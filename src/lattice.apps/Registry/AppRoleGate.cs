@@ -22,6 +22,13 @@ namespace Orleans.Lattice.Apps;
 /// registry record revision, re-binding a role produces a new revision and therefore a new gate, so the change
 /// is seen on the next evaluation.
 /// </para>
+/// <para>
+/// <b>A deny still wins where the gate is asked.</b> <see cref="IsHeld"/> is the binding alone.
+/// <see cref="IsHeldAsync"/> additionally lets the access gate take the role away when it refuses the role's
+/// operations, so an explicit deny rule on a bound member is honoured; it can never add a role. The app MCP tool
+/// gate uses it, because an app tool runs app code the data path may not see. The app bridge gets the same
+/// deny semantics from the data path itself, which authorizes every call under the caller's own identity.
+/// </para>
 /// </remarks>
 internal sealed class AppRoleGate
 {
@@ -70,6 +77,68 @@ internal sealed class AppRoleGate
         foreach (var groupId in GroupIds)
         {
             if (IsMember(groups, groupId))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Evaluates whether <paramref name="subject"/> holds the role by binding and the access gate does not refuse
+    /// it. The binding decides who <em>can</em> hold the role; the gate can only take it away - an explicit deny
+    /// rule on the caller (on one of the role's trees, or cluster-wide) wins over the compiled app rule exactly as
+    /// it does on the data path. The gate is asked only once the binding holds, so a caller's own rights can
+    /// never add a role.
+    /// </summary>
+    /// <param name="gate">The shared access gate.</param>
+    /// <param name="subject">The resolved caller.</param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    /// <returns>
+    /// <c>true</c> when the caller is bound to the role and, on at least one of its scopes, the gate refuses none
+    /// of its operations.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="gate"/> is null.</exception>
+    /// <remarks>
+    /// Each operation bit is asked in the scope's own shape: with its key for a key scope, and as a whole-tree
+    /// request otherwise. A key-filtered answer is resolved at a representative key of the scope - the key itself,
+    /// the prefix itself, or the empty key for a whole tree - because the question is only whether the gate
+    /// refuses the role there. That probe cannot widen anything (#3863 concerned a filter <em>granting</em> a
+    /// prefix): it is reached only after the binding holds, and it can only turn the answer to <c>false</c>. A
+    /// deny narrower than the scope (one key under a tree scope, say) leaves the role held and is enforced by the
+    /// data path itself.
+    /// </remarks>
+    public async ValueTask<bool> IsHeldAsync(ILatticeAccessGate gate, LatticeSubject subject, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        if (!IsHeld(subject))
+            return false;
+
+        foreach (var scope in Scopes)
+        {
+            if (!await IsRefusedAsync(gate, subject, scope, cancellationToken).ConfigureAwait(false))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async ValueTask<bool> IsRefusedAsync(
+        ILatticeAccessGate gate,
+        LatticeSubject subject,
+        LatticeScope scope,
+        CancellationToken cancellationToken)
+    {
+        var key = scope.Kind == LatticeScopeKind.Key ? scope.KeyOrPrefix : null;
+        var probe = scope.KeyOrPrefix ?? string.Empty;
+        var remaining = (int)Operations;
+        while (remaining != 0)
+        {
+            var bit = remaining & -remaining;
+            remaining &= remaining - 1;
+
+            var request = new LatticeAccessRequest(scope.TreeId, (LatticeOperation)bit, subject, key);
+            var decision = await gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+            if (!decision.Allowed || (decision.KeyFilter is { } filter && !filter(probe)))
                 return true;
         }
 

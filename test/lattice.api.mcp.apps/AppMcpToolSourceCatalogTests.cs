@@ -222,6 +222,7 @@ public sealed class AppMcpToolSourceCatalogTests
             NullLogger<AppMcpToolSource>.Instance,
             projection,
             appSource,
+            new GrantingAccessGate(),
             new CredentialEchoMembershipContext(),
             new AmbientTenantResolver());
 
@@ -265,6 +266,7 @@ public sealed class AppMcpToolSourceCatalogTests
             NullLogger<AppMcpToolSource>.Instance,
             host.Projection,
             host.Source,
+            host.Gate,
             host.Membership,
             tenantResolver);
 

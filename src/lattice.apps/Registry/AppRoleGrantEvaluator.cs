@@ -14,7 +14,9 @@ namespace Orleans.Lattice.Apps;
 /// <remarks>
 /// <para>
 /// <b>Only app-owned rules.</b> The evaluation never consults the caller's other rules, so broad rights a caller
-/// holds of its own never make it hold an app role, exactly as the bridge never lets them flow into the app.
+/// holds of its own never make it hold an app role, exactly as the bridge never lets them flow into the app. A
+/// surface that also asks the access gate (the app MCP tools, through <see cref="AppRoleGate.IsHeldAsync"/>) lets
+/// it only take a role away, never add one.
 /// </para>
 /// <para>
 /// <b>Which installs count.</b> Only an <see cref="AppRegistryLifecycleState.Enabled"/> install whose

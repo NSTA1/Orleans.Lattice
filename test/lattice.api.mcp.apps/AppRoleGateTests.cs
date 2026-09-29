@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="AppRoleGate"/>, the single definition of "holds an app role": a role is held by
-/// binding - membership of a group the install binds to it - never by the caller's other rights.
+/// binding - membership of a group the install binds to it - never by the caller's other rights, and the access gate
+/// can only take it away.
 /// </summary>
 [TestFixture]
 public sealed class AppRoleGateTests
@@ -116,25 +117,103 @@ public sealed class AppRoleGateTests
             Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, null!, []));
             Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, Notes, null!));
             Assert.Throws<ArgumentNullException>(() => AppRoleGate.IsMember(null!, "g"));
-            Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(null!, Member("alice")));
+            Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(null!, new GrantingAccessGate(), Member("alice"), CancellationToken.None));
+            Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(new AppRoleGate(LatticeOperation.Read, Notes, ["g"]), null!, Member("alice"), CancellationToken.None));
+            Assert.ThrowsAsync<ArgumentNullException>(async () => await new AppRoleGate(LatticeOperation.Read, Notes, ["g"]).IsHeldAsync(null!, Member("alice"), CancellationToken.None));
         });
     }
 
     [Test]
-    public async Task The_tool_gate_delegates_to_the_shared_role_gate_and_completes_synchronously()
+    public async Task The_tool_gate_delegates_to_the_shared_role_gate()
     {
+        var gate = new GrantingAccessGate { AllowByDefault = true };
         var held = new AppRoleGate(LatticeOperation.Read, Notes, ["g-readers"]);
         var notHeld = new AppRoleGate(LatticeOperation.Write, Notes, ["g-writers"]);
         var alice = Member("alice", "g-readers");
 
-        var heldTask = AppMcpRoleGate.IsHeldAsync(held, alice);
-        var notHeldTask = AppMcpRoleGate.IsHeldAsync(notHeld, alice);
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await AppMcpRoleGate.IsHeldAsync(held, gate, alice, CancellationToken.None), Is.True);
+            Assert.That(await AppMcpRoleGate.IsHeldAsync(notHeld, gate, alice, CancellationToken.None), Is.False);
+        });
+    }
+
+    // The access gate can only take a role away.
+
+    [Test]
+    public async Task An_explicit_deny_takes_the_role_from_a_bound_member()
+    {
+        var role = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, Notes, ["g"]);
+        var alice = Member("alice", "g");
+        var onTree = new GrantingAccessGate { AllowByDefault = true }.Deny("alice", "t1", LatticeOperation.Write);
+        var clusterWide = new GrantingAccessGate { AllowByDefault = true }.Deny("alice", LatticeScope.ClusterWideTreeId, LatticeOperation.Read);
 
         Assert.Multiple(async () =>
         {
-            Assert.That(heldTask.IsCompletedSuccessfully && notHeldTask.IsCompletedSuccessfully, Is.True);
-            Assert.That(await heldTask, Is.True);
-            Assert.That(await notHeldTask, Is.False);
+            Assert.That(await role.IsHeldAsync(new GrantingAccessGate { AllowByDefault = true }, alice, CancellationToken.None), Is.True);
+            Assert.That(await role.IsHeldAsync(onTree, alice, CancellationToken.None), Is.False, "a deny on any one operation");
+            Assert.That(await role.IsHeldAsync(clusterWide, alice, CancellationToken.None), Is.False, "a cluster-wide deny");
         });
+    }
+
+    [Test]
+    public async Task The_gate_is_never_asked_for_a_caller_the_binding_does_not_hold()
+    {
+        var everything = new GrantingAccessGate { AllowByDefault = true };
+        var role = new AppRoleGate(LatticeOperation.Read, Notes, ["g-editors"]);
+
+        Assert.That(await role.IsHeldAsync(everything, Member("bob", "cluster-admins"), CancellationToken.None), Is.False);
+        Assert.That(everything.Requests, Is.Empty, "the caller's own rights never add a role");
+    }
+
+    [Test]
+    public async Task A_role_survives_a_deny_on_one_scope_through_another_scope()
+    {
+        var role = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Tree("t1"), LatticeScope.Tree("t2")], ["g"]);
+        var gate = new GrantingAccessGate { AllowByDefault = true }.Deny("alice", "t1", LatticeOperation.Read);
+
+        Assert.That(await role.IsHeldAsync(gate, Member("alice", "g"), CancellationToken.None), Is.True);
+    }
+
+    [Test]
+    public async Task Each_operation_the_role_confers_is_asked_in_each_scopes_own_shape()
+    {
+        var gate = new GrantingAccessGate { AllowByDefault = true };
+        var role = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Key("t1", "k"), LatticeScope.Prefix("t1", "p/")], ["g"]);
+        gate.Deny("alice", "t1", LatticeOperation.Write);
+
+        await role.IsHeldAsync(gate, Member("alice", "g"), CancellationToken.None);
+
+        Assert.That(
+            gate.Requests.Select(r => (r.TreeId, r.Operation, r.Key)),
+            Is.EqualTo(new[]
+            {
+                ("t1", LatticeOperation.Read, (string?)"k"), ("t1", LatticeOperation.Write, (string?)"k"),
+                ("t1", LatticeOperation.Read, (string?)null), ("t1", LatticeOperation.Write, (string?)null),
+            }));
+    }
+
+    /// <summary>
+    /// A key-filtered answer is resolved at the scope's representative key: the prefix itself for a prefix scope,
+    /// the empty key for a whole tree. The filter can only take the role away - a filter that keeps every key
+    /// leaves the bound member its role, one that drops the representative key removes it.
+    /// </summary>
+    [Test]
+    public async Task A_filtered_answer_is_resolved_at_the_scopes_representative_key()
+    {
+        var alice = Member("alice", "g");
+        var prefix = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Prefix("t1", "p/")], ["g"]);
+        var tree = new AppRoleGate(LatticeOperation.Read, Notes, ["g"]);
+        string? probed = null;
+        var recording = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(k => { probed = k; return true; }) };
+        var dropsPrefix = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(k => k != "p/") };
+        var dropsEmpty = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(k => k.Length > 0) };
+
+        Assert.That(await prefix.IsHeldAsync(recording, alice, CancellationToken.None), Is.True);
+        Assert.That(probed, Is.EqualTo("p/"));
+        Assert.That(await tree.IsHeldAsync(recording, alice, CancellationToken.None), Is.True);
+        Assert.That(probed, Is.EqualTo(string.Empty));
+        Assert.That(await prefix.IsHeldAsync(dropsPrefix, alice, CancellationToken.None), Is.False);
+        Assert.That(await tree.IsHeldAsync(dropsEmpty, alice, CancellationToken.None), Is.False);
     }
 }

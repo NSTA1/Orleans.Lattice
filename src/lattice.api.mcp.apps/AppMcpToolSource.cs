@@ -30,13 +30,14 @@ namespace Orleans.Lattice.Api.Mcp.Apps;
 /// <b>Per session.</b> Under the caller's bridged credential and asserted active tenant
 /// the source resolves the caller's tenant and subject, then offers each tool of the
 /// tenant's installs whose declared role the caller holds by binding - it is a member of a
-/// group the install binds to the role (see <see cref="AppMcpRoleGate"/>). Only prebuilt
-/// tool instances are selected; nothing is re-materialised per session.
+/// group the install binds to the role, and the shared access gate does not refuse it with
+/// an explicit deny (see <see cref="AppMcpRoleGate"/>). Only prebuilt tool instances are
+/// selected; nothing is re-materialised per session.
 /// </para>
 /// <para>
-/// <b>Fail-closed.</b> Without a registry projection, an app source or any provider the
-/// source offers nothing, and a caller without a resolved membership holds no role. A
-/// denied tenant resolution offers nothing. A transient backend fault surfaces as a
+/// <b>Fail-closed.</b> Without a registry projection, an app source, an access gate or any
+/// provider the source offers nothing, and a caller without a resolved membership holds no
+/// role. A denied tenant resolution offers nothing. A transient backend fault surfaces as a
 /// retryable discovery error rather than a falsely narrow tool list; any other fault
 /// offers nothing and is logged.
 /// </para>
@@ -47,6 +48,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
     private readonly ILogger<AppMcpToolSource> _logger;
     private readonly IAppRegistryProjection? _projection;
     private readonly IAppSource? _appSource;
+    private readonly ILatticeAccessGate? _gate;
     private readonly ILatticeMembershipContext? _membership;
     private readonly ITenantContextResolver? _tenantResolver;
     private readonly ILatticeApiMcpActiveTenantBridge? _tenantBridge;
@@ -58,6 +60,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
     /// <param name="logger">The logger activation failures are reported to.</param>
     /// <param name="projection">The app registry projection, or <c>null</c> when none is registered.</param>
     /// <param name="appSource">The app source manifests resolve through, or <c>null</c> when none is registered.</param>
+    /// <param name="gate">The shared access gate, which can only refuse a role the binding confers, or <c>null</c> when none is registered (the source then offers nothing).</param>
     /// <param name="membership">The membership context callers resolve through, or <c>null</c> (every caller is then anonymous and holds no role).</param>
     /// <param name="tenantResolver">The active-tenant resolver, or <c>null</c> (every caller is then in the default tenant).</param>
     /// <param name="tenantBridge">The MCP active-tenant bridge, or <c>null</c>.</param>
@@ -66,6 +69,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
         ILogger<AppMcpToolSource> logger,
         IAppRegistryProjection? projection = null,
         IAppSource? appSource = null,
+        ILatticeAccessGate? gate = null,
         ILatticeMembershipContext? membership = null,
         ITenantContextResolver? tenantResolver = null,
         ILatticeApiMcpActiveTenantBridge? tenantBridge = null)
@@ -90,6 +94,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
         _logger = logger;
         _projection = projection;
         _appSource = appSource;
+        _gate = gate;
         _membership = membership;
         _tenantResolver = tenantResolver;
         _tenantBridge = tenantBridge;
@@ -98,7 +103,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
     /// <summary>The most recently built catalog; <see cref="AppMcpToolCatalog.Empty"/> before the first build.</summary>
     internal AppMcpToolCatalog Catalog => _catalog;
 
-    private bool CanServe => _providersBySlug.Count > 0 && _projection is not null && _appSource is not null;
+    private bool CanServe => _providersBySlug.Count > 0 && _projection is not null && _appSource is not null && _gate is not null;
 
     /// <inheritdoc />
     public async ValueTask<IReadOnlyList<McpServerTool>> GetPermittedToolsAsync(
@@ -144,7 +149,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
                     }
                     else
                     {
-                        allowed = await AppMcpRoleGate.IsHeldAsync(app.Roles[role], subject).ConfigureAwait(false);
+                        allowed = await AppMcpRoleGate.IsHeldAsync(app.Roles[role], _gate!, subject, cancellationToken).ConfigureAwait(false);
                         if (role < 32)
                         {
                             evaluated |= 1u << role;
@@ -214,7 +219,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
 
             var subject = await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
                 .ConfigureAwait(false);
-            return await AppMcpRoleGate.IsHeldAsync(app.Roles[current.RoleIndex], subject).ConfigureAwait(false);
+            return await AppMcpRoleGate.IsHeldAsync(app.Roles[current.RoleIndex], _gate!, subject, cancellationToken).ConfigureAwait(false);
         }
         catch (LatticeTenantAccessDeniedException)
         {

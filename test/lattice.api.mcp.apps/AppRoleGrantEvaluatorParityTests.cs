@@ -80,7 +80,8 @@ public sealed class AppRoleGrantEvaluatorParityTests
             Assert.That(evaluation!.HeldRoles, Is.EquivalentTo(advertised));
             Assert.That(evaluation.HeldRoles, Is.EquivalentTo(bound), "a role is held exactly when the caller is bound to it");
             Assert.That(evaluation.HasGrant, Is.EqualTo(advertised.Count > 0));
-            Assert.That(host.Gate.Requests, Is.Empty, "neither surface consults the caller's own rules");
+            Assert.That(host.Gate.Requests.Count == 0, Is.EqualTo(bound.Length == 0),
+                "the gate is asked only once the binding holds, so the caller's own rights never add a role");
         });
     }
 
@@ -110,7 +111,8 @@ public sealed class AppRoleGrantEvaluatorParityTests
             [new AppMcpToolProvider(Notes, [AppMcpTestData.Tool("search")])],
             NullLogger<AppMcpToolSource>.Instance,
             projection,
-            set);
+            set,
+            new GrantingAccessGate());
 
         var catalog = await source.GetCatalogAsync(CancellationToken.None);
 

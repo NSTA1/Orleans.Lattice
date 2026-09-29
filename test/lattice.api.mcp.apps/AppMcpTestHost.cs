@@ -41,7 +41,11 @@ internal sealed class AppMcpTestHost
 
     public FakeAppSource Source { get; } = new();
 
-    public GrantingAccessGate Gate { get; } = new();
+    /// <summary>
+    /// The access gate: the whole policy, including the install's compiled app rules. It allows by default
+    /// (the app rules are live and nothing denies), so a fixture removes a role with an explicit deny.
+    /// </summary>
+    public GrantingAccessGate Gate { get; } = new() { AllowByDefault = true };
 
     /// <summary>The membership the host resolves callers through; join a caller to a bound group to give it a role.</summary>
     public CredentialEchoMembershipContext Membership { get; } = new();

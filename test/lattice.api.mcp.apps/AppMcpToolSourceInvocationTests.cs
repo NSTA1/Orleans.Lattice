@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using Orleans.Lattice.Apps;
+using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
@@ -42,6 +43,42 @@ public sealed class AppMcpToolSourceInvocationTests
         var host = NotesHost();
 
         Assert.That(await host.SessionToolAsync("notes_search"), Is.Null);
+    }
+
+    /// <summary>
+    /// Coordinator review of #3902: a role is held by binding, but an explicit deny on the caller still takes it
+    /// away, as it did when the tool gate asked the access gate. A deny on the role's tree or a cluster-wide deny
+    /// refuses a tool advertised before the deny landed, and the next session no longer advertises it.
+    /// </summary>
+    [TestCase("a/notes/notes")]
+    [TestCase(LatticeScope.ClusterWideTreeId)]
+    public async Task An_explicit_deny_on_a_bound_member_refuses_the_invocation_and_withholds_the_tool(string deniedTree)
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        var tool = await host.SessionToolAsync("notes_search");
+        Assert.That(tool, Is.Not.Null, "a bound member is offered the tool before the deny");
+
+        host.Gate.Deny("alice", deniedTree, LatticeOperation.Read);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!));
+            Assert.That(await host.SessionToolAsync("notes_search"), Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task A_deny_on_another_subject_or_tree_leaves_the_bound_member_its_tool()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        host.Gate.Deny("bob", LatticeScope.ClusterWideTreeId, LatticeOperation.Read);
+        host.Gate.Deny("alice", "a/other/tree", LatticeOperation.Read);
+
+        var tool = await host.SessionToolAsync("notes_search");
+
+        Assert.That((await host.InvokeAsync(tool!)).Text(), Does.Contain("found"));
     }
 
     [Test]

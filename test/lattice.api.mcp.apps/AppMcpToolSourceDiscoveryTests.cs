@@ -266,6 +266,53 @@ public sealed class AppMcpToolSourceDiscoveryTests
     }
 
     [Test]
+    public void A_transient_gate_fault_surfaces_as_a_retryable_discovery_error()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        host.Gate.Fault = new TimeoutException("gate unreachable");
+
+        Assert.ThrowsAsync<LatticeApiMcpDiscoveryUnavailableException>(() => host.AdvertisedAsync());
+    }
+
+    [Test]
+    public async Task A_non_transient_gate_fault_offers_no_app_tools()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        host.Gate.Fault = new InvalidOperationException("broken");
+
+        Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
+    }
+
+    [Test]
+    public async Task Without_an_access_gate_no_app_tool_is_offered_even_to_a_bound_member()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        var tools = await new AppMcpToolSource(
+                host.Providers,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<AppMcpToolSource>.Instance,
+                host.Projection,
+                host.Source,
+                gate: null,
+                host.Membership)
+            .GetPermittedToolsAsync(host.Context(), new LatticeCredential("t", principalId: "alice"), CancellationToken.None);
+
+        Assert.That(tools, Is.Empty);
+    }
+
+    [Test]
+    public async Task A_bound_member_whose_app_rules_are_not_yet_live_in_the_gate_is_not_offered_the_tool()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        host.Gate.AllowByDefault = false;
+
+        Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
+    }
+
+    [Test]
     public void A_transient_membership_fault_surfaces_as_a_retryable_discovery_error()
     {
         var host = NotesHost();
@@ -295,6 +342,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<AppMcpToolSource>.Instance,
                 host.Projection,
                 host.Source,
+                host.Gate,
                 host.Membership,
                 new DenyingTenantResolver())
             .GetPermittedToolsAsync(host.Context(), new LatticeCredential("t", principalId: "alice"), CancellationToken.None);

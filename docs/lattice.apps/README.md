@@ -54,7 +54,10 @@ The package is the engine. Operators reach it through companion packages:
   caller holds through any other rule never make it hold an app role. The app
   workspace (and so the roles an app's UI is told), the app MCP tools and the app
   bridge all use this one definition, so a caller is never shown a control the bridge
-  then denies. Re-binding a role moves it on the next evaluation.
+  then denies. Re-binding a role moves it on the next evaluation. A deny rule can only
+  take access away: the app MCP tools withhold a tool from a bound member the access
+  gate explicitly denies, and the bridge's data-path calls run under the caller's own
+  identity, so a denied read reports nothing and a denied write is refused.
 - **Capability ceiling.** Every install records a ceiling of allowed operations and
   operator-approved exception scopes, pinned to the installed version. Every
   compiled rule is checked against it; a manifest that asks for more fails
