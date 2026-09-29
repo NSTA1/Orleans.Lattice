@@ -52,26 +52,9 @@ on:
       #   lattice.tenancy-v8.0.0
       #   lattice.explorer.core-v7.9.1
       #   lattice.explorer.ui-v7.9.1
-      #   lattice.explorer.backup-v7.9.1
-      #   lattice.explorer.access-v7.9.1
-      #   lattice.explorer.schema-v7.9.1
       #   lattice.explorer.web-v7.9.1
       #   lattice.explorer.entra-v7.7.1
       #   lattice.explorer.entra.web-v8.0.0
-      #   lattice.explorer.designsystem-v9.4.0
-      #   lattice.explorer.plugins.abstractions-v9.4.0
-      #   lattice.explorer.plugins.selection-v9.4.0
-      #   lattice.explorer.plugins.data-v9.4.0
-      #   lattice.explorer.plugins.history-v9.4.0
-      #   lattice.explorer.plugins.metrics-v9.4.0
-      #   lattice.explorer.plugins.topology-v9.4.0
-      #   lattice.explorer.plugins.tagindex-v9.4.0
-      #   lattice.explorer.plugins.deadletter-v9.4.0
-      #   lattice.explorer.plugins.telemetry-v9.4.0
-      #   lattice.explorer.plugins.tenancy-v9.4.0
-      #   lattice.explorer.plugins.tenants-v9.4.0
-      #   lattice.explorer.plugins.mytenant-v9.4.0
-      #   lattice.explorer.shell-v9.8.0
       #   lattice.explorer.appkit-v9.8.0
       #   lattice.caching.azureblob-v8.0.0
       #   lattice.grainindex-v0.1.0
@@ -127,26 +110,9 @@ on:
       - 'lattice.tenancy-v*'
       - 'lattice.explorer.core-v*'
       - 'lattice.explorer.ui-v*'
-      - 'lattice.explorer.backup-v*'
-      - 'lattice.explorer.access-v*'
-      - 'lattice.explorer.schema-v*'
       - 'lattice.explorer.web-v*'
       - 'lattice.explorer.entra-v*'
       - 'lattice.explorer.entra.web-v*'
-      - 'lattice.explorer.designsystem-v*'
-      - 'lattice.explorer.plugins.abstractions-v*'
-      - 'lattice.explorer.plugins.selection-v*'
-      - 'lattice.explorer.plugins.data-v*'
-      - 'lattice.explorer.plugins.history-v*'
-      - 'lattice.explorer.plugins.metrics-v*'
-      - 'lattice.explorer.plugins.topology-v*'
-      - 'lattice.explorer.plugins.tagindex-v*'
-      - 'lattice.explorer.plugins.deadletter-v*'
-      - 'lattice.explorer.plugins.telemetry-v*'
-      - 'lattice.explorer.plugins.tenancy-v*'
-      - 'lattice.explorer.plugins.tenants-v*'
-      - 'lattice.explorer.plugins.mytenant-v*'
-      - 'lattice.explorer.shell-v*'
       - 'lattice.explorer.appkit-v*'
       - 'lattice.caching.azureblob-v*'
       - 'lattice.grainindex-v*'

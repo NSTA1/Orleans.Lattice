@@ -94,7 +94,6 @@ See [Running and hosting the Explorer](running-the-explorer.md) for the full hos
 - [Managing backups from the Explorer](managing-backups.md) - the Backups area and its capability gating.
 - [Managing access control from the Explorer](managing-access.md) - the Access area and its capability gating.
 - [Managing schema from the Explorer](managing-schema.md) - the Schema plugin, withheld by default.
-- [Writing an Explorer plugin](writing-a-plugin.md) - the extension model: adding a tab as its own package, with its own domain contract, access gate, and styling.
 
 ## See also
 
