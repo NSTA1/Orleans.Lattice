@@ -142,6 +142,27 @@ That read returns configuration only. It does not see what the tree registry pin
 - Use `ArgumentNullException.ThrowIfNull` at public API boundaries.
 - Grains that support split recovery must check `SplitState.SplitInProgress` before performing writes.
 
+## Await and ConfigureAwait
+
+Orleans runs every turn of an activation on that activation's own `TaskScheduler`, which is what provides the single-threaded turn guarantee. A bare `await` (identical to `ConfigureAwait(true)`) resumes the continuation on that scheduler, inside the turn, so code after the await may safely touch grain state. `.ConfigureAwait(false)` deliberately drops that capture and resumes on the thread pool, outside the turn, where any post-await state access races other turns. The resume context is therefore load-bearing in this directory in a way it is not in ordinary library code.
+
+**In a grain class, never write `.ConfigureAwait(false)`.** This is the universal invariant here and the whole directory already honours it: across every grain class under `BPlusTree/Grains/` there is not one use. Dropping the capture would let post-await code touch grain state outside the turn, which is a silent data race rather than a compile error, so there is nothing to catch it later.
+
+**Mark an await of a synchronisation primitive explicitly.** The established convention is narrower than "annotate everything", and it targets the awaits where the hazard is real: a `SemaphoreSlim` gate, a raw `TaskCompletionSource.Task`, an `IGrainStorage` call, or a WAL provider call. These do not route through Orleans' own grain-call dispatch, so the captured context is the only thing returning the continuation to the turn. Thirty of the thirty-six gate awaits in this directory carry the marker, and every `store.*` await does. Three spellings are in use and all mean the same thing - `ConfigureAwait(true)` (`BPlusLeafGrain`, `BPlusInternalGrain`, `LatticeLockGrain`), `ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext)` (`ShardRootGrain`), and a bare `await`. Match whichever the file already uses rather than introducing a fourth.
+
+The marker is redundant to the compiler, and that is the point: it records that the turn context was considered and is required, which an absent annotation cannot distinguish from nobody having thought about it. **Do not bulk-remove these as redundant.** The removal is behaviour-preserving but erases the only signal separating a deliberate resume from an unconsidered one, in exactly the place where being wrong is a silent race.
+
+**Do not generalise the marker to ordinary awaits.** A plain grain-to-grain call is left bare, and so, predominantly, are `state.WriteStateAsync()` (118 bare against 6 marked) and `ReminderRegistry` calls (43 against 2). There is no established convention on those, so annotating them wholesale would be inventing a rule rather than following one. Likewise a `private static` helper that receives its gate as a parameter (`LatticeGrain.Cursor.cs`) has no activation affinity and needs no marker.
+
+**In a helper reachable from a grain turn, do not put `.ConfigureAwait(false)` on internal awaits.** These singleton helpers (`WalCommitLogWriter`, the cursor and pin writers, ...) are invoked from grain context, so silently dropping that context is fragile: it leaves the resume context of every internal await unclear to readers, and it is one bug fix away from breaking the turn invariant for any state the helper acquires later. `WalCommitLogWriterConfigureAwaitAuditTests` pins this for `WalCommitLogWriter` at an exact count, so a regression trips immediately.
+
+The one recognised exception is a **deliberate outbound RPC dispatch site** whose `catch` must land off a possibly-wedged grain context, so that writer-side diagnostic counters and log lines still fire when the callee is wedged. Annotate every such call site inline with its rationale, and prefer pinning the count with an audit test in the style above so the exception cannot quietly spread.
+
+Two caveats when editing:
+
+- **The helper convention is not uniform, so match the file you are in rather than generalising from one sibling.** `LeafCursorReporter` uses `.ConfigureAwait(false)` throughout and carries no audit test, which is the opposite of the audited `WalCommitLogWriter`. Keep whichever form a file has established; do not introduce a third style into a file that already marks its awaits consistently.
+- `.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)` (see `ShareBoundedTouchRunner`) is a different overload controlling exception propagation, not scheduler capture. It is outside this rule.
+
 ## StatelessWorker
 
 `LatticeGrain` is annotated `[StatelessWorker]` - it holds no persistent state and routes requests to the correct `IShardRootGrain` through the tree's `ShardMap` (key hash -> virtual slot -> physical shard, resolved by `GetRoutingAsync`). `LatticeSharding.GetShardIndex` survives only as a backward-compatible hash helper.
