@@ -3,9 +3,10 @@
 A one-command, self-contained demo of the opt-in `Orleans.Lattice.Explorer.Web`
 hosting library. It co-hosts, in a single process:
 
-1. a single-silo Orleans cluster with the state-API, auth-admin, schema-admin
-   and apps gRPC surfaces (app control, the source catalogue, the per-user
-   workspace and the app frame bridge), carrying the task-board sample app, and
+1. a single-silo Orleans cluster with the state-API, auth-admin, schema-admin,
+   tree-admin, backup, replication-status and apps gRPC surfaces (app control,
+   the source catalogue, the per-user workspace and the app frame bridge),
+   carrying the task-board sample app, and
 2. the embeddable **Explorer web console**, pointed at that gRPC endpoint,
 
 so you can open the console in a browser and browse a live tree end to end.
@@ -54,14 +55,21 @@ disabling authorization.
 
 The console's top-level areas live in a stable vertical rail down the left of
 the shell, and each is capability-gated and fails closed. This sample co-hosts
-the auth and schema gRPC admin APIs and auto-signs-in as a bootstrap
-administrator (`explorer-admin`), so the **Data**, **Access**, **Schema** and
-**Apps** areas are live out of the box. The
-**Backups** area resolves as unavailable, because this sample maps the state,
-auth, schema and apps gRPC services but not the backup one, so the probe reports the
-capability as absent from the cluster. The **Tenancy**, **Replication** and
-**Telemetry** areas are unavailable for the same reason: the sample
-runs no tenancy or replication add-on and serves no telemetry facade.
+every control plane its one silo can serve and auto-signs-in as a bootstrap
+administrator (`explorer-admin`), so the **Data**, **Apps**, **Access**,
+**Schema**, **Replication**, **Backups** and **Cluster** areas are live out of
+the box. Two are absent, each for a stated reason:
+
+- **Telemetry** needs a metrics backend (a Prometheus-compatible query
+  endpoint) behind the telemetry facade, and this one-process sample runs none,
+  so it serves no telemetry facade and the area hides itself.
+- **Tenancy** needs the tenancy add-on; this sample runs one implicit tenant.
+
+Replication is registered with one region and no peer, so the Replication area
+and the Cluster area's region picture show a single-region estate with nothing
+behind. Runtime enrolment is not served: it replicates its own configuration
+tree, and a replicated tree must be backed by a shared off-cluster backup sink,
+while this sample's backups go to the default in-cluster sink.
 
 An unavailable area renders no entry at all, and the rail's "why can I not see
 everything?" affordance names it, so the absence is disclosed once rather than
@@ -257,7 +265,8 @@ see [Identity directory providers](../../docs/lattice.membership/identity-direct
 
 ## What to look at
 
-- `Program.cs` - the silo host wiring (state + auth + schema + apps gRPC surfaces and
+- `Program.cs` - the silo host wiring (state, auth, schema, tree-admin, backup,
+  replication-status and apps gRPC surfaces and
   the bootstrap-administrator authorization setup), the identity-directory mode
   selection (static roster by default, Entra Graph when configured), the console
   registration (`AddLatticeExplorerWeb` / `MapLatticeExplorer`), and the bootstrap

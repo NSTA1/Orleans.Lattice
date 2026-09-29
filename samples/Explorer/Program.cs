@@ -7,16 +7,24 @@ using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Apps.Grpc;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
+using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Apps;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Membership.Entra;
 using Orleans.Lattice.Membership.Entra.Graph;
+using Orleans.Lattice.Replication;
 using Orleans.Lattice.Samples.Explorer;
 using Orleans.Lattice.Samples.Explorer.TaskBoard;
 using Orleans.Lattice.Schema;
@@ -31,9 +39,12 @@ using Orleans.Lattice.Schema;
 // embed the Explorer in their own ASP.NET app. Here it is pointed at the local
 // gRPC endpoint through the launcher-friendly bootstrap environment variables.
 //
-// Four control planes are co-hosted on the one gRPC endpoint - state (Data), auth
-// (Access), schema (Schema) and apps (Apps, with its catalogue, per-user workspace
-// and the frame bridge) - so those console areas are live. The console
+// Every control plane this one silo can serve is co-hosted on the one gRPC
+// endpoint - state (Data), auth (Access), schema (Schema), apps (Apps, with its
+// catalogue, per-user workspace and the frame bridge), tree administration
+// (Cluster), backup (Backups) and replication status (Replication) - so those
+// console areas are live. Telemetry needs a metrics backend this sample does not
+// run, and tenancy an add-on it does not use. The console
 // auto-signs-in as a bootstrap administrator (see below), which is what makes the
 // administrator-gated areas light up without a manual login. Areas whose facade
 // this sample does not serve, such as Backups, decide for themselves that they are
@@ -268,6 +279,21 @@ builder.Host.UseOrleans(silo =>
     silo.AddLatticeAppsApi();
     silo.AddLatticeAppBridgeApi();
 
+    // Tree administration (the Cluster area and the Data area's view and tag
+    // index panels), backups into the default in-cluster sink (the Backups
+    // area), and the replication status read (the Replication area and the
+    // Cluster area's region picture). This silo is the only region, so the
+    // estate reads as one region with nothing behind: replication is registered
+    // so the areas can be seen, not to replicate anything. Runtime enrolment
+    // (AddLatticeReplicationApi) is deliberately left out: it replicates its own
+    // configuration tree, and a replicated tree must be backed by a shared
+    // off-cluster backup sink, which this one-process sample does not have.
+    silo.AddLatticeTreeAdminApi();
+    silo.AddLatticeBackup();
+    silo.AddLatticeBackupApi();
+    silo.AddLatticeReplication(options => options.ClusterId = "explorer-sample");
+    silo.AddLatticeReplicationStatusApi();
+
     // Trusts the console's auto-applied Basic sign-in: the auth / schema gRPC
     // bridges hand this authenticator the base64(username:password) token and it
     // resolves the caller subject to "explorer-admin", the bootstrap administrator.
@@ -320,6 +346,28 @@ builder.Services.AddLatticeAppCatalogApiGrpc(appsGrpc);
 builder.Services.AddLatticeAppWorkspaceApiGrpc(appsGrpc);
 builder.Services.AddLatticeAppBridgeApiGrpc(appsGrpc);
 
+// The tree-administration, backup and replication bindings, on the same
+// sample-only terms: transport authorization off, the Basic scheme understood,
+// and every call still authorized by the cluster against the resolved caller.
+builder.Services.AddLatticeTreeAdminApiGrpc(o =>
+{
+    o.RequireAuthorization = false;
+    o.CredentialScheme = DemoBasicAuthenticator.Scheme;
+});
+builder.Services.AddLatticeBackupApiGrpc(o =>
+{
+    o.RequireAuthorization = false;
+    o.CredentialScheme = DemoBasicAuthenticator.Scheme;
+});
+// The replication binding's options carry the status read, whose service alone
+// is mapped: the sample serves no runtime enrolment (see above).
+builder.Services.AddLatticeReplicationApiGrpc(o =>
+{
+    o.RequireAuthorization = false;
+    o.CredentialScheme = DemoBasicAuthenticator.Scheme;
+});
+builder.Services.AddLatticeReplicationStatusApiGrpc();
+
 // The embeddable Explorer web console - the one call a consumer makes to host it.
 // The sample pins the console's persisted config to its own isolated file so it
 // always connects to the co-hosted endpoint seeded above.
@@ -346,6 +394,9 @@ app.MapLatticeAppsApiGrpc();
 app.MapLatticeAppCatalogApiGrpc();
 app.MapLatticeAppWorkspaceApiGrpc();
 app.MapLatticeAppBridgeApiGrpc();
+app.MapLatticeTreeAdminApiGrpc();
+app.MapLatticeBackupApiGrpc();
+app.MapLatticeReplicationStatusApiGrpc();
 app.MapLatticeExplorer();
 
 await app.StartAsync();
@@ -395,9 +446,9 @@ using (LatticeSystemOrigin.Enter())
         Console.WriteLine("  In Access > Explain: 'alice' Read -> Allowed (matched rule); 'bob' Read -> Denied (default).");
     }
 }
-Console.WriteLine($"Silo + state/auth/schema/apps gRPC surface started on http://localhost:{GrpcPort}");
+Console.WriteLine($"Silo + state/auth/schema/apps/treeadmin/backup/replication gRPC surface started on http://localhost:{GrpcPort}");
 Console.WriteLine($"Explorer console: open http://localhost:{WebPort}/ in a browser.");
-Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - the Data, Apps, Access and Schema areas are all enabled.");
+Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - every area but Telemetry and Tenancy is enabled.");
 Console.WriteLine($"The '{TaskBoardApp.Slug}' app is available in Apps > Catalogue; see samples/Explorer/Apps/TaskBoard/README.md.");
 Console.WriteLine(useEntraDirectory
     ? "Identity directory: Microsoft Entra (Graph) - the Access subject picker and validated create run against your real tenant."
