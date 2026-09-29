@@ -64,9 +64,23 @@ The area's forms use [pickers](navigation-model.md#pickers), and each one is ten
 - **New tenant.** The tenant id suggests existing tenants and refuses one that already exists. The optional admin subjects are a multi-value picker over the identity directory.
 - **Members.** The subject id is a picker over the identity directory's users and groups.
 - **Regions.** The allowed region ids are a multi-value picker over the regions this cluster knows, plus any region the tenant already lists, since a region can be allowed before this cluster replicates with it. When the cluster's regions cannot be listed, the field accepts what is typed.
-- **Grants.** The grantee tenant is a picker. For a platform operator, who can list every tenant, it accepts only a listed tenant; for anyone else it suggests the tenants they can reach and accepts any id. The scope suggests the tenant's trees and accepts a tree-name prefix too.
+- **Grants.** The grantee tenant is a picker. For a platform operator, who can list every tenant, it accepts only a listed tenant; for anyone else it suggests the tenants they can reach and accepts any id. The scope suggests the tenant's trees and accepts a tree-name prefix too. A bare name or prefix is qualified into the granting tenant's namespace before the offer is sent, so `orders` is offered as `t/{tenant}/orders`: the cluster matches a grant's scope against the full tree id it reads, so a bare name would share nothing. Approving, rejecting or revoking a grant refreshes the Data listing in the same session.
 
 The Tenancy area supplies the reachable-tenant list used by the directory and by the `t/` completions in the address line. It is exactly the tenants the cluster names for the caller, plus `default` for a proven platform operator, and never a tenant the cluster did not name. The established tenant is listed first and suspended tenants are not offered, except that the established tenant remains available so the current scope never disappears under the caller.
+
+## Trees shared through a grant
+
+A tenant can share a tree, or a tree-name prefix, with another tenant through a cross-tenant grant: the granting tenant offers it from **Sharing**, and the receiving tenant approves it there. Once approved, the shared trees appear in the receiving tenant's Data area alongside its own.
+
+- **Only approved grants.** Only a received grant in the `Active` state (one the tenant approved) shares anything. An offer not yet approved, a rejected offer and a revoked grant are left out, exactly as the cluster's tenant gate ignores them.
+- **Listed with their owner and access.** Each shared row has the **Shared by** tenant and what the grant allows ("Read only", "Write only" or "Read and write"), and the **Shared with this tenant** filter shows them alone. A shared tree's page carries the same two pills.
+- **Addressed under your own root.** A shared tree keeps its full id and is opened under the receiving tenant's root, so acme's `orders` shared with globex is `/t/globex/data/t/acme/orders`. It is read by exactly that id, and the cluster's tenant gate admits the crossing on the grant.
+- **A prefix is one row.** A prefix grant is listed as a single **Shared prefix** row that does not open: the Explorer can list only the receiving tenant's own trees, so it cannot enumerate another tenant's trees under the prefix. Open a tree under it by its full id in the address line, and the directory resolves it against the grant.
+- **No administration.** A grant carries read or write access, never administration, so a shared tree's workspace offers no reconcile or rebuild, whatever the grant allows.
+- **When grants cannot be listed.** If the cluster serves no grant facade, or you may not list the tenant's grants, the directory shows only the tenant's own trees with a note saying shared trees are not listed. A grant whose scope lies outside its granting tenant's own trees shares nothing, so it is not listed and a note counts it. A shared id that matches one of the tenant's own trees is dropped, and the tenant's own tree wins.
+- **Not for the default tenant.** Grants are tenant to tenant, so with tenancy off, or scoped to the reserved `default` tenant, nothing is shared.
+
+**A grant never bypasses the authorization policy.** The tenant gate is composed on top of the cluster's access policy: a grant only opens the boundary between the two tenants, and the policy still decides who may read. The receiving tenant's user also needs an authorization rule that allows the read (for example `Read` and `RangeRead` on `t/acme/orders`), or the shared tree is refused like any other tree.
 
 ## See also
 
