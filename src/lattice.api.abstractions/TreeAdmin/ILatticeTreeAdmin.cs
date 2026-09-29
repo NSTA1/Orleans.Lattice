@@ -329,13 +329,25 @@ public interface ILatticeTreeAdmin
     /// destruction the caller must pass <paramref name="confirm"/>
     /// <see langword="true"/>; a <see langword="false"/> value is rejected before
     /// any authorization or grain call. Reserved system tree ids are rejected.
+    /// <para>
+    /// Accept-then-poll: the purge is recorded as in progress and its shard walk
+    /// runs in the background, where no request timeout can stop it part-way. The
+    /// call waits a bounded time for it and returns the status: when
+    /// <see cref="TreeDeletionStatus.PurgeInProgress"/> is still
+    /// <see langword="true"/>, the purge was accepted and is running, with
+    /// <see cref="TreeDeletionStatus.PurgedShardCount"/> of
+    /// <see cref="TreeDeletionStatus.PurgeShardCount"/> shards done; poll
+    /// <see cref="GetTreeDeletionStatusAsync"/> rather than treating it as a
+    /// failure. A call while the purge runs, or after it has completed, returns the
+    /// status without error.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree to purge. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="confirm">Must be <see langword="true"/> to acknowledge the irreversible purge; <see langword="false"/> is rejected.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tree's deletion status after the purge.</returns>
+    /// <returns>The tree's deletion status once the purge has completed, or has been accepted and is still running.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="confirm"/> is <see langword="false"/>.</exception>
-    /// <exception cref="InvalidOperationException">The tree is not deleted or was already purged.</exception>
+    /// <exception cref="InvalidOperationException">The tree is not deleted.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
     Task<TreeDeletionStatus> PurgeTreeAsync(
         string treeId, bool confirm, CancellationToken cancellationToken = default);

@@ -95,6 +95,17 @@ public sealed partial class InternalOriginGuardIntegrationTests
     }
 
     [Test]
+    public void TreeDeletion_BeginPurgeAsync_direct_external_call_is_refused()
+    {
+        // The accept-then-poll purge (issue #3941) is as destructive as
+        // PurgeNowAsync, so it carries the same internal-origin guard.
+        var grain = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>("coord-guard-begin-purge");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await grain.BeginPurgeAsync());
+    }
+
+    [Test]
     public void TreeDeletion_DiscardDerivedPhysicalTreeAsync_direct_external_call_is_refused()
     {
         // A discard releases a tree's WAL retention and makes it unrecoverable,

@@ -319,14 +319,39 @@ public class TreeDeletionIntegrationTests
     }
 
     [Test]
-    public async Task PurgeTree_throws_if_already_purged()
+    public async Task PurgeTree_retry_after_completion_reports_the_prior_success()
     {
+        // Issue #3941: a retry after the purge completed returns without error
+        // rather than reporting the finished purge as a failure.
         var treeName = $"purge-twice-{Guid.NewGuid():N}";
         var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
 
         await router.DeleteTreeAsync();
         await router.PurgeTreeAsync();
 
+        Assert.DoesNotThrowAsync(() => router.PurgeTreeAsync());
+        var status = await _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName).GetDeletionStatusAsync();
+        Assert.That(status.PurgeComplete, Is.True);
+    }
+
+    [Test]
+    public async Task PurgeTree_on_an_id_registered_again_after_its_purge_is_refused_and_keeps_the_new_tree()
+    {
+        // Issues #3940 and #3941 together: the earlier purge's success is not
+        // reported against a new tree that now answers to the id.
+        var treeName = $"purge-reused-{Guid.NewGuid():N}";
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await router.DeleteTreeAsync();
+        await router.PurgeTreeAsync();
+        await router.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
         Assert.ThrowsAsync<InvalidOperationException>(() => router.PurgeTreeAsync());
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await router.TreeExistsAsync(), Is.True);
+            Assert.That(Encoding.UTF8.GetString((await router.GetAsync("b"))!), Is.EqualTo("2"));
+        });
     }
 }

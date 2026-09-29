@@ -301,5 +301,6 @@ internal sealed class CatalogGrainSurface
         public Task RecoverAsync() => throw new NotSupportedException();
 
         public Task PurgeNowAsync() => throw new NotSupportedException();
+        public Task BeginPurgeAsync() => throw new NotSupportedException();
     }
 }

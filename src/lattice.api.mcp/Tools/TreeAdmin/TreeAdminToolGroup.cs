@@ -178,7 +178,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Read a tree's soft-deletion status",
                 "Reads a tree's soft-deletion lifecycle status: whether it is live, soft-deleted (with the UTC "
                 + "delete time and the recovery deadline derived from the configured soft-delete window), whether a "
-                + "hard purge is in progress or has completed, and whether it can still be recovered. It reports the "
+                + "hard purge is in progress or has completed (with purgedShardCount of purgeShardCount shards done), and "
+                + "whether it can still be recovered. It answers without waiting for a shard's purge, from the state as "
+                + "last persisted. It reports the "
                 + "logical tree: a live resized tree reads as not deleted while its old copy is retired, and for a "
                 + "tree created again under a purged id it reports the purged tree, while the tree itself is live. "
                 + "A pure read with no side "
@@ -406,12 +408,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.PurgeTreeAsync, "lattice_treeadmin_tree_purge",
                 "Hard-purge a soft-deleted tree",
                 "Immediately and irreversibly hard-purges a soft-deleted tree, bypassing the soft-delete window: its "
-                + "leaf and internal node state is permanently removed and the tree is unregistered, returning the "
-                + "tree's final deletion status. On an aliased tree it purges the live copy the delete pinned and "
-                + "unregisters both that copy and the logical tree. The confirm flag must be set to true to acknowledge the "
-                + "irreversible destruction; a false or omitted value is rejected. Rejected when the tree is not "
-                + "deleted or was already purged, and for a reserved system tree id. Tree-lifecycle-gated and "
-                + "destructive."));
+                + "leaf and internal node state is permanently removed and the tree is unregistered. On an aliased "
+                + "tree it purges the live copy the delete pinned and unregisters both that copy and the logical tree. "
+                + "Accept-then-poll: the purge is recorded as in progress and its shard walk runs in the background, "
+                + "where no request timeout stops it part-way; the call waits a bounded time and returns the tree's "
+                + "deletion status. purgeInProgress=true in that status means the purge was accepted and is still "
+                + "running (purgedShardCount of purgeShardCount shards done), not that it failed: poll "
+                + "tree_deletion_status until purgeComplete=true rather than retrying. A call while the purge runs, or "
+                + "after it completed, returns the status without error. The confirm flag must be set to true to "
+                + "acknowledge the irreversible destruction; a false or omitted value is rejected. Rejected when the "
+                + "tree is not deleted, and for a reserved system tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.BeginBulkLoadAsync, "lattice_treeadmin_bulk_load_begin",
                 "Open a bulk-load session",
                 "Opens a streamed, resumable bulk-load (tree-creation) session over an empty tree under a stable, "

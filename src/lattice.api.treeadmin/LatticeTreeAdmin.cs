@@ -2326,6 +2326,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             PurgeInProgress = snapshot.PurgeInProgress,
             PurgeComplete = snapshot.PurgeComplete,
             CanRecover = snapshot.CanRecover,
+            PurgedShardCount = snapshot.PurgedShardCount,
+            PurgeShardCount = snapshot.PurgeShardCount,
         };
 
     /// <summary>

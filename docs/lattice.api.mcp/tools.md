@@ -248,7 +248,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_resolve_alias` | read | Resolve the physical tree a logical tree maps to. |
 | `lattice_treeadmin_tree_get_config` | read | Read a tree's registry-backed configuration (sizing, alias, per-tree overrides). |
 | `lattice_treeadmin_tree_get_shard_map` | read | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts). |
-| `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status. |
+| `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status - including, while a purge runs, `purgeInProgress` with `purgedShardCount` of `purgeShardCount` shards done. Answers without waiting for a shard's purge. |
 | `lattice_treeadmin_tree_reshard_status` | read | Read the current online-reshard state and shard-map fan-out. |
 | `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state and effective B+ node capacities. |
 | `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree. |
@@ -257,7 +257,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides - publish-events, projection-digest maintenance, durable-history retention, and the advisory WAL retained-byte ceiling - each written only when its `apply*` flag is set (a null value on an applied dimension clears that override). |
 | `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
 | `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |
-| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. |
+| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. Accept-then-poll: the shard walk runs in the background, and the call returns within a bounded wait - with `purgeInProgress` still `true` for a tree too large to purge in that time, which is not a failure; poll `lattice_treeadmin_tree_deletion_status`. A call while the purge runs or after it completed returns the status without error. |
 | `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
 | `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. |
