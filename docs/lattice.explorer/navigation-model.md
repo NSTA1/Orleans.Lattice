@@ -215,6 +215,51 @@ sees no tenancy chrome: addresses stay plain, and `/t/default/...` is
 redirected to the plain form. See [Tenant scope](tenant-scope.md) for the full
 tenancy model and the Tenancy area.
 
+## Pickers
+
+Every field that names something the cluster already knows (a tree, a region, a
+user or group, a tenant, a key, a rule id, a schema member, a WAL provider key) is
+a type-ahead picker. As you type, it lists the matching existing values in a mono
+face, with a short description beside each where there is one, such as a
+principal's display name. A polite status region announces how many values match,
+or that more match than are shown and you should keep typing.
+
+A picker works in one of two ways:
+
+- **Pick existing.** Only a listed value is accepted. Leaving the field, or
+  submitting the form, with a value that names nothing is refused with an inline
+  error such as "No tree is named orders. Choose one from the list." Fields that
+  act on an existing tree, region, subject or tenant work this way.
+- **Suggest.** Any text is accepted, and existing values are offered as
+  suggestions. A typed value that already exists is flagged, for example "This
+  tree exists: restoring replaces what it holds.", and where a new id must be
+  unused (a snapshot's destination tree, a new tenant, a new rule id) it is
+  refused.
+
+A field that takes several values, such as a tenant's allowed regions or a new
+tenant's admin subjects, shows the chosen values as removable chips. Choosing a
+suggestion, pressing Enter or typing a comma adds the next value, and duplicates
+are ignored.
+
+The list is a bounded answer (8 values by default), never a full listing. Typing
+does not start a query per key: at most one query is outstanding, a new keystroke
+cancels it, and the keys typed meanwhile collapse into one query for the latest
+text. Small lists such as regions, tenants and provider keys are read once and
+reused for up to 30 seconds.
+
+A picker never blocks a form. When its source cannot list values (no identity
+directory is configured, the cluster does not serve the facade, or the read is
+refused or fails), the field says why and accepts what you type as free text.
+
+Suggestions are tenant-scoped. Tree suggestions come from the same catalogue the
+Data area reads, so with tenancy on only the active tenant's trees are offered;
+anything a picker remembers is keyed on the tenant the circuit asserts, so a value
+read under one tenant is never offered under another.
+
+The picker is an ARIA 1.2 combobox with no focus trap. Down and Up open the list and
+move the highlighted value, Enter chooses it, Escape closes the list, Home and End
+return to editing the text, and Tab leaves the field.
+
 ## Where the address ends and preferences begin
 
 The address carries where you are. Preferences carry how you like the console,

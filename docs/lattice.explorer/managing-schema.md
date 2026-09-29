@@ -67,6 +67,8 @@ The Policy tab reads, sets, edits, and clears the tree's write-validation policy
 - largest size in bytes;
 - regular-expression match, optionally under a member path.
 
+The member path, and a remediation step's member or new name, is a [picker](navigation-model.md#pickers) that suggests the member paths the tree's policy already names. It accepts any path, because a value's members are not known to the cluster until a rule names them.
+
 A policy needs at least one rule; to accept every value, clear the policy instead. Saving replaces the whole policy and affects new writes immediately. Existing stored values are not changed.
 
 **Strict ingest** controls whether replicated and restored values are checked too. When it is on, a value that fails strict ingest is diverted to dead letters instead of being applied.

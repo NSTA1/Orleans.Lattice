@@ -3,7 +3,8 @@
 The Explorer is made from nine built-in areas. Each area owns one top-level
 address, reads only the cluster facades named below, and appears in the spine
 only after its availability probe succeeds or returns a user-actionable
-Unavailable reason.
+Unavailable reason. Every field below that names an existing tree, region, subject,
+tenant or key is a type-ahead [picker](navigation-model.md#pickers).
 
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
@@ -49,7 +50,8 @@ not let you read this entry.", missing entries become "It no longer exists, or
 you cannot see it.", and transient failures ask the reader to try again.
 
 The History tab has three modes. With neither `?key=` nor `?prefix=`, it asks
-for a key. With `?prefix=`, it follows live changes under that prefix and keeps
+for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's keys
+starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
 at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
 boundary notes and a live tail. `?at=` marks the revision that was in effect at
@@ -164,8 +166,9 @@ The enrolled-trees page reads enrolment and status together. The table shows
 enabled, disabled or ambiguous state, merge mode, whether enrolment is runtime,
 static or both, app ownership and worst link health. A caller with the control
 facade and a readable enrolment report can enable replication for a new tree or
-for a disabled runtime tree. Enabling asks for the logical tree id, merge mode
-and optional bootstrap source cluster; app-owned ids are rejected because their
+for a disabled runtime tree. Enabling asks for the logical tree id (a picker
+that accepts only a tree you can reach), merge mode and optional bootstrap source
+cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
 enrolment follows the app install. Disabling is a destructive confirmation: it
 stops new changes from replicating, leaves peer data in place, and keeps the
 merge mode for a later enable. Static-only enrolments cannot be toggled here.
@@ -296,8 +299,12 @@ peers without relying on colour alone, and links to Replication.
 The tree list is filtered by tree name, app or tenant. It filters out restore
 shadows and physical resize or restore targets, so rows show logical trees only.
 App and tenant ownership are parsed from `t/{tenant}/a/{app}/...` and shown as
-text. The visible `cluster.reshard-tree` control opens a dialog, validates the
-logical tree name, and navigates to that tree's reshard page.
+text. The visible `cluster.reshard-tree` control opens a dialog whose tree field
+is a picker over the cluster's logical trees, and navigates to that tree's reshard
+page. Every Cluster field that names an existing tree (the WAL and orphaned-leaf
+audits, the alias target, the reshard dialog) accepts only a listed tree, while a
+snapshot's destination is suggested against the existing trees and refused if it
+already exists.
 
 A tree page begins with a side-effect-free capability probe. If the caller has
 no tree-admin capability over the tree, it shows "Nothing you can administer".
@@ -334,7 +341,9 @@ entries into a new tree, either online or offline, and allows optional sizing.
 While any of these operations is in progress, the page polls status every 2
 seconds and stops when the operation finishes or the page goes away.
 
-The WAL page first audits placement for a named tree. A move plan is addressed
+The WAL page first audits placement for a named tree. The move planner's target
+provider key is a picker over the provider keys the resolving silo reports for that
+tree; without a tree to audit it accepts a typed key. A move plan is addressed
 entirely by `?tree=`, `?partition=` and `?target=`, so refreshing or returning
 to the link resumes the same preview. Planning changes nothing. Executing a
 move quiesces the partition briefly, copies the tail, flips placement and
