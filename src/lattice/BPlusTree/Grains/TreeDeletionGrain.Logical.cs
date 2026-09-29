@@ -9,7 +9,9 @@ internal sealed partial class TreeDeletionGrain
 
     public async Task EnsureAliasWritableAsync()
     {
-        if (await IsDeletedAsync() || state.State.LocalDeleteTargetPinned)
+        // Interleaved, so it may only read: a purged tree whose id was
+        // registered again is live, whatever its record says.
+        if (state.State.LocalDeleteTargetPinned ? !await IsReusedAfterPurgeAsync() : await IsDeletedAsync())
             throw Refuse($"Cannot change an alias involving deleted tree '{TreeId}'; recover it first.");
     }
 
@@ -17,6 +19,7 @@ internal sealed partial class TreeDeletionGrain
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);
         EnsureLifecycleOrigin();
+        await ClearRecordIfReusedAfterPurgeAsync();
         if (await IsDeletedAsync() || state.State.LocalDeleteTargetPinned)
             throw Refuse($"Tree '{TreeId}' is logically deleted; recover it before changing its alias.");
         if (state.State.AliasOperationId is { } active && active != operationId)
@@ -57,6 +60,9 @@ internal sealed partial class TreeDeletionGrain
     public async Task DeleteTreeAsync()
     {
         EnsureLifecycleOrigin();
+        // A purged tree's record would otherwise make this a silent no-op on the
+        // live tree now registered under its id.
+        await ClearRecordIfReusedAfterPurgeAsync();
         if (state.State.AliasOperationId is { } operation)
             throw Refuse($"Cannot delete tree '{TreeId}': alias operation '{operation}' is in progress.");
         if (state.State.LocalDeleteTargetPinned)
