@@ -174,6 +174,140 @@ public class LeafSnapshotFrameTrimBenchmarks
         AssertKeyCompareEquivalence();
         AssertAccountingEquivalence();
         AssertInlineRootEquivalence();
+        AssertRowModeEquivalence();
+    }
+
+    /// <summary>
+    /// The group (7) pair differs only in how the parse mode is carried, so the
+    /// two replicas and the shipped parser must agree on every frame - that the
+    /// skip walks all step to the same offsets, that the materialising walks all
+    /// decode the same rows, and that all of them still REJECT a corrupted
+    /// frame, since a side that stopped bounds-checking would look fast for the
+    /// wrong reason.
+    /// </summary>
+    private void AssertRowModeEquivalence()
+    {
+        var edgeFrame = LeafSnapshotCodec.Encode(BuildEdgeCaseRows());
+        foreach (var (frame, label) in new[]
+                 {
+                     (_frame, "primary frame"),
+                     (_tinyFrame, "two-row frame"),
+                     (edgeFrame, "edge-case frame"),
+                 })
+        {
+            var baseline = BoolModeSkipWalk(frame);
+            if (baseline <= 0
+                || baseline != GenericModeSkipWalk(frame)
+                || baseline != ShippedSkipWalk(frame))
+            {
+                throw new InvalidOperationException(
+                    $"Row-mode skip lanes disagree over the {label}; the comparison would be void.");
+            }
+
+            var read = BoolModeReadWalk(frame);
+            if (read <= 0 || read != GenericModeReadWalk(frame))
+            {
+                throw new InvalidOperationException(
+                    $"Row-mode materialising lanes disagree over the {label}; the comparison would be void.");
+            }
+
+            // The decoded rows must match field for field, not merely in the
+            // aggregate the walk lanes accumulate.
+            if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+            {
+                throw new InvalidOperationException($"The {label} has no readable header.");
+            }
+
+            var boolPos = LeafSnapshotCodec.HeaderLength;
+            var genericPos = LeafSnapshotCodec.HeaderLength;
+            for (var i = 0; i < rowCount; i++)
+            {
+                if (!BoolModeTryReadRowCore(
+                        frame, indexOffset, ref boolPos, materialize: true, out var boolRow, out var boolKeyLength)
+                    || !GenericModeTryReadRowCore<ReplicaMaterialisingMode>(
+                        frame, indexOffset, ref genericPos, out var genericRow, out var genericKeyLength)
+                    || boolPos != genericPos
+                    || boolKeyLength != genericKeyLength
+                    || !RowsMatch(boolRow, genericRow))
+                {
+                    throw new InvalidOperationException(
+                        $"Row-mode parsers decoded row {i} of the {label} differently.");
+                }
+            }
+        }
+
+        // Positive proof that every side still rejects corruption.
+        var corrupt = (byte[])_frame.Clone();
+        corrupt[LeafSnapshotCodec.HeaderLength] ^= 0xFF;
+        if (BoolModeSkipWalk(corrupt) >= 0
+            || GenericModeSkipWalk(corrupt) >= 0
+            || ShippedSkipWalk(corrupt) >= 0)
+        {
+            throw new InvalidOperationException(
+                "A corrupted frame walked cleanly; the row-mode lanes are not bounds-checking anything.");
+        }
+    }
+
+    /// <summary>
+    /// Compares two decoded rows by value. <see cref="LeafSnapshotRow"/> is a
+    /// record struct carrying a <c>byte[]</c> payload and a
+    /// <see cref="VersionVector"/>, so its generated equality compares those by
+    /// REFERENCE - two independent decodes of the same row can never be equal
+    /// under it, and an equality check would report a difference that is not
+    /// there. Every field is therefore compared explicitly.
+    /// </summary>
+    private static bool RowsMatch(in LeafSnapshotRow left, in LeafSnapshotRow right)
+    {
+        if (!string.Equals(left.Key, right.Key, StringComparison.Ordinal)
+            || left.MergeMode != right.MergeMode)
+        {
+            return false;
+        }
+
+        var a = left.Value;
+        var b = right.Value;
+        if (a.IsTombstone != b.IsTombstone
+            || a.ExpiresAtTicks != b.ExpiresAtTicks
+            || a.IsMigrated != b.IsMigrated
+            || a.Timestamp.WallClockTicks != b.Timestamp.WallClockTicks
+            || a.Timestamp.Counter != b.Timestamp.Counter
+            || !string.Equals(a.OriginClusterId, b.OriginClusterId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (a.Value is null != (b.Value is null)
+            || (a.Value is not null && !a.Value.AsSpan().SequenceEqual(b.Value)))
+        {
+            return false;
+        }
+
+        if (a.VectorClock is null != (b.VectorClock is null))
+        {
+            return false;
+        }
+
+        if (a.VectorClock is null)
+        {
+            return true;
+        }
+
+        if (a.VectorClock.Entries.Count != b.VectorClock!.Entries.Count)
+        {
+            return false;
+        }
+
+        foreach (var (replica, clock) in a.VectorClock.Entries)
+        {
+            if (!b.VectorClock.Entries.TryGetValue(replica, out var other)
+                || other.WallClockTicks != clock.WallClockTicks
+                || other.Counter != clock.Counter)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -541,6 +675,72 @@ public class LeafSnapshotFrameTrimBenchmarks
     [Benchmark(Description = "(6) probe - structural validate - pinned (not shipped)")]
     public bool Validate_Pinned() => PinnedValidate(_frame);
 
+    // ---------------------------------------------------------------- group 7
+    //
+    // The row parser serves two callers with opposite appetites from one body:
+    // the materialising walk, which decodes every field into a
+    // LeafSnapshotRow, and the structural walk, which only needs to step over
+    // them. Which one is running was a `bool materialize` PARAMETER, and the
+    // JIT cannot fold a parameter: the skip walk therefore carried the whole
+    // materialising half - two UTF-8 decodes, a VersionVector allocation, a
+    // per-clock-entry dictionary insert, a payload copy and the row
+    // construction - as unreachable-but-present code it had to branch around
+    // once per row.
+    //
+    // Carrying the mode as a generic type argument over a struct makes the
+    // runtime compile one copy of the parser per mode, in which the mode test
+    // is a JIT-time constant. The skip copy dead-codes the materialising half
+    // outright; the materialising copy is unchanged.
+    //
+    // Both sides below are LOCAL replicas, for the reason group (6)'s Validate
+    // probe gives: pointing one side at the shipped method makes the pair
+    // collapse into the same code the moment the shipped shape changes, and it
+    // would read as a null result while measuring nothing. The two replicas
+    // share their field readers and differ ONLY in how the mode is carried,
+    // and the two walk drivers are literal copies of one another differing
+    // only in the callee name - so neither the call shape nor the walk can
+    // account for the delta.
+
+    /// <summary>Structural row walk whose parser takes the mode as a runtime bool.</summary>
+    [Benchmark(Description = "(7) structural row walk - baseline (mode as bool parameter)")]
+    public int SkipWalk_Baseline() => BoolModeSkipWalk(_frame);
+
+    /// <summary>Structural row walk whose parser takes the mode as a generic type argument.</summary>
+    [Benchmark(Description = "(7) structural row walk - optimised (mode specialised)")]
+    public int SkipWalk_Optimised() => GenericModeSkipWalk(_frame);
+
+    /// <summary>
+    /// Reference: the same walk through the shipped <c>TrySkipRow</c>. It must
+    /// track the optimised replica - if it tracked the baseline instead, the
+    /// replica would be measuring a shape production does not have.
+    /// </summary>
+    [Benchmark(Description = "(7) structural row walk - shipped TrySkipRow (reference)")]
+    public int SkipWalk_Shipped() => ShippedSkipWalk(_frame);
+
+    /// <summary>
+    /// Control: a two-row frame. The specialisation is a per-row effect, so a
+    /// frame with almost no rows must show no meaningful separation.
+    /// </summary>
+    [Benchmark(Description = "(7) control - structural walk over a 2-row frame - baseline")]
+    public int SkipWalkTiny_Baseline() => BoolModeSkipWalk(_tinyFrame);
+
+    /// <summary>Control: a two-row frame, optimised side.</summary>
+    [Benchmark(Description = "(7) control - structural walk over a 2-row frame - optimised")]
+    public int SkipWalkTiny_Optimised() => GenericModeSkipWalk(_tinyFrame);
+
+    /// <summary>
+    /// Control: the MATERIALISING walk, which the specialisation must leave
+    /// alone. Its copy of the parser keeps every field decode, so this pair is
+    /// expected to be flat - a win here would mean the two lanes are not
+    /// decoding the same rows.
+    /// </summary>
+    [Benchmark(Description = "(7) control - materialising row walk - baseline")]
+    public int ReadWalk_Baseline() => BoolModeReadWalk(_frame);
+
+    /// <summary>Control: the materialising walk, optimised side.</summary>
+    [Benchmark(Description = "(7) control - materialising row walk - optimised")]
+    public int ReadWalk_Optimised() => GenericModeReadWalk(_frame);
+
     // ------------------------------------------------------------- equivalence
     private void AssertAdmissionEquivalence()
     {
@@ -824,6 +1024,449 @@ public class LeafSnapshotFrameTrimBenchmarks
 
         stateBytes = total;
         return true;
+    }
+
+    // ------------------------------------------------- group (7) replicas
+    //
+    // A faithful copy of the leaf row parser in its two mode-carrying shapes.
+    // The field readers and the row flags below are verbatim copies of the
+    // codec's private ones, shared by BOTH cores, so the only difference
+    // between the pair is whether the mode arrives as a `bool` parameter or as
+    // a struct type argument.
+
+    private const byte ReplicaRowFlagHasValue = 0x01;
+    private const byte ReplicaRowFlagTombstone = 0x02;
+    private const byte ReplicaRowFlagHasOriginClusterId = 0x04;
+    private const byte ReplicaRowFlagHasVectorClock = 0x08;
+    private const byte ReplicaRowFlagMigrated = 0x10;
+    private const byte ReplicaRowFlagHasMergeMode = 0x20;
+
+    private static bool ReplicaTryReadByte(ReadOnlySpan<byte> frame, int limit, ref int pos, out byte value)
+    {
+        value = 0;
+        if (pos < 0 || limit - pos < sizeof(byte))
+        {
+            return false;
+        }
+
+        value = frame[pos];
+        pos += sizeof(byte);
+        return true;
+    }
+
+    private static bool ReplicaTryReadInt32(ReadOnlySpan<byte> frame, int limit, ref int pos, out int value)
+    {
+        value = 0;
+        if (pos < 0 || limit - pos < sizeof(int))
+        {
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadInt32LittleEndian(frame.Slice(pos, sizeof(int)));
+        pos += sizeof(int);
+        return true;
+    }
+
+    private static bool ReplicaTryReadInt64(ReadOnlySpan<byte> frame, int limit, ref int pos, out long value)
+    {
+        value = 0;
+        if (pos < 0 || limit - pos < sizeof(long))
+        {
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(pos, sizeof(long)));
+        pos += sizeof(long);
+        return true;
+    }
+
+    private static bool ReplicaTryReadSpan(
+        ReadOnlySpan<byte> frame, int limit, ref int pos, out ReadOnlySpan<byte> value)
+    {
+        value = default;
+        if (!ReplicaTryReadInt32(frame, limit, ref pos, out var length) || length < 0 || limit - pos < length)
+        {
+            return false;
+        }
+
+        value = frame.Slice(pos, length);
+        pos += length;
+        return true;
+    }
+
+    /// <summary>Compile-time parse mode for the generic replica core.</summary>
+    private interface IReplicaRowParseMode
+    {
+        /// <summary>Whether this mode decodes row payloads or only walks past them.</summary>
+        static abstract bool Materialize { get; }
+    }
+
+    /// <summary>Replica parse mode that decodes each row.</summary>
+    private readonly struct ReplicaMaterialisingMode : IReplicaRowParseMode
+    {
+        /// <inheritdoc />
+        public static bool Materialize => true;
+    }
+
+    /// <summary>Replica parse mode that walks past each row's payloads.</summary>
+    private readonly struct ReplicaSkippingMode : IReplicaRowParseMode
+    {
+        /// <inheritdoc />
+        public static bool Materialize => false;
+    }
+
+    /// <summary>The parser as it stood: the mode is a runtime <see cref="bool"/>.</summary>
+    private static bool BoolModeTryReadRowCore(
+        ReadOnlySpan<byte> frame,
+        int limit,
+        ref int pos,
+        bool materialize,
+        out LeafSnapshotRow row,
+        out int keyUtf8Length)
+    {
+        row = default;
+        keyUtf8Length = 0;
+
+        if (!ReplicaTryReadSpan(frame, limit, ref pos, out var keyUtf8)
+            || !ReplicaTryReadByte(frame, limit, ref pos, out var flags)
+            || !ReplicaTryReadInt64(frame, limit, ref pos, out var wallClockTicks)
+            || !ReplicaTryReadInt32(frame, limit, ref pos, out var counter)
+            || !ReplicaTryReadInt64(frame, limit, ref pos, out var expiresAtTicks))
+        {
+            return false;
+        }
+
+        keyUtf8Length = keyUtf8.Length;
+
+        LatticeMergeMode? mergeMode = null;
+        if ((flags & ReplicaRowFlagHasMergeMode) != 0)
+        {
+            if (!ReplicaTryReadInt32(frame, limit, ref pos, out var rawMode))
+            {
+                return false;
+            }
+
+            mergeMode = (LatticeMergeMode)rawMode;
+        }
+
+        string? originClusterId = null;
+        if ((flags & ReplicaRowFlagHasOriginClusterId) != 0)
+        {
+            if (!ReplicaTryReadSpan(frame, limit, ref pos, out var originUtf8))
+            {
+                return false;
+            }
+
+            if (materialize)
+            {
+                originClusterId = Encoding.UTF8.GetString(originUtf8);
+            }
+        }
+
+        VersionVector? vectorClock = null;
+        if ((flags & ReplicaRowFlagHasVectorClock) != 0)
+        {
+            if (!ReplicaTryReadInt32(frame, limit, ref pos, out var entryCount) || entryCount < 0)
+            {
+                return false;
+            }
+
+            if ((long)entryCount * (sizeof(int) + sizeof(long) + sizeof(int)) > limit - pos)
+            {
+                return false;
+            }
+
+            if (materialize)
+            {
+                vectorClock = new VersionVector();
+            }
+
+            for (var i = 0; i < entryCount; i++)
+            {
+                if (!ReplicaTryReadSpan(frame, limit, ref pos, out var replicaUtf8)
+                    || !ReplicaTryReadInt64(frame, limit, ref pos, out var entryTicks)
+                    || !ReplicaTryReadInt32(frame, limit, ref pos, out var entryCounter))
+                {
+                    return false;
+                }
+
+                if (materialize)
+                {
+                    vectorClock!.Entries[Encoding.UTF8.GetString(replicaUtf8)] =
+                        new HybridLogicalClock { WallClockTicks = entryTicks, Counter = entryCounter };
+                }
+            }
+        }
+
+        byte[]? value = null;
+        if ((flags & ReplicaRowFlagHasValue) != 0)
+        {
+            if (!ReplicaTryReadSpan(frame, limit, ref pos, out var valueBytes))
+            {
+                return false;
+            }
+
+            if (materialize)
+            {
+                value = valueBytes.ToArray();
+            }
+        }
+
+        if (!materialize)
+        {
+            return true;
+        }
+
+        row = new LeafSnapshotRow(
+            Encoding.UTF8.GetString(keyUtf8),
+            new LwwValue<byte[]>
+            {
+                Value = value,
+                Timestamp = new HybridLogicalClock { WallClockTicks = wallClockTicks, Counter = counter },
+                IsTombstone = (flags & ReplicaRowFlagTombstone) != 0,
+                ExpiresAtTicks = expiresAtTicks,
+                OriginClusterId = originClusterId,
+                VectorClock = vectorClock,
+                IsMigrated = (flags & ReplicaRowFlagMigrated) != 0,
+            },
+            mergeMode);
+        return true;
+    }
+
+    /// <summary>The same parser with the mode carried as a generic type argument.</summary>
+    private static bool GenericModeTryReadRowCore<TMode>(
+        ReadOnlySpan<byte> frame,
+        int limit,
+        ref int pos,
+        out LeafSnapshotRow row,
+        out int keyUtf8Length)
+        where TMode : struct, IReplicaRowParseMode
+    {
+        row = default;
+        keyUtf8Length = 0;
+
+        if (!ReplicaTryReadSpan(frame, limit, ref pos, out var keyUtf8)
+            || !ReplicaTryReadByte(frame, limit, ref pos, out var flags)
+            || !ReplicaTryReadInt64(frame, limit, ref pos, out var wallClockTicks)
+            || !ReplicaTryReadInt32(frame, limit, ref pos, out var counter)
+            || !ReplicaTryReadInt64(frame, limit, ref pos, out var expiresAtTicks))
+        {
+            return false;
+        }
+
+        keyUtf8Length = keyUtf8.Length;
+
+        LatticeMergeMode? mergeMode = null;
+        if ((flags & ReplicaRowFlagHasMergeMode) != 0)
+        {
+            if (!ReplicaTryReadInt32(frame, limit, ref pos, out var rawMode))
+            {
+                return false;
+            }
+
+            mergeMode = (LatticeMergeMode)rawMode;
+        }
+
+        string? originClusterId = null;
+        if ((flags & ReplicaRowFlagHasOriginClusterId) != 0)
+        {
+            if (!ReplicaTryReadSpan(frame, limit, ref pos, out var originUtf8))
+            {
+                return false;
+            }
+
+            if (TMode.Materialize)
+            {
+                originClusterId = Encoding.UTF8.GetString(originUtf8);
+            }
+        }
+
+        VersionVector? vectorClock = null;
+        if ((flags & ReplicaRowFlagHasVectorClock) != 0)
+        {
+            if (!ReplicaTryReadInt32(frame, limit, ref pos, out var entryCount) || entryCount < 0)
+            {
+                return false;
+            }
+
+            if ((long)entryCount * (sizeof(int) + sizeof(long) + sizeof(int)) > limit - pos)
+            {
+                return false;
+            }
+
+            if (TMode.Materialize)
+            {
+                vectorClock = new VersionVector();
+            }
+
+            for (var i = 0; i < entryCount; i++)
+            {
+                if (!ReplicaTryReadSpan(frame, limit, ref pos, out var replicaUtf8)
+                    || !ReplicaTryReadInt64(frame, limit, ref pos, out var entryTicks)
+                    || !ReplicaTryReadInt32(frame, limit, ref pos, out var entryCounter))
+                {
+                    return false;
+                }
+
+                if (TMode.Materialize)
+                {
+                    vectorClock!.Entries[Encoding.UTF8.GetString(replicaUtf8)] =
+                        new HybridLogicalClock { WallClockTicks = entryTicks, Counter = entryCounter };
+                }
+            }
+        }
+
+        byte[]? value = null;
+        if ((flags & ReplicaRowFlagHasValue) != 0)
+        {
+            if (!ReplicaTryReadSpan(frame, limit, ref pos, out var valueBytes))
+            {
+                return false;
+            }
+
+            if (TMode.Materialize)
+            {
+                value = valueBytes.ToArray();
+            }
+        }
+
+        if (!TMode.Materialize)
+        {
+            return true;
+        }
+
+        row = new LeafSnapshotRow(
+            Encoding.UTF8.GetString(keyUtf8),
+            new LwwValue<byte[]>
+            {
+                Value = value,
+                Timestamp = new HybridLogicalClock { WallClockTicks = wallClockTicks, Counter = counter },
+                IsTombstone = (flags & ReplicaRowFlagTombstone) != 0,
+                ExpiresAtTicks = expiresAtTicks,
+                OriginClusterId = originClusterId,
+                VectorClock = vectorClock,
+                IsMigrated = (flags & ReplicaRowFlagMigrated) != 0,
+            },
+            mergeMode);
+        return true;
+    }
+
+    // The three skip wrappers below carry IDENTICAL signatures, so the walk
+    // drivers that call them present the same call shape and the delta cannot
+    // be an argument-passing or inlining artefact of the wrapper itself.
+
+    private static bool BoolModeTrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
+        => BoolModeTryReadRowCore(frame, limit, ref pos, materialize: false, out _, out _);
+
+    private static bool GenericModeTrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
+        => GenericModeTryReadRowCore<ReplicaSkippingMode>(frame, limit, ref pos, out _, out _);
+
+    // The three walk drivers are literal copies of one another; only the
+    // callee name differs.
+
+    private static int BoolModeSkipWalk(ReadOnlySpan<byte> frame)
+    {
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return -1;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!BoolModeTrySkipRow(frame, indexOffset, ref pos))
+            {
+                return -1;
+            }
+        }
+
+        return pos == indexOffset ? rowCount : -1;
+    }
+
+    private static int GenericModeSkipWalk(ReadOnlySpan<byte> frame)
+    {
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return -1;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!GenericModeTrySkipRow(frame, indexOffset, ref pos))
+            {
+                return -1;
+            }
+        }
+
+        return pos == indexOffset ? rowCount : -1;
+    }
+
+    private static int ShippedSkipWalk(ReadOnlySpan<byte> frame)
+    {
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return -1;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!LeafSnapshotCodec.TrySkipRow(frame, indexOffset, ref pos))
+            {
+                return -1;
+            }
+        }
+
+        return pos == indexOffset ? rowCount : -1;
+    }
+
+    // The materialising controls consume the decoded row - a walk that threw
+    // the row away would let the JIT delete the very work being controlled for.
+
+    private static int BoolModeReadWalk(ReadOnlySpan<byte> frame)
+    {
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return -1;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        var acc = 0;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!BoolModeTryReadRowCore(frame, indexOffset, ref pos, materialize: true, out var row, out _))
+            {
+                return -1;
+            }
+
+            acc += row.Key.Length + (row.Value.Value?.Length ?? 0);
+        }
+
+        return pos == indexOffset ? acc : -1;
+    }
+
+    private static int GenericModeReadWalk(ReadOnlySpan<byte> frame)
+    {
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return -1;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        var acc = 0;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!GenericModeTryReadRowCore<ReplicaMaterialisingMode>(
+                    frame, indexOffset, ref pos, out var row, out _))
+            {
+                return -1;
+            }
+
+            acc += row.Key.Length + (row.Value.Value?.Length ?? 0);
+        }
+
+        return pos == indexOffset ? acc : -1;
     }
 
     private static bool BaselineIsAscendingByKey(ReadOnlySpan<byte> frame)    {
