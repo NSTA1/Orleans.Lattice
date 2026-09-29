@@ -1035,6 +1035,10 @@
       "response": "TenantGrantChangeResult",
       "errors": [
         {
+          "error_id": "invalid-argument",
+          "condition": "The scope is blank, operations is TenantGrantAccess.None, or the granting and grantee tenants are the same."
+        },
+        {
           "error_id": "failed-precondition",
           "condition": "A live active grant exists for the same grantee and scope or a reserved tenant was targeted."
         },

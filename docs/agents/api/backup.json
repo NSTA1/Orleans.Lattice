@@ -1366,8 +1366,8 @@
         "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
       },
       "concurrency": {
-        "rule": "Cross-tree consistent multi-tree sets use one causal fence.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+        "rule": "Cross-tree consistent multi-tree sets use one causal fence, a quiescence window that keeps cross-tree atomic writes whole but is not a single point-in-time cut for writes that touch only one member tree.",
+        "source": "docs/lattice.backup/architecture.md"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync",

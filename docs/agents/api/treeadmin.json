@@ -2294,7 +2294,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "concurrency": {
-        "rule": "Trees that source materialised views are rejected.",
+        "rule": "Rejected while the tree is the source of a materialised view, while another tree aliases it, when its alias targets a tree it does not own, or while a resize, restore or remediation is changing its alias.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "sources": [
@@ -3643,7 +3643,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
       },
       "concurrency": {
-        "rule": "Available within the soft-delete recovery window.",
+        "rule": "Available within the soft-delete recovery window; on an aliased tree it recovers the live copy the delete pinned, and a live resized tree is not deleted, so recovering it is rejected.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
       },
       "sources": [
@@ -4824,6 +4824,10 @@
           "condition": "Facade precondition failed."
         },
         {
+          "error_id": "tree-ownership-denied",
+          "condition": "The registered ownership guard refuses the alias."
+        },
+        {
           "error_id": "cancelled",
           "condition": "Call cancellation."
         },
@@ -4849,12 +4853,13 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed.",
+        "rule": "Only one level of alias indirection is allowed, and the alias is refused while either tree is deleted or a delete of it is pending.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeAlias"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeAlias",
+        "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard"
       ]
     },
     {
@@ -5173,6 +5178,14 @@
       "retryable": false,
       "meaning": "Bulk-load target is not empty.",
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeNotEmptyException.cs#TreeNotEmptyException"
+    },
+    {
+      "id": "tree-ownership-denied",
+      "type": "LatticeTreeOwnershipDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The registered ITreeOwnershipGuard refused an alias assignment; the status message carries the guard's caller-safe reason.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
     }
   ]
 }

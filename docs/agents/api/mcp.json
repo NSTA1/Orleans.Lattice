@@ -8746,7 +8746,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "concurrency": {
-        "rule": "Trees that source materialised views are rejected.",
+        "rule": "Rejected while the tree is the source of a materialised view, while another tree aliases it, when its alias targets a tree it does not own, or while a resize, restore or remediation is changing its alias.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "sources": [
@@ -9113,7 +9113,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
       },
       "concurrency": {
-        "rule": "Available within the soft-delete recovery window.",
+        "rule": "Available within the soft-delete recovery window; on an aliased tree it recovers the live copy the delete pinned, and a live resized tree is not deleted, so recovering it is rejected.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
       },
       "sources": [
@@ -9766,7 +9766,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed.",
+        "rule": "Only one level of alias indirection is allowed, and the alias is refused while either tree is deleted or a delete of it is pending.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
       },
       "sources": [
@@ -13622,11 +13622,11 @@
     },
     {
       "id": "invalid-argument",
-      "type": "McpException",
+      "type": "result-error",
       "grpc_status": null,
       "retryable": false,
-      "meaning": "The request supplied an unknown parameter, invalid value, unsafe path, or unsupported region.",
-      "source": "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs#CredentialStampingTool.InvokeAsync"
+      "meaning": "The request supplied an unknown parameter, a missing or invalid value, refused content, an unsafe path, or an unsupported region. A fault classified as a client error is answered as an MCP error result (isError true) rather than thrown, logged at Debug and counted; authorization denials are never classified as client errors.",
+      "source": "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
     },
     {
       "id": "mcp-exception",

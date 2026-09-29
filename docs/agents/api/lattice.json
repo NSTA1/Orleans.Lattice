@@ -16,6 +16,8 @@
     "src/lattice/ILatticeAdmin.cs#ILatticeAdmin",
     "src/lattice/ILatticeRetryPolicy.cs#ILatticeRetryPolicy",
     "src/lattice/IMutationObserver.cs#IMutationObserver",
+    "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard",
+    "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#LatticeCrossTreeAtomicWriteExtensions",
     "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException",
     "src/lattice/LatticeSaturatedException.cs#LatticeSaturatedException",
     "src/lattice/LatticeServiceCollectionExtensions.cs#AddLattice"
@@ -106,6 +108,14 @@
         }
       ],
       "source": "src/lattice/ClusterStorageUsageReport.cs#ClusterStorageUsageReport"
+    },
+    "CrossTreeAtomicWriteOutcome": {
+      "kind": "enum",
+      "values": [
+        "Committed",
+        "PreconditionFailed"
+      ],
+      "source": "src/lattice/CrossTreeAtomicWriteOutcome.cs#CrossTreeAtomicWriteOutcome"
     },
     "EntryHistoryPage": {
       "kind": "record",
@@ -205,6 +215,17 @@
         }
       ],
       "source": "src/lattice/IMutationObserver.cs#IMutationObserver"
+    },
+    "ITreeOwnershipGuard": {
+      "kind": "interface",
+      "fields": [
+        {
+          "name": "AuthorizeAliasAsync",
+          "type": "ValueTask<TreeOwnershipDecision> AuthorizeAliasAsync(string logicalTreeId, string physicalTreeId, string? derivedFrom, CancellationToken cancellationToken = default)",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard"
     },
     "LatticeBooleanOperator": {
       "kind": "enum",
@@ -615,6 +636,48 @@
       ],
       "source": "src/lattice/Predicates/LatticeStringMethod.cs#LatticeStringMethod"
     },
+    "LatticeTreeBatch": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "List<KeyValuePair<string, byte[]>>",
+          "required": true
+        },
+        {
+          "name": "Predicate",
+          "type": "LatticePredicateNode?",
+          "required": false
+        },
+        {
+          "name": "EntryDeltas",
+          "type": "List<byte[]?>?",
+          "required": false
+        },
+        {
+          "name": "EntryDeletes",
+          "type": "List<bool>?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/LatticeTreeBatch.cs#LatticeTreeBatch"
+    },
+    "LatticeTreeOwnershipDeniedException": {
+      "kind": "exception",
+      "fields": [
+        {
+          "name": "Reason",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/LatticeTreeOwnershipDeniedException.cs#LatticeTreeOwnershipDeniedException"
+    },
     "LeafProjectionDigest": {
       "kind": "struct",
       "fields": [
@@ -784,6 +847,22 @@
         }
       ],
       "source": "src/lattice/BPlusTree/TreeDiagnosticReport.cs#TreeDiagnosticReport"
+    },
+    "TreeOwnershipDecision": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Allowed",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Reason",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/TreeOwnershipDecision.cs#TreeOwnershipDecision"
     },
     "TreeStorageUsageReport": {
       "kind": "struct",
@@ -1863,6 +1942,86 @@
       ]
     },
     {
+      "id": "cross-tree-set-many-atomic",
+      "in_process": {
+        "interface": "LatticeCrossTreeAtomicWriteExtensions",
+        "method": "SetManyAtomicAsync",
+        "signature": "Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAsync(this IGrainFactory factory, IReadOnlyList<LatticeTreeBatch> batches, string operationId, CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "factory",
+            "type": "IGrainFactory",
+            "required": true
+          },
+          {
+            "name": "batches",
+            "type": "IReadOnlyList<LatticeTreeBatch>",
+            "required": true
+          },
+          {
+            "name": "operationId",
+            "type": "string",
+            "required": true
+          },
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "CrossTreeAtomicWriteOutcome"
+      },
+      "errors": [
+        {
+          "error_id": "argument-null",
+          "condition": "factory or batches is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "operationId is null, empty, whitespace, or contains '/'; a tree id is null, empty, or repeated; or a tree's slice repeats a key (a Set and a Delete of one key count as a repeat), or carries a null key or a null upsert value. A rejected batch stages no write and persists no saga state."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "A write fails after the saga compensates, including a key or value that exceeds MaxKeyLength or MaxValueSizeBytes when the saga writes it; or the operationId is re-submitted with a different tree-set or key-set."
+        },
+        {
+          "error_id": "state-write-failed",
+          "condition": "A saga state-write conflict persists after the bounded re-attach attempts."
+        },
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before dispatch."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Re-submitting the same batch under the same operationId re-attaches to the in-flight or completed saga and returns its memoized outcome.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#SetManyAtomicAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The required operationId binds the tree-set and key-set; a matching re-submission returns the memoized outcome and the durable decision is never applied twice.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#SetManyAtomicAsync"
+      },
+      "concurrency": {
+        "rule": "Each participating tree runs its single-tree saga in prepare-and-pause mode and one coordinator decision flips visibility on every tree at once.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#LatticeCrossTreeAtomicWriteExtensions"
+      },
+      "sources": [
+        "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#SetManyAtomicAsync",
+        "src/lattice/LatticeTreeBatch.cs#LatticeTreeBatch",
+        "src/lattice/CrossTreeAtomicWriteOutcome.cs#CrossTreeAtomicWriteOutcome",
+        "docs/lattice/atomic-writes.md"
+      ]
+    },
+    {
       "id": "delete",
       "in_process": {
         "interface": "ILattice",
@@ -2147,6 +2306,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The tree's alias targets a tree this tree does not own, another tree aliases this one, or a resize, restore or remediation holds the tree's alias."
         }
       ],
       "retry": {
@@ -2160,17 +2323,13 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#DeleteTreeAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "rule": "The delete acts on the logical tree and throws InvalidOperationException while a resize, restore or remediation holds the tree's alias, when another tree aliases it, or when its alias targets a tree it does not own.",
         "source": "src/lattice/BPlusTree/ILattice.cs#DeleteTreeAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#DeleteTreeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#DeleteTreeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#DeleteTreeAsync",
+        "docs/lattice/tree-registry.md"
       ]
     },
     {
@@ -5037,6 +5196,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The tree has not been deleted, or the purge has already completed."
         }
       ],
       "retry": {
@@ -5080,7 +5243,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#PurgeTreeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#PurgeTreeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#PurgeTreeAsync",
+        "docs/lattice/tree-registry.md"
       ]
     },
     {
@@ -5503,6 +5667,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The tree has not been deleted (including a live resized tree), a purge is in progress, or the purge has already completed."
         }
       ],
       "retry": {
@@ -5546,7 +5714,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#RecoverTreeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#RecoverTreeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#RecoverTreeAsync",
+        "docs/lattice/tree-registry.md"
       ]
     },
     {
@@ -6137,6 +6306,10 @@
         {
           "error_id": "saturated",
           "condition": "The per-shard fan-out has not settled within LatticeOptions.SetManyFanOutBudget; already-committed branches are retained and in-flight branches are not cancelled."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "A key exceeds LatticeOptions.MaxKeyLength or a value exceeds LatticeOptions.MaxValueSizeBytes; every entry is checked on entry before any shard work."
         }
       ],
       "retry": {
@@ -6155,7 +6328,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6193,6 +6367,14 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "An upsert key exceeds LatticeOptions.MaxKeyLength or an upsert value exceeds LatticeOptions.MaxValueSizeBytes; the batch is refused before its saga starts."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6211,7 +6393,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6258,7 +6441,7 @@
         },
         {
           "error_id": "argument-exception",
-          "condition": "operationId is null, empty, whitespace, or contains '/'; or the combined batch contains a duplicate or null key, or a null upsert value."
+          "condition": "operationId is null, empty, whitespace, or contains '/'; or the combined batch contains a duplicate or null key, or a null upsert value; or an upsert key exceeds LatticeOptions.MaxKeyLength or an upsert value exceeds LatticeOptions.MaxValueSizeBytes; the batch is refused before its saga starts."
         },
         {
           "error_id": "invalid-operation",
@@ -6271,6 +6454,10 @@
         {
           "error_id": "idempotency-key-mismatch",
           "condition": "The operationId was previously submitted with a different key set."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole. A delete-only batch is not checked."
         }
       ],
       "retry": {
@@ -6289,7 +6476,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6332,6 +6520,14 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "An entry key exceeds LatticeOptions.MaxKeyLength or an entry value exceeds LatticeOptions.MaxValueSizeBytes; checked before the precondition is evaluated and before the saga starts."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6350,7 +6546,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicWhereAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6402,6 +6599,14 @@
         {
           "error_id": "idempotency-key-mismatch",
           "condition": "The operationId was previously submitted with a different key set."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "An entry key exceeds LatticeOptions.MaxKeyLength or an entry value exceeds LatticeOptions.MaxValueSizeBytes; checked before the precondition is evaluated and before the saga starts."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6420,7 +6625,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicWhereAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6462,7 +6668,7 @@
         },
         {
           "error_id": "argument-exception",
-          "condition": "operationId is null, empty, whitespace, or contains '/'; or entries contains duplicate keys or null values."
+          "condition": "operationId is null, empty, whitespace, or contains '/'; or entries contains duplicate keys or null values; or an upsert key exceeds LatticeOptions.MaxKeyLength or an upsert value exceeds LatticeOptions.MaxValueSizeBytes; the batch is refused before its saga starts."
         },
         {
           "error_id": "invalid-operation",
@@ -6475,6 +6681,10 @@
         {
           "error_id": "idempotency-key-mismatch",
           "condition": "The operationId was previously submitted with a different key set."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6493,7 +6703,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6540,6 +6751,10 @@
         {
           "error_id": "quota-exceeded",
           "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "A key exceeds LatticeOptions.MaxKeyLength or a value exceeds LatticeOptions.MaxValueSizeBytes; every entry is checked on entry before any shard work. The check runs before the predicate is evaluated."
         }
       ],
       "retry": {
@@ -6578,7 +6793,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyWherePredicateAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyWherePredicateAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyWherePredicateAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -7260,6 +7476,14 @@
       "retryable": false,
       "meaning": "Opening a snapshot cursor would exceed the configured replay entry budget.",
       "source": "src/lattice/LatticeSnapshotReplayBudgetExceededException.cs#LatticeSnapshotReplayBudgetExceededException"
+    },
+    {
+      "id": "state-write-failed",
+      "type": "LatticeStateWriteFailedException",
+      "grpc_status": null,
+      "retryable": "conditional",
+      "meaning": "A saga state write kept losing its optimistic-concurrency check after bounded re-attach; Conflict is set and the saga resumes when the same batch is re-submitted under the same operationId.",
+      "source": "src/lattice/LatticeStateWriteFailedException.cs#LatticeStateWriteFailedException"
     },
     {
       "id": "wal-provider-missing",
