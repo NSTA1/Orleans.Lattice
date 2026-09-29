@@ -44,7 +44,7 @@ public class TreeResizeGrainIsCompleteTests
         return new TreeResizeGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeResizeGrain>(),
-            Substitute.For<ITagIndexReconcileTrigger>(), state);
+            Substitute.For<ITagIndexReconcileTrigger>(), state, new FakePersistentState<TreeResizeUndoState>());
     }
 
     [Test]

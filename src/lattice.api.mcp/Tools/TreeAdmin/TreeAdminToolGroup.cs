@@ -191,10 +191,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetResizeStatusAsync, "lattice_treeadmin_tree_resize_status",
                 "Read a tree's online-resize status",
-                "Reads a tree's online-resize status: whether a resize is currently in flight, and the tree's "
+                "Reads a tree's online-resize status: whether a resize is currently in flight, whether an "
+                + "accepted undo is still unwinding (undoRequested), and the tree's "
                 + "current effective B+ node capacity (maximum keys per leaf node and maximum children per internal "
-                + "node) as recorded in the registry. Poll this after triggering tree_resize to watch the rebuild "
-                + "complete. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
+                + "node) as recorded in the registry. undoRequested=true means an undo was accepted and is still "
+                + "unwinding (whatever inProgress says); otherwise inProgress=true means a resize is running and "
+                + "inProgress=false means none is in flight. Poll this after triggering tree_resize to watch the rebuild complete, or after "
+                + "tree_resize_undo to watch the unwind. Answers without waiting for an in-flight resize phase. A "
+                + "pure read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync, "lattice_treeadmin_tree_snapshot_status",
                 "Read a tree's snapshot status",
                 "Reads a tree's snapshot status: whether a point-in-time snapshot capture is currently in flight for "
@@ -483,8 +487,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "and discards the draft destination; an undo after the alias swap recovers the pre-resize tree, "
                 + "removes the alias, restores the prior registry configuration, and deletes the resized tree. "
                 + "Available while a resize is in flight or while the pre-resize tree is still within its "
-                + "soft-delete recovery window. Returns the tree's resize status once the undo has been applied. "
-                + "Rejected when no resize exists to undo or the pre-resize tree has already been purged, and for a "
+                + "soft-delete recovery window. The undo is accepted even while a resize phase is running: the "
+                + "intent is persisted at once and the resize unwinds at its next phase or slice boundary. The call "
+                + "waits a bounded time for the unwind and returns the tree's resize status; undoRequested=true in "
+                + "that status means the undo was accepted and is still unwinding, so poll tree_resize_status "
+                + "rather than retrying. A retry while the undo is pending is acknowledged again. "
+                + "Rejected when no resize exists to undo (naming the most recent resize when it was already "
+                + "undone) or when the unwind cannot be applied because the pre-resize tree has already been "
+                + "purged, and for a "
                 + "reserved system tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SnapshotTreeAsync, "lattice_treeadmin_tree_snapshot",
                 "Capture a point-in-time snapshot of a tree",

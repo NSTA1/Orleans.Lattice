@@ -23,7 +23,8 @@ public partial class TreeResizeGrainTests
                      IOptionsMonitor<LatticeOptions> optionsMonitor) CreateGrain(
         LatticeOptions? options = null,
         FakePersistentState<TreeResizeState>? existingState = null,
-        IServiceProvider? activationServices = null)
+        IServiceProvider? activationServices = null,
+        FakePersistentState<TreeResizeUndoState>? undoState = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("resize", TreeId));
@@ -52,7 +53,8 @@ public partial class TreeResizeGrainTests
         var grain = new TreeResizeGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeResizeGrain>(),
-            Substitute.For<ITagIndexReconcileTrigger>(), state);
+            Substitute.For<ITagIndexReconcileTrigger>(), state,
+            undoState ?? new FakePersistentState<TreeResizeUndoState>());
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 

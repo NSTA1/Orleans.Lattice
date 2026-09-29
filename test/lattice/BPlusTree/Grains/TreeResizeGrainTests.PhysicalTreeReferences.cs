@@ -40,6 +40,49 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
+    public async Task ReferencesPhysicalTree_keeps_naming_a_copy_until_the_undo_reset_is_durable()
+    {
+        // The undo clears these ids in memory before awaiting its write. The WAL GC
+        // must not see the copy released inside that window: if the write then
+        // fails and reverts, the resize still names it and an undo can recover it.
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        state.State.InProgress = true;
+        state.State.Phase = ResizePhase.Snapshot;
+        state.State.OperationId = "undo-held";
+        state.State.ShardCount = ShardCount;
+        state.State.OldPhysicalTreeId = TreeId;
+        state.State.SnapshotTreeId = $"{TreeId}/resized/undo-held";
+        SetupOldTreeDeletion(grainFactory, isDeleted: false);
+        Assert.That(await grain.ReferencesPhysicalTreeAsync($"{TreeId}/resized/undo-held"), Is.True, "precondition");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Hold, then fail, only the reset write - the undo also writes its alias
+        // reservation first.
+        state.BeforeWrite = async () =>
+        {
+            if (state.State.SnapshotTreeId is not null) return;
+            entered.TrySetResult();
+            await release.Task;
+            throw new InvalidOperationException("storage unavailable");
+        };
+
+        var undoing = grain.UndoResizeAsync();
+        await entered.Task;
+        Assert.That(state.State.SnapshotTreeId, Is.Null, "precondition: the reset is applied in memory");
+        var namedWhileHeld = await grain.ReferencesPhysicalTreeAsync($"{TreeId}/resized/undo-held");
+
+        release.SetResult();
+        Assert.ThrowsAsync<InvalidOperationException>(() => undoing);
+        var namedAfterRevert = await grain.ReferencesPhysicalTreeAsync($"{TreeId}/resized/undo-held");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(namedWhileHeld, Is.True);
+            Assert.That(namedAfterRevert, Is.True);
+        });
+    }
+
+    [Test]
     public void ReferencesPhysicalTree_rejects_a_null_id()
     {
         var (grain, _, _, _, _) = CreateGrain();

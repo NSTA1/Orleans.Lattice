@@ -134,6 +134,18 @@ public sealed partial class InternalOriginGuardIntegrationTests
             async () => await grain.UndoResizeAsync());
     }
 
+    [Test]
+    public void TreeResize_RequestUndoAsync_direct_external_call_is_refused()
+    {
+        // Interleaved, so admitted ahead of any in-flight phase - which makes the
+        // origin assertion on it the only thing between an external client and a
+        // persisted undo intent.
+        var grain = _cluster.GrainFactory.GetGrain<ITreeResizeGrain>("coord-guard-resize-request-undo");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await grain.RequestUndoAsync());
+    }
+
     // --- Tree merge ---
 
     [Test]

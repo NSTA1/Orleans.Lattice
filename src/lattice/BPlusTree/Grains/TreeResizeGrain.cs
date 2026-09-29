@@ -35,6 +35,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// before the alias swap (during the drain) - in that case the destination
 /// tree is deleted and shadow-forward cleared without touching the source.
 /// </para>
+/// <para>
+/// The public undo path goes through <see cref="RequestUndoAsync"/>, which is
+/// interleaved: it persists the undo intent in a slot separate from the phase
+/// state and returns, and the phase loop runs the unwind at its next tick or
+/// snapshot slice boundary. A non-reentrant undo would queue behind the very
+/// phase it exists to stop (issue 3923).
+/// </para>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 internal sealed class TreeResizeGrain(
@@ -46,17 +53,125 @@ internal sealed class TreeResizeGrain(
     ILogger<TreeResizeGrain> logger,
     ITagIndexReconcileTrigger tagIndexReconcileTrigger,
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeResizeState> state)
+    IPersistentState<TreeResizeState> state,
+    [PersistentState("tree-resize-undo", LatticeOptions.StorageProviderName)]
+    IPersistentState<TreeResizeUndoState> undoIntent)
     : CoordinatorGrain<TreeResizeGrain>(context, reminderRegistry, logger), ITreeResizeGrain
 {
     private string TreeId => Context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
 
+    /// <summary>
+    /// Serialises every write to the <c>undoIntent</c> slot. The interleaved
+    /// <see cref="RequestUndoAsync"/> can run concurrently with itself and with a
+    /// phase turn that records an unwind's outcome, and two in-flight writes to one
+    /// storage row would race each other's ETag.
+    /// </summary>
+    private readonly SemaphoreSlim _undoIntentGate = new(1, 1);
+
+    /// <summary>
+    /// The resize fields the interleaved reads report, as last persisted.
+    /// </summary>
+    private readonly record struct DurableResize(
+        bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId)
+    {
+        public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
+    }
+
+    /// <summary>
+    /// The undo-intent fields the interleaved reads report, as last persisted.
+    /// </summary>
+    private readonly record struct DurableIntent(
+        string? RequestedOperationId, string? FailedOperationId, string? FailureMessage,
+        string? UndoneOperationId, DateTime? UndoneAtUtc);
+
+    // What the interleaved reads (RequestUndoAsync, GetUndoProgressAsync,
+    // IsIdleAsync) answer from. Every phase transition mutates the in-memory state
+    // first, then awaits WriteStateAsync, and reverts the mutation if that write
+    // fails - so an interleaved read of the live state can land inside that window
+    // and report a transition (a completion, say) that is then rolled back,
+    // breaking the documented monotonic completion guarantee. These copies move
+    // only when a write has succeeded, and are captured at activation once the
+    // persisted state has been read. Phase turns keep reading the live state.
+    private DurableResize? _durableResize;
+    private DurableIntent? _durableIntent;
+
+    private DurableResize DurableResizeState => _durableResize ??= CaptureResize();
+
+    private DurableIntent DurableIntentState => _durableIntent ??= CaptureIntent();
+
+    private DurableResize CaptureResize() => new(
+        state.State.InProgress, state.State.Complete, state.State.OperationId,
+        state.State.OldPhysicalTreeId, state.State.SnapshotTreeId);
+
+    private DurableIntent CaptureIntent() => new(
+        undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
+        undoIntent.State.FailureMessage, undoIntent.State.UndoneOperationId, undoIntent.State.UndoneAtUtc);
+
+    /// <inheritdoc />
+    protected override Task OnActivateCoreAsync(CancellationToken cancellationToken)
+    {
+        _durableResize = CaptureResize();
+        _durableIntent = CaptureIntent();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Persists <see cref="TreeResizeState"/> and, only once the write has
+    /// succeeded, publishes what was written to the interleaved reads.
+    /// </summary>
+    private async Task WriteResizeStateAsync()
+    {
+        var written = CaptureResize();
+        await state.WriteStateAsync();
+        _durableResize = written;
+    }
+
+    /// <summary>
+    /// Persists the undo-intent slot and, only once the write has succeeded,
+    /// publishes what was written to the interleaved reads.
+    /// </summary>
+    private async Task WriteUndoIntentAsync()
+    {
+        var written = CaptureIntent();
+        await undoIntent.WriteStateAsync();
+        _durableIntent = written;
+    }
+
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "resize-keepalive";
 
     /// <inheritdoc />
-    protected override bool InProgress => state.State.InProgress;
+    /// <remarks>
+    /// A completed resize whose undo has been accepted still has work outstanding,
+    /// so the keepalive keeps the phase loop armed until the unwind lands.
+    /// </remarks>
+    protected override bool InProgress => state.State.InProgress || UndoPending;
+
+    /// <summary>
+    /// <see langword="true"/> while an accepted undo still names the current
+    /// resize and that resize can still be undone. It turns false by itself once
+    /// the unwind resets the resize state, or once a new resize replaces the
+    /// operation id, so the intent slot never needs clearing to stop being pending.
+    /// </summary>
+    private bool UndoPending =>
+        undoIntent.State.RequestedOperationId is { } requested
+        && (state.State.InProgress || state.State.Complete)
+        && string.Equals(requested, state.State.OperationId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// <see cref="UndoPending"/> as last persisted, for the interleaved reads.
+    /// </summary>
+    private bool DurableUndoPending
+    {
+        get
+        {
+            var resize = DurableResizeState;
+            return DurableIntentState.RequestedOperationId is { } requested
+                && (resize.InProgress || resize.Complete)
+                && string.Equals(requested, resize.OperationId, StringComparison.Ordinal);
+        }
+    }
 
     /// <inheritdoc />
     protected override string LogContext => $"tree {TreeId}";
@@ -96,6 +211,16 @@ internal sealed class TreeResizeGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
+        // An accepted undo has not finished unwinding: starting (or re-affirming)
+        // a resize now would either be undone the moment the phase loop runs, or
+        // - for a completed resize in its soft-delete window - replace the
+        // operation id the undo names and silently drop an undo the caller was
+        // told had been accepted.
+        if (UndoPending)
+            throw new InvalidOperationException(
+                $"An undo of the resize of tree '{TreeId}' (operation '{state.State.OperationId}') is still " +
+                "unwinding; start a new resize once tree_resize_status no longer reports undoRequested.");
 
         if (state.State.InProgress)
         {
@@ -178,7 +303,7 @@ internal sealed class TreeResizeGrain(
         state.State.NewMaxInternalChildren = newMaxInternalChildren;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -246,7 +371,7 @@ internal sealed class TreeResizeGrain(
         state.State.ShardIndices = shardIndices;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -287,12 +412,24 @@ internal sealed class TreeResizeGrain(
         }
         await ReserveAliasAsync();
 
+        if (UndoPending)
+        {
+            await RunPendingUndoAsync();
+            return;
+        }
+
         if (state.State.Phase == ResizePhase.Snapshot)
         {
             // The manual run-everything path: drive the snapshot to completion
             // in one call rather than one slice, as this method always has.
             var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(state.State.OldPhysicalTreeId!);
             await snapshot.RunSnapshotPassAsync();
+            if (UndoPending)
+            {
+                await RunPendingUndoAsync();
+                return;
+            }
+
             await AdvanceToSwapAsync();
         }
 
@@ -318,6 +455,124 @@ internal sealed class TreeResizeGrain(
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
+        var operationId = state.State.OperationId;
+        await ExecuteUndoAsync();
+        await RecordUndoneAsync(operationId);
+    }
+
+    /// <inheritdoc />
+    public async Task<string> RequestUndoAsync()
+    {
+        // Interleaved with whatever turn currently holds the coordinator, so this
+        // body reads the resize state and writes nothing but the separate intent
+        // slot: the phase that holds the turn may be part-way through mutating
+        // TreeResizeState, and a write of that row from here could persist the
+        // half-applied transition or lose to its ETag (issue 3923). For the same
+        // reason it validates against the resize state as last persisted, not
+        // against a transition a phase has applied in memory and may yet revert.
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+        var resize = DurableResizeState;
+        if (!resize.InProgress && !resize.Complete)
+            throw new InvalidOperationException(NoResizeToUndoMessage());
+
+        if (!resize.HasUndoTargets || resize.OperationId is not { } operationId)
+            throw new InvalidOperationException(
+                $"Resize state for tree '{TreeId}' is incomplete; cannot undo.");
+
+        bool accepted;
+        await _undoIntentGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            accepted = !string.Equals(
+                undoIntent.State.RequestedOperationId, operationId, StringComparison.Ordinal);
+            if (accepted)
+            {
+                var prevRequested = undoIntent.State.RequestedOperationId;
+                var prevRequestedAt = undoIntent.State.RequestedAtUtc;
+                var prevFailed = undoIntent.State.FailedOperationId;
+                var prevFailure = undoIntent.State.FailureMessage;
+                undoIntent.State.RequestedOperationId = operationId;
+                undoIntent.State.RequestedAtUtc = DateTime.UtcNow;
+                undoIntent.State.FailedOperationId = null;
+                undoIntent.State.FailureMessage = null;
+                try
+                {
+                    await WriteUndoIntentAsync();
+                }
+                catch
+                {
+                    undoIntent.State.RequestedOperationId = prevRequested;
+                    undoIntent.State.RequestedAtUtc = prevRequestedAt;
+                    undoIntent.State.FailedOperationId = prevFailed;
+                    undoIntent.State.FailureMessage = prevFailure;
+                    throw;
+                }
+            }
+        }
+        finally
+        {
+            _undoIntentGate.Release();
+        }
+
+        // Arm the phase loop that will carry the unwind out. A completed resize
+        // has retired its keepalive and timer, so a newly accepted undo registers
+        // them again; an in-flight resize normally has both already, and the
+        // timer start is idempotent. Neither touches TreeResizeState.
+        if (accepted) await StartCoordinatorAsync();
+        else StartPhaseTimer();
+
+        Logger.LogInformation(
+            "Undo of resize {OperationId} for tree {TreeId} {Outcome}; the phase loop unwinds it at its next boundary.",
+            operationId, TreeId, accepted ? "accepted" : "already pending");
+        return operationId;
+    }
+
+    /// <inheritdoc />
+    public Task<ResizeUndoProgress> GetUndoProgressAsync()
+    {
+        var intent = DurableIntentState;
+        return Task.FromResult(new ResizeUndoProgress(
+            DurableUndoPending, intent.FailedOperationId, intent.FailureMessage));
+    }
+
+    /// <summary>
+    /// Runs the phase-aware unwind for an accepted undo from inside a phase turn,
+    /// then records its outcome in the intent slot. A failure the unwind cannot
+    /// recover from on a retry - the <see cref="InvalidOperationException"/>
+    /// family, such as an old tree whose data has already been purged - withdraws
+    /// the intent and records the reason, so the loop does not retry an
+    /// impossible unwind forever and the caller polling
+    /// <see cref="GetUndoProgressAsync"/> is told why; any other failure leaves the
+    /// intent pending and is retried on the next tick. Exposed as
+    /// <c>internal</c> for unit testing.
+    /// </summary>
+    internal async Task RunPendingUndoAsync()
+    {
+        var operationId = state.State.OperationId;
+        try
+        {
+            await ExecuteUndoAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Logger.LogError(ex,
+                "Undo of resize {OperationId} for tree {TreeId} could not be applied and was withdrawn.",
+                operationId, TreeId);
+            await WithdrawUndoAsync(operationId, ex.Message);
+            if (!state.State.InProgress) await CompleteCoordinatorAsync();
+            throw;
+        }
+
+        await RecordUndoneAsync(operationId);
+
+        // The drain-window branch retires the coordinator itself; the after-swap
+        // branch does not, and a loop left ticking over reset state only spins.
+        await CompleteCoordinatorAsync();
+    }
+
+    private async Task ExecuteUndoAsync()
+    {
         await ReserveAliasAsync();
         try
         {
@@ -329,10 +584,81 @@ internal sealed class TreeResizeGrain(
         }
     }
 
+    private async Task RecordUndoneAsync(string? operationId)
+    {
+        await _undoIntentGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            var prevRequested = undoIntent.State.RequestedOperationId;
+            var prevUndone = undoIntent.State.UndoneOperationId;
+            var prevUndoneAt = undoIntent.State.UndoneAtUtc;
+            undoIntent.State.RequestedOperationId = null;
+            undoIntent.State.UndoneOperationId = operationId;
+            undoIntent.State.UndoneAtUtc = DateTime.UtcNow;
+            try
+            {
+                await WriteUndoIntentAsync();
+            }
+            catch (Exception ex)
+            {
+                // The unwind itself is durable in TreeResizeState and the intent is
+                // already inert, because it names a resize that no longer exists;
+                // only the "already undone" breadcrumb for a later retry is lost.
+                undoIntent.State.RequestedOperationId = prevRequested;
+                undoIntent.State.UndoneOperationId = prevUndone;
+                undoIntent.State.UndoneAtUtc = prevUndoneAt;
+                Logger.LogWarning(ex,
+                    "Resize {OperationId} for tree {TreeId} was undone, but recording the outcome failed.",
+                    operationId, TreeId);
+            }
+        }
+        finally
+        {
+            _undoIntentGate.Release();
+        }
+    }
+
+    private async Task WithdrawUndoAsync(string? operationId, string reason)
+    {
+        await _undoIntentGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            var prevRequested = undoIntent.State.RequestedOperationId;
+            var prevFailed = undoIntent.State.FailedOperationId;
+            var prevFailure = undoIntent.State.FailureMessage;
+            undoIntent.State.RequestedOperationId = null;
+            undoIntent.State.FailedOperationId = operationId;
+            undoIntent.State.FailureMessage = reason;
+            try
+            {
+                await WriteUndoIntentAsync();
+            }
+            catch
+            {
+                undoIntent.State.RequestedOperationId = prevRequested;
+                undoIntent.State.FailedOperationId = prevFailed;
+                undoIntent.State.FailureMessage = prevFailure;
+                throw;
+            }
+        }
+        finally
+        {
+            _undoIntentGate.Release();
+        }
+    }
+
+    private string NoResizeToUndoMessage() =>
+        DurableIntentState is { UndoneOperationId: { } undone } intent
+            ? $"No resize exists for tree '{TreeId}' that can be undone. The most recent resize " +
+              $"(operation '{undone}') was already undone at {intent.UndoneAtUtc:O}, so a " +
+              "retried undo has nothing further to unwind."
+            : $"No resize exists for tree '{TreeId}' that can be undone.";
+
     private async Task UndoResizeCoreAsync()
     {
-        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
-            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+        // No internal-origin assertion here: the public entry points assert it,
+        // and the phase loop that runs an accepted undo is a timer turn with no
+        // request context to carry the marker.
 
         // Undo is available in two windows:
         //   1. Before swap - while the online snapshot is draining and the
@@ -348,8 +674,7 @@ internal sealed class TreeResizeGrain(
         //      Shadow-forward state on the old-tree shards must also
         //      be cleared so the tree becomes writable again.
         if (!state.State.InProgress && !state.State.Complete)
-            throw new InvalidOperationException(
-                $"No resize exists for tree '{TreeId}' that can be undone.");
+            throw new InvalidOperationException(NoResizeToUndoMessage());
 
         if (state.State.OldPhysicalTreeId is null || state.State.SnapshotTreeId is null)
             throw new InvalidOperationException(
@@ -412,7 +737,7 @@ internal sealed class TreeResizeGrain(
             ResetResizeState();
             try
             {
-                await state.WriteStateAsync();
+                await WriteResizeStateAsync();
             }
             catch
             {
@@ -491,7 +816,7 @@ internal sealed class TreeResizeGrain(
         ResetResizeState();
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -519,10 +844,18 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     protected internal override async Task ProcessNextPhaseAsync()
     {
-        if (!state.State.InProgress) return;
+        if (!state.State.InProgress && !UndoPending) return;
 
         try
         {
+            // An accepted undo is observed before any forward work, so a phase is
+            // never started on a resize an operator has asked to stop.
+            if (UndoPending)
+            {
+                await RunPendingUndoAsync();
+                return;
+            }
+
             await ReserveAliasAsync();
             switch (state.State.Phase)
             {
@@ -543,6 +876,13 @@ internal sealed class TreeResizeGrain(
                     await CompleteResizeAsync();
                     break;
             }
+
+            // ...and again at the end of the step. An undo requested while the
+            // phase held the turn - most often mid snapshot slice - was admitted by
+            // the interleaved RequestUndoAsync and has been waiting on exactly
+            // this boundary, which a wall-clock-bounded slice reaches within
+            // seconds.
+            if (UndoPending) await RunPendingUndoAsync();
         }
         catch (Exception ex)
         {
@@ -566,6 +906,11 @@ internal sealed class TreeResizeGrain(
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(state.State.OldPhysicalTreeId!);
         if (!await snapshot.RunSnapshotSliceAsync()) return;
 
+        // Do not swap the alias onto a copy the operator asked to discard while
+        // this slice ran; the caller unwinds from the Snapshot phase instead,
+        // which is the cheapest undo there is.
+        if (UndoPending) return;
+
         await AdvanceToSwapAsync();
     }
 
@@ -575,7 +920,7 @@ internal sealed class TreeResizeGrain(
         state.State.Phase = ResizePhase.Swap;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -645,7 +990,7 @@ internal sealed class TreeResizeGrain(
         state.State.Phase = ResizePhase.Reject;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -688,7 +1033,7 @@ internal sealed class TreeResizeGrain(
         state.State.Phase = ResizePhase.Cleanup;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -761,7 +1106,7 @@ internal sealed class TreeResizeGrain(
         state.State.Complete = true;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -787,7 +1132,7 @@ internal sealed class TreeResizeGrain(
         if (state.State.AliasReservationId is null)
         {
             state.State.AliasReservationId = $"resize:{Guid.NewGuid():N}";
-            try { await state.WriteStateAsync(); }
+            try { await WriteResizeStateAsync(); }
             catch { state.State.AliasReservationId = null; throw; }
         }
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
@@ -799,7 +1144,7 @@ internal sealed class TreeResizeGrain(
         if (state.State.AliasReservationId is not { } id) return;
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).EndAliasChangeAsync(id);
         state.State.AliasReservationId = null;
-        try { await state.WriteStateAsync(); }
+        try { await WriteResizeStateAsync(); }
         catch { state.State.AliasReservationId = id; throw; }
     }
 
@@ -814,15 +1159,28 @@ internal sealed class TreeResizeGrain(
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Answers from the resize state as last persisted: this read is interleaved,
+    /// and a completion a phase has applied in memory but not yet durably written
+    /// may still be reverted, which would make completion non-monotonic.
+    /// </remarks>
     public Task<bool> IsIdleAsync() =>
-        Task.FromResult(!state.State.InProgress);
+        Task.FromResult(!DurableResizeState.InProgress);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Answers from the resize state as last persisted, like every interleaved
+    /// read on this coordinator. That is also the safe direction for the WAL GC
+    /// that calls it: an undo's reset clears these ids in memory before its write,
+    /// and a live read inside that window would release a copy the resize still
+    /// names if the write then failed and reverted.
+    /// </remarks>
     public Task<bool> ReferencesPhysicalTreeAsync(string physicalTreeId)
     {
         ArgumentNullException.ThrowIfNull(physicalTreeId);
+        var resize = DurableResizeState;
         return Task.FromResult(
-            string.Equals(state.State.OldPhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
-            || string.Equals(state.State.SnapshotTreeId, physicalTreeId, StringComparison.Ordinal));
+            string.Equals(resize.OldPhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+            || string.Equals(resize.SnapshotTreeId, physicalTreeId, StringComparison.Ordinal));
     }
 }

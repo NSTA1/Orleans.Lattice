@@ -287,7 +287,7 @@ public partial class TreeResizeGrainTests
             context, grainFactory, reminderRegistry, optionsMonitor,
             TestOptionsResolver.ForFactory(grainFactory, options),
             new LoggerFactory().CreateLogger<TreeResizeGrain>(),
-            Substitute.For<ITagIndexReconcileTrigger>(), state);
+            Substitute.For<ITagIndexReconcileTrigger>(), state, new FakePersistentState<TreeResizeUndoState>());
 
         await grain.ReceiveReminder(KeepaliveReminder, new TickStatus());
 

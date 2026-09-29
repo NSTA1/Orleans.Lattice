@@ -100,6 +100,8 @@ internal static class TypeAliases
     internal const string PhysicalTreeRetention = "ol.ptr";
     internal const string TreeResizeState = "ol.trs";
     internal const string ResizePhase = "ol.rp";
+    internal const string TreeResizeUndoState = "ol.tru";
+    internal const string ResizeUndoProgress = "ol.rup";
     internal const string TreeRegistryEntry = "ol.tre";
     internal const string TreeSnapshotState = "ol.tss";
     internal const string SnapshotPhase = "ol.snp";
