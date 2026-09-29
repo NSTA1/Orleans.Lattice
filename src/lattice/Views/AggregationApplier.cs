@@ -139,28 +139,56 @@ internal sealed class AggregationApplier(
         var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
         var newGroup = contribution.GroupKey;
 
-        // Accumulate every touched slot's final row in memory. The old-group slot
-        // and the new-group slot can be the same key (a same-group overwrite), so
-        // a dictionary both de-duplicates the atomic batch and folds the retract
-        // and add onto one row.
-        var slots = new Dictionary<string, AccumulatorRow>(StringComparer.Ordinal);
+        // Accumulate every touched slot's final row in memory. A contribution
+        // touches at most two accumulator keys - the retracted old-group slot and
+        // the added new-group slot - and a same-group overwrite makes them the
+        // same key, which must fold onto one row and reach the atomic batch once.
+        //
+        // That is two locals and one string comparison, so it was a dictionary's
+        // whole job for a map that can never hold a third entry. Every numeric
+        // contribution paid for a Dictionary (its bucket and entry arrays) plus a
+        // second List to re-extract the very keys it had just put in, on the
+        // hottest path an aggregation view has. Both are gone; `sameSlot` below
+        // carries the de-duplication the dictionary used to provide.
+        //
+        // The source key's accumulator shard is a pure function of the key and
+        // the fanout, and neither changes across this method - but a re-group
+        // touches two accumulator keys, and deriving the slot for each of them
+        // separately transcoded the key to UTF-8 and hashed it twice per
+        // contribution. Derive it once.
+        var slot = Slot(sourceKey, _fanout);
 
         string? oldGroup = null;
+        string? oldKey = null;
+        var oldRow = new AccumulatorRow(0, 0);
         if (prior is { } old)
         {
             oldGroup = old.GroupKey;
-            var oldKey = AccumulatorKey(old.GroupKey, Slot(sourceKey, _fanout));
+            oldKey = AccumulatorKey(old.GroupKey, slot);
             var current = await ReadAccumulatorAsync(oldKey, cancellationToken) ?? new AccumulatorRow(0, 0);
-            slots[oldKey] = new AccumulatorRow(current.Count - 1, current.Sum - old.Numeric);
+            oldRow = new AccumulatorRow(current.Count - 1, current.Sum - old.Numeric);
         }
 
-        var newKey = AccumulatorKey(newGroup, Slot(sourceKey, _fanout));
-        var baseRow = slots.TryGetValue(newKey, out var pending)
-            ? pending
-            : await ReadAccumulatorAsync(newKey, cancellationToken) ?? new AccumulatorRow(0, 0);
-        slots[newKey] = new AccumulatorRow(baseRow.Count + 1, baseRow.Sum + contribution.Numeric);
+        var newKey = AccumulatorKey(newGroup, slot);
 
-        var entries = BuildSlotEntries(slots);
+        // A same-group overwrite retracts and adds on one key. Fold onto the
+        // retracted row rather than re-reading the store, exactly as the
+        // dictionary's TryGetValue hit used to.
+        var sameSlot = oldKey is not null && string.Equals(oldKey, newKey, StringComparison.Ordinal);
+        var baseRow = sameSlot
+            ? oldRow
+            : await ReadAccumulatorAsync(newKey, cancellationToken) ?? new AccumulatorRow(0, 0);
+        var newRow = new AccumulatorRow(baseRow.Count + 1, baseRow.Sum + contribution.Numeric);
+
+        // Insertion order matters: the dictionary this replaces enumerated the
+        // old-group slot first, so the atomic batch keeps that order.
+        var entries = new List<KeyValuePair<string, byte[]>>(sameSlot || oldKey is null ? 2 : 3);
+        if (oldKey is not null && !sameSlot)
+        {
+            entries.Add(new KeyValuePair<string, byte[]>(oldKey, SlotValue(oldRow)));
+        }
+
+        entries.Add(new KeyValuePair<string, byte[]>(newKey, SlotValue(newRow)));
         entries.Add(new KeyValuePair<string, byte[]>(
             membershipKey,
             EncodeMembership(new MembershipRow(newGroup, contribution.Numeric, contribution.Member))));
@@ -179,17 +207,12 @@ internal sealed class AggregationApplier(
         // now keeps storage bounded without needing an atomic delete. Cleanup is
         // driven by the store's actual value (not the computed row), so it is a
         // safe no-op when the flip was deduped by a replay's saga re-attach. The
-        // probes go out as one batched read: `slots` holds the old-group and
-        // new-group slots, whose emptiness decisions are independent of each
-        // other, so there is nothing to gain from reading them one at a time.
-        // Iterate the slots dictionary directly rather than through its `.Keys`
-        // collection: `slots` is a fresh per-contribution map, so each `.Keys`
-        // access otherwise allocates a throwaway KeyCollection wrapper.
-        var cleanupKeys = new List<string>(slots.Count);
-        foreach (var (key, _) in slots)
-        {
-            cleanupKeys.Add(key);
-        }
+        // probes go out as one batched read: the old-group and new-group slots'
+        // emptiness decisions are independent of each other, so there is nothing
+        // to gain from reading them one at a time. The keys are already in hand,
+        // so the list is built straight from them rather than re-extracted from a
+        // dictionary that existed only to hold them.
+        var cleanupKeys = oldKey is null || sameSlot ? [newKey] : new List<string> { oldKey, newKey };
 
         await CleanupIfEmptyAsync(cleanupKeys, cancellationToken);
     }
@@ -227,16 +250,13 @@ internal sealed class AggregationApplier(
         await CleanupIfEmptyAsync([oldKey, membershipKey], cancellationToken);
     }
 
-    private List<KeyValuePair<string, byte[]>> BuildSlotEntries(Dictionary<string, AccumulatorRow> slots)
-    {
-        var entries = new List<KeyValuePair<string, byte[]>>(slots.Count + 1);
-        foreach (var (key, row) in slots)
-        {
-            entries.Add(new KeyValuePair<string, byte[]>(key, row.Count <= 0 ? EmptyRow() : EncodeAccumulator(row)));
-        }
-
-        return entries;
-    }
+    /// <summary>
+    /// Encodes one accumulator slot's final row, collapsing a slot the flip
+    /// emptied to the empty sentinel (the atomic batch cannot delete).
+    /// </summary>
+    /// <param name="row">The slot's computed final row.</param>
+    private static byte[] SlotValue(AccumulatorRow row)
+        => row.Count <= 0 ? EmptyRow() : EncodeAccumulator(row);
 
     /// <summary>
     /// Deletes each of <paramref name="keys"/> that currently holds the empty

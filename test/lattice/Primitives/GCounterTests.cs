@@ -73,6 +73,32 @@ public class GCounterTests
     }
 
     [Test]
+    public void Increment_past_the_component_ceiling_throws_and_leaves_the_component_unchanged()
+    {
+        // A wrapped component would read long.MinValue: a grow-only component that
+        // decreased, which every pointwise-max merge then discards, so the increment
+        // would be lost without any error.
+        var c = new GCounter();
+        c.Increment("r1", long.MaxValue);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => c.Increment("r1", 1), Throws.TypeOf<OverflowException>());
+            Assert.That(c.Increments["r1"], Is.EqualTo(long.MaxValue));
+        });
+    }
+
+    [Test]
+    public void Increment_up_to_the_component_ceiling_is_exact()
+    {
+        var c = new GCounter();
+        c.Increment("r1", long.MaxValue - 1);
+        c.Increment("r1", 1);
+
+        Assert.That(c.Increments["r1"], Is.EqualTo(long.MaxValue));
+    }
+
+    [Test]
     public void Value_sums_all_replica_components()
     {
         var c = new GCounter();

@@ -54,7 +54,7 @@ transport binding layered on top neither repeats nor reconfigures it.
 | `BackendAddress` | `Uri?` | `null` | The Prometheus-compatible endpoint. Must be absolute. Unset means no backend is configured, and every query reports as unoffered. |
 | `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer` (a token resolved per request through `ITelemetryBackendTokenProvider`). |
 | `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer` (`BearerToken`), `Basic` (`BasicUsername` / `BasicPassword`), or `MutualTls` (`ClientCertificate`). Required for those three modes; not consulted under `None` or `DynamicBearer`. |
-| `RequestTimeout` | `TimeSpan` | 30 seconds | Per-request timeout against the backend. |
+| `RequestTimeout` | `TimeSpan` | 30 seconds | Per-request timeout against the backend. Must be strictly positive and no longer than `int.MaxValue` milliseconds (about 24.8 days), the longest finite timeout `HttpClient` accepts. |
 | `MaxRange` | `TimeSpan` | 24 hours | The widest window a range query may evaluate. |
 | `MaxStep` | `TimeSpan` | 1 hour | The coarsest step a range query may request. |
 | `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll`, or `DenyAllExceptAllowed` to serve only `AllowedMetrics`. |

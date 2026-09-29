@@ -176,7 +176,12 @@ public class LatticeReplicationGrpcServicePushResilienceTests
         protected override string HostCore => string.Empty;
         protected override string PeerCore => string.Empty;
         protected override DateTime DeadlineCore => DateTime.MaxValue;
-        protected override global::Grpc.Core.Metadata RequestHeadersCore { get; } = new();
+        protected override global::Grpc.Core.Metadata RequestHeadersCore { get; } = new()
+        {
+            // Models a conforming peer: GrpcChannelHardening stamps this header
+            // on every outbound call, and the receiver refuses an unstamped one.
+            { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, "remote" },
+        };
         protected override CancellationToken CancellationTokenCore => cancellationToken;
         protected override global::Grpc.Core.Metadata ResponseTrailersCore { get; } = new();
         protected override Status StatusCore { get; set; }

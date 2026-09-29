@@ -55,13 +55,18 @@ public sealed class GCounter : ICrdt<GCounter>
     /// <paramref name="amount"/>. <paramref name="amount"/> must be non-negative -
     /// a grow-only counter never decreases.
     /// </summary>
+    /// <exception cref="OverflowException">
+    /// The advance would take the component past <see cref="long.MaxValue"/>. The
+    /// component is left unchanged: a wrapped component would be smaller than the
+    /// one it replaced, and the pointwise-max merge would silently discard it.
+    /// </exception>
     public void Increment(string replicaId, long amount = 1)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         if (amount == 0) return;
         ref var inc = ref CollectionsMarshal.GetValueRefOrAddDefault(Increments, replicaId, out _);
-        inc += amount;
+        inc = checked(inc + amount);
     }
 
     /// <summary>

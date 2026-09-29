@@ -163,7 +163,11 @@ public class TransportMetadataPassthroughContractTests
         var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
         var invoker = _channel.CreateCallInvoker();
         var box = new ReplicationBatchEnvelopeBox { Value = envelope };
-        using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: default, request: box);
+        using var call = invoker.AsyncUnaryCall(
+            method.Push,
+            host: null,
+            options: GrpcTestFactories.OriginOptions(envelope.OriginClusterId),
+            request: box);
         await call.ResponseAsync;
     }
 
