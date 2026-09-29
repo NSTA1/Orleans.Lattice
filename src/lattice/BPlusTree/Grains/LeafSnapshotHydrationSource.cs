@@ -54,6 +54,7 @@ internal sealed class LeafSnapshotHydrationSource
 
     private readonly byte[] _frame;
     private readonly int _rowCount;
+    private readonly int _indexOffset;
     private readonly int _blockCount;
     private readonly bool[] _hydrated;
     private readonly bool[] _pinned;
@@ -65,10 +66,11 @@ internal sealed class LeafSnapshotHydrationSource
     private long _rowsMaterialised;
     private long _seeks;
 
-    private LeafSnapshotHydrationSource(byte[] frame, int rowCount, long stateBytes, long liveRows)
+    private LeafSnapshotHydrationSource(byte[] frame, int rowCount, int indexOffset, long stateBytes, long liveRows)
     {
         _frame = frame;
         _rowCount = rowCount;
+        _indexOffset = indexOffset;
         TotalStateBytes = stateBytes;
         TotalLiveRows = liveRows;
         _blockCount = rowCount == 0 ? 0 : ((rowCount - 1) / BlockRows) + 1;
@@ -90,15 +92,19 @@ internal sealed class LeafSnapshotHydrationSource
     internal static bool TryCreate(byte[] frame, out LeafSnapshotHydrationSource source)
     {
         source = null!;
+
+        // One admission probe, not three. Row count, cache aggregates and the
+        // ascending-order check all read the same frame header, and the order
+        // check used to re-read it once per row on top of that; every snapshot
+        // load pays this before it can serve a bounded read.
         if (frame is null
-            || !LeafSnapshotCodec.TryGetRowCount(frame, out var rowCount)
-            || !LeafSnapshotCodec.TryComputeCacheAggregates(frame, out var stateBytes, out var liveRows)
-            || !LeafSnapshotCodec.IsAscendingByKey(frame))
+            || !LeafSnapshotCodec.TryAdmitForHydration(
+                frame, out var rowCount, out var indexOffset, out var stateBytes, out var liveRows))
         {
             return false;
         }
 
-        source = new LeafSnapshotHydrationSource(frame, rowCount, stateBytes, liveRows);
+        source = new LeafSnapshotHydrationSource(frame, rowCount, indexOffset, stateBytes, liveRows);
         return true;
     }
 
@@ -206,7 +212,7 @@ internal sealed class LeafSnapshotHydrationSource
     internal bool TryFindLowerBound(ReadOnlySpan<byte> keyUtf8, out int index)
     {
         _seeks++;
-        return LeafSnapshotCodec.TryFindFirstRowAtOrAfter(_frame, keyUtf8, out index);
+        return LeafSnapshotCodec.TryFindFirstRowAtOrAfter(_frame, keyUtf8, _rowCount, _indexOffset, out index);
     }
 
     /// <summary>
@@ -217,7 +223,7 @@ internal sealed class LeafSnapshotHydrationSource
     /// <param name="keyUtf8">Key to compare, UTF-8 encoded.</param>
     internal bool RowKeyEquals(int index, ReadOnlySpan<byte> keyUtf8)
     {
-        if (!LeafSnapshotCodec.TryReadRowKeyUtf8At(_frame, index, out var probe))
+        if (!LeafSnapshotCodec.TryReadRowKeyUtf8At(_frame, index, _rowCount, _indexOffset, out var probe))
         {
             return false;
         }
@@ -234,7 +240,7 @@ internal sealed class LeafSnapshotHydrationSource
     /// <param name="key">Receives the decoded key on success.</param>
     internal bool TryReadRowKeyAt(int index, out string key)
     {
-        if (!LeafSnapshotCodec.TryReadRowKeyUtf8At(_frame, index, out var keyUtf8))
+        if (!LeafSnapshotCodec.TryReadRowKeyUtf8At(_frame, index, _rowCount, _indexOffset, out var keyUtf8))
         {
             key = string.Empty;
             return false;
@@ -251,8 +257,21 @@ internal sealed class LeafSnapshotHydrationSource
     /// <param name="index">Zero-based row index.</param>
     /// <param name="row">Receives the decoded row on success.</param>
     internal bool TryReadRowAt(int index, out LeafSnapshotRow row)
+        => TryReadRowAt(index, out row, out _);
+
+    /// <summary>
+    /// As <see cref="TryReadRowAt(int, out LeafSnapshotRow)"/>, but also reports
+    /// the key's UTF-8 byte length so the caller can account the key's encoded
+    /// size without re-encoding the decoded string to rediscover a length the
+    /// frame already carried.
+    /// </summary>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
+    internal bool TryReadRowAt(int index, out LeafSnapshotRow row, out int keyUtf8Length)
     {
-        if (!LeafSnapshotCodec.TryReadRowAt(_frame, index, out row, out var bytesConsumed))
+        if (!LeafSnapshotCodec.TryReadRowAt(
+                _frame, index, _rowCount, _indexOffset, out row, out var bytesConsumed, out keyUtf8Length))
         {
             return false;
         }

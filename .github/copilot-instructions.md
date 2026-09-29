@@ -227,8 +227,8 @@ That is a fact about the current source, not a guarantee.
 
 `MeterFieldDeclarationOrderTests` enforces the ordering across `src/` and fails
 loudly if its own scan matches nothing, so it cannot go vacuous. It scans the
-classes that declare **both** a `Meter` field and an instrument field. Nine
-classes in `src/` declare a static `Meter` field; the two that declare no instrument
+classes that declare **both** a `Meter` field and an instrument field. Of the
+classes in `src/` that declare a static `Meter` field, the two that declare no instrument
 (`LatticeTenantMetrics`, `LatticeScalingMetrics`) are outside that set, and the
 guard's silence on them is **correct, not a gap** - there is no ordering to
 check until an instrument exists, and it begins covering them the moment one is

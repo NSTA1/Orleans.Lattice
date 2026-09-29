@@ -1,14 +1,15 @@
 # Replication overlay - adds a second silo cluster (vfs-replica) acting as the
-# downstream peer for current-state-single-peer (single replica), replication-backpressure (silo crash chaos), receiver-crash
-# (network partition chaos), bidirectional-replication (bidirectional). The base stack already runs
-# the origin silo with Replication:Enabled=true; this overlay brings up the
+# downstream peer for current-state-single-peer (single replica),
+# replication-backpressure (receiver pause chaos), receiver-crash (receiver kill
+# chaos), and bidirectional-replication (bidirectional). The base stack already
+# runs the origin silo with Replication:Enabled=true; this overlay brings up the
 # matching peer plus a second Azurite for cluster isolation.
 #
 # Compose file selection:
 #   docker compose -f docker-compose.yml -f docker-compose.replication.yml up -d
 #
-# benchmark.ps1 picks this overlay when scenarios/B-XX.env declares
-# REPLICATION_OVERLAY=true.
+# benchmark.ps1 picks this overlay when scenarios/<slug>.env declares
+# BENCH_REPLICATION_OVERLAY=true.
 
 services:
   azurite-replica:

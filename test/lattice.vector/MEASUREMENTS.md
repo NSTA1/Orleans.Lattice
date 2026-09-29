@@ -221,7 +221,11 @@ grows with the corpus.
 
 The table predates byte-bounded chunk records: a chunk record is now also capped
 at 64 KiB, so at 384 dimensions it carries at most 42 vectors rather than 1,024,
-and a re-run of this sweep would write more, smaller chunk records.
+and a re-run of this sweep would write more, smaller chunk records. It also
+predates batched identifier-mapping writes: the build then issued one store write
+per vector for its mapping record, and now writes each build slice's mapping
+records in one batch, so the build column describes the older write pattern. The
+number of mapping records is unchanged.
 
 ### Lazy load
 

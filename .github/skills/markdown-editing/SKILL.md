@@ -13,7 +13,7 @@ Patch-style edit tools that rely on `// ...existing code...` markers and similar
 
 1. **Use deterministic byte-level replacement, not patch-style edits.** Read the file via `[System.IO.File]::ReadAllText`, perform an exact `String.Replace` (or a regex with an asserted match-count of exactly 1), and write back via `[System.IO.File]::WriteAllText`. The replacement string must be the verbatim final text - no `// ...existing code...` placeholders.
 
-2. **Pre-condition: assert the old text matches exactly once.** Before replacing, count occurrences of the old string and throw if the count is anything other than 1. A 0 means your anchor text is wrong; a > 1 means your anchor isn't unique enough.
+2. **Pre-condition: assert the old text matches exactly once.** Before replacing, count occurrences of the old string and throw if the count is anything other than 1. A 0 means your anchor text is wrong, or - for a multi-line anchor - that its line endings differ from the file's: with `core.autocrlf=true` the working tree holds tracked markdown with CRLF endings while a PowerShell here-string is LF, so detect the file's line ending and normalise the anchor and replacement to it first. A > 1 means your anchor isn't unique enough.
 
 3. **Post-condition: `git diff` the file and visually verify only the intended lines changed.** The diff must show only the bullet you meant to change. If sibling bullets, paragraph breaks, or trailer text appear in the diff with `-` markers, the edit is wrong - `git checkout HEAD -- <file>` and retry with a more precise anchor.
 

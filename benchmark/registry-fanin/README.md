@@ -76,13 +76,13 @@ Crossing them:
 | mechanism | **not** turn-token contention | **turn-token contention** |
 
 The production storm is 100% never-served on members that **all** carry
-`[AlwaysInterleave]` (`ResolveAsync` `ILatticeRegistry.cs:246`, `GetEntryAsync`
-`:129`, `GetShardMapAsync` `:259`). This also explains, without needing any
+`[AlwaysInterleave]` (`ResolveAsync` `ILatticeRegistry.cs:258`, `GetEntryAsync`
+`:130`, `GetShardMapAsync` `:271`). This also explains, without needing any
 further conjecture, why PR #3183's interleaving attributes were present in the
 binary that produced the 103-timeout storm and did not prevent it.
 
 The rig's storm is 93% served-slowly and 64% on non-interleaved members
-(`GetAllTreeIdsAsync` `:169`, `RegisterAsync` `:096`). Different mechanism,
+(`GetAllTreeIdsAsync` `:170`, `RegisterAsync` `:097`). Different mechanism,
 different remedy.
 
 **Consequence for anyone writing the fix: a remedy validated against this rig
@@ -137,7 +137,7 @@ makes it two-sided:
 
 | grain | `[PersistentState]` | series present |
 |---|---|---|
-| `TxRegistryGrain` (`:46`) | yes, `TxRegistryState` | yes - `state_name="tx-registry"`, 19 reads / 21 writes |
+| `TxRegistryGrain` (`:55`) | yes, `TxRegistryState` | yes - `state_name="tx-registry"`, 19 reads / 21 writes |
 | `ViewRegistryGrain` (`:13`) | yes, `ViewRegistryState` | yes - `state_name="view-registry"`, 1 read |
 | `LatticeRegistryGrain` (`:27`) | **no** | **absent** |
 

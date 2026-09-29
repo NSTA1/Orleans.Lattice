@@ -3,9 +3,10 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Payload delivered to every registered <see cref="ITreeAliasObserver"/>
 /// when the tree registry repoints a logical tree's physical-identity alias
-/// to a different physical tree - the event a shadow-cutover restore, a
-/// resize, or a reshard produces when it swaps the logical tree onto a
-/// freshly minted physical WAL. Carries the logical tree id and both the
+/// to a different physical tree - the event a shadow-cutover restore or
+/// revert, resize or undo, schema remediation, or administrative alias
+/// assignment produces when it swaps the logical tree onto another physical
+/// WAL. Carries the logical tree id and both the
 /// old and new <b>effective</b> physical ids (an unaliased tree resolves to
 /// its own logical id, so a removed alias reports the logical id as the new
 /// physical), so a consumer can rebind directly without re-reading the

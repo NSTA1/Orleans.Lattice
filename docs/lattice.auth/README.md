@@ -56,7 +56,7 @@ var rule = new LatticeAuthorizationRule(
 - **Effect** (`LatticeEffect`) is `Allow` or `Deny`.
 - **Condition** is an optional, opaque string reserved for a future claim / attribute predicate language. Nothing evaluates it in this version: a rule carrying a condition matches exactly as an unconditional rule would, so never rely on one to narrow a grant.
 
-`LatticeAuthOperations.All` is a convenience mask of every tree-scoped data-plane operation, `Read` through `SchemaAdmin`. It deliberately excludes `Telemetry`, `Replication`, `TreeLifecycle`, and `AppInstall`, so a whole-data-plane grant never confers them; each must be granted explicitly. `AppInstall` is a scopeless, cluster-wide capability granted over `LatticeScope.ClusterWide()` exactly as `Telemetry` is; it authorizes installing, enabling, disabling, and uninstalling [installable apps](../lattice.apps/README.md) and confers nothing else.
+`LatticeAuthOperations.All` is a convenience mask of every tree-scoped data-plane operation, `Read` through `SchemaAdmin`. It deliberately excludes `Telemetry`, `Replication`, `TreeLifecycle`, and `AppInstall`, so a whole-data-plane grant never confers them; each must be granted explicitly. `AppInstall` is a scopeless, cluster-wide capability granted over `LatticeScope.ClusterWide()` exactly as `Telemetry` is; it authorizes the [installable-app](../lattice.apps/README.md) lifecycle - installing, upgrading and re-consenting, enabling, disabling, reconciling and uninstalling an app - and the app-control facade's list, describe and consent reads, and confers nothing else.
 
 Rules are authored through the policy store, resolved from the silo's service provider:
 

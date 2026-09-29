@@ -41,7 +41,11 @@ It proves the headline properties of the telemetry surface:
 > `RequireAuthorization = false` does not lift that gate. As written, the agent
 > is offered only the `lattice_capabilities` meta-tool, so the four telemetry
 > tools never appear and the run cannot complete property 1 or the live queries
-> below. The anonymous caller is still offered nothing. Registering
+> below: after waiting for the telemetry tools, its first `lattice_telemetry_query`
+> call names a tool the session does not offer, which the MCP server answers with
+> a protocol error, so the client throws and the run ends there, before the
+> anonymous-caller act. The anonymous caller would still be offered nothing.
+> Registering
 > `AllowAllMcpAuthorizer` (or your own `ILatticeApiMcpAuthorizer`) is the
 > missing step for the agent journey.
 

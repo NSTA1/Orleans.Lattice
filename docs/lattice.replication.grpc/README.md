@@ -31,6 +31,7 @@ The package has no external broker and no `.proto` file to maintain.
 | **Unified peer options** | One `LatticeReplicationGrpcOptions` instance configures peer endpoints, TLS policy, channel customization, and origin header override. | [Configuration](configuration.md) |
 | **Receiver endpoint mapping** | `MapLatticeReplicationGrpc` exposes the inbound replication endpoints on an ASP.NET Core route builder. | [API Reference](api.md) |
 | **Bootstrap and anti-entropy transport** | The same peer endpoint carries snapshot bootstrap and read-only drift probes used by the replication package. | [Replication docs](../lattice.replication/README.md) |
+| **Saga control channel** | The same peer endpoint carries the cross-cluster saga control calls (prepare, commit, abort, status) that coordinated restore drives, and the receiver serves them behind a peer allow-list gate. | [Coordinated restore](../lattice.replication/coordinated-restore.md) |
 | **Transport chaos coverage** | Fault-injected channel tests prove that bounded caller retries deliver every batch with no key loss. | [Chaos Tests](chaos-tests.md) |
 
 ## Quick Start

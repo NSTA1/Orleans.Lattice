@@ -69,9 +69,10 @@ public enum WalSaturationState
     /// enabled), or - only when <see cref="LatticeOptions.WalSaturationAcuteOnly"/>
     /// is disabled - an admission semaphore at its cap with callers parked on
     /// it. Callers should pause new appends until the state returns to
-    /// <see cref="Healthy"/> - continuing to dispatch will fault parked
-    /// callers with <see cref="TimeoutException"/> rather than
-    /// improving throughput.
+    /// <see cref="Healthy"/> - continuing to dispatch will refuse parked
+    /// callers with <see cref="LatticeSaturatedException"/> on the default
+    /// admission gate, or <see cref="TimeoutException"/> when that gate is
+    /// disabled, rather than improving throughput.
     /// </summary>
     Saturated = 2,
 }

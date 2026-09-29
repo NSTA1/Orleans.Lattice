@@ -36,9 +36,10 @@ internal sealed partial class BPlusLeafGrain
     /// What changes is that nothing is materialised. The whole-cache view called
     /// <c>HydrateAll</c>, which ends in <c>DetachSnapshot</c> and leaves every
     /// row resident for the life of the activation. That mattered here more than
-    /// anywhere else, because this runs on <em>every</em> successful foreground
-    /// commit once either threshold is configured, so on a write-heavy tree it
-    /// was reliably the first operation to consume a leaf's snapshot frame - and
+    /// anywhere else, because this runs on every successful foreground delete and
+    /// range-delete commit once either threshold is configured, so on a
+    /// delete-heavy tree it was reliably the first operation to consume a leaf's
+    /// snapshot frame - and
     /// a leaf whose frame is gone can only divide by materialising itself whole,
     /// which is the cost a division on an oversized leaf can least afford.
     /// Deciding that a leaf needs compaction was itself the act that forfeited

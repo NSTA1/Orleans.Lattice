@@ -193,7 +193,7 @@ Produce a single chat reply with these sections, in this order:
 3. **Stale claims and omissions found and fixed** - numbered list, one entry per file. Each stale-claim entry lists: the file, the false claim (quoted), the source-of-truth citation (`src/...:line`), the corrected wording (quoted). Each omission entry lists: the doc structure (e.g. "the `PACKAGES.md` package inventory"), the source item(s) that had no entry, the source citation proving they exist, and the added wording. Group multi-edit files under a single numbered entry with sub-bullets.
 4. **Claims verified accurate (depth pass)** - axis-by-axis evidence summary. Cite source files and the specific values (e.g. "`AtomicWriteRetention=48h`" from `LatticeOptions.cs:NN"). The user reads this section to gauge sweep coverage; missing axes here means missing coverage.
 5. **Changelog historical narrative** - explicit note of any tracker-id hits surfaced by greps that were intentionally left alone, with a one-line reason ("retrospective record of pre-fix behaviour in `CHANGELOG.md`").
-6. **Verification** - one line each for: hygiene gates (`Failed: 0`), link scan (`0 broken across N`), file count touched. Cite gate transcripts by name.
+6. **Verification** - one line each for: hygiene gates (`FAILED=0` with a non-zero `EXECUTED` count for every fixture), link scan (`0 broken across N`), file count touched. Cite gate transcripts by name.
 7. **Files modified** - flat list. Note any scratch script left in place (gitignored; preserved for future runs).
 
 ## Anti-patterns

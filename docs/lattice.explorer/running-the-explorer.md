@@ -128,10 +128,12 @@ to the Explorer `BasePath` rather than to unrelated traffic.
 ### Static web assets in a thin host
 
 An isolated head can be a thin project with no Razor files of its own. The
-Explorer packages provide the Razor components and static assets. In a published
-ASP.NET Core app those assets are composed by the static web assets system. The
-sample host calls `UseStaticWebAssets()` so `dotnet run` serves the packaged
-assets even outside the Development environment.
+Explorer packages provide the Razor components and static assets, which are
+served automatically by a published host and under the Development environment.
+When you run from build output (for example with `dotnet run`) under a
+non-Development environment, call `builder.WebHost.UseStaticWebAssets()` so those
+assets are mapped and the console is styled. The Explorer sample host does
+exactly that.
 
 If a container build restores and publishes in separate stages, make sure the
 publish stage restores with the full host source available, or do not use

@@ -50,6 +50,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Aggregation row transcode.** A row now encodes a short string once instead of sizing it and then encoding it again, gated on a compile-time UTF-8 bound rather than a virtual `Encoding.GetMaxByteCount` call paid per string. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
 
+- **Performance - Leaf snapshot frame reads.** The frame codec re-validated its 24-byte header on every read helper, inside per-row and per-probe loops. It is now read once and threaded through: a lower-bound seek is 76% faster, hydration admission 22%, and the aggregate walk 64%. ([#3881](https://github.com/NSTA1/Orleans.Lattice/pull/3881)) (`Orleans.Lattice`)
+
+- **Performance - Leaf key comparison and row accounting.** The UTF-8 comparator behind every seek now decides from the first differing byte, decoding only when that byte is non-ASCII; ASCII keys compare 16x faster. A hydrated row reuses the key length the frame states instead of re-scanning it. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`Orleans.Lattice`)
+
+- **Performance - Durable pin fan-out.** Tree purge and consumer unregister now clear the WAL materialiser pin keys in one concurrent round instead of walking them, replacing 2 * shards + 1 sequential grain round trips - seventeen at the default shard count - with one. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`Orleans.Lattice`)
+
+- **Docs - Grain await convention.** The grain instructions now state when an await in a grain carries an explicit ConfigureAwait and when it does not, and three semaphore waits are brought in line with it. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`repository-wide`, `Orleans.Lattice`)
+
 - **Performance - CRDT delta fold enumeration.** Eight delta-fold and shape-registry sites walk a span over the concrete backing array or list instead of the read-only list interface, which boxed an enumerator per call. The coalescing fold is 18% faster and allocates up to 896 fewer bytes. ([#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
 
 - **Performance - CRDT provenance decode.** The or-map state decoder orders distinct keys and emits their events contiguously, from a pooled scratch, instead of sorting every event by key surrogate; the multi-value register sorts its projected result, not a copy; a flag read returns a UTF-8 literal. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833), [#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
@@ -181,7 +189,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Replication - A resumed bootstrap dropped rows above its cursor.** A crash-resume or transient retry re-opened the snapshot export bounded at the highest HLC applied so far, dropping unapplied rows stamped above it. Every attempt now exports the whole snapshot; the overlap applies as LWW no-ops. ([#3656](https://github.com/NSTA1/Orleans.Lattice/issues/3656)) (`Orleans.Lattice.Replication`)
 
+- **Shard - Resize and snapshot dropped split-added shards and resurrected stale values.** They copied, shadow-forwarded, locked and rejected only shards `0..ShardCount-1` of the pinned count into an identity-routed destination, so a resize or snapshot of a tree an adaptive split had grown silently lost every key on the split shard and served the donor's sealed, pre-split copy of each moved key. The destination now inherits the source's routing map and split allocation mark, every shard the map routes to is copied, forwarded, rejected and released, and a copied entry is kept only on the shard the map routes it to. ([#3880](https://github.com/NSTA1/Orleans.Lattice/issues/3880)) (`Orleans.Lattice`)
+
 - **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice`)
+
+- **Shard - Reshard ignored a declared virtual slot count.** On an app tree with fewer than 4096 slots, a target above that count passed validation and stayed in progress forever, and an empty-tree reshard rebuilt the map over 4096 slots. Both now honour the tree's slot count. ([#3888](https://github.com/NSTA1/Orleans.Lattice/issues/3888)) (`Orleans.Lattice`, `Orleans.Lattice.Apps`)
 
 - **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
 
@@ -217,6 +229,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Backup - A full backup's cut recorded HLC 0.** The consistency cut read an anchor the core always stamps as zero; it now records the highest HLC the capture read, so the first increment on a full base pins the WAL at that frontier while it drains. ([#3758](https://github.com/NSTA1/Orleans.Lattice/issues/3758)) (`Orleans.Lattice.Backup`)
 
+- **Backup - Capturing a tree with a folded shard failed.** The topology step digested shards `0..count-1`, so once shard healing had folded a shard away it named a missing index and every backup threw. It now follows the routing map, which also gives the true virtual slot count. ([#3887](https://github.com/NSTA1/Orleans.Lattice/issues/3887)) (`Orleans.Lattice.Backup`, `Orleans.Lattice`)
+
 - **WAL - GC reactivation respects the sweep share.** The reactivation pass fans leaf touches out within the sweep starvation share and retries a refused touch in the same pass, a refusal no longer spends a reactivation attempt, and the orphan-pin sweep sum is documented as a population bound. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761), [#2878](https://github.com/NSTA1/Orleans.Lattice/issues/2878)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Leaf - Split and hydration accounting.** Recovery-path split completions land on a zero-primed `recovered` outcome, the bisect-refusal counter documents its corrected cost model, and the hydration heap factor is justified from both the binary and legacy JSON read paths. ([#2860](https://github.com/NSTA1/Orleans.Lattice/issues/2860), [#2856](https://github.com/NSTA1/Orleans.Lattice/issues/2856), [#2858](https://github.com/NSTA1/Orleans.Lattice/issues/2858)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
@@ -233,7 +247,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Replication - Bootstrap dropped the TTL of committed rows.** The default snapshot export left every committed row's expiry at 0, so whole-tree bootstrap and the anti-entropy fallback installed TTL keys on the peer as durable. Committed rows now carry the source entry's absolute expiry. ([#3802](https://github.com/NSTA1/Orleans.Lattice/issues/3802)) (`Orleans.Lattice.Replication`)
 
-- **Core - Conditional and atomic batches skipped the write bounds.** `SetManyWherePredicateAsync`, `SetManyAtomicAsync` and `SetManyAtomicWhereAsync` now enforce `MaxKeyLength`, `MaxValueSizeBytes` and `MaxLiveKeys` / `MaxEstimatedBytes` caps like `SetManyAsync`, atomic ones before the saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852)) (`Orleans.Lattice`)
+- **Core - Batch writes skipped the write bounds.** `SetManyWherePredicateAsync`, single-tree atomic batches and the cross-tree `SetManyAtomicAsync` extension now enforce `MaxKeyLength`, `MaxValueSizeBytes`, `MaxLiveKeys` and `MaxEstimatedBytes` like `SetManyAsync`, atomic ones before a saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852), [#3889](https://github.com/NSTA1/Orleans.Lattice/issues/3889)) (`Orleans.Lattice`)
 
 - **Performance - `performance-report.ps1` threw at startup.** Its `-NamePrefix` parameter is declared again, so Layer 1, Layer 2 and self-provisioning Layer 3 sweeps no longer fail under StrictMode, and a gate checks that every documented script parameter is declared. ([#3804](https://github.com/NSTA1/Orleans.Lattice/issues/3804)) (`repository-wide`)
 
@@ -242,6 +256,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Observability - Replication wire-version gauges had no tenant tag.** `wire_version.negotiated` and `wire_version.downgrade_active` now carry the derived `tenant` tag like every other replication instrument, so tenant-scoped telemetry sees a tree's mixed-version peers. ([#3853](https://github.com/NSTA1/Orleans.Lattice/issues/3853)) (`Orleans.Lattice.Replication`)
 
 - **Performance - The azure-throughput rig ignored a documented `0`.** The silo now honours `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=0` (coalescing off) and the TCP producer `BENCH_DURATION_SEC=0` (run forever) instead of running the default, and a gate checks every documented `0`. ([#3854](https://github.com/NSTA1/Orleans.Lattice/issues/3854)) (`repository-wide`)
+
+- **Core - History continuation pages misreported the trim point.** On the WAL-window history fallback, a truncated continuation page named its own first revision, or zero when it returned none, as `EarliestAvailable`. Every truncated page now names the oldest still-readable revision. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice`)
+
+- **Replication - Leaf re-replay missed a trimmed partition.** Once an earlier partition spent the shared read budget, later ones went unexamined, so a trimmed one read as untrimmed and re-replay ran past a WAL gap instead of reporting `wal_trimmed`. Their trim point is now probed. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice.Replication`)
+
+- **Config - NaN ratios passed range checks.** A NaN `LatticeViewOptions.ThrottledBatchRatio` was accepted, draining one entry per throttled pass, and a NaN `RetainedBytesAdvisoryRatio` zeroed every storage-pressure threshold. The validator now rejects NaN and the collector falls back to `0.8`. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice`, `Orleans.Lattice.Scaling`)
 
 ### Security
 

@@ -1,7 +1,7 @@
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
-using System.Diagnostics;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -91,18 +91,14 @@ public class TombstoneCompactionReclaimWiringIntegrationTests
     /// The pass is timer-driven (one shard per tick), so the trigger call
     /// returns before the work is done and the caller must wait on an
     /// observable outcome rather than on the call itself.
+    /// <para>
+    /// Routed to the shared <see cref="TestPoll"/>, whose asynchronous-probe
+    /// form has exactly this shape - bounded poll, 100ms cadence, one final
+    /// sample after the deadline - so the private copy was pure duplication.
+    /// </para>
     /// </summary>
-    private static async Task<bool> WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout)
-    {
-        var sw = Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (await condition()) return true;
-            await Task.Delay(100);
-        }
-
-        return await condition();
-    }
+    private static Task<bool> WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout) =>
+        TestPoll.TryUntilAsync(condition, timeout, TimeSpan.FromMilliseconds(100));
 
     /// <summary>
     /// The finding this fixture exists for. A range grows, is emptied, and the

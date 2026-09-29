@@ -97,6 +97,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// registered by <c>AddLattice</c>, so it is present on every real host; when
     /// <c>null</c> the tag-index verbs throw <see cref="InvalidOperationException"/>.
     /// </param>
+    /// <param name="admission">
+    /// The optional tenant admission controller that decides whether a tree create is
+    /// within the active tenant's quota, or <c>null</c> when no tenancy add-on
+    /// registers one. When <c>null</c> or inactive, and for a system-origin call,
+    /// creates are not quota-checked.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeTreeAdmin(
         ILatticeSchemaControl schemaControl,

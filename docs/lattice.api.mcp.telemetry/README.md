@@ -59,7 +59,7 @@ var rule = new LatticeAuthorizationRule(
     LatticeEffect.Allow);
 ```
 
-For a complete, runnable host that proxies a real Prometheus instance running in Docker and drives the telemetry tools over a real MCP client, see the [`McpTelemetry`](../../samples/McpTelemetry) sample under [`samples/`](../../samples).
+For a complete host that proxies a real Prometheus instance running in Docker and drives the telemetry tools over a real MCP client, see the [`McpTelemetry`](../../samples/McpTelemetry) sample under [`samples/`](../../samples). As written it registers no `ILatticeApiMcpAuthorizer`, so the default `DenyAllMcpAuthorizer` withholds the telemetry tools from its agent - its README describes the missing registration.
 
 ## Reference
 

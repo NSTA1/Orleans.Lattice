@@ -60,8 +60,12 @@ transitively.
   register an area. The only way a third party puts UI into the console is a
   [Lattice App](lattice-apps.md), and an app's UI never sees a credential.
 - **Embeddable without wiring.** The UI ships its static web assets at
-  `_content/Orleans.Lattice.Explorer.UI/`, served automatically. A host mounts
-  the whole console with two extension calls under a configurable base path.
+  `_content/Orleans.Lattice.Explorer.UI/`, served automatically by a published
+  host. A host run from its build output outside the Development environment adds
+  one call, `UseStaticWebAssets()` (see
+  [Static web assets in a thin host](running-the-explorer.md#static-web-assets-in-a-thin-host)).
+  A host mounts the whole console with two extension calls under a configurable
+  base path.
 
 ## Features
 

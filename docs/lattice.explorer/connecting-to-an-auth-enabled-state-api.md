@@ -81,23 +81,13 @@ HTTP/2 for local development.
 
 ## Signing in with Entra
 
-Add the optional Entra package for an interactive host. Configured values win
-over the endpoint advertisement; advertised values only fill in unset options.
-
-```csharp
-using Microsoft.Extensions.DependencyInjection;
-using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.Entra;
-
-var services = new ServiceCollection();
-services.AddExplorerAuth();
-services.AddExplorerEntraAuth(options =>
-{
-    options.Authority = "https://login.microsoftonline.com/<tenant>";
-    options.ClientId = "<public-client-id>";
-    options.Scopes.Add("api://<state-api-app-id>/.default");
-});
-```
+Add the optional `Orleans.Lattice.Explorer.Entra` package for an interactive
+host, call `AddExplorerAuth()`, then call `AddExplorerEntraAuth(...)` to set the
+public OIDC authority (or tenant), client id and State API scope. The verified
+setup snippet lives in the
+[`Orleans.Lattice.Explorer.Entra` package docs](../lattice.explorer.entra/README.md#setup),
+where the Entra package is part of the compiling reference set. Configured values
+win over the endpoint advertisement; advertised values only fill in unset options.
 
 An advertised authority is admitted only when it is an absolute `https` URL and
 its host is allowed. With no custom allow-list, the provider accepts the known

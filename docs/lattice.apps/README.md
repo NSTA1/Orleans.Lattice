@@ -143,10 +143,9 @@ A tree declaration names an **app-local** tree. The physical tree is the
 structural `a/{app}/{name}`, composed per tenant as described above. Omitted shape
 pins inherit the host's defaults. `virtualShardCount` is applied when the install
 first registers the tree, and a manifest upgrade may not change it or drop the pin.
-The tree keeps the declared slot count only until a resize of the tree once it holds
-data drops its shard map, or a reshard to a different shard count while it is still
-empty rebuilds that map with 4096 slots; it then routes over the default 4096 virtual
-slots (see [Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
+A resize carries the declared slot count over to the resized copy and a reshard keeps
+it, and a reshard target cannot exceed it (see
+[Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
 
 `rebuildable: true` marks a tree whose contents can be re-derived rather than
 restored. It is descriptive metadata: the control facade's describe reports it, and no
@@ -351,9 +350,11 @@ upgrade. A manifest upgrade that drops a tree soft-deletes that tree, and one th
 drops a tree from the `replication` section unenrols it. Reconciling an app in any
 other state withdraws its owned rules; reconcile never changes the registry state.
 
-Every run records its outcome, and the manifest whose trees and rules are currently
+Each run records its outcome, and the manifest whose trees and rules are currently
 applied, as the app's `AppActivationStatus` in a second reserved system tree,
-`sys-app-activation`, keyed like the registry. That record is the evidence the
+`sys-app-activation`, keyed like the registry; a run that cannot read the existing
+status leaves it untouched rather than overwrite it, and a failed status write is
+only logged. That record is the evidence the
 control facade reports as a `Failed` state; a disabled registry state alone is never
 read as a failure.
 
@@ -486,8 +487,10 @@ which is registered as the single `IAppSource`. Register further sources with
   source's is refused the same way, so a source cannot vouch for another.
 
 `InImageAppSource` is the only implementation in this version. Its key is
-`in-image`, its kind is `Static`, and it offers `Enumerate` only. It lists exactly
-the apps registered with `AddLatticeApp`, in slug order. It serves UI assets from
+`in-image`, its kind is `Static`, and it offers `Enumerate` only. Its provenance is
+`in-image` with the registration's `Publisher` (`first-party` unless the
+registration sets another), and each manifest is parsed once and cached. It lists
+exactly the apps registered with `AddLatticeApp`, in slug order. It serves UI assets from
 embedded resources named `{manifestResourceNamespace}.ui.{path}`, or from an
 explicit prefix passed to the `AddLatticeApp` overload that takes one, with every
 `/` in the path mapped to `.`.

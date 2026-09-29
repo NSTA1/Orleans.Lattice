@@ -46,12 +46,12 @@ public interface ILatticeSchemaVersionAdmin
     /// stamped at the new version immediately; existing values are upcast lazily on
     /// read. (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The updated config.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">The tree is unversioned, or <paramref name="newTargetVersion"/> does not advance the current target.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The tree is unversioned, including reserved schema-infrastructure tree ids, or <paramref name="newTargetVersion"/> does not advance the current target.</exception>
     Task<LatticeSchemaVersionConfig> AdvanceTargetVersionAsync(
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default);
 
@@ -65,7 +65,8 @@ public interface ILatticeSchemaVersionAdmin
     /// upcasting each through the registered upcaster chain and re-enveloping it at
     /// the new target, so steady-state reads stop paying the per-read upcast cost.
     /// It aborts on the first value that cannot be upcast, naming the offending key
-    /// and a value preview and leaving the tree's data untouched. If the tree has an
+    /// and a value preview and leaving the tree's data untouched; the target version
+    /// advance is already committed and is not rolled back. If the tree has an
     /// enforcement policy, the re-stamped values are validated against it during the
     /// build; the policy itself is left unchanged. (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>

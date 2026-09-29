@@ -28,6 +28,7 @@ Every facade operation authorizes before it touches data, through the same backu
 - A **scope status** read authorizes the scope's read grant.
 - A **catalog rebuild** or **catalog scrub** authorizes the restore grant over the reserved backup catalog tree, because it acts on the rows of every scope.
 - **List**, **stream**, and **inventory** authorize per manifest and silently exclude any manifest whose scope the caller may not read, so existence of a backup a caller cannot read is never leaked through a count, a page, or the inventory totals.
+- The **capability probe** and the **health-monitoring availability** flag touch no backup data and refuse no caller for lack of a grant: the probe evaluates both grants over the scope without side effects and reports each as a flag, and the availability flag reports only whether the registered sink is durable.
 
 Because the gate is the same one the data path consults, the facade inherits the engine's fail-closed posture, the zero-cost short-circuit when no authorization add-on is registered, and the bootstrap-administrator break-glass, with no bespoke authorization logic of its own.
 

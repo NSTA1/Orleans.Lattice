@@ -4,12 +4,11 @@ namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
 /// Unified configuration for the <c>Orleans.Lattice.Replication.Grpc</c>
-/// binding. A single options instance configures both the outbound
-/// live-push transport (<see cref="IReplicationTransport"/>) and the
-/// outbound snapshot-bootstrap transport
-/// (<see cref="IRemoteSnapshotTransport"/>), because a real deployment
-/// hosts both gRPC services on one ASP.NET Core process behind one
-/// endpoint per peer.
+/// binding. A single options instance configures the outbound live-push
+/// transport (<see cref="IReplicationTransport"/>), digest-probe transport,
+/// snapshot-bootstrap transport (<see cref="IRemoteSnapshotTransport"/>), and
+/// saga-control channel, because a real deployment hosts all receiver services
+/// on one ASP.NET Core process behind one endpoint per peer.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,8 +25,8 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// </para>
 /// <para>
 /// The public options project into three per-transport clients, each with its
-/// own per-peer <see cref="GrpcChannel"/> cache: live push, snapshot pulls,
-/// and saga-control RPCs. The hardened-defaults pipeline (TLS enforced unless
+/// own per-peer <see cref="GrpcChannel"/> cache: live push plus digest
+/// probes, snapshot pulls, and saga-control RPCs. The hardened-defaults pipeline (TLS enforced unless
 /// <see cref="AllowPlaintextEndpoints"/> opts out, the shared-secret
 /// authenticator on every call, the <c>x-lattice-replication-origin</c> header)
 /// applies uniformly.
@@ -37,7 +36,7 @@ public sealed class LatticeReplicationGrpcOptions
 {
     /// <summary>
     /// Map of remote cluster id to the gRPC endpoint URI it accepts
-    /// push batches, snapshot pulls, and saga-control calls at. Each entry can
+    /// push batches, digest probes, snapshot pulls, and saga-control calls at. Each entry can
     /// produce one long-lived <see cref="GrpcChannel"/> per outbound transport
     /// cache; HTTP/2 multiplexes concurrent calls within each transport's
     /// underlying TCP connection.
@@ -86,7 +85,16 @@ public sealed class LatticeReplicationGrpcOptions
     /// <summary>
     /// The local cluster id stamped on the
     /// <c>x-lattice-replication-origin</c> metadata header of every
-    /// outbound call (live-push batch or snapshot RPC). When
+    /// outbound call (live-push batch, digest probe, snapshot RPC, or saga-control
+    /// RPC). For live pushes, content-manifest exchanges, and peer high-water-mark
+    /// probes, receivers compare this header with the origin cluster id carried in
+    /// the request. The request names the sending tree's own resolved
+    /// <see cref="LatticeReplicationOptions.ClusterId"/>, while the header is one
+    /// value per peer channel; set an override only to the same value as the
+    /// cluster-wide <see cref="LatticeReplicationOptions.ClusterId"/>, and do not
+    /// give a replicated tree a per-tree cluster id that differs from it, or those
+    /// calls are refused.
+    /// When
     /// <see langword="null"/> or whitespace, the binding reads
     /// <see cref="LatticeReplicationOptions.ClusterId"/> from
     /// <c>IOptionsMonitor&lt;LatticeReplicationOptions&gt;</c> at

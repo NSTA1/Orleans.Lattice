@@ -127,14 +127,45 @@ Register the method in DI as an `IExplorerAuthMethod`. Stateless methods can be
 singletons. Methods that hold per-circuit user state or depend on scoped services
 should be scoped, as the shipped Entra methods are.
 
-```csharp
+```csharp verify
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Connection;
 
-var services = new ServiceCollection();
-services.AddExplorerAuth();
-services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, ApiKeyAuthMethod>());
+public static class CustomAuthRegistration
+{
+    public static IServiceCollection AddApiKeyAuth(IServiceCollection services)
+    {
+        services.AddExplorerAuth();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, ApiKeyAuthMethod>());
+        return services;
+    }
+
+    private sealed class ApiKeyAuthMethod : IExplorerAuthMethod
+    {
+        public string SchemeId => "apikey";
+
+        public bool CanHandle(string advertisedScheme)
+            => string.Equals(advertisedScheme, SchemeId, StringComparison.OrdinalIgnoreCase);
+
+        public Task<ExplorerAuthSignIn> ChallengeAsync(
+            ExplorerAuthChallengeContext context,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new ExplorerAuthSignIn
+            {
+                SchemeId = SchemeId,
+                DisplayName = "API key",
+                Authentication = new LatticeCallAuthentication
+                {
+                    Headers = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        [LatticeCallAuthentication.AuthorizationHeaderName] = "ApiKey example",
+                    },
+                },
+            });
+    }
+}
 ```
 
 The Explorer resolves `IEnumerable<IExplorerAuthMethod>` and chooses a method

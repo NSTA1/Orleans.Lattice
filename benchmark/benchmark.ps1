@@ -11,10 +11,11 @@
     opportunistically pushes them into the history VictoriaMetrics so the
     cross-run trend dashboard fills in over time.
 
-    -Compare:         aggregate every .run/B-*/*/results.json into a Markdown +
-                      CSV summary at .run/comparison.{md,csv}.
-    -CompareAgainst:  add a "Δ vs. <baseline>" column to the comparison output
-                      (the simulator-baseline delta the plan calls for).
+    -Compare:         aggregate every .run/**/results.json into the latest run per
+                      scenario, then write a Markdown + CSV summary at
+                      .run/comparison.{md,csv}.
+    -CompareAgainst:  add a delta-vs-baseline column to the comparison output
+                      for the scenario id supplied.
     -ImportHistory:   bulk-import every .run/**/results.json into the history
                       VictoriaMetrics (idempotent; dedupes by run_id label).
     -OpenHistory:     stand up the history docker-compose stack and print URLs.
@@ -56,12 +57,12 @@
     long-lived regression-trend dashboards.
 
 .PARAMETER Compare
-    Aggregate every .run/B-*/*/results.json into a Markdown + CSV summary at
-    .run/comparison.{md,csv}.
+    Aggregate every .run/**/results.json into the latest run per scenario, then
+    write a Markdown + CSV summary at .run/comparison.{md,csv}.
 
 .PARAMETER CompareAgainst
-    Add a "Δ vs. <baseline>" column to the comparison output (the
-    simulator-baseline delta the plan calls for). Requires -Compare.
+    Add a delta-vs-baseline column to the comparison output for the scenario id
+    supplied. Requires -Compare.
 
 .PARAMETER ImportHistory
     Bulk-import every .run/**/results.json into the history VictoriaMetrics
@@ -80,7 +81,7 @@
     ./benchmark.ps1 -Scenario replication-backpressure -KeepRunning
 
 .EXAMPLE
-    ./benchmark.ps1 -Compare -CompareAgainst simulator-baseline
+    ./benchmark.ps1 -Compare -CompareAgainst current-state-no-replication
 
 .EXAMPLE
     ./benchmark.ps1 -OpenHistory; ./benchmark.ps1 current-state-no-replication; ./benchmark.ps1 current-state-single-peer
@@ -869,11 +870,11 @@ function Invoke-Microbench {
         .run/<scenario>/<run_id>/results.json and opportunistically pushes to the
         history VM, exactly like the docker-driven scenarios.
     .NOTES
-        The microbench project lives at benchmark/host/Bench.Microbench/. It uses
-        Orleans.TestingHost for an in-process single-silo cluster and BDN's
-        InProcessEmitToolchain so the cluster comes up once and serves all
-        [Benchmark] methods (vs. paying the ~5s cluster startup per child .exe
-        with the default forking toolchain).
+        The microbench project lives at benchmark/host/Bench.Microbench/. It
+        hand-instantiates the benchmarked grains over FakeGrainFactory and uses
+        BDN's InProcessEmitToolchain so the shared fixture is reused inside one
+        process (vs. paying setup cost per child .exe with the default forking
+        toolchain).
     #>
     param(
         [Parameter(Mandatory = $true)] [string] $ScenarioId,

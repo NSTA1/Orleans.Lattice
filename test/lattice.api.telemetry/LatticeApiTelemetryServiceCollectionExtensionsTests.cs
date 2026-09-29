@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -155,4 +157,85 @@ public sealed class LatticeApiTelemetryServiceCollectionExtensionsTests
     private static HttpClient BackendHttpClient(IServiceProvider provider)
         => provider.GetRequiredService<IHttpClientFactory>()
             .CreateClient(nameof(IPrometheusQueryClient));
+
+    [Test]
+    public void The_backend_transport_presents_the_configured_client_certificate()
+    {
+        // Mutual TLS is the one auth mode whose credential is not a request header: the
+        // certificate has to reach the primary transport handler or the backend sees an
+        // anonymous connection, and nothing on the request would reveal the difference.
+        using var certificate = SelfSignedCertificate();
+        var services = Configured(options =>
+        {
+            options.AuthMode = LatticeTelemetryBackendAuthMode.MutualTls;
+            options.Credential = new LatticeTelemetryBackendCredential { ClientCertificate = certificate };
+        });
+        services.AddLatticeTelemetryBackend();
+
+        using var provider = services.BuildServiceProvider();
+        var primary = PrimaryHandlerOf(provider);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(primary, Is.InstanceOf<HttpClientHandler>());
+            Assert.That(((HttpClientHandler)primary).ClientCertificates, Does.Contain(certificate));
+        });
+    }
+
+    [Test]
+    public void The_backend_transport_stays_anonymous_for_a_header_auth_mode()
+    {
+        // Anti-vacuity for the case above: a handler that attached every configured
+        // certificate regardless of mode would pass it, and only a header mode carrying a
+        // certificate separates "presented because mutual TLS" from "presented always".
+        using var certificate = SelfSignedCertificate();
+        var services = Configured(options =>
+        {
+            options.AuthMode = LatticeTelemetryBackendAuthMode.Bearer;
+            options.Credential = new LatticeTelemetryBackendCredential
+            {
+                BearerToken = "token",
+                ClientCertificate = certificate,
+            };
+        });
+        services.AddLatticeTelemetryBackend();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(((HttpClientHandler)PrimaryHandlerOf(provider)).ClientCertificates, Is.Empty);
+    }
+
+    [Test]
+    public void The_backend_transport_builds_when_mutual_tls_names_no_certificate()
+    {
+        // Defensive: the options validator rejects this pairing, so the handler must present
+        // nothing rather than fault while the transport is being built.
+        var services = Configured(options => options.AuthMode = LatticeTelemetryBackendAuthMode.MutualTls);
+        services.AddLatticeTelemetryBackend();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(((HttpClientHandler)PrimaryHandlerOf(provider)).ClientCertificates, Is.Empty);
+    }
+
+    private static HttpMessageHandler PrimaryHandlerOf(IServiceProvider provider)
+    {
+        var current = provider.GetRequiredService<IHttpMessageHandlerFactory>()
+            .CreateHandler(nameof(IPrometheusQueryClient));
+
+        while (current is DelegatingHandler { InnerHandler: { } inner })
+        {
+            current = inner;
+        }
+
+        return current;
+    }
+
+    private static X509Certificate2 SelfSignedCertificate()
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            "CN=lattice-telemetry-backend-registration-test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        return request.CreateSelfSigned(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1));
+    }
 }

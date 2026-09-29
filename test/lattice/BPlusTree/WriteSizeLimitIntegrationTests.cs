@@ -235,4 +235,72 @@ public class WriteSizeLimitIntegrationTests
 
         Assert.That(await tree.GetAsync("k"), Is.EqualTo(ScoredJson(2)));
     }
+
+    // Regression: a cross-tree atomic write skipped the entry-time write-size
+    // bounds. Its sub-sagas caught an oversized leg only once they were running,
+    // so the commit failed with InvalidOperationException after the prepare had
+    // been staged and rolled back, instead of the ArgumentException every other
+    // write raises before anything is staged.
+    [Test]
+    public async Task Cross_tree_batch_rejects_oversized_value_before_any_tree_is_staged()
+    {
+        var (first, second) = CrossTreePair("wsl-xtree-value");
+        await first.Lattice.SetAsync("ok", ScoredJson(1));
+        await second.Lattice.SetAsync("bad", ScoredJson(1));
+
+        Assert.That(
+            async () => await _cluster.GrainFactory.SetManyAtomicAsync(
+                [
+                    new LatticeTreeBatch(first.TreeId, [new("ok", ScoredJson(2))]),
+                    new LatticeTreeBatch(second.TreeId, [new("bad", OversizedValue())]),
+                ],
+                $"op-xtree-value-{Guid.NewGuid():N}"),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(await first.Lattice.GetAsync("ok"), Is.EqualTo(ScoredJson(1)),
+            "the rejected cross-tree write must not have written any tree's leg");
+        Assert.That(await second.Lattice.GetAsync("bad"), Is.EqualTo(ScoredJson(1)),
+            "the rejected cross-tree write must not have written the oversized value");
+    }
+
+    [Test]
+    public void Cross_tree_batch_rejects_oversized_key_before_any_tree_is_staged()
+    {
+        var (first, second) = CrossTreePair("wsl-xtree-key");
+
+        Assert.That(
+            async () => await _cluster.GrainFactory.SetManyAtomicAsync(
+                [
+                    new LatticeTreeBatch(first.TreeId, [new("ok", ScoredJson(2))]),
+                    new LatticeTreeBatch(second.TreeId, [new(OverlongKey(), ScoredJson(2))]),
+                ],
+                $"op-xtree-key-{Guid.NewGuid():N}"),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task Cross_tree_batch_accepts_within_bound_write()
+    {
+        var (first, second) = CrossTreePair("wsl-xtree-ok");
+
+        var outcome = await _cluster.GrainFactory.SetManyAtomicAsync(
+            [
+                new LatticeTreeBatch(first.TreeId, [new("a", ScoredJson(2))]),
+                new LatticeTreeBatch(second.TreeId, [new("b", ScoredJson(3))]),
+            ],
+            $"op-xtree-ok-{Guid.NewGuid():N}");
+
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await first.Lattice.GetAsync("a"), Is.EqualTo(ScoredJson(2)));
+        Assert.That(await second.Lattice.GetAsync("b"), Is.EqualTo(ScoredJson(3)));
+    }
+
+    private ((string TreeId, ILattice Lattice) First, (string TreeId, ILattice Lattice) Second) CrossTreePair(string prefix)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var first = $"{prefix}-a-{suffix}";
+        var second = $"{prefix}-b-{suffix}";
+        return (
+            (first, _cluster.GrainFactory.GetGrain<ILattice>(first)),
+            (second, _cluster.GrainFactory.GetGrain<ILattice>(second)));
+    }
 }

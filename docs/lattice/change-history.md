@@ -35,7 +35,10 @@ live stream lets a reader follow new revisions as they happen:
    opted into a history view, the same read falls back to the surviving entries in
    the source tree's retained WAL window. This needs no configuration and is handy
    for ad-hoc inspection, but it is bounded by WAL garbage collection, so older
-   revisions may already have been trimmed.
+   revisions may already have been trimmed. It also reads the retained log raw, so it
+   lists an atomic batch's staged writes whether the batch commits or aborts, and a
+   delete that compaction has since reaped appears twice - see
+   [Fallback without a history view](history-views.md#fallback-without-a-history-view).
 3. **Live feed (forward-only).** Independently of either stored source, a reader
    can subscribe to a tree's live mutation stream (`ILatticeStateObserver.ObserveAsync`
    on the State API, or `ObserveChangesAsync` on its gRPC client) to be notified of
@@ -90,13 +93,15 @@ per-tree retention mode:
 |------|-----------------|-----------|
 | `MetadataOnly` (default) | Stripped to a content hash and length. | Smallest footprint; values are not served from the view. |
 | `FullValue` | Stored verbatim per revision. | Point-in-time values come straight from the view; largest footprint. |
-| `Hybrid` | Verbatim for a recent window, metadata-only behind it. | A recent full-value tail with an unbounded metadata-only history behind it. |
+| `Hybrid` | Verbatim for a revision the view applies within a short window of its write, metadata-only for one applied later (see [retention modes](history-views.md#retention-modes)). | Full values for promptly applied revisions without paying for them on a backlog or catch-up replay; a stored row is never re-shaped as it ages. |
 
 CRDT revisions are always stored as their compact author delta regardless of mode -
 the delta *is* the history. An anti-entropy or bootstrap resync is the exception: it
-ships the full CRDT state with no delta, so its revision is a CRDT-mode `Set`. The
-explorer decodes that full state into a current-membership snapshot (visually
-distinct from a per-write member diff) rather than rendering the raw serialized blob.
+ships the full CRDT state with no delta, so its revision is a CRDT-mode `Set`, and
+like any `Set` revision it keeps those bytes only under a retention mode that
+retains them. Where they are retained, the explorer decodes that full state into a
+current-membership snapshot (visually distinct from a per-write member diff) rather
+than rendering the raw serialized blob.
 An optional **age bound** expires revision rows after a positive
 window; with no age bound revisions never expire. Clear the bound by passing `null`
 (a zero or negative window is rejected); `GetHistoryRetentionAsync` reports an
@@ -123,7 +128,8 @@ The page's bound tells a reader how complete the timeline is:
   `page.Truncated` is always `false`.
 - **Truncated (WAL-window fallback).** On the fallback path, when WAL garbage
   collection has already trimmed older entries, `page.Truncated` is `true` and
-  `page.EarliestAvailable` names the oldest hybrid-logical-clock still readable. A
+  `page.EarliestAvailable` names the oldest hybrid-logical-clock still readable, on
+  every page of the read including continuation pages. A
   partial window is never presented as a full history.
 
 Enable a [history view](history-views.md) when you need a durable, retention-bounded
@@ -206,7 +212,18 @@ non-trivial, durable history to show out of the box:
 Both timelines are seeded for part `HPT-BLD-S1-2028-00002`. To reproduce:
 
 1. Start the cluster: `./samples/MultiSiteManufacturing/run.ps1`.
-2. Launch the explorer: `./samples/MultiSiteManufacturing/run-explorer.ps1`.
+2. Launch the explorer. On Windows, `./samples/MultiSiteManufacturing/run-explorer.ps1 -Client windows`
+   opens the desktop explorer against the `us` cluster. The script's default web explorer
+   launch currently fails with "Web explorer project not found", because the script still
+   points at the web head's old project path (see the sample's
+   [known issue](../../samples/MultiSiteManufacturing/README.md#exploring-the-cluster-with-orleanslatticeexplorer)).
+   To use the web explorer, run the standalone web head
+   `src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj` (see
+   [Running and hosting the Explorer](../lattice.explorer/running-the-explorer.md)) with
+   `LATTICE_EXPLORER_ENDPOINT` set to `http://localhost:5001` and
+   `LATTICE_EXPLORER_INSECURE_DEV` set to `true` (see the Explorer's
+   [environment variables](../lattice.explorer/configuration.md#environment-variables)),
+   and open `http://localhost:5080`.
 3. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`), select key
    `HPT-BLD-S1-2028-00002` on the **Data** tab, and press its **History** button.
 4. Live-follow starts on its own once the timeline has loaded: add or remove a label

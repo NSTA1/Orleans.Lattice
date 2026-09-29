@@ -19,7 +19,7 @@ These are non-negotiable; each encodes a real failure mode from this program.
 
 3. **Change one scaling axis per arm.** Vary partitions *or* accounts *or* silo count, never two at once, or you cannot attribute the delta. Keep `Vehicles`, `TickHz`, `DurationSec` identical across the arms you are comparing.
 
-4. **Trust the silo's `FINAL` line, not the harness verdict parser.** The `ladder.ps1` CSV/verdict parser has historically mis-graded (`verdict=UNKNOWN steady=0`). Parse the `[silo] FINAL` line (and the per-second `[silo] t=` samples) directly from the silo log, and read the `=== Cohort complete ===` block from `run-cohort.ps1`'s console output - it is printed with `Write-Host`, and only its `Verdict :` and `Drain tail :` lines are appended to the silo log. A `FINAL active/s` printed alongside a non-zero `failed=` count is drain-inflated - ignore that number and treat the rung as wedged.
+4. **Trust the silo's `FINAL` line, not the harness verdict parser.** The `ladder.ps1` CSV/verdict parser has historically mis-graded (`verdict=UNKNOWN steady=0`). Parse the `[silo] FINAL` line (and the per-second `[silo] t=` samples) directly from the silo log, and read the `=== Cohort complete ===` block from `run-cohort.ps1`'s console output - it is printed with `Write-Host`, and only its `Verdict :` and `Drain tail :` lines are appended to the silo log. A `FINAL active` line on a rung whose `failed` count is non-zero is not a throughput number: that count raises the verdict to at least `FAILED`, and the summary marks the line `(drain-inflated; ignore)` on a `WEDGE` - ignore it and treat the rung as above the ceiling.
 
 5. **Don't re-quote stale numbers.** Every issue update must cite the run that produced the number (cohort id + log path). Conversation summaries have overstated throughput before. Re-derive from the logs.
 
@@ -170,8 +170,9 @@ A characterised multi-silo scaling curve, closing the single->multi-silo through
 
 ## The azure-throughput rig
 
-The real-Azure single-silo throughput harness lives in `benchmark/azure-throughput/` and
-is the only benchmark backed by *real* Azure Storage (local scenarios use Azurite, which
+The real-Azure throughput harness lives in `benchmark/azure-throughput/` - the single-silo
+VM rig, plus the multi-silo Azure Container Apps rig (`deploy-aca.ps1` /
+`run-cohort-aca.ps1`) that Phase 3 needs - and is the only benchmark backed by *real* Azure Storage (local scenarios use Azurite, which
 collapses RTT). **Its operating runbook is the `azure-throughput-rig` skill** - invoke
 that skill for the mechanics: provisioning (single- and multi-account), the inner loop,
 running a cohort, the `BENCH_*` knob table, reading the cohort result (the `Steady mean`

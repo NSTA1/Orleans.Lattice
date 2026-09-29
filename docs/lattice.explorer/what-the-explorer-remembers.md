@@ -1,6 +1,8 @@
 # What the Explorer remembers
 
-The Explorer remembers only declared preferences. Each key is registered in the preference catalogue, scoped before it is stored, and cleared by the reset page. A component that does not declare a key does not persist its state.
+The Explorer remembers only declared preferences. The sign-in credential is not a
+view preference and is not part of this contract; see
+[Where credentials live](connecting-to-an-auth-enabled-state-api.md#where-credentials-live). Each key is registered in the preference catalogue, scoped before it is stored, and cleared by the reset page. A component that does not declare a key does not persist its state.
 
 Remembered state is never authority. Every restored value is rechecked against the live route, tenant list, area, or appearance vocabulary. If it no longer resolves, the Explorer forgets it and shows a default with an explanation where the caller provides one.
 

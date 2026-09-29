@@ -53,10 +53,13 @@ value from `lattice_list_regions` rather than assuming it.
 These override or extend the base for Orleans.Lattice only.
 
 1. **GitHub authentication.** This repository's name contains "lattice", so
-   every `gh` call runs as **NSTA1**: clear the ambient token
-   (`$env:GH_TOKEN=''`) then `gh auth switch --user NSTA1`. A `gh` call under the
-   ambient identity may act as the wrong account, and pull-request creation can
-   `403`.
+   every `gh` call runs as **NSTA1**: put its token on each command
+   (`$env:GH_TOKEN = (gh auth token --user NSTA1)`) rather than using
+   `gh auth switch`, which changes the active account for every other session
+   sharing this machine's `gh` configuration, and push with that token in the
+   remote URL and the git credential helper disabled, as the base and
+   `{conventionsDoc}` describe. A `gh` call under the ambient identity may act as
+   the wrong account, and pull-request creation can `403`.
 
 2. **Text hygiene is gated in CI.** No em-dash (U+2014) and no non-ASCII bytes in
    any tracked text file. The em-dash, and the mojibake a mangled non-ASCII byte
@@ -64,14 +67,15 @@ These override or extend the base for Orleans.Lattice only.
    either fails the build rather than merely reading badly; other non-ASCII is
    not gated, so keep to plain ASCII by discipline.
 
-3. **The hygiene gates enumerate tracked files.** Running them before committing
-   a **new** file is a false green, because an untracked file is not enumerated.
-   Commit first, then run them.
+3. **The hygiene gates enumerate tracked files** (the git index). Running them
+   before a **new** file is staged is a false green, because an untracked file is
+   not enumerated. `git add` it (or commit) first, then run them.
 
 4. **Commits carry no trailers**, and branch names are
-   `<type>/<kebab-case-description>` and never contain a username. Both are
-   enforced by a fail-fast CI guard. See `{conventionsDoc}` for the allowed
-   branch types and the epic-branch convention.
+   `<type>/<kebab-case-description>` and never contain a username. A fail-fast
+   CI guard enforces both: it checks the branch name, and it rejects the
+   attribution trailers it names (`Co-authored-by`, `Copilot-Session`). See
+   `{conventionsDoc}` for the allowed branch types and the epic-branch convention.
 
 5. **Test scope.** Run the smallest scope that validates the change. Exclude
    `Chaos` and `AzureStorageEmulator` categories locally; CI runs the full

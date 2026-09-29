@@ -279,6 +279,12 @@ capabilities:
         source: "docs/lattice/atomic-writes.md"
       - statement: "A read whose result depends on a prepared saga throws LatticeTransactionOutcomeUnavailableException when the transaction registry stays unreachable."
         source: "docs/lattice/atomic-writes.md"
+      - statement: "SetManyAtomicAsync (every upsert, all overloads) and SetManyAtomicWhereAsync (every entry) check MaxKeyLength and MaxValueSizeBytes on entry and refuse an oversized entry with ArgumentException before the saga starts."
+        source: "docs/lattice/configuration.md"
+      - statement: "A cross-tree batch whose tree ids repeat or whose tree slice repeats a key, including a Set and a Delete of one key, throws ArgumentException before any write is staged or saga state is persisted, so the operationId stays free for a corrected retry."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "The cross-tree SetManyAtomicAsync extension checks every participating tree's entries against that tree's MaxKeyLength and MaxValueSizeBytes and refuses an oversized entry with ArgumentException before any tree is staged."
+        source: "docs/lattice/configuration.md"
     non_guarantees:
       - statement: "SetManyAsync is not atomic and can leave a partial batch applied."
         source: "docs/lattice/bulk-loading.md"
@@ -323,7 +329,7 @@ capabilities:
         source: "docs/lattice.scaling/README.md"
       - statement: "The signal carries ScaleValue and RecommendedReplicas."
         source: "docs/lattice.scaling/README.md"
-      - statement: "The storage axis reports retained-WAL pressure and an optional WAL rebalance recommendation."
+      - statement: "The storage axis reports whether retained WAL bytes of trees declaring WalMaxRetainedBytes reached the configured fraction of those ceilings, the aggregate retained bytes, and an optional WAL rebalance recommendation."
         source: "docs/lattice.scaling/README.md"
       - statement: "The signal can be exposed through HTTP and an ASP.NET Core health check."
         source: "docs/lattice.scaling/README.md"
@@ -362,6 +368,8 @@ capabilities:
         source: "docs/lattice.backup/README.md"
       - statement: "Cold restore can recover a tree into a fresh cluster from the sink alone."
         source: "docs/lattice.backup/disaster-recovery.md"
+      - statement: "A backup's consistency-cut HlcTimestamp is the wall-clock component of the highest HLC stamp the capture read, and an incremental pins the WAL at that frontier while it drains forward from its base."
+        source: "docs/lattice.backup/api.md"
     non_guarantees:
       - statement: "Capture schedules and retention are opt-in."
         source: "docs/lattice.backup/README.md"
@@ -509,6 +517,8 @@ capabilities:
         source: "docs/lattice/compression.md"
       - statement: "Azure Table WAL reads use the row's stored compression tag rather than the reader's current option."
         source: "docs/lattice/compression.md"
+      - statement: "AzureTableWalStorageOptions are read once when the Azure Table WAL provider is constructed, so one setting covers every tree whose WAL that provider stores."
+        source: "docs/lattice/compression.md"
     non_guarantees:
       - statement: "Host compressors cannot claim core-reserved tags from 0x00 through 0x7F."
         source: "docs/lattice/compression.md"
@@ -558,6 +568,8 @@ capabilities:
         source: "docs/crdt/readme.md"
       - statement: "LwwValue merge picks the higher HLC timestamp and deterministic tie-breaks."
         source: "docs/lattice/state-primitives.md"
+      - statement: "G-Counter and PN-Counter merge by per-replica maxima; a G-Counter value is the sum of the maxima and a PN-Counter value subtracts the decrement maxima from the increment maxima."
+        source: "docs/crdt/readme.md"
     non_guarantees:
       - statement: "Plain SetAsync is last-writer-wins and can silently discard a concurrent write."
         source: "docs/crdt/readme.md"
@@ -614,6 +626,10 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "Replicated SetManyAtomicAsync arrives as one visible unit on receivers."
         source: "docs/lattice.replication/README.md"
+      - statement: "The default snapshot export carries each entry's ExpiresAtTicks on committed and prepared rows, so whole-tree bootstrap and the anti-entropy fallback install the same TTL the source recorded."
+        source: "src/lattice.replication/SnapshotEntry.cs#SnapshotEntry.ExpiresAtTicks"
+      - statement: "Push, ExchangeContentManifest and GetPeerHighWaterMark refuse with PermissionDenied a body-declared OriginClusterId that differs from the transport-stamped origin, so a peer may only advance or read its own stream's high-water mark."
+        source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
     non_guarantees:
       - statement: "A host without the replication package runs the core library alone."
         source: "PACKAGES.md"
@@ -634,6 +650,11 @@ capabilities:
           - "expect incremental shipping to cover the gap"
         hazard: "A fallen-off peer must re-seed from snapshot bootstrap."
         source: "docs/lattice.replication/README.md"
+      - sequence:
+          - "replay a dead-lettered entry while a coordinated restore holds the tree's receive fence"
+          - "treat the replay as terminal"
+        hazard: "A deferred replay applies nothing and leaves the entry parked; nothing re-ships a parked entry once the fence lifts, so it must be replayed again after the restore completes."
+        source: "docs/lattice.replication/dead-letter-queue.md"
     concurrency_rules:
       - statement: "A per-tree shipper tails the WAL separately for each peer."
         source: "docs/lattice.replication/README.md"
@@ -1252,6 +1273,8 @@ capabilities:
         source: "docs/lattice.explorer/managing-access.md"
       - statement: "The Entra Graph provider searches and resolves users and groups with app-only Microsoft Graph permissions."
         source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "The tenant-administration facades validate each explicitly supplied or added admin-subject id through the identity directory before writing it."
+        source: "docs/lattice.membership/identity-directory-providers.md"
     non_guarantees:
       - statement: "A principal returned by the identity-directory provider is a searchable identity and never grants access on its own."
         source: "docs/lattice.membership/identity-directory-providers.md"
@@ -1297,6 +1320,7 @@ capabilities:
       - app-role-binding
       - app-role-compiler
       - app-source
+      - app-tree-ownership-ledger
     guarantees:
       - statement: "A manifest can be inspected before installation without loading or running app code."
         source: "src/lattice.apps/Sources/IAppSource.cs#IAppSource.ResolveAsync"
@@ -1306,12 +1330,34 @@ capabilities:
         source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.EnableAsync"
       - statement: "Disabling an app withdraws its owned rules and keeps its trees and data in place."
         source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.DisableAsync"
-      - statement: "Uninstall withdraws owned rules, soft-deletes structural app trees, skips adopted trees, and never purges data."
+      - statement: "Uninstall withdraws owned rules, unenrols the replication the app enrolled, soft-deletes structural app trees without purging them itself, skips adopted trees, and releases adopted-tree ownership claims."
         source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
+      - statement: "Every structural and adopted tree an app uses belongs to exactly one install at a time, recorded in the sys-app-trees ownership ledger keyed by tenant-composed tree id."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Installing or upgrading an app claims every tree its manifest declares, and a conflict visible before the install is recorded refuses it with nothing written."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Enable and reconcile re-verify every ownership claim before any replication, provisioning or grant, and a conflict fails activation closed with AppActivationFailure.TreeOwnershipConflict and the app's rules withdrawn."
+        source: "docs/lattice.apps/README.md"
+      - statement: "DescribeAsync reports per-tree ownership conflicts before installation in AppTreeDescriptor.OwnershipConflict."
+        source: "src/lattice.api.abstractions/Apps/Model/AppTreeDescriptor.cs#AppTreeDescriptor.OwnershipConflict"
+      - statement: "With the apps package registered, a core alias from logical tree L to physical tree P is allowed only when the install owning L also owns DerivedFrom(P) or P, and is otherwise refused with LatticeTreeOwnershipDeniedException for every caller including core maintenance."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Enable and reconcile of an enabled app enrol every declared replication tree not yet enrolled, per tenant install, under the tenant-composed ids that install uses."
+        source: "docs/lattice.apps/README.md"
     non_guarantees:
       - statement: "The in-image source performs no runtime package acquisition, download, assembly loading, or NuGet protocol."
         source: "src/lattice.apps/Sources/InImageAppSource.cs#InImageAppSource"
       - statement: "App role compilation is not an enforcement engine; enforcement remains with the existing access gate."
+        source: "docs/lattice.apps/README.md"
+      - statement: "The core deferred purge removes each soft-deleted structural app tree once its soft-delete window elapses unless the tree is recovered first."
+        source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
+      - statement: "A structural ownership claim is held until the tree is purged, so no other install can take a tree still in its soft-delete window."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Replication intent is ignored without the replication add-on and its runtime configuration."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Uninstall unenrols only trees the app enrolled itself; a tree an operator had already enrolled keeps replicating."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Enrolling an adopted tree that already holds data does not bootstrap peers from it."
         source: "docs/lattice.apps/README.md"
     unsafe_sequences:
       - sequence:
@@ -1331,6 +1377,10 @@ capabilities:
         source: "src/lattice.apps/Registry/AppRegistry.cs#AppRegistry.TransitionAsync"
       - statement: "Activation runs for one tenant app are serialized through the activation grain."
         source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline"
+      - statement: "Ownership claims are compare-and-set writes taken in ascending tree-id order, so of two concurrent installs of one tree exactly one wins and the loser releases what it took and rolls its record back."
+        source: "docs/lattice.apps/README.md"
+      - statement: "Activation checks every declared tree's replication merge mode before it changes any enrolment, so a mode conflict changes nothing."
+        source: "docs/lattice.apps/README.md"
     sources:
       - "FEATURES.md"
       - "PACKAGES.md"
@@ -1429,10 +1479,14 @@ capabilities:
         source: "docs/lattice.api.mcp/remote.md"
       - statement: "Remote multi-region routing builds the region list and routing table once at startup from one configuration."
         source: "docs/lattice.api.mcp/remote.md"
-      - statement: "Discovery carries the scopeless Telemetry operation only from a cluster-wide Allow rule; a tree-scoped rule never makes the telemetry group discoverable."
+      - statement: "Discovery carries the scopeless Telemetry and AppInstall operations only from a cluster-wide Allow rule; a tree-scoped rule never confers either for group discovery or per-tool minimums."
         source: "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
       - statement: "With tenancy active, region discovery scopes to an asserted tenant only after ITenantContextResolver validates it; an unvalidated assertion yields the current region alone with no tenantScope annotation."
         source: "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+      - statement: "When the permission resolver carries operation detail, a mutating data tool is offered only to a caller holding Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad, and a tool withheld at tools/list is unreachable at tools/call."
+        source: "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.RequiredOperationsFor"
+      - statement: "A caller mistake (a missing, invalid or unknown argument, refused content, or an unknown record) is answered as an MCP error result and counted rather than thrown; an authorization denial is never classified as a client error."
+        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
     non_guarantees:
       - statement: "Discovery is coarse at the facade group level, so a listed group can still contain per-call verbs the facade access gate refuses."
         source: "docs/lattice.api.mcp/README.md"
@@ -1551,6 +1605,8 @@ capabilities:
         source: "docs/lattice.dashboards/README.md"
       - statement: "Dashboard metric references and discoverable instruments are drift-guarded by CI tests."
         source: "docs/lattice.dashboards/README.md"
+      - statement: "Every grain serving a physical copy created to back a logical tree tags its series with the logical tree id read from DerivedFrom, so the tree tag is stable across resizes, restores and remediations."
+        source: "docs/lattice/metrics.md"
     non_guarantees:
       - statement: "AddMeter with an exact name matches that meter only and does not cascade to child lattice meters."
         source: "docs/lattice/metrics.md"
@@ -1623,6 +1679,8 @@ capabilities:
         source: "docs/lattice.tenancy/README.md"
       - statement: "The default tenant cannot be suspended, deleted, given quotas, have admin subjects changed, or participate in cross-tenant grants."
         source: "docs/lattice.tenancy/README.md"
+      - statement: "An explicit default tenant assertion is validated like any other and fails, because the reserved default tenant has no admin subjects and cannot be given any."
+        source: "docs/lattice.tenancy/README.md"
     unsafe_sequences:
       - sequence:
           - "call AddLatticeTenancy before AddLatticeMembership or AddLatticeAuth"
@@ -1678,7 +1736,7 @@ capabilities:
         source: "docs/lattice/online-reshard.md"
       - statement: "The reshard coordinator is reminder-anchored and resumes automatically after silo restart."
         source: "docs/lattice/online-reshard.md"
-      - statement: "The reshard target range is 2 through the fixed virtual shard count of 4096."
+      - statement: "The reshard target range is 2 through the smaller of 4096 and the tree's own virtual slot count (the number of slots in its shard map), and a target above it is refused with ArgumentOutOfRangeException."
         source: "docs/lattice/online-reshard.md"
     non_guarantees:
       - statement: "ReshardAsync cannot shrink a tree that holds data."
@@ -1795,6 +1853,12 @@ capabilities:
         source: "src/lattice/LatticeQuotaExceededException.cs"
       - statement: "AdmissionAdvisoryLiveKeys and AdmissionAdvisoryBytes emit dry-run metrics without rejecting writes."
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.AdmissionAdvisoryLiveKeys"
+      - statement: "SetManyWherePredicateAsync, SetManyAtomicAsync (every overload except a delete-only batch) and SetManyAtomicWhereAsync check the MaxLiveKeys and MaxEstimatedBytes caps, and an atomic batch is refused before its saga starts."
+        source: "docs/lattice/configuration.md"
+      - statement: "The caps are checked once per call, so a batch is admitted or refused as a whole."
+        source: "docs/lattice/configuration.md"
+      - statement: "The cross-tree SetManyAtomicAsync extension checks the MaxLiveKeys and MaxEstimatedBytes caps of every participating tree whose slice carries an upsert, before any tree is staged."
+        source: "docs/lattice/configuration.md"
     non_guarantees:
       - statement: "Per-tree admission is best-effort and approximate because it reads a cached per-tree aggregate."
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
@@ -1815,6 +1879,7 @@ capabilities:
       - "FEATURES.md"
       - "src/lattice/BPlusTree/LatticeOptions.cs"
       - "src/lattice/LatticeQuotaExceededException.cs"
+      - "docs/lattice/configuration.md"
   - id: performance
     name: "Performance"
     packages:
@@ -1873,6 +1938,8 @@ capabilities:
         source: "docs/lattice/predicated-operations.md"
       - statement: "Predicated DeleteRangeAsync persists the matched key set to the WAL so peers delete the same keys without re-evaluating the predicate."
         source: "docs/lattice/predicated-operations.md"
+      - statement: "Each member a predicate lambda names is looked up by its C# member name in the value's serialized document, exact match first and then case-insensitive; a serializer-renamed or omitted member resolves as missing, and a value that is not well-formed JSON never matches."
+        source: "docs/lattice/predicated-operations.md"
     non_guarantees:
       - statement: "A serializer that does not implement ILatticePredicateSerializer is rejected client-side with NotSupportedException before any RPC."
         source: "docs/lattice/predicated-operations.md"
@@ -1909,7 +1976,7 @@ capabilities:
         source: "docs/lattice/projection-rebuild.md"
       - statement: "The projection digest folds key, HLC timestamp, tombstone state, TTL, origin cluster id, version vector, and value bytes."
         source: "docs/lattice/projection-rebuild.md"
-      - statement: "RebuildLeafProjectionAsync clears projection-owned state for every leaf in a shard and lets activation replay rebuild from the WAL."
+      - statement: "RebuildLeafProjectionAsync clears projection-owned state for every leaf in a shard, and the next activation rehydrates from a usable leaf snapshot first and then replays only the WAL entries that snapshot does not cover."
         source: "docs/lattice/projection-rebuild.md"
       - statement: "GetMaterialiserLagAsync returns the maximum estimated materialiser lag across all physical shards of the tree."
         source: "docs/lattice/projection-rebuild.md"
@@ -1922,10 +1989,10 @@ capabilities:
         source: "docs/lattice/projection-rebuild.md"
       - statement: "RebuildLeafProjectionAsync does not take a tree-wide consistency lock."
         source: "docs/lattice/projection-rebuild.md"
-      - statement: "During a live RebuildLeafProjectionAsync, reads against the rebuilt shard can see fewer entries until WAL replay catches up."
+      - statement: "During a live RebuildLeafProjectionAsync, a read that reaches a rebuilt leaf waits for its activation replay to finish, so callers see higher read latency or a failed replay rather than a partial projection."
         source: "docs/lattice/projection-rebuild.md"
-      - statement: "Activation-time SnapshotThenWal does not yet recover the case where snapshot rehydrate declined and the WAL is genuinely short."
-        source: "docs/lattice/projection-rebuild.md"
+      - statement: "Activation-time projection recovery does not recover genuine loss: when the WAL was trimmed past the persisted checkpoint and no snapshot covers the gap, every ProjectionRebuildPolicy value fails closed."
+        source: "docs/lattice/api.md"
     unsafe_sequences:
       - sequence:
           - "set MaintainProjectionDigest to false for a tree"
@@ -2088,6 +2155,8 @@ capabilities:
         source: "docs/lattice.api.mcp.repocontext/semantic-search.md"
       - statement: "docker compose down -v deletes both the code index and authored agent memory unless a separate memory archive or backup protects it."
         source: "samples/RepoContextContainer/README.md"
+      - statement: "A semantic.approximate retrievalPath is also reported for an answer the exact fallback served while the approximate index builds, so it does not prove the trained approximate plane served the query."
+        source: "docs/lattice.api.mcp.repocontext/semantic-search.md"
     unsafe_sequences:
       - sequence:
           - "call repocontext_remove_repo to repair a wedged or stale code index"
@@ -2108,6 +2177,8 @@ capabilities:
         source: "docs/lattice.api.mcp.repocontext/tools.md"
       - statement: "The self-index grain owns each repository's keep-indexed guarantee until the repository is removed or its index is reset."
         source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - statement: "A memory entry's expiry only moves later on ordinary memory writes, so no tool call makes an ephemeral entry durable again."
+        source: "docs/lattice.api.mcp.repocontext/memory-and-ttl.md"
     sources:
       - "FEATURES.md"
       - "docs/lattice.api.mcp.repocontext/README.md"
@@ -2129,7 +2200,7 @@ capabilities:
         source: "docs/lattice/tree-sizing.md"
       - statement: "Reads and writes remain available throughout an online resize."
         source: "docs/lattice/tree-sizing.md"
-      - statement: "The destination tree is registered with the source ShardCount and receives copied entries for shard indices 0 through ShardCount - 1 rather than inheriting the source shard map."
+      - statement: "The destination tree is registered with the source ShardCount and inherits the source shard map, and receives copied entries for every shard index that map routes to, including shards an adaptive split allocated above the pinned count."
         source: "docs/lattice/tree-sizing.md"
       - statement: "The alias swap carries the logical tree's configuration overrides onto the live resized copy."
         source: "docs/lattice/tree-sizing.md"
@@ -2236,6 +2307,8 @@ capabilities:
         source: "docs/lattice.api.replication/architecture.md"
       - statement: "GetReplicationConfigAsync returns only trees the caller is authorized to manage."
         source: "docs/lattice.api.replication/architecture.md"
+      - statement: "Each installed app enrols and unenrols its own tenant-composed trees through ILatticeReplicationConfigAuthority as it is enabled, reconciled, upgraded and uninstalled, so app trees appear in the runtime configuration rather than in ReplicatedTrees."
+        source: "docs/lattice.replication/runtime-config.md"
     non_guarantees:
       - statement: "The compiled runtime config snapshot is eventually consistent rather than a grain call on the commit hot path."
         source: "docs/lattice.replication/runtime-config.md"
@@ -2285,8 +2358,8 @@ capabilities:
     concepts:
       - tree
     guarantees:
-      - statement: "Keys are routed through XxHash32 into a fixed virtual shard space and then through the per-tree ShardMap to a physical shard."
-        source: "docs/lattice/architecture.md"
+      - statement: "Keys are routed through XxHash32 into the virtual slot space recorded in the tree's persisted ShardMap (4096 slots by default) and then through that map to a physical shard."
+        source: "docs/lattice/api.md"
       - statement: "Sharding gives each key range an independent B+ subtree and removes the single-root bottleneck."
         source: "docs/lattice/architecture.md"
       - statement: "The default shard count is 64 and is configurable at tree creation time."
@@ -2384,6 +2457,8 @@ capabilities:
         source: "docs/lattice.schema/schema-versioning.md"
       - statement: "Strict-ingest dead-lettering keeps replication or restore ingest from blocking on a schema violation."
         source: "docs/lattice.schema/dead-letter-queue.md"
+      - statement: "A remediation pass holds the tree's alias reservation, so a delete of the tree is refused while it runs and a remediation of a deleted tree is refused."
+        source: "docs/lattice.schema/schema-enforcement.md"
     sources:
       - "FEATURES.md"
       - "docs/lattice.schema/README.md"
@@ -2512,7 +2587,7 @@ capabilities:
     concepts:
       - snapshot
     guarantees:
-      - statement: "SnapshotAsync creates a point-in-time copy of a source tree into a new destination tree."
+      - statement: "SnapshotAsync copies a source tree into a new destination tree; offline mode is point-in-time and online mode mirrors source writes until completion."
         source: "docs/lattice/snapshots.md"
       - statement: "Offline snapshots lock the source tree at the start and unlock each shard after its entries have been copied."
         source: "docs/lattice/snapshots.md"
@@ -2573,6 +2648,12 @@ capabilities:
         source: "docs/lattice/tree-deletion.md"
       - statement: "DeleteTreeAsync, RecoverTreeAsync, and PurgeTreeAsync authorize TreeLifecycle over the whole tree."
         source: "docs/lattice/tree-deletion.md"
+      - statement: "DeleteTreeAsync, RecoverTreeAsync and PurgeTreeAsync act on the logical tree; on an aliased tree they apply to the live backing tree the alias targets after checking that this tree owns it."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "The resolved alias target is pinned in durable state before any physical effect, so a retry after an ambiguous failure continues on the same target."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "A logical purge removes the backing tree's state and unregisters both the backing tree and the logical tree."
+        source: "docs/lattice/tree-registry.md"
     non_guarantees:
       - statement: "RecoverTreeAsync throws when the tree is not deleted, purge is in progress, or purge is complete."
         source: "docs/lattice/tree-deletion.md"
@@ -2584,6 +2665,10 @@ capabilities:
         source: "docs/lattice/tree-deletion.md"
       - statement: "LeafCacheGrain activations are not notified when a tree is deleted."
         source: "docs/lattice/tree-deletion.md"
+      - statement: "A delete is refused, rather than applied through the wrong name, when the alias targets a tree whose DerivedFrom is not this tree or that another logical tree also aliases."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "A resize's retirement of its old copy is not a logical delete, and RecoverTreeAsync on a live resized tree is refused."
+        source: "docs/lattice/tree-registry.md"
     unsafe_sequences:
       - sequence:
           - "delete a source tree while one or more materialised views derive from it"
@@ -2610,9 +2695,14 @@ capabilities:
         source: "docs/lattice/tree-deletion.md"
       - statement: "A shard-root deleted-tree check runs before traversal, so stale leaf-cache activations cannot be reached through the public read path."
         source: "docs/lattice/tree-deletion.md"
+      - statement: "Resize and its undo, shadow-cutover restore and revert, and schema remediation hold a durable reservation on the tree during their alias change; a delete refuses while one is held, and an alias change refuses while the tree is deleted or a delete is pending."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Alias-change reservations never expire by time and are released only by the owning operation id."
+        source: "docs/lattice/tree-registry.md"
     sources:
       - "FEATURES.md"
       - "docs/lattice/tree-deletion.md"
+      - "docs/lattice/tree-registry.md"
   - id: state-model
     name: "State model"
     packages:
@@ -2817,6 +2907,8 @@ capabilities:
         source: "docs/lattice.api.telemetry/README.md"
       - statement: "GetCatalogAsync returns an empty catalog for an unconfigured backend or a caller entitled to no query."
         source: "docs/lattice.api.telemetry/README.md"
+      - statement: "A telemetry tree filter matches the logical tree id in the metric tree dimension, so it keeps returning the tree's series after a resize, shadow-cutover restore or schema remediation."
+        source: "docs/lattice.api.telemetry/README.md"
     non_guarantees:
       - statement: "The facade is not a query proxy."
         source: "docs/lattice.api.telemetry/README.md"
@@ -2967,6 +3059,12 @@ capabilities:
         source: "docs/lattice/tree-registry.md"
       - statement: "Every persisted shard-map write increments ShardMap.Version monotonically."
         source: "docs/lattice/tree-registry.md"
+      - statement: "Every alias assignment, including system-origin resize, restore and remediation, consults the registered ITreeOwnershipGuard after the namespace, target-control and lifecycle checks and before anything is written or published."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "A physical tree created to back a logical tree records that logical tree id in DerivedFrom once at creation, and a missing DerivedFrom is treated as not derived."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "An ownership refusal surfaces as LatticeTreeOwnershipDeniedException carrying the guard's reason, mapped to gRPC PermissionDenied by the tree-administration binding."
+        source: "docs/lattice/tree-registry.md"
     non_guarantees:
       - statement: "System trees whose ids start with _lattice_ are excluded from self-registration."
         source: "docs/lattice/tree-registry.md"
@@ -2976,6 +3074,10 @@ capabilities:
         source: "docs/lattice/tree-registry.md"
       - statement: "ConfigureLattice cannot seed structural sizing because LatticeOptions carries no sizing properties."
         source: "docs/lattice/api.md"
+      - statement: "AddLattice registers an allow-all ownership guard, so aliases are ownership-bounded only when an add-on such as the installable apps package replaces it."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "The default TreeOwnershipDecision value denies, and a failure thrown by the guard propagates without writing the alias."
+        source: "docs/lattice/tree-registry.md"
     unsafe_sequences:
       - sequence:
           - "configure structural sizing through named LatticeOptions after a tree exists"
@@ -2987,6 +3089,11 @@ capabilities:
           - "expect a normal user tree"
         hazard: "Reserved namespace guards refuse or route the mutation through tenancy rules."
         source: "docs/lattice/tree-registry.md"
+      - sequence:
+          - "implement ITreeOwnershipGuard"
+          - "call registry mutations or range scans from AuthorizeAliasAsync"
+        hazard: "The guard runs inside the registry's mutation turn, so it must use only point reads."
+        source: "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard.AuthorizeAliasAsync"
     concurrency_rules:
       - statement: "Concurrent resolves of the same tree on one silo share one in-flight registry read."
         source: "docs/lattice/tree-registry.md"
@@ -3015,8 +3122,10 @@ capabilities:
         source: "docs/lattice.vector/architecture.md"
       - statement: "DurableVectorIndex persists the index under a caller-chosen key prefix."
         source: "docs/lattice.vector/api.md"
-      - statement: "Lazy load fetches only query-probed vector partitions after opening metadata."
+      - statement: "Lazy open walks the identifier mapping, reads each partition commit record and applies only centroid chunks; a query then fetches only the vector chunks of the partitions it probes."
         source: "docs/lattice.vector/architecture.md"
+      - statement: "DurableVectorIndexOptions.BuildObserver, null by default, receives per-slice build stage timings through IVectorIndexBuildObserver so a host can publish them on its own meter; the package declares no instruments of its own."
+        source: "src/lattice.vector/Persistence/IVectorIndexBuildObserver.cs#IVectorIndexBuildObserver"
     non_guarantees:
       - statement: "Approximate search does not guarantee exact nearest-neighbour recall."
         source: "docs/lattice.vector/recall.md"
@@ -3040,7 +3149,7 @@ capabilities:
       - sequence:
           - "share KeyPrefix with unrelated data"
           - "trigger recovery or rebuild"
-        hazard: "The recovery path deletes whole key ranges under KeyPrefix."
+        hazard: "A discard or rebuild deletes the manifest, build checkpoint, generations, retirement journal and identifier mapping under KeyPrefix, keeping only the identifier watermark."
         source: "docs/lattice.vector/configuration.md"
     concurrency_rules:
       - statement: "VectorIndex is safe for concurrent readers or a single writer, not both."
@@ -3230,6 +3339,10 @@ capabilities:
         source: "docs/lattice/api.md"
       - statement: "WaitForHealthyAsync completes synchronously when the tree is already Healthy."
         source: "docs/lattice/api.md"
+      - statement: "The drain-lag input measures the WAL head's wall clock minus that of the slowest eligible consumer cursor, covering leaf materialisers and tree-wide tailers such as view maintainers, WAL subscribers and replication shippers."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "Provider-failure saturation counts escaped outbound append exceptions except the writer's dispatch-deadline timeout, any cancellation, and LatticeShuttingDownException."
+        source: "docs/lattice/wal-saturation-signal.md"
     non_guarantees:
       - statement: "The signal is per-silo and does not compute cluster-wide aggregate health."
         source: "docs/lattice/wal-saturation-signal.md"
@@ -3323,6 +3436,11 @@ capabilities:
           - "start the provider"
         hazard: "Provider validation fails because exactly one mode is required."
         source: "docs/lattice.storage.azuretable/configuration.md"
+      - sequence:
+          - "register the Azure Table WAL provider"
+          - "leave AddLattice on a non-durable grain storage provider"
+        hazard: "Leaf state rows and snapshots live in the grain storage provider and the WAL collector trims entries a snapshot covers, so the tree is not durable end to end."
+        source: "docs/lattice.storage.azuretable/README.md"
     concurrency_rules:
       - statement: "With WalMaxPendingBatches above one, providers must accept out-of-order concurrent batches and reject offset overlap."
         source: "docs/lattice/wal-storage-providers.md"

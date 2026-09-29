@@ -35,13 +35,16 @@ namespace Orleans.Lattice;
 ///   when the per-tree <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>
 ///   elapses with the per-tree saturation signal still reporting
 ///   <see cref="WalSaturationState.Saturated"/>.</description></item>
-///   <item><description>The saga coordinator's caller-facing throw
-///   path, raised when <c>AtomicWriteGrain.QuiesceOnSaturatedAsync</c>
-///   exhausts its quiesce budget (bounded by
-///   <see cref="LatticeOptions.WalAppendDispatchTimeout"/>) and the
-///   saga refuses to dispatch into a still-saturated tree rather
-///   than re-issuing the same RowKeys into a back-pressured storage
-///   account, which would amplify the 409-Conflict burst.</description></item>
+///   <item><description>The atomic-write coordinator's caller-facing
+///   refusal, raised when the coordinator's quiesce budget (bounded by
+///   <see cref="LatticeOptions.WalAppendDispatchTimeout"/>) elapses and
+///   the saga refuses to dispatch into a still-saturated tree rather than
+///   re-issuing the same row keys into a back-pressured storage account.
+///   When this wraps a lower-level refusal, the caller sees the atomic-write
+///   refusal with the wrapped refusal as <see cref="Exception.InnerException"/>.
+///   A refusal while a cross-tree participant stages its writes is instead
+///   converted to a failed prepare vote, so the coordinator aborts the whole
+///   batch and the caller sees <see cref="InvalidOperationException"/>.</description></item>
 ///   <item><description>The snapshot-cursor read-admission refusal
 ///   from <c>LatticeGrain.OpenSnapshotCursorAsync</c>, raised when
 ///   <see cref="LatticeOptions.ShedSnapshotOpensWhenSaturated"/> is

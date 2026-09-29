@@ -7,7 +7,9 @@ of auth state must survive that move:
 
 1. The browser session cookie must be decryptable on the replica that receives
    the request. ASP.NET Data Protection uses a key ring; the framework default is
-   per-instance, so replica B cannot read a cookie issued by replica A.
+   per-instance, so replica B cannot read a cookie issued by replica A. The
+   Basic sign-in's credential cookie is encrypted with the same key ring, so a
+   replica that cannot decrypt it treats the operator as signed out.
 2. A downstream State API token must be obtainable on the new replica. With the
    hosted-web Entra provider, Microsoft.Identity.Web reads a token cache. A cold
    replica has no token unless that cache is shared or the user is forced through

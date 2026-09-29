@@ -270,6 +270,33 @@ public sealed class StoragePressureCollectorRecommendationTests
     }
 
     [Test]
+    public async Task A_NaN_advisory_ratio_falls_back_to_the_default_ratio()
+    {
+        // NaN compares false against both normalisation bounds, so without an
+        // explicit check it passes through and scales every threshold to zero:
+        // the aggregate then reads over threshold at any occupancy, and no
+        // account ever does, because an account treats a zero threshold as "no
+        // capacity classification".
+        var under = await Collector(
+            Sample(new[] { AcctA }, Tree("t-a", 100L, ceiling: 1_000L, partitions: (0, AcctA))),
+            configure: o => o.RetainedBytesAdvisoryRatio = double.NaN)
+            .CollectAsync(CancellationToken.None);
+        var over = await Collector(
+            Sample(new[] { AcctA }, Tree("t-a", 900L, ceiling: 1_000L, partitions: (0, AcctA))),
+            configure: o => o.RetainedBytesAdvisoryRatio = double.NaN)
+            .CollectAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(under.OverThreshold, Is.False,
+                "100 is below the default advisory fraction of a 1000-byte ceiling.");
+            Assert.That(over.OverThreshold, Is.True);
+            Assert.That(over.Accounts.Single(a => a.ProviderKey == AcctA).OverThreshold, Is.True,
+                "900 is above the default advisory fraction of the account's 1000-byte ceiling.");
+        });
+    }
+
+    [Test]
     public async Task An_advisory_ratio_above_one_is_clamped_to_the_full_ceiling()
     {
         var sample = Sample(new[] { AcctA }, Tree("t-a", 999L, ceiling: 1_000L, partitions: (0, AcctA)));

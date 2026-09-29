@@ -851,13 +851,14 @@ internal sealed partial class BPlusLeafGrain
         // no frame was ever attached (a leaf replayed from the WAL) or an
         // earlier whole-leaf operation already consumed it. In the second case
         // the cost was paid by that earlier operation, which the detach seam
-        // names; this seam merely observes it. The expensive refusals are the
-        // ones taken with a frame STILL attached (FrameKeyUnreadable,
-        // NoKeySortsBelowPivot): there Keys below materialises the whole
-        // remainder of the leaf and detaches the frame, unsheddable for the
-        // life of the activation, on precisely the oversized leaf that can
-        // least afford it. That is why the refusal is metered with its reason
-        // and the detaching seam rather than merely taken.
+        // names; this seam merely observes it. TooFewRows is frame-attached but
+        // cheap because the fallback materialises at most one row. The expensive
+        // refusals are the frame-attached cases that still have rows to
+        // materialise (FrameKeyUnreadable, NoKeySortsBelowPivot): there Keys
+        // below materialises the whole remainder of the leaf and detaches the
+        // frame, unsheddable for the life of the activation, on precisely the
+        // oversized leaf that can least afford it. That is why the refusal is
+        // metered with its reason and the detaching seam rather than merely taken.
         if (!Cache.TryGetBisectingKeyWithoutHydrating(out var splitKey, out var refusalReason))
         {
             // Recorded before the fallback runs, because on a frame-attached

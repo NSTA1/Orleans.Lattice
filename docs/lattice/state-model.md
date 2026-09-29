@@ -14,7 +14,7 @@ distinct durability boundaries and growth rates:
 |---|---|---|---|
 | Write-ahead log (WAL) | Per-shard `IWalStorageProvider` rows | Total mutation count since last GC | Foreground commit: a mutation is durable once its WAL append returns |
 | Leaf state row | `BPlusLeafGrain` persistent state | Fixed-shape topology + checkpoint metadata. **Does not grow** with live-key count. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
-| Snapshot blob | `LeafSnapshotStorageGrain` persistent state | Live-key count * canonical row size | Each snapshot capture - whenever the leaf's durable coverage lags its checkpoint (the WAL GC trims only covered prefixes) and when a checkpoint nears the WAL retention horizon; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
+| Snapshot blob | The leaf's snapshot row (a separate `leaf-snapshot` grain state), plus separate segment rows when a capture exceeds `LeafSnapshotSegmentBytes` | Entry count (live keys plus uncompacted tombstones) * canonical row size | Each snapshot capture - whenever the leaf's durable coverage lags its checkpoint (the WAL GC trims only covered prefixes) and when a checkpoint nears the WAL retention horizon; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
 
 The **WAL is canonical.** Everything else is derived. A leaf's
 per-activation entry cache is the projection of the WAL, and the
@@ -147,8 +147,11 @@ registered `CrdtShape`'s `MergeDelta`.
 
 `ILattice.ApplyCrdtDeltaAsync(key, mode, deltaBytes)` is the
 public surface. The typed CRDT accessors wrap this surface and are
-the recommended caller-facing seam; for each mutation they read the
-key's current state and mint the typed delta from it.
+the recommended caller-facing seam; for most mutations they read the
+key's current state and mint the typed delta from it. A mutation
+whose delta does not depend on that state - a G-Set add, a Max- or
+Min-Register write, or a sequence remove by dot - sends its delta
+without reading.
 
 `LwwRegister` keys remain a full-state model: the WAL carries the
 canonical post-merge `byte[]` payload in `Value`. Concurrent writers
@@ -171,8 +174,11 @@ siloBuilder
 
 The shape descriptor is installed at silo start via a hosted
 service, before the first producer emission or WAL apply runs.
-Registering a different `(TKey, TValue)` pair for the same tree is
-a configuration error and throws at registration time.
+Registering a second shape for the same tree - a different
+`(TKey, TValue)` pair, or even the same pair again - is a
+configuration error: that hosted service throws
+`InvalidOperationException` when it installs the descriptors, so host
+start-up fails.
 
 ## Related surfaces
 

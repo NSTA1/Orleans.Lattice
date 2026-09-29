@@ -37,7 +37,7 @@ Register the core auth services, then the Entra provider. Supplying an authority
 (or tenant id), client id and scope is required unless the endpoint advertises
 what you omit.
 
-```csharp
+```csharp verify
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Entra;

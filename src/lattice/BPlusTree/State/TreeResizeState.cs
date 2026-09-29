@@ -60,6 +60,18 @@ internal sealed class TreeResizeState
 
     /// <summary>Persisted before reserving the logical alias; retained until release succeeds.</summary>
     [Id(10)] public string? AliasReservationId { get; set; }
+
+    /// <summary>
+    /// The physical shard indices of the old physical tree the resize rejects
+    /// and, on undo, releases, in ascending order: the union of <c>0</c> to
+    /// <see cref="ShardCount"/><c> - 1</c> and every index the logical tree's
+    /// routing map named when the resize started. An adaptive split routes keys
+    /// to a shard above the pinned count, so the pinned count alone misses it
+    /// (issue 3880). Legacy persisted state decodes the missing slot to
+    /// <see langword="null"/>, which falls back to <c>0</c> to
+    /// <c>ShardCount - 1</c>, the set such a resize's snapshot shadow-forwarded.
+    /// </summary>
+    [Id(11)] public int[]? ShardIndices { get; set; }
 }
 
 /// <summary>

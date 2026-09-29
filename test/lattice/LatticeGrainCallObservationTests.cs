@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Orleans.Hosting;
 using Orleans.Lattice.Testing;
@@ -233,19 +232,15 @@ public sealed class LatticeGrainCallObservationTests
         return false;
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition, string what)
-    {
-        var deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 20);
-        while (!condition())
-        {
-            if (Stopwatch.GetTimestamp() > deadline)
-            {
-                Assert.Fail("Timed out waiting for " + what + ".");
-            }
-
-            await Task.Delay(25);
-        }
-    }
+    /// <summary>
+    /// The fixture's bounded-poll barrier, routed to the shared
+    /// <see cref="TestPoll"/>. The 20-second budget and 25ms cadence are carried
+    /// over verbatim; what the shared barrier adds is a final re-sample after
+    /// the deadline elapses, so a sample that lands during the last delay is
+    /// still observed.
+    /// </summary>
+    private static Task WaitUntilAsync(Func<bool> condition, string what) =>
+        TestPoll.UntilAsync(condition, what, TimeSpan.FromSeconds(20), TimeSpan.FromMilliseconds(25));
 
     private sealed class SiloConfigurator : ISiloConfigurator
     {

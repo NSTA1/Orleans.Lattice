@@ -121,7 +121,7 @@ Watched in order, in the order of the site's list, then on to Secure and
 govern. The deployment journey is the front door's to tell, so Evaluate does
 not retell it. The README has no "when not to use it" section, so When Lattice
 fits takes its limits from the pages that state them - [Consistency](../docs/lattice/consistency.md),
-the [API reference](../docs/lattice/api.md) and the [WAL](../docs/lattice/wal.md)
+[Tree storage](../docs/lattice/tree-storage.md) and the [WAL](../docs/lattice/wal.md)
 among them - and its brief cites each one.
 
 | # | Episode | Idea | Introduces | Leads to |

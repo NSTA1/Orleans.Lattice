@@ -132,8 +132,7 @@ as the **median across N cohorts** of the steady-state mean (per-second
 silo rate samples filtered to the productive window; see
 `benchmark/azure-throughput/throughput.md` section 27.1 for the exact
 formula), pulls the per-call p50/p99 from the matching duration histogram's
-last full reporter window, and tears the VM down (at the current revision
-that run fails before it provisions the VM; see the note under Layer 1).
+last full reporter window, and tears the VM down.
 The full provenance
 (host SKU, region, .NET version, WAL options, rung, response-timeout,
 cohort-N, methodology, measurement date) is recorded in the marker block's

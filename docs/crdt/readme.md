@@ -131,20 +131,24 @@ id so concurrent edits are attributed to different causal lineages.
 
 ## Who owns the bytes
 
-Every primitive stores opaque `byte[]` payloads, and the library follows one rule
-for who owns a given array. Ownership is decided by where the array came from,
-not by which type is holding it:
+Every primitive that carries caller values handles them as opaque `byte[]`
+payloads - the sets, the registers and the sequence, and an OR-Map whose values
+carry bytes; the counters, the flags and the version vector carry no bytes of yours
+at all. The library follows one rule for who owns a given array, and ownership is
+decided by where the array came from, not by which type is holding it:
 
 | Seam | Rule | What it means for you |
 |---|---|---|
-| **You hand a value in** (`SetAsync`, `AddAsync`, and the primitives' `Set`/`Add`/`InsertAfter`) | The array is taken over, not copied | Do not keep writing into an array after you pass it in. Author it, hand it over, forget it. |
+| **You hand a value in** (a register's `Set`, the sequence's `InsertAfter`) | The array is taken over, not copied - a set's `Add` and `OrMap.Set` keep no array of yours (see below) | Do not keep writing into an array after you pass it in. Author it, hand it over, forget it. |
 | **A peer or a delta is folded in** (`MergeFrom`, `MergeDelta`) | The incoming array is copied | A replica never ends up sharing a buffer with the peer it merged from. |
 | **A value comes back out** (`Clone`, `OrMap.Get`, materialised projections) | The array is copied | A value you read is yours to mutate; doing so can never reach back into stored state. |
 
-The first rule is why a write never pays to copy the payload it is handed, and the
-last two are why a read or a merge can never corrupt somebody else's state. If you are
-implementing a CRDT against `ICrdt<TSelf>`, all three legs are part of the
-contract.
+The first rule is why writing to a register or the sequence never pays to copy the payload it is
+handed, and the last two are why a read or a merge can never corrupt somebody else's
+state. A value you pass to the tree itself - `SetAsync`, or an accessor method such
+as `AddAsync` - is copied or encoded on the way in, so the store never keeps your
+array. If you are implementing a CRDT against `ICrdt<TSelf>`, all three legs are
+part of the contract.
 
 Two things keep the cost of the copying legs down. An empty payload reuses the
 shared `Array.Empty<byte>()` singleton, so copying it never allocates. And the set

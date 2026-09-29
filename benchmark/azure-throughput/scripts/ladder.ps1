@@ -12,7 +12,7 @@
 
 	The harness pins BENCH_RESPONSE_TIMEOUT_SEC=180 by default so a saturated
 	rung does NOT collapse into the silo's own 30s grain-RPC deadline (see
-	repro/wedge-orleans/throughput.md and wedge-plan.md s.23 / s.25 for why
+	throughput.md s.25 and wedge-plan.md s.23, both in this folder, for why
 	this matters).
 
 .PARAMETER Rungs

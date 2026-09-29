@@ -47,14 +47,14 @@ in-process one.
 
 Register the binding on a silo that already has `AddLatticeReplicationApi`, then map its routes. The snippet is illustrative and not compiled; [samples/RuntimeReplicationConfig](../../samples/RuntimeReplicationConfig) is a runnable example of the in-process facade this binding adapts, and does not host the gRPC binding.
 
-```csharp
+```csharp verify
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication.Grpc;
 
 var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeReplicationApiGrpc(o => o.RequireAuthorization = true);
-builder.Services.AddSingleton<ILatticeReplicationApiAuthorizer, MyReplicationApiAuthorizer>();
+builder.Services.AddSingleton<ILatticeReplicationApiAuthorizer, AllowAllReplicationApiAuthorizer>();
 
 var app = builder.Build();
 app.MapLatticeReplicationApiGrpc();
@@ -65,24 +65,29 @@ The host must expose the control facade in the same service provider - typically
 
 ## Client
 
-```csharp
+```csharp verify
 using Grpc.Net.Client;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Replication.Grpc;
 
+IServiceProvider serializerProvider = CreateSerializerProvider();
+static IServiceProvider CreateSerializerProvider()
+    => throw new NotImplementedException(
+        "Resolve a provider with Orleans serialization registered.");
+
 using var channel = GrpcChannel.ForAddress("https://replication-admin.example:443");
-var client = LatticeReplicationApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
+var replicationClient = LatticeReplicationApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
 
-await client.EnableReplicationAsync("orders", LatticeMergeMode.OrSet, cancellationToken: ct);
+await replicationClient.EnableReplicationAsync("orders", LatticeMergeMode.OrSet, cancellationToken: cancellationToken);
 
-var report = await client.GetReplicationConfigAsync(ct);
+var report = await replicationClient.GetReplicationConfigAsync(cancellationToken);
 foreach (var tree in report.Trees)
 {
     // tree.TreeId, tree.Enabled, tree.Mode, tree.Ambiguous, tree.Source
 }
 ```
 
-The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (notably `FailedPrecondition` for an in-place mode change or an unmet enable precondition, and `InvalidArgument` for a malformed request). See [Architecture](architecture.md#status-mapping) for the full mapping.
+The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (notably `FailedPrecondition` for an in-place mode change or an unmet enable or disable precondition, and `InvalidArgument` for a malformed request). See [Architecture](architecture.md#status-mapping) for the full mapping.
 
 ## Reference
 

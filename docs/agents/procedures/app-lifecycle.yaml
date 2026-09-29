@@ -31,12 +31,12 @@ steps:
   - n: 1
     action: "Inspect the app manifest before trust."
     api: "ILatticeAppsControl.DescribeAsync / /orleans.lattice.api.apps/Describe"
-    expects: "Returns requested trees, roles, operations, subscriptions, MCP tools, provenance, and NotInstalled state, or null for an unknown app or version."
+    expects: "Returns requested trees with any per-tree OwnershipConflict, roles, operations, subscriptions, MCP tools, provenance, and NotInstalled state, or null for an unknown app or version."
     source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DescribeAsync"
   - n: 2
     action: "Install the exact source version with role-to-group bindings and the version-pinned ceiling."
     api: "ILatticeAppsControl.InstallAsync / /orleans.lattice.api.apps/Install"
-    expects: "Returns Installed for a new install; a live install at another version is upgraded in place and an enabled app is re-applied."
+    expects: "Claims every manifest tree in the ownership ledger and returns Installed for a new install; a live install at another version is upgraded in place and an enabled app is re-applied. A visible ownership conflict refuses the install with nothing written."
     source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.InstallAsync"
   - n: 3
     action: "Enable the installed app."
@@ -61,7 +61,7 @@ steps:
   - n: 7
     action: "Uninstall the app when the install should be retired."
     api: "ILatticeAppsControl.UninstallAsync / /orleans.lattice.api.apps/Uninstall"
-    expects: "Owned rules are withdrawn, structural app trees are soft-deleted, adopted trees are skipped, and the record reaches Uninstalled."
+    expects: "Owned rules are withdrawn, replication the app enrolled is unenrolled, structural app trees are soft-deleted, adopted trees are skipped and their ownership claims released, and the record reaches Uninstalled."
     source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
   - n: 8
     action: "For gRPC clients, discover the advertised auth scheme before app-control calls when sign-in metadata is needed."
@@ -78,8 +78,8 @@ postconditions:
     source: "src/lattice.apps/Activation/AppActivationEngine.cs#AppActivationEngine.ExecuteAsync"
   - check: "A disabled app has no owned rules and keeps trees and data in place."
     source: "test/lattice.apps/Activation/AppActivationEngineTests.Lifecycle.cs"
-  - check: "An uninstalled app retains its registry record as Uninstalled and never physically purges data."
-    source: "src/lattice.apps/Registry/IAppRegistry.cs#IAppRegistry.UninstallAsync"
+  - check: "An uninstalled app retains its registry record as Uninstalled; uninstall never purges data itself, and the core deferred purge removes each soft-deleted structural tree once its soft-delete window elapses unless it is recovered first."
+    source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
   - check: "App-control responses and sanitized exceptions do not disclose composed physical tree ids."
     source: "src/lattice.api.apps/AppsControlExceptionSanitizer.cs#AppsControlExceptionSanitizer.TryRewrite"
 failure_modes:
@@ -107,6 +107,14 @@ failure_modes:
     signal: "ConcurrencyConflict or InvalidOperationException stating the installed version changed."
     effect: "The consent update or upgrade is refused without rolling back the newer install."
     response: "Re-read the descriptor or consent report and retry against the current version."
+  - id: replication-enrolment
+    signal: "Enable or reconcile returns ReplicationModeChangeRejected, ReplicationPreconditionFailed, or ReplicationEnrolmentFailed."
+    effect: "The app's existing rules stay in place; enrolments attempted before the failure are recorded so a later reconcile completes them."
+    response: "Keep the declared merge mode, satisfy the replication prerequisite such as runtime configuration and a cluster id, or retry with reconcile."
+  - id: tree-ownership-conflict
+    signal: "Install is refused, or enable or reconcile fails with AppActivationFailure.TreeOwnershipConflict (OwnedByAnotherApp, PreExistingUnownedTree, DerivedTree, or AliasTarget)."
+    effect: "Nothing is written at install; at activation the app's rules are withdrawn and the tree stays with its current owner."
+    response: "Inspect DescribeAsync OwnershipConflict, release the tree from its owning install, or stop declaring it, then retry."
 rollback:
   supported: true
   mechanism: "Disable withdraws access without deleting data; uninstall retires the install and soft-deletes structural app trees under retention. A consent or upgrade rollback is a new version-pinned InstallAsync or UpdateConsentAsync followed by reconciliation when the app is enabled."

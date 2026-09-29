@@ -66,7 +66,8 @@ returning the cursor ID:
 3. **Saga-decision snapshot.** The tree's transaction registry is read, as
    for a point-in-time cursor, but its decisions are not carried into the
    cursor: the coordinate records only a diagnostic registry clock, which
-   is currently always zero, and a failed read does not fail the open. Saga
+   is currently always zero, and a transport failure of that read does not
+   fail the open (any other registry fault does). Saga
    visibility is fixed by the frozen baseline itself - a batch whose commit
    terminal lands after the captured head stays pending, and so invisible,
    on every leaf it touched.
