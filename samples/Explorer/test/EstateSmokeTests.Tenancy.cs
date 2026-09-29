@@ -7,10 +7,35 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 /// The console asserts the tenant its address names on every cluster call, so a
 /// tenant admin's Data lists that tenant's trees, an operator's Apps lists and
 /// installs in the tenant the address names, and the reserved default tenant is
-/// reached by asserting none.
+/// reached by asserting none. The operator's Tenancy and Access stops open their
+/// pages from the default tenant.
 /// </summary>
 public sealed partial class EstateSmokeTests
 {
+    [Test]
+    public async Task The_operators_tenancy_and_access_stops_open_their_pages_from_the_default_tenant()
+    {
+        var home = await SampleTestHost.GetHomeAsync(_sample);
+        var targets = DirectorySpine.ReadTargets(home);
+
+        var (tenancyAddress, tenancy) = await SampleTestHost.GetPageAsync(_sample, targets["tenancy"]);
+        var (accessAddress, access) = await SampleTestHost.GetPageAsync(_sample, targets["access"]);
+        var (workspaceAddress, workspace) = await SampleTestHost.GetPageAsync(_sample, "t/default/tenancy");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(targets["tenancy"], Is.EqualTo("tenancy"), "the operator's Tenancy stop leads to the tenant directory from /t/default");
+            Assert.That(tenancyAddress.AbsolutePath, Is.EqualTo("/tenancy"));
+            Assert.That(tenancy, Does.Contain("<h1 class=\"lt-shell-page-title\">Tenancy</h1>"), "the tenant directory renders");
+            Assert.That(tenancy, Does.Not.Contain("This tenant could not be read"));
+            Assert.That(workspaceAddress.AbsolutePath, Is.EqualTo("/tenancy"), "the default tenant's workspace root is the directory");
+            Assert.That(workspace, Does.Not.Contain("This tenant could not be read"));
+            Assert.That(accessAddress.AbsolutePath, Is.EqualTo("/access"));
+            Assert.That(access, Does.Contain("<h1 class=\"lt-shell-page-title\">Access</h1>"), "the Access area renders");
+            Assert.That(access, Does.Not.Contain("Nothing lives at this address"));
+        });
+    }
+
     [Test]
     public async Task A_tenant_admins_console_lists_its_own_tenants_trees()
     {

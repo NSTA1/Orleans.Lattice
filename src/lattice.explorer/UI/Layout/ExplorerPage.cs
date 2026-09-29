@@ -71,4 +71,46 @@ public abstract class ExplorerPage : ComponentBase
     /// browser's URL read directly.
     /// </summary>
     internal ExplorerAddress Address => Location?.Address ?? Navigator.Current ?? ExplorerAddress.Home;
+
+    /// <summary>
+    /// Whether the page accepts a location at any address rather than only at one
+    /// of its own routes. Only a page the head renders for every address - the
+    /// not-found page - says yes.
+    /// </summary>
+    private protected virtual bool AnswersEveryAddress => false;
+
+    /// <summary>
+    /// Sets the page's parameters, unless the cascaded location is at an address
+    /// none of the page's routes answers: then the page is left exactly as it was,
+    /// and neither reads nor acts on that address.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The layout's location reaches the page through a cascade, and a navigation
+    /// updates that cascade before the page being left is torn down, so the
+    /// outgoing page is handed the next page's address. A page that read it would
+    /// load, or declare not found, an address that is not its own - "my tenant"
+    /// reading <c>/access</c> as a tenant with no id declared <c>/access</c> not
+    /// found. The page entered is likewise rendered once with the previous page's
+    /// location before the layout has resolved the new one; it waits for its own.
+    /// </para>
+    /// <para>
+    /// Either way the page's own address arrives with the layout's next location,
+    /// and the page takes it then. A page rendered outside the layout, with no
+    /// location, is not affected.
+    /// </para>
+    /// </remarks>
+    /// <param name="parameters">The parameters, including the cascaded location.</param>
+    public override Task SetParametersAsync(ParameterView parameters)
+    {
+        if (!AnswersEveryAddress
+            && parameters.TryGetValue<ExplorerLocation>(nameof(Location), out var location)
+            && location is not null
+            && !ExplorerPageRoutes.For(GetType()).Answers(location.Address))
+        {
+            return Task.CompletedTask;
+        }
+
+        return base.SetParametersAsync(parameters);
+    }
 }
