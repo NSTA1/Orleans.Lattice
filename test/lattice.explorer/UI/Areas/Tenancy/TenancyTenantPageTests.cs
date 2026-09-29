@@ -41,6 +41,38 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
     }
 
     [Test]
+    public void Residency_and_the_allowed_set_link_straight_to_the_tenants_regions()
+    {
+        UseTenancyAs(isOperator: true);
+
+        var cut = RenderAt<TenancyTenantPage>("tenancy/acme");
+
+        cut.WaitUntil(() =>
+        {
+            var links = cut.FindAll(".lt-dl__row").Where(row => row.QuerySelector("dt")!.TextContent is "Resident in" or "Allowed")
+                .Select(row => row.QuerySelector("dd a")!).ToArray();
+            Assert.That(links.Select(link => link.GetAttribute("href")), Is.EqualTo(new[] { "tenancy/acme/regions", "tenancy/acme/regions" }));
+            Assert.That(links.Select(link => link.GetAttribute("aria-label")), Is.EqualTo(new[]
+            {
+                "Resident in: eu-west. Open the regions of tenant acme",
+                "Allowed: eu-west. Open the regions of tenant acme",
+            }));
+            Assert.That(cut.FindAll(".lt-tenancy-warning"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_tenant_resident_nowhere_online_is_said_to_be_served_nowhere()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = TenantRegionLifecycleStatus.Provisioning };
+
+        var cut = RenderAt<TenancyTenantPage>("tenancy/acme");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Does.StartWith("This tenant is not served anywhere")));
+    }
+
+    [Test]
     public void Suspend_is_confirmed_and_resume_is_immediate()
     {
         UseTenancyAs(isOperator: true);

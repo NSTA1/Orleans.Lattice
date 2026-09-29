@@ -42,11 +42,15 @@ else
             }
         </LtDefinition>
         <LtDefinition Term="Kind">@(view.IsDefault ? "The reserved default tenant" : "Tenant")</LtDefinition>
-        <LtDefinition Term="Resident in" Mono="true">@TenancyFormat.RegionList(TenancyFormat.ResidentRegions(view.Regions))</LtDefinition>
-        <LtDefinition Term="Allowed" Mono="true">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))</LtDefinition>
+        <LtDefinition Term="Resident in" Mono="true"><a href="@Href(TenancyRoutes.TenantRegions(TenantId))" aria-label="@($"Resident in: {TenancyFormat.ResidencyText(view.Regions)}. Open the regions of tenant {TenantId}")">@TenancyFormat.ResidencyText(view.Regions)</a></LtDefinition>
+        <LtDefinition Term="Allowed" Mono="true"><a href="@Href(TenancyRoutes.TenantRegions(TenantId))" aria-label="@($"Allowed: {TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))}. Open the regions of tenant {TenantId}")">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))</a></LtDefinition>
         <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@(_apps is { } apps ? (apps == 1 ? "1 app installed" : $"{TenancyFormat.Count(apps)} apps installed") : "Installed apps")</a></LtDefinition>
         <LtDefinition Term="Workspace"><a href="@Href(TenancyRoutes.MyTenant(TenantId))">@(IsActive ? "Open the tenant's workspace" : "Scope to this tenant")</a></LtDefinition>
     </LtDefinitionList>
+    @if (TenancyFormat.IsServedNowhere(view.Regions))
+    {
+        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: it has residency set and none of its regions is Online yet.</p>
+    }
 
     <section class="lt-tenancy-section" aria-labelledby="tenancy-lifecycle-heading">
         <h2 class="lt-tenancy-section__title" id="tenancy-lifecycle-heading">Lifecycle</h2>

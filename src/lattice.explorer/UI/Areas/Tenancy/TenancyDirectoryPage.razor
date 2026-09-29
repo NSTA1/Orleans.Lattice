@@ -3,8 +3,10 @@
 
 @*
     The tenant directory, for a platform operator: every tenant the caller can
-    reach, its state, quota use, regions and installed apps, and a validated
-    create form. Anyone else is taken to their own tenant.
+    reach, its state, quota use, regions and installed apps, a validated create
+    form that can also set a new tenant's allowed regions and initial residency,
+    and a picker that opens a tenant's regions. Anyone else is taken to their
+    own tenant.
 *@
 
 <PageTitle>Tenancy - Orleans.Lattice Explorer</PageTitle>
@@ -34,6 +36,7 @@ else
     <div class="lt-toolbar">
         <LtSearchInput Label="Search tenants" Placeholder="Tenant id" Value="@_search" ValueChanged="@(value => _search = value)" />
         <LtButton OnClick="OpenCreate" data-lt-command="@TenancyArea.CreateTenantCommandId">New tenant</LtButton>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="OpenSetRegions" Disabled="@(_rows.Count == 0)" data-lt-command="@TenancyArea.SetRegionsCommandId">Set regions...</LtButton>
         <span class="lt-tenancy-count" role="status">@CountText</span>
     </div>
 
@@ -50,7 +53,16 @@ else
                 <LtStatusPill State="@TenancyFormat.TenantStateRole(context.Tenant.Status)" Text="@TenancyFormat.TenantStateLabel(context.Tenant.Status)" />
             </LtColumn>
             <LtColumn TItem="TenancyDirectoryRow" Title="Quota use" Value="@(row => Pending(row, row.Quota))" />
-            <LtColumn TItem="TenancyDirectoryRow" Title="Resident in" Mono="true" Value="@(row => row.Regions is { } regions ? TenancyFormat.RegionList(regions) : Pending(row, null))" />
+            <LtColumn TItem="TenancyDirectoryRow" Title="Resident in" Mono="true">
+                @if (context.Regions is { } regions)
+                {
+                    <a href="@Href(TenancyRoutes.TenantRegions(context.TenantId))" aria-label="@RegionsLabel(context, regions)">@TenancyFormat.RegionList(regions, TenancyFormat.NoResidency)</a>
+                }
+                else
+                {
+                    @Pending(context, null)
+                }
+            </LtColumn>
             <LtColumn TItem="TenancyDirectoryRow" Title="Apps">
                 <a href="@Href(TenancyRoutes.Apps(context.TenantId))" aria-label="@AppsLabel(context)">@AppsText(context)</a>
             </LtColumn>
@@ -70,6 +82,7 @@ else
         </CompactRow>
         <DetailActions>
             <a class="lt-btn" href="@Href(TenancyRoutes.Tenant(context.TenantId))">Administer</a>
+            <a class="lt-btn" href="@Href(TenancyRoutes.TenantRegions(context.TenantId))">Regions</a>
             <a class="lt-btn" href="@Href(TenancyRoutes.MyTenant(context.TenantId))">@(IsActive(context) ? "Open workspace" : "Scope to tenant")</a>
             <a class="lt-btn" href="@Href(TenancyRoutes.Apps(context.TenantId))">@AppsText(context)</a>
         </DetailActions>
@@ -86,6 +99,12 @@ else
             <LtMultiComboBox @ref="_adminsBox" Label="Admin subjects (optional)" Values="@_newAdmins" ValuesChanged="@(values => _newAdmins = values)" Error="@_adminsError"
                              Source="@Suggestions.Principals" Noun="subject"
                              Hint="Choose users or groups from the directory, or type ids separated by commas. Left blank, you become its first admin subject; listing any replaces that." />
+            <LtMultiComboBox @ref="_allowedBox" Label="Allowed regions (optional)" Values="@_newAllowed" ValuesChanged="@AllowedChanged" Error="@_allowedError"
+                             Source="@Suggestions.Regions" Noun="region"
+                             Hint="The regions a platform operator lets this tenant use. Left blank, it is allowed none until you set them." />
+            <LtMultiComboBox @ref="_residencyBox" Label="Initial residency (optional)" Values="@_newResidency" ValuesChanged="@(values => _newResidency = values)" Error="@_residencyError"
+                             Source="@_residencySource" Noun="region" Disabled="@(_newAllowed.Count == 0)"
+                             Hint="@ResidencyHint" />
             @if (_formError is not null)
             {
                 <p class="lt-tenancy-form__error" role="alert">@_formError</p>
@@ -93,6 +112,36 @@ else
             <div class="lt-tenancy-form__actions">
                 <LtButton Type="LtButtonType.Submit" Disabled="_saving">Create tenant</LtButton>
                 <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _createOpen = false)" Disabled="_saving">Cancel</LtButton>
+            </div>
+        </form>
+    }
+</LtDialog>
+
+<LtDialog Open="_confirmCreate" OpenChanged="@(open => { if (!open) BackToCreate(); })" Title="@($"Create tenant {_pendingId} with no Online region?")" Alert="true" Placement="DialogPlacement">
+    <p>
+        Tenant <code class="lt-tenancy-mono">@_pendingId</code> will be resident in <code class="lt-tenancy-mono">@TenancyFormat.RegionList(_pendingResidency)</code>.
+        Each region starts Provisioning and stays there until a platform operator of the hosting deployment promotes it.
+    </p>
+    <p class="lt-tenancy-consequence">
+        A tenant with residency is served only in Online regions, so <code class="lt-tenancy-mono">@_pendingId</code> is not served anywhere until then.
+        Leave the residency empty to serve it in every region.
+    </p>
+    <div class="lt-dialog__actions">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="BackToCreate" Disabled="_saving">Back</LtButton>
+        <LtButton OnClick="CreateConfirmedAsync" Disabled="_saving">Create tenant</LtButton>
+    </div>
+</LtDialog>
+
+<LtDialog Open="_setRegionsOpen" OpenChanged="@(open => _setRegionsOpen = open)" Title="Set a tenant's regions" Placement="DialogPlacement"
+          Description="Choose the tenant whose allowed regions and residency to set.">
+    @if (_setRegionsOpen)
+    {
+        <form class="lt-tenancy-form" @onsubmit="GoToRegionsAsync" novalidate>
+            <LtComboBox @ref="_pickBox" Label="Tenant" Value="@_pickedTenant" ValueChanged="@(value => _pickedTenant = value)" Error="@_pickError"
+                        Source="@Suggestions.Tenants" Noun="tenant" />
+            <div class="lt-tenancy-form__actions">
+                <LtButton Type="LtButtonType.Submit">Open its regions</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _setRegionsOpen = false)">Cancel</LtButton>
             </div>
         </form>
     }

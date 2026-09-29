@@ -22,7 +22,12 @@ public sealed class TenancyRegionsTests : TenancyTestContext
 
         cut.WaitUntil(() =>
         {
-            var rows = cut.FindAll("tbody tr").Select(row => row.Children.Take(3).Select(cell => cell.TextContent.Trim()).ToArray()).ToArray();
+            var rows = cut.FindAll("tbody tr").Select(row => new[]
+            {
+                row.Children[0].TextContent.Trim(),
+                row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim(),
+                row.Children[2].TextContent.Trim(),
+            }).ToArray();
             Assert.That(rows, Is.EqualTo(new[]
             {
                 new[] { "ap-south", "Not resident", "Not allowed" },
@@ -177,7 +182,201 @@ public sealed class TenancyRegionsTests : TenancyTestContext
 
         TenancyForms.Button(cut, "Refresh").Click();
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr")[2].Children[1].TextContent.Trim(), Is.EqualTo("Backfilling")));
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr")[2].Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim(), Is.EqualTo("Backfilling")));
+    }
+
+    [Test]
+    public void While_a_saved_allowed_set_is_read_again_the_residency_controls_stay_disabled()
+    {
+        var cut = RenderRegions(canAuthorize: true);
+        cut.WaitUntil(() => TenancyForms.Field(cut, "Allowed region ids"));
+        var reread = Cluster.Hold(nameof(FakeTenancyCluster.GetTenantRegionStatusAsync));
+
+        TenancyForms.Type(cut, "Allowed region ids", "ap-south,");
+        cut.Find("form.lt-tenancy-allowed").Submit();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Services.GetToasts().Last().Message, Does.StartWith("Tenant acme is allowed"));
+            Assert.That(cut.FindAll("input[type=checkbox]").Where(box => !box.HasAttribute("disabled")), Is.Empty, "an edit made now would be replaced by the re-read");
+            Assert.That(cut.FindAll("button").Where(button => button.TextContent.Trim() is "Save allowed regions" or "Refresh").Select(button => button.HasAttribute("disabled")), Is.All.True);
+        });
+
+        cut.InvokeAsync(reread.SetResult);
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Checkbox(cut, "us-east").HasAttribute("disabled"), Is.False);
+            Assert.That(TenancyForms.Button(cut, "Save allowed regions").HasAttribute("disabled"), Is.False);
+        });
+    }
+
+    [Test]
+    public void The_allowed_set_and_the_residency_are_two_labelled_parts_each_stating_its_rule()
+    {
+        var cut = RenderRegions();
+
+        cut.WaitUntil(() =>
+        {
+            var parts = cut.FindAll("section.lt-tenancy-part").ToArray();
+            Assert.That(parts, Has.Length.EqualTo(2));
+            Assert.That(parts.Select(part => part.QuerySelector("h3")!.TextContent), Is.EqualTo(new[]
+            {
+                "Allowed regions (set by a platform operator)",
+                "Residency (where the tenant's data is kept)",
+            }));
+            Assert.That(parts.Select(part => part.GetAttribute("aria-labelledby")), Is.EqualTo(parts.Select(part => part.QuerySelector("h3")!.Id)));
+            Assert.That(parts[0].QuerySelector(".lt-tenancy-note")!.TextContent, Does.Contain("A platform operator decides which regions this tenant may use").And.Contain("Only a platform operator can change this set."));
+            Assert.That(parts[1].QuerySelector(".lt-tenancy-note")!.TextContent, Does.Contain("served only in regions that are Online"));
+            Assert.That(parts[1].QuerySelector("table"), Is.Not.Null, "the residency table sits in the residency part");
+            Assert.That(parts[0].QuerySelector("form"), Is.Null, "a tenant admin cannot change the allowed set");
+        });
+    }
+
+    [Test]
+    public void The_operators_allowed_picker_lives_in_the_allowed_part_and_its_hint_matches_the_picker()
+    {
+        var cut = RenderRegions(canAuthorize: true);
+
+        cut.WaitUntil(() =>
+        {
+            var allowed = cut.FindAll("section.lt-tenancy-part")[0];
+            Assert.That(allowed.QuerySelector("form.lt-tenancy-allowed"), Is.Not.Null);
+            Assert.That(allowed.QuerySelector(".lt-tenancy-note")!.TextContent, Does.Not.Contain("Only a platform operator"));
+            var hint = TenancyForms.Field(cut, "Allowed region ids").Closest(".lt-field")!.QuerySelector(".lt-field__hint")!.TextContent.Trim();
+            Assert.That(hint, Is.EqualTo(TenancyRegions.AllowedHint));
+            Assert.That(hint, Does.Not.Contain("comma"), "the picker takes chosen regions, not a comma-separated list");
+        });
+    }
+
+    [Test]
+    public void Each_lifecycle_status_says_what_it_means_and_a_provisioning_region_waits_for_promotion()
+    {
+        var tenant = Cluster.Tenants["acme"];
+        tenant.Regions.Clear();
+        var statuses = new[]
+        {
+            TenantRegionLifecycleStatus.Provisioning, TenantRegionLifecycleStatus.Backfilling, TenantRegionLifecycleStatus.Online,
+            TenantRegionLifecycleStatus.Draining, TenantRegionLifecycleStatus.Offline, TenantRegionLifecycleStatus.Removed,
+        };
+        for (var i = 0; i < statuses.Length; i++)
+        {
+            tenant.Regions.Add(new TenantRegionStatusDescriptor { RegionId = $"r{i}", Status = statuses[i], IsAllowed = true });
+        }
+
+        var cut = RenderSection<TenancyRegions>(parameters => parameters.Add(regions => regions.TenantId, "acme"));
+
+        cut.WaitUntil(() =>
+        {
+            var rows = cut.FindAll("tbody tr").ToArray();
+            Assert.That(rows.Select(row => row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim()),
+                Is.EqualTo(new[] { "Provisioning", "Backfilling", "Online", "Draining", "Offline", "Removed" }));
+            Assert.That(rows.Select(row => row.Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim()),
+                Is.EqualTo(statuses.Select(status => TenancyFormat.RegionStatusMeaning(status))));
+            Assert.That(rows[0].Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim(),
+                Is.EqualTo("Waiting for a platform operator to promote it; this tenant is not served here until it is Online."));
+        });
+    }
+
+    [Test]
+    public void A_region_outside_the_residency_shows_no_meaning_beside_its_status()
+    {
+        var cut = RenderRegions();
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr")[0].Children[1].QuerySelector(".lt-tenancy-meaning"), Is.Null));
+    }
+
+    [Test]
+    public void With_no_residency_set_the_residency_part_says_the_tenant_is_served_in_every_region()
+    {
+        var cut = RenderRegions(resident: []);
+
+        cut.WaitUntil(() =>
+        {
+            var residency = cut.FindAll("section.lt-tenancy-part")[1];
+            Assert.That(residency.QuerySelector(".lt-tenancy-note")!.TextContent, Does.Contain("No residency is set yet, so tenant acme is served in every region."));
+            Assert.That(residency.QuerySelector(".lt-dl__row dd")!.TextContent.Trim(), Is.EqualTo(TenancyFormat.NoResidency));
+            Assert.That(cut.FindAll(".lt-tenancy-warning"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Setting_a_first_residency_is_confirmed_with_the_consequence_of_having_no_online_region()
+    {
+        var cut = RenderRegions(resident: []);
+        cut.WaitUntil(() => Checkbox(cut, "us-east"));
+
+        Checkbox(cut, "us-east").Change(true);
+        TenancyForms.Button(cut, "Apply residency").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo("Stop serving tenant acme?"));
+            Assert.That(cut.Find("[role=alertdialog] .lt-tenancy-consequence").TextContent, Does.Contain("is not served anywhere until a platform operator of the")
+                .And.Contain("promotes one of us-east to Online"));
+            Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.SetResidencyAsync)));
+        });
+
+        TenancyForms.Button(cut, "Apply and stop serving").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Cluster.Tenants["acme"].Regions.Single(region => region.RegionId == "us-east").Status, Is.EqualTo(TenantRegionLifecycleStatus.Provisioning));
+            Assert.That(Services.GetToasts().Last().Message, Is.EqualTo("Tenant acme is adding us-east. " + TenancyRegions.NotServedYet));
+            Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Does.Contain("Tenant acme is not served anywhere."));
+        });
+    }
+
+    [Test]
+    public void Cancelling_the_no_online_region_confirmation_keeps_the_plan_and_writes_nothing()
+    {
+        var cut = RenderRegions(resident: []);
+        cut.WaitUntil(() => Checkbox(cut, "us-east"));
+        Checkbox(cut, "us-east").Change(true);
+        TenancyForms.Button(cut, "Apply residency").Click();
+        cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
+
+        TenancyForms.Button(cut, "Cancel").Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("[role=alertdialog]"), Is.Empty);
+            Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.SetResidencyAsync)));
+            Assert.That(Checkbox(cut, "us-east").HasAttribute("checked"), Is.True);
+        });
+    }
+
+    [Test]
+    public void Removing_the_only_online_region_states_both_the_drain_and_the_loss_of_service()
+    {
+        var cut = RenderRegions(resident: ["eu-west"]);
+        cut.WaitUntil(() => Checkbox(cut, "us-east"));
+        Checkbox(cut, "us-east").Change(true);
+        Checkbox(cut, "eu-west").Change(false);
+
+        TenancyForms.Button(cut, "Apply residency").Click();
+
+        cut.WaitUntil(() =>
+        {
+            var dialog = cut.Find("[role=alertdialog]");
+            Assert.That(dialog.QuerySelector(".lt-dialog__title")!.TextContent, Is.EqualTo("Stop serving tenant acme?"));
+            Assert.That(dialog.TextContent, Does.Contain("will start draining").And.Contain("is not served anywhere"));
+            Assert.That(TenancyForms.HasButton(cut, "Apply and stop serving"), Is.True);
+        });
+    }
+
+    [Test]
+    public void A_tenant_resident_only_where_it_is_not_yet_online_is_said_to_be_served_nowhere()
+    {
+        var cut = RenderRegions(resident: []);
+        cut.WaitUntil(() => Checkbox(cut, "us-east"));
+        var tenant = Cluster.Tenants["acme"];
+        var index = tenant.Regions.FindIndex(region => region.RegionId == "us-east");
+        tenant.Regions[index] = tenant.Regions[index] with { Status = TenantRegionLifecycleStatus.Provisioning };
+
+        TenancyForms.Button(cut, "Refresh").Click();
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-tenancy-warning").GetAttribute("role"), Is.EqualTo("status")));
     }
 
     [Test]
@@ -222,7 +421,7 @@ public sealed class TenancyRegionsTests : TenancyTestContext
         tenant.Regions.Clear();
         resident ??= ["eu-west"];
         tenant.Regions.Add(new TenantRegionStatusDescriptor { RegionId = "us-east", Status = resident.Contains("us-east") ? TenantRegionLifecycleStatus.Online : TenantRegionLifecycleStatus.None, IsAllowed = true });
-        tenant.Regions.Add(new TenantRegionStatusDescriptor { RegionId = "eu-west", Status = TenantRegionLifecycleStatus.Online, IsAllowed = true });
+        tenant.Regions.Add(new TenantRegionStatusDescriptor { RegionId = "eu-west", Status = resident.Contains("eu-west") ? TenantRegionLifecycleStatus.Online : TenantRegionLifecycleStatus.None, IsAllowed = true });
         tenant.Regions.Add(new TenantRegionStatusDescriptor { RegionId = "ap-south", Status = TenantRegionLifecycleStatus.None, IsAllowed = false });
         return RenderSection<TenancyRegions>(parameters => parameters.Add(regions => regions.TenantId, "acme").Add(regions => regions.CanAuthorize, canAuthorize), band);
     }

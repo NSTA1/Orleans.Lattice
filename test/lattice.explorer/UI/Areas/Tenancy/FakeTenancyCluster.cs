@@ -47,6 +47,12 @@ internal sealed class FakeTenancyCluster :
     /// <summary>How many apps the caller's tenant has installed; <see langword="null"/> refuses the listing.</summary>
     public int? InstalledApps { get; set; } = 2;
 
+    /// <summary>
+    /// Whether a tenant created through the admin facade starts with no region, as
+    /// the cluster creates it, rather than with the fixture's resident eu-west.
+    /// </summary>
+    public bool CreatesTenantsWithoutRegions { get; set; }
+
     /// <summary>Every call made, by method name.</summary>
     public List<string> Calls { get; } = [];
 
@@ -152,6 +158,10 @@ internal sealed class FakeTenancyCluster :
 
         var admins = adminSubjects is { Count: > 0 } ? [.. adminSubjects] : new[] { Caller };
         WithTenant(tenantId, admins: admins);
+        if (CreatesTenantsWithoutRegions)
+        {
+            Tenants[tenantId].Regions.Clear();
+        }
         return new TenantCreationResult { TenantId = tenantId, Status = TenantLifecycleStatus.Active, AdminSubjects = admins };
     }
 

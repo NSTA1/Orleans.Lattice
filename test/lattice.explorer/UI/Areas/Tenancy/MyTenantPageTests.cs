@@ -32,10 +32,12 @@ public sealed class MyTenantPageTests : TenancyTestContext
                 ["Kind"] = "Tenant",
                 ["Your standing"] = "Admin subject of this tenant",
                 ["Resident in"] = "eu-west",
+                ["Allowed"] = "eu-west",
                 ["Quota use"] = "Stored bytes 25%",
                 ["Apps"] = "2 apps installed",
             }));
-            Assert.That(cut.Find(".lt-dl a").GetAttribute("href"), Is.EqualTo("t/acme/apps"));
+            Assert.That(cut.FindAll(".lt-dl a").Select(link => link.GetAttribute("href")),
+                Is.EqualTo(new[] { "t/acme/tenancy/regions", "t/acme/tenancy/regions", "t/acme/apps" }), "residency and the allowed set lead to the regions section");
             Assert.That(cut.FindAll(".lt-shell-page-lede a"), Is.Empty);
             Assert.That(cut.FindAll(".lt-tenancy-nav__link").Select(link => link.TextContent), Is.EqualTo(new[] { "Overview", "Members", "Quota", "Regions", "Sharing" }));
             Assert.That(cut.FindAll(".lt-tenancy-nav__link").Select(link => link.GetAttribute("href")),
@@ -124,6 +126,50 @@ public sealed class MyTenantPageTests : TenancyTestContext
         {
             ExplorerCommandControls.AssertVisibleControl(cut, command);
             Assert.That(cut.Find(".lt-dialog__title").TextContent, Is.EqualTo("Offer a grant"));
+        });
+    }
+
+    [Test]
+    public async Task The_change_residency_command_has_a_visible_control_on_the_regions_section()
+    {
+        UseTenancyAs(isOperator: false);
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+        var command = area.Commands.Single(candidate => candidate.Id == TenancyArea.ChangeResidencyCommandId);
+
+        var cut = RenderAt<MyTenantPage>(command.Target!.ToHref());
+
+        cut.WaitUntil(() =>
+        {
+            ExplorerCommandControls.AssertVisibleControl(cut, command);
+            Assert.That(cut.Find($"[data-lt-command=\"{command.Id}\"]").GetAttribute("aria-current"), Is.EqualTo("page"));
+            Assert.That(TenancyForms.HasButton(cut, "Apply residency"), Is.True);
+        });
+    }
+
+    [Test]
+    public void A_tenant_with_residency_and_no_online_region_is_said_to_be_served_nowhere()
+    {
+        UseTenancyAs(isOperator: false);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = TenantRegionLifecycleStatus.Provisioning };
+
+        var cut = RenderAt<MyTenantPage>("t/acme/tenancy");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Does.StartWith("This tenant is not served anywhere")));
+    }
+
+    [Test]
+    public void A_tenant_with_no_residency_says_it_is_not_set()
+    {
+        UseTenancyAs(isOperator: false);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = TenantRegionLifecycleStatus.None };
+
+        var cut = RenderAt<MyTenantPage>("t/acme/tenancy");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Facts(cut)["Resident in"], Is.EqualTo(TenancyFormat.NoResidency));
+            Assert.That(cut.FindAll(".lt-tenancy-warning"), Is.Empty, "a tenant with no residency is served everywhere");
         });
     }
 

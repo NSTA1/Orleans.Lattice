@@ -62,13 +62,18 @@ else
         <LtDefinition Term="State"><LtStatusPill State="@TenancyFormat.TenantStateRole(status.Status)" Text="@TenancyFormat.TenantStateLabel(status.Status)" /></LtDefinition>
         <LtDefinition Term="Kind">@(status.IsDefault ? "The reserved default tenant, which owns the cluster's un-prefixed trees" : "Tenant")</LtDefinition>
         <LtDefinition Term="Your standing">@(standing.IsOperator ? "Platform operator" : "Admin subject of this tenant")</LtDefinition>
-        <LtDefinition Term="Resident in" Mono="true">@TenancyFormat.RegionList(TenancyFormat.ResidentRegions(status.Regions))</LtDefinition>
+        <LtDefinition Term="Resident in" Mono="true"><a href="@Href(TenancyRoutes.MyTenant(TenantId, TenancyRoutes.RegionsSegment))" aria-label="@($"Resident in: {TenancyFormat.ResidencyText(status.Regions)}. Open the regions of tenant {TenantId}")">@TenancyFormat.ResidencyText(status.Regions)</a></LtDefinition>
+        <LtDefinition Term="Allowed" Mono="true"><a href="@Href(TenancyRoutes.MyTenant(TenantId, TenancyRoutes.RegionsSegment))" aria-label="@($"Allowed: {TenancyFormat.RegionList(TenancyFormat.AllowedRegions(status.Regions))}. Open the regions of tenant {TenantId}")">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(status.Regions))</a></LtDefinition>
         <LtDefinition Term="Quota use">@(_quota ?? "Unknown")</LtDefinition>
         <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@AppsText</a></LtDefinition>
     </LtDefinitionList>
     @if (status.Status == TenantLifecycleStatus.Suspended)
     {
         <p class="lt-tenancy-note">This tenant is suspended: its trees refuse reads and writes until a platform operator resumes it.</p>
+    }
+    @if (TenancyFormat.IsServedNowhere(status.Regions))
+    {
+        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: it has residency set and none of its regions is Online yet.</p>
     }
 
     @if (_others.Count > 0)

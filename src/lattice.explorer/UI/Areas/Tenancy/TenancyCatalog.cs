@@ -21,10 +21,14 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// </remarks>
 internal sealed class TenancyCatalog
 {
+    /// <summary>The most tenants whose residency the Home status reads.</summary>
+    public const int ResidencySurveyLimit = 50;
+
     private readonly IServiceProvider _services;
     private (bool Authenticated, string? User, string? Active, TenancyStanding Standing)? _standing;
     private IReadOnlyList<TenantDescriptor>? _tenants;
     private (string Tenant, int? Count)? _apps;
+    private (string? User, string? Active, TenancyResidencySurvey Survey)? _survey;
 
     /// <summary>Creates the catalogue over the circuit's services.</summary>
     /// <param name="services">The circuit's services.</param>
@@ -166,6 +170,61 @@ internal sealed class TenancyCatalog
     {
         _tenants = null;
         _apps = null;
+        _survey = null;
+    }
+
+    /// <summary>
+    /// How many of the tenants the caller can reach have no residency set, read
+    /// from each tenant's status, for at most <see cref="ResidencySurveyLimit"/>
+    /// tenants, and remembered for the identity and asserted tenant that read it
+    /// until <see cref="Invalidate"/>. A tenant whose status cannot be read is not
+    /// counted; the reserved default tenant has no residency and is skipped. A
+    /// cancellation propagates, and nothing is remembered.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the reads.</param>
+    /// <returns>The count, and whether it covers only the first tenants.</returns>
+    public async Task<TenancyResidencySurvey> GetResidencySurveyAsync(CancellationToken cancellationToken)
+    {
+        var user = Session?.Username;
+        var active = ActiveTenant;
+        if (_survey is { } memo
+            && string.Equals(memo.User, user, StringComparison.Ordinal)
+            && string.Equals(memo.Active, active, StringComparison.Ordinal))
+        {
+            return memo.Survey;
+        }
+
+        var tenants = (await GetTenantsAsync(cancellationToken).ConfigureAwait(true)).Where(tenant => !tenant.IsDefault).ToArray();
+        var surveyed = tenants.Take(ResidencySurveyLimit).ToArray();
+        var answers = await Task.WhenAll(surveyed.Select(tenant => HasResidencySetAsync(tenant.TenantId, cancellationToken))).ConfigureAwait(true);
+        var survey = new TenancyResidencySurvey(answers.Count(answer => answer == false), tenants.Length > surveyed.Length);
+        _survey = (user, active, survey);
+        return survey;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="tenantId"/> has residency set, or
+    /// <see langword="null"/> when its status cannot be read.
+    /// </summary>
+    /// <param name="tenantId">The tenant id.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public async Task<bool?> HasResidencySetAsync(string tenantId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        if (SelfService is null || string.Equals(tenantId, TenantId.DefaultId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var status = await SelfService.GetTenantAsync(tenantId, cancellationToken).ConfigureAwait(true);
+            return status?.Regions is { } regions ? TenancyFormat.ResidentRegions(regions).Count > 0 : null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Forgets the proven standing, so the next read proves it again.</summary>
