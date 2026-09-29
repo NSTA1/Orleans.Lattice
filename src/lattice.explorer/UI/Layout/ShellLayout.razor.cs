@@ -103,6 +103,18 @@ public partial class ShellLayout : IAsyncDisposable
 
     private IExplorerArea? GatedArea => Directory.Find(_location.Address.Area);
 
+    /// <summary>What a signed-in caller is told when their tenant could not be established.</summary>
+    internal const string TenantUnresolvedReason =
+        "Your tenant could not be established, so nothing scoped to a tenant is shown. Reload the page or sign in again to retry.";
+
+    // A signed-in caller at a tenant-scoped address with tenancy on and no tenant
+    // established: every call would reach the cluster as the reserved default
+    // tenant, so the page is withheld rather than served under the wrong tenant.
+    private bool TenantUnresolved =>
+        AuthSession.IsAuthenticated
+        && Tenancy.IsTenantUnresolved
+        && Navigator.IsTenantScoped(_location.Address);
+
     /// <summary>Stops listening to the directory and the browser.</summary>
     public async ValueTask DisposeAsync()
     {

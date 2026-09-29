@@ -111,13 +111,13 @@ tenant's own install would be recorded: `editor` bound to `acme-editors`
 runtime enrolment, and its link to `west` is live. As the operator, `/t/acme/data`
 lists it as an app tree.
 
-The walkthrough above installs a second, independent copy. Install it from the
-console and it lands in the tenant the cluster resolves for the call. The
-console does not yet send its active tenant to the cluster, so today that is
-the default tenant, whichever tenant the address names; that is also why
-`alice`, `bob` and `carol`, who belong to no tenant, see it. The default tenant's
-copy and acme's copy share nothing: separate consent, separate bindings,
-separate boards.
+The walkthrough above installs a second, independent copy. An install from the
+console lands in the tenant its address names: the walkthrough starts at
+`/t/default/apps`, where the operator's console opens, so its copy is in the
+default tenant, which is why `alice`, `bob` and `carol`, who belong to no tenant,
+see it. The same steps at `/t/globex/apps` would install a copy in `globex`
+instead. The default tenant's copy and acme's copy share nothing: separate
+consent, separate bindings, separate boards.
 
 ## How the UI stays untrusted
 

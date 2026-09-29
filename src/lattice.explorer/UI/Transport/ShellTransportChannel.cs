@@ -32,6 +32,13 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// by reference, so a steady-state call allocates nothing here). A call still in
 /// flight on the replaced channel fails when that channel is disposed.
 /// </para>
+/// <para>
+/// <b>The tenant is asserted per call, never built in.</b> The circuit's
+/// <see cref="ILatticeActiveTenantProvider"/> rides the settings and is asked for
+/// the tenant as each call starts, so a tenant switch changes the next call
+/// without rebuilding the channel, and a channel can never carry one circuit's
+/// tenant into another's calls.
+/// </para>
 /// </remarks>
 internal sealed class ShellTransportChannel : IDisposable
 {
@@ -42,6 +49,7 @@ internal sealed class ShellTransportChannel : IDisposable
     private readonly IExplorerAuthSession _auth;
     private readonly IShellGrpcChannelFactory _channelFactory;
     private readonly ShellTransportSerializer _serializer;
+    private readonly ILatticeActiveTenantProvider? _activeTenant;
     private readonly object _gate = new();
 
     private GrpcChannel? _channel;
@@ -55,12 +63,18 @@ internal sealed class ShellTransportChannel : IDisposable
     /// <param name="auth">The circuit's auth session, whose current sign-in is attached.</param>
     /// <param name="channelFactory">Builds the underlying gRPC channel.</param>
     /// <param name="serializer">The shared Orleans serializer provider.</param>
-    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <param name="activeTenant">
+    /// The circuit's live tenant source, asked on every call for the tenant to
+    /// assert; <see langword="null"/> when the head registers no tenancy, so no
+    /// call carries a tenant.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any required argument is <see langword="null"/>.</exception>
     public ShellTransportChannel(
         IExplorerSession session,
         IExplorerAuthSession auth,
         IShellGrpcChannelFactory channelFactory,
-        ShellTransportSerializer serializer)
+        ShellTransportSerializer serializer,
+        ILatticeActiveTenantProvider? activeTenant = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(auth);
@@ -70,6 +84,7 @@ internal sealed class ShellTransportChannel : IDisposable
         _auth = auth;
         _channelFactory = channelFactory;
         _serializer = serializer;
+        _activeTenant = activeTenant;
         Invoker = new ShellCircuitCallInvoker(this);
     }
 
@@ -108,7 +123,11 @@ internal sealed class ShellTransportChannel : IDisposable
                 return _invoker;
             }
 
-            var settings = configuration.ToConnectionSettings() with { Authentication = authentication };
+            var settings = configuration.ToConnectionSettings() with
+            {
+                Authentication = authentication,
+                ActiveTenantProvider = _activeTenant,
+            };
             var channel = _channelFactory.CreateChannel(settings);
             CallInvoker invoker;
             try

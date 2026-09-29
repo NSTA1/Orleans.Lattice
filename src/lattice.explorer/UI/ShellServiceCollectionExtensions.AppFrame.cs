@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.UI.Framing.Broker;
@@ -30,7 +31,8 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped(provider => new AppFrameBundleLoader(
             provider.GetShellFacade<ILatticeAppWorkspace>(),
             provider.GetRequiredService<AppFrameBundleCache>(),
-            provider.GetService<ILogger<AppFrameBundleLoader>>() ?? NullLogger<AppFrameBundleLoader>.Instance));
+            provider.GetService<ILogger<AppFrameBundleLoader>>() ?? NullLogger<AppFrameBundleLoader>.Instance,
+            provider.GetService<ILatticeActiveTenantProvider>()));
 
         services.TryAddScoped(provider => new AppBridgeBroker(
             provider.GetShellFacade<ILatticeAppBridge>(),
@@ -38,6 +40,7 @@ internal static partial class ShellServiceCollectionExtensions
             provider.GetService<IAppFrameHostContext>(),
             provider.GetService<LtToastService>(),
             provider.GetRequiredService<TimeProvider>(),
-            provider.GetService<ILogger<AppBridgeBroker>>() ?? NullLogger<AppBridgeBroker>.Instance));
+            provider.GetService<ILogger<AppBridgeBroker>>() ?? NullLogger<AppBridgeBroker>.Instance,
+            provider.GetService<ILatticeActiveTenantProvider>()));
     }
 }

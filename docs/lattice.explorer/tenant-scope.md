@@ -103,12 +103,40 @@ The identity resolver establishes a tenant only when none is set. It does not
 overwrite an explicit in-session switch, which is a behaviour worth stating
 because the opposite once made every switch appear to do nothing.
 
+## Every call carries the tenant
+
+Every call the console makes to the cluster asserts the active tenant through
+the `lattice-active-tenant` header: data and catalogue reads, live tails, every
+administration area, and an app's bridge calls. The header is read as each call
+starts, so the call after a switch already carries the new tenant, and one
+browser's tenant never reaches another's calls. With tenancy off, with no tenant
+established, or scoped to the reserved `default` tenant, no header is sent, and
+the call is exactly what a tenant-unaware client sends.
+
+The header is an **assertion, not a grant**. The cluster checks it against the
+caller's own tenants before it scopes anything, so asserting a tenant gives no
+standing in it. Two consequences follow:
+
+- An install at `/t/{tenant}/apps` lands in that tenant, and a tenant admin's
+  Data and Apps list that tenant's trees and apps.
+- If a signed-in caller's tenant cannot be established, the console shows no
+  tenant-scoped page at all, rather than letting its calls fall back to the
+  `default` tenant.
+
+An open app is bound to the tenant it was opened in: once the console is scoped
+to another tenant, the app is closed rather than allowed to read or write there.
+
 ## The reserved `default` tenant
 
 `default` is the tenant that owns the un-prefixed trees a non-tenant deployment
 writes. On a single-tenant cluster it is the only tenant and the console shows
 no tenancy chrome at all. The term is explained in-product wherever it appears,
 as is the all-tenant view.
+
+The cluster lists only the tenants a caller administers, which never includes
+`default`, so the console adds it to the tenant list for a platform operator. An
+operator can therefore always pick it and open `/t/default/...`, and an operator
+with nothing remembered starts there. A non-operator's list is unchanged.
 
 ## See also
 

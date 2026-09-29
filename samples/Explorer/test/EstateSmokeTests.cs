@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class EstateSmokeTests
+public sealed partial class EstateSmokeTests
 {
     /// <summary>Every area but Telemetry, which needs a metrics backend the sample does not run.</summary>
     private static readonly string[] EstateAreas =
