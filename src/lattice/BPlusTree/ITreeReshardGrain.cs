@@ -47,4 +47,13 @@ internal interface ITreeReshardGrain : IGrainWithStringKey
     /// Returns <c>false</c> while a reshard is in flight.
     /// </summary>
     Task<bool> IsIdleAsync();
+
+    /// <summary>
+    /// Reports the reshard's durable intent: whether one is in flight, the
+    /// physical shard count it grows the tree to, and the count the tree had when
+    /// it started. The progress itself is read from the tree's shard map. Not
+    /// interleaved, so it answers between turns, when the in-memory state is
+    /// exactly what was last persisted. A pure read.
+    /// </summary>
+    Task<ReshardProgress> GetProgressAsync();
 }

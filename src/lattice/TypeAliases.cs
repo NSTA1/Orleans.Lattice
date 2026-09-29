@@ -102,6 +102,9 @@ internal static class TypeAliases
     internal const string ResizePhase = "ol.rp";
     internal const string TreeResizeUndoState = "ol.tru";
     internal const string ResizeUndoProgress = "ol.rup";
+    internal const string ResizeProgress = "ol.rzg";
+    internal const string SnapshotProgress = "ol.sng";
+    internal const string ReshardProgress = "ol.rxg";
     internal const string TreeRegistryEntry = "ol.tre";
     internal const string TreeSnapshotState = "ol.tss";
     internal const string SnapshotPhase = "ol.snp";

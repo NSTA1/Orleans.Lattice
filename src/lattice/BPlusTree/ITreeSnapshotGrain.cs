@@ -103,4 +103,16 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     /// Returns <c>false</c> while a snapshot is in flight.
     /// </summary>
     Task<bool> IsIdleAsync();
+
+    /// <summary>
+    /// Reports how far the snapshot has durably got: its phase and the shards it
+    /// has finished copying out of those it copies. Answers from the snapshot state
+    /// as last persisted, never from a transition a turn has applied in memory but
+    /// not yet written, so it never runs ahead of work a reactivated coordinator
+    /// would resume from. Marked
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a status read
+    /// is not held behind a copy slice. A pure read.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<SnapshotProgress> GetProgressAsync();
 }

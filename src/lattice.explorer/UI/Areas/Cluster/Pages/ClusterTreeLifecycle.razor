@@ -11,11 +11,19 @@
             {
                 <LtDefinition Term="Deleted">@ClusterFormat.Instant(deletedAt)</LtDefinition>
             }
-            @if (status.IsDeleted && status.RecoveryDeadlineUtc is { } deadline)
+            @if (status.CanRecover && status.RecoveryDeadlineUtc is { } deadline)
             {
                 <LtDefinition Term="Recoverable until">@ClusterFormat.Instant(deadline)</LtDefinition>
             }
         </LtDefinitionList>
+        @if (ClusterOperationProgress.Of(status) is { } progress)
+        {
+            <LtProgress Label="@progress.Label" Phase="@progress.Phase" Value="@progress.Value" Maximum="@progress.Maximum" Detail="@progress.Detail" />
+        }
+        @if (status.PurgeInProgress)
+        {
+            <p class="lt-cluster-note">The purge runs in the cluster and survives silo restarts. This page asks again every few seconds; you can leave and come back.</p>
+        }
     }
     else
     {

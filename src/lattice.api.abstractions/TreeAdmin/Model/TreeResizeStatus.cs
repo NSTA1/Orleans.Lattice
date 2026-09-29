@@ -11,9 +11,10 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <para>
 /// Resize is online and self-completing (it snapshots the tree into a
 /// destination physical tree with the new sizing, shadow-forwards live writes, and
-/// atomically swaps the alias, then clears itself), so this status intentionally
-/// surfaces the observable idle/in-flight signal and the effective node capacity
-/// rather than the coordinator's internal phase machine.
+/// atomically swaps the alias, then clears itself), so this status surfaces the
+/// observable idle/in-flight signal, the effective node capacity, and a coarse,
+/// durable progress measure (<see cref="Phase"/>, <see cref="CompletedUnits"/> and
+/// <see cref="TotalUnits"/>) rather than the coordinator's internal phase machine.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -72,4 +73,30 @@ public sealed record TreeResizeStatus
     /// <see langword="false"/> means there is none in flight.
     /// </summary>
     [Id(6)] public bool UndoRequested { get; init; }
+
+    /// <summary>
+    /// The step the resize has durably reached while it runs, or
+    /// <see cref="TreeResizePhase.Undo"/> while an accepted undo unwinds;
+    /// <see langword="null"/> when nothing is in flight, or when the status comes
+    /// from a build that does not report it.
+    /// </summary>
+    [Id(7)] public TreeResizePhase? Phase { get; init; }
+
+    /// <summary>
+    /// The work units the resize has durably finished, read against
+    /// <see cref="TotalUnits"/>. A resize is one unit per shard its copy
+    /// drains, then one for each of the three steps after the copy (swap,
+    /// rejecting the old shards, retiring the old copy). It never runs ahead of
+    /// what a resumed resize would start from. 0 when nothing is in flight.
+    /// </summary>
+    [Id(8)] public int CompletedUnits { get; init; }
+
+    /// <summary>
+    /// The work units the running resize consists of, or <see langword="null"/>
+    /// when it is not known: nothing is in flight, an undo is unwinding (an
+    /// unwind reports no units), or the status comes from a build that does not
+    /// report progress. A caller should then show the <see cref="Phase"/>
+    /// without a percentage.
+    /// </summary>
+    [Id(9)] public int? TotalUnits { get; init; }
 }

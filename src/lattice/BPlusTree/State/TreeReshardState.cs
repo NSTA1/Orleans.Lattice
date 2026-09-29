@@ -29,4 +29,12 @@ internal sealed class TreeReshardState
     /// distinct physical shard indices.
     /// </summary>
     [Id(4)] public int TargetShardCount { get; set; }
+
+    /// <summary>
+    /// The number of distinct physical shards the tree's <see cref="ShardMap"/>
+    /// named when the current or most recent reshard started, so its progress can
+    /// be measured from where it began rather than from zero. Legacy persisted
+    /// state decodes the missing slot to <c>0</c>, which means "not recorded".
+    /// </summary>
+    [Id(5)] public int StartShardCount { get; set; }
 }

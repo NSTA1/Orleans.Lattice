@@ -136,7 +136,7 @@ public sealed class ClusterTreePageTests : ClusterTestContext
         {
             Assert.That(cut.Markup, Does.Contain("48,210"));
             Assert.That(cut.Markup, Does.Contain("Aliased: this name resolves to another physical tree"));
-            Assert.That(cut.Markup, Does.Contain("In progress, to 8 shards."));
+            Assert.That(cut.Markup, Does.Contain("In progress, to 8 physical shards."));
             Assert.That(cut.Markup, Does.Contain("128 keys per leaf, 64 children per node."));
             Assert.That(cut.Markup, Does.Contain("None in progress."));
         });

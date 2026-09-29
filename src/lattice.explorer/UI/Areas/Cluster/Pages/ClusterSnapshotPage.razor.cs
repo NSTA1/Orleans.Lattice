@@ -81,30 +81,44 @@ public partial class ClusterSnapshotPage : IDisposable
         {
             Poller.Follow(RefreshAsync);
         }
+        else
+        {
+            _poller?.Stop();
+        }
     }
 
-    private async Task<bool> RefreshAsync(CancellationToken cancellationToken)
+    private async Task<ClusterPollOutcome> RefreshAsync(CancellationToken cancellationToken)
     {
         var status = await ClusterLoad<TreeSnapshotStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().GetSnapshotStatusAsync(TreeId, ct),
             cancellationToken);
-        var running = status.Value?.InProgress ?? !status.Denied;
+        if (status.Value is not { } value)
+        {
+            return status.Denied ? ClusterPollOutcome.Settled : ClusterPollOutcome.Failed;
+        }
+
         await InvokeAsync(() =>
         {
-            if (status.Value is { } value)
+            var previous = _status.Value;
+            if (!value.InProgress && previous is { InProgress: true })
             {
-                if (!value.InProgress && _status.Value is { InProgress: true })
-                {
-                    Toasts.Show("Snapshot complete.", LtToastTone.Success);
-                }
-
-                _status = status;
+                Toasts.Show("Snapshot complete.", LtToastTone.Success);
             }
 
+            _status = ClusterLoad<TreeSnapshotStatus>.Loaded(KeepRequested(previous, value));
             StateHasChanged();
         });
-        return running;
+        return value.InProgress ? ClusterPollOutcome.Running : ClusterPollOutcome.Settled;
     }
+
+    /// <summary>
+    /// A standalone status read does not echo the destination and mode a trigger
+    /// asked for, so a running capture keeps what this page last saw.
+    /// </summary>
+    private static TreeSnapshotStatus KeepRequested(TreeSnapshotStatus? previous, TreeSnapshotStatus current) =>
+        current.InProgress && current.RequestedDestinationTreeId is null && previous?.RequestedDestinationTreeId is not null
+            ? current with { RequestedDestinationTreeId = previous.RequestedDestinationTreeId, RequestedMode = previous.RequestedMode }
+            : current;
 
     private async Task Review()
     {
@@ -167,8 +181,11 @@ public partial class ClusterSnapshotPage : IDisposable
         return false;
     }
 
-    private static string StatusSentence(TreeSnapshotStatus status) =>
-        status.InProgress
-            ? $"Copying into {status.RequestedDestinationTreeId}, {(status.RequestedMode == TreeSnapshotMode.Offline ? "offline" : "online")}."
-            : "No snapshot is running.";
+    private static string StatusSentence(TreeSnapshotStatus status) => status switch
+    {
+        { InProgress: true, RequestedDestinationTreeId: { } destination } =>
+            $"Copying into {destination}{(status.RequestedMode is { } mode ? ", " + (mode == TreeSnapshotMode.Offline ? "offline" : "online") : string.Empty)}.",
+        { InProgress: true } => "A snapshot of this tree is running.",
+        _ => "No snapshot is running.",
+    };
 }

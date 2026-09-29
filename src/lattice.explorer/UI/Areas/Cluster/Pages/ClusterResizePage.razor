@@ -12,18 +12,22 @@ else if (_status.Value is not { } status)
 }
 else
 {
-    <section class="lt-cluster-section" aria-label="Resize status" aria-live="polite">
-        <div class="lt-cluster-stage">
-            <LtStatusPill State="@(status.InProgress ? LtStateRole.Lagging : LtStateRole.Healthy)" Text="@(status.InProgress ? "Running" : "Idle")" />
+    <section class="lt-cluster-section" aria-label="Resize status">
+        <div class="lt-cluster-stage" aria-live="polite">
+            <LtStatusPill State="@Stage(status).State" Text="@Stage(status).Text" />
             <span>@StatusSentence(status)</span>
         </div>
+        @if (ClusterOperationProgress.Of(status) is { } progress)
+        {
+            <LtProgress Label="@progress.Label" Phase="@progress.Phase" Value="@progress.Value" Maximum="@progress.Maximum" Detail="@progress.Detail" />
+        }
         <LtDefinitionList>
             <LtDefinition Term="Keys per leaf">@ClusterFormat.Count(status.CurrentMaxLeafKeys)</LtDefinition>
             <LtDefinition Term="Children per internal node">@ClusterFormat.Count(status.CurrentMaxInternalChildren)</LtDefinition>
         </LtDefinitionList>
         @if (Poller.IsFollowing)
         {
-            <p class="lt-cluster-note">This page asks again every few seconds. You can leave and come back to this address; the resize carries on in the cluster.</p>
+            <p class="lt-cluster-note">This page asks again every few seconds, and waits longer while the cluster does not answer. You can leave and come back to this address; the @(status.UndoRequested ? "undo" : "resize") carries on in the cluster.</p>
         }
     </section>
 
@@ -33,7 +37,7 @@ else
     }
     else
     {
-        @if (!status.InProgress)
+        @if (!status.InProgress && !status.UndoRequested)
         {
             @if (_reviewing is { } target)
             {
@@ -60,8 +64,15 @@ else
 
         <section class="lt-cluster-section" aria-labelledby="lt-cluster-resize-undo">
             <h2 class="lt-cluster-heading" id="lt-cluster-resize-undo">Undo</h2>
-            <p class="lt-cluster-note">Undo returns the tree to its pre-resize size: a running copy is aborted, and a finished resize is reverted while the old tree is still within its recovery window.</p>
-            <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="undo" OnClick="() => _confirm = Verb.Undo" Disabled="@_busy">Undo the last resize...</LtButton>
+            <p class="lt-cluster-note">Undo returns the tree to its pre-resize size: a running copy is aborted, and a finished resize is reverted while the old tree is still within its recovery window. An accepted undo unwinds in the cluster; this page follows it.</p>
+            @if (status.UndoRequested)
+            {
+                <p class="lt-cluster-note">An undo has been accepted and is unwinding.</p>
+            }
+            else
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="undo" OnClick="() => _confirm = Verb.Undo" Disabled="@_busy">Undo the last resize...</LtButton>
+            }
         </section>
     }
 
