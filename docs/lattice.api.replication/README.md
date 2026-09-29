@@ -43,6 +43,37 @@ The facade operations (each reached over the gRPC binding as one RPC, and over M
 | Disable replication | Disable a tree's runtime enrollment without purging already-replicated peer data. Idempotent. |
 | Get replication config | Report each authorized tree's enrolled state, the merge mode in force, its ambiguity status, and which enrollment source put it in force. |
 
+## Peer status
+
+`ILatticeReplicationStatus` is a separate, read-only contract. It reports how each
+replication link is doing, and leaves `ILatticeReplicationControl` unchanged. Register
+it with `AddLatticeReplicationStatusApi()`.
+
+`GetPeerStatusAsync(ReplicationPeerStatusQuery)` returns a paged
+`ReplicationPeerStatusPage`. The page carries the local region id, then one
+`ReplicationPeerStatusEntry` per tree, peer region and direction. Each entry holds
+entries and bytes behind, consecutive errors, time since last contact, in-flight
+count, and a derived `ReplicationLinkHealth`: `Healthy`, `Lagging`, `Stalled` or
+`Unknown`.
+
+- **Cluster-wide.** Peer statistics are kept per silo. The facade fans out to every
+  active silo through an internal grain service. When the same link appears on more
+  than one silo, it keeps the most recent contact whole. None of this runs on the
+  shipping or apply path.
+- **Logical ids.** Tree ids are reported in their logical form (`a/{app}/{tree}` for
+  an app's tree), with the caller's tenant prefix removed. A continuation token only
+  encodes rows the caller was shown.
+- **Permission-scoped.** Each tree is checked against the same `Replication`
+  capability that `GetReplicationConfigAsync` requires. Trees the caller may not
+  manage are left out. A tree filter the caller may not manage returns an empty page
+  without reading any statistics.
+- **Configurable health.** `LatticeReplicationStatusOptions` sets the thresholds. By
+  default a link is lagging at 1,000 entries behind, 5 consecutive errors or 30
+  seconds without contact, and stalled at 10,000 entries, 50 errors or 5 minutes.
+  Inbound links can have their own no-contact thresholds.
+
+The [Explorer](../lattice.explorer/README.md)'s Replication area draws its estate
+diagram from this report.
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.

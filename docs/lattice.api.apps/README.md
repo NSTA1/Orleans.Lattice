@@ -138,6 +138,71 @@ version is a `KeyNotFoundException`, a denied call is a
 `InvalidOperationException`. A replaced exception also keeps a cancellation or timeout
 category, and becomes an `InvalidOperationException` when it had any other type.
 
+## Catalogue, workspace and bridge
+
+Beside the control facade, the package implements three more contracts from
+`Orleans.Lattice.Api.Apps`. They serve the [Explorer](../lattice.explorer/README.md)'s
+Apps area and the untrusted app UIs it frames, and any other client can use them.
+`AddLatticeAppsApi` registers `ILatticeAppCatalog` and `ILatticeAppWorkspace` beside
+`ILatticeAppsControl`. `AddLatticeAppBridgeApi` registers `ILatticeAppBridge`, and
+registers the control facade too:
+
+```csharp verify
+using Orleans.Lattice.Apps;
+using Orleans.Lattice.Api.Apps;
+
+siloBuilder.AddLatticeApps();
+siloBuilder.AddLatticeAppBridgeApi(options => options.RateLimitPermitLimit = 200);
+```
+
+| Contract | Who may call it | What it serves |
+|---|---|---|
+| `ILatticeAppCatalog` | Callers holding `AppInstall` over `LatticeScope.ClusterWide()`, the same gate as the control facade | The configured app sources (`ListSourcesAsync`); what each source offers, joined with the active tenant's installs (`ListAvailableAsync`, filtered by source key, text, and `All`, `Installed`, `Available` or `Updates`); a pre-install description of an exact source version (`DescribeFromSourceAsync`); the pre-install icon (`GetIconAsync`). |
+| `ILatticeAppWorkspace` | Any caller who holds at least one app-owned compiled rule of an enabled install in the active tenant | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
+| `ILatticeAppBridge` | Per operation (see below) | Get, scan, set and delete on an app's own logical trees, on behalf of that app's UI. |
+
+A caller that fails the gate learns nothing. The catalogue refuses the call before
+it reads any source or the registry. The workspace answers as if the app did not
+exist. The workspace description excludes the ceiling, the approved exception
+scopes, consent history, role-to-group bindings and every physical tree id: those
+remain behind `AppInstall` on the control facade.
+
+When the same slug is offered by more than one source, the catalogue lists one row
+per source. An install names its source with `AppInstallRequest.SourceKey`. Without
+a key, an ambiguous slug is refused rather than resolved to either source. `Updates`
+means a newer version from the **same** source the install came from.
+
+### The bridge
+
+`ILatticeAppBridge` is the single place where data access by an app UI is enforced.
+A target is `AppBridgeTarget(AppSlug, InstallRevision, LogicalTree)`. No overload
+accepts a physical tree id. Each call runs these steps in order, and each fails
+closed:
+
+1. **The install.** It must be enabled in the caller's active tenant, and
+   `InstallRevision` must match. A frame launched before an upgrade, a disable or
+   an uninstall therefore stops working.
+2. **Bridge consent.** The operation must be in the install's **consented** bridge
+   grants (see [presentation and UI](../lattice.apps/README.md#presentation-and-ui)),
+   and the logical tree must be covered by those grants.
+3. **Tree resolution.** This happens on the server. A declared tree composes to
+   `a/{slug}/{tree}`, and then per tenant. An adopted tree uses its adopted id. An
+   undeclared name is not found.
+4. **App-owned grants only.** The caller must match an app-owned compiled rule for
+   this slug (`app:{slug}:` ids) that allows the concrete operation on the concrete
+   key or prefix. The caller's other rules are deliberately not consulted. This is
+   what stops a user's broad operator rights from flowing into an app's UI. A reader
+   who is also a cluster operator still cannot write through a viewer role. A scan
+   needs `RangeRead`, because that is what the data path enforces. A role whose UI
+   scans must therefore request `RangeRead`, and the ceiling must allow it.
+5. **Execution.** The call runs under the caller's own identity and tenant, so
+   ordinary data-plane authorization also applies.
+
+Values are bounded (64 KiB each, 1 MiB for a scan page of at most 200 entries), and
+each caller and slug pair is rate limited (`LatticeAppBridgeOptions`: 100 permits per
+second by default). Failures are the closed `AppBridgeFailure` set: `Denied`,
+`NotFound`, `Invalid`, `TooLarge`, `Conflict` and `Unavailable`. They are carried by
+`AppBridgeException` with a fixed, sanitised message.
 ## See also
 
 - [Installable apps](../lattice.apps/README.md)

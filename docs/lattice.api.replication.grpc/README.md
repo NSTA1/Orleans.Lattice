@@ -33,6 +33,15 @@ The gRPC service name is `orleans.lattice.api.replication`.
 | `GetReplicationConfig` | unary | Report the permission-scoped per-tree replication config. |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes. |
 
+### Peer status service
+
+Read-only peer status is a separate service, `orleans.lattice.api.replication.status`,
+with one RPC, `GetPeerStatus`. It is registered with `AddLatticeReplicationStatusApiGrpc()`
+and mapped with `MapLatticeReplicationStatusApiGrpc()`. It sits behind the same
+default-deny interceptor, and `LatticeReplicationApiOperation.GetPeerStatus` names it
+for authorizers. `LatticeReplicationStatusGrpcClient` implements
+`ILatticeReplicationStatus` directly, so a remote caller uses the same contract as an
+in-process one.
 ## Quick start
 
 Register the binding on a silo that already has `AddLatticeReplicationApi`, then map its routes. The snippet is illustrative and not compiled; [samples/RuntimeReplicationConfig](../../samples/RuntimeReplicationConfig) is a runnable example of the in-process facade this binding adapts, and does not host the gRPC binding.

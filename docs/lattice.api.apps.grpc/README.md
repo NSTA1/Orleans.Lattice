@@ -74,6 +74,23 @@ The gRPC service name is `orleans.lattice.api.apps`, so each method's full path 
 | `GetCapabilities` | `GetCapabilitiesAsync` |
 | `GetAuthScheme` | Auth-scheme advertisement (unauthenticated). |
 
+### Catalogue, workspace and bridge services
+
+The [catalogue, workspace and bridge](../lattice.api.apps/README.md#catalogue-workspace-and-bridge)
+contracts are bound as three further code-first services. Each has its own name, its
+own `Add*`/`Map*` pair, and a public client that implements the contract directly.
+All three sit behind the same default-deny interceptor as the control service.
+
+| Service | Registration | Client |
+|---|---|---|
+| `orleans.lattice.api.apps.catalog` | `AddLatticeAppCatalogApiGrpc` / `MapLatticeAppCatalogApiGrpc` | `LatticeAppCatalogApiGrpcClient` (`ILatticeAppCatalog`) |
+| `orleans.lattice.api.apps.workspace` | `AddLatticeAppWorkspaceApiGrpc` / `MapLatticeAppWorkspaceApiGrpc` | `LatticeAppWorkspaceApiGrpcClient` (`ILatticeAppWorkspace`) |
+| `orleans.lattice.api.apps.bridge` | `AddLatticeAppBridgeApiGrpc` / `MapLatticeAppBridgeApiGrpc` | `LatticeAppBridgeApiGrpcClient` (`ILatticeAppBridge`) |
+
+The asset RPCs, for the icon and UI bundle assets, carry at most 2 MiB each. That
+bound is set per method with a bounded marshaller rather than by raising the channel's
+global message limit. A bridge failure crosses the wire as a status code mapped from
+its `AppBridgeFailure`, carrying only the fixed message.
 ## Hosting the service
 
 Register Orleans serialization, the facade, and the binding, then map the endpoint:
