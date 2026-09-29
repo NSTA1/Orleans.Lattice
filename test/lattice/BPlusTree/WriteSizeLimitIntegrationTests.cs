@@ -166,4 +166,73 @@ public class WriteSizeLimitIntegrationTests
         Assert.That(written, Is.EqualTo(new[] { "k" }));
         Assert.That(await tree.GetAsync("k"), Is.EqualTo(ScoredJson(2)));
     }
+
+    // Regression: the atomic batch writes skipped the entry-time write-size
+    // bounds. An oversized leg was only caught once the saga was already
+    // running, so the call failed with InvalidOperationException after the
+    // saga had been started and rolled back, instead of the ArgumentException
+    // every other write raises before any shard work.
+    private static IEnumerable<TestCaseData> AtomicWrites()
+    {
+        yield return new TestCaseData(
+            (Func<ILattice, List<KeyValuePair<string, byte[]>>, Task>)((t, e) => t.SetManyAtomicAsync(e)))
+            .SetArgDisplayNames("SetManyAtomicAsync(entries)");
+        yield return new TestCaseData(
+            (Func<ILattice, List<KeyValuePair<string, byte[]>>, Task>)((t, e) => t.SetManyAtomicAsync(e, "op-id")))
+            .SetArgDisplayNames("SetManyAtomicAsync(entries, operationId)");
+        yield return new TestCaseData(
+            (Func<ILattice, List<KeyValuePair<string, byte[]>>, Task>)((t, e) => t.SetManyAtomicAsync(e, Array.Empty<string>(), "op-mixed")))
+            .SetArgDisplayNames("SetManyAtomicAsync(upserts, deletes, operationId)");
+        yield return new TestCaseData(
+            (Func<ILattice, List<KeyValuePair<string, byte[]>>, Task>)((t, e) => t.SetManyAtomicWhereAsync(e, AnyScore())))
+            .SetArgDisplayNames("SetManyAtomicWhereAsync(entries, predicate)");
+        yield return new TestCaseData(
+            (Func<ILattice, List<KeyValuePair<string, byte[]>>, Task>)((t, e) => t.SetManyAtomicWhereAsync(e, AnyScore(), "op-where")))
+            .SetArgDisplayNames("SetManyAtomicWhereAsync(entries, predicate, operationId)");
+    }
+
+    [TestCaseSource(nameof(AtomicWrites))]
+    public async Task Atomic_batch_rejects_oversized_value_before_the_saga_starts(
+        Func<ILattice, List<KeyValuePair<string, byte[]>>, Task> write)
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>($"wsl-atomic-value-{Guid.NewGuid():N}");
+        await tree.SetAsync("ok", ScoredJson(1));
+        await tree.SetAsync("bad", ScoredJson(1));
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("ok", ScoredJson(2)),
+            new("bad", OversizedValue()),
+        };
+
+        Assert.That(async () => await write(tree, entries), Throws.InstanceOf<ArgumentException>());
+        Assert.That(await tree.GetAsync("ok"), Is.EqualTo(ScoredJson(1)),
+            "the rejected batch must not have written any leg");
+        Assert.That(await tree.GetAsync("bad"), Is.EqualTo(ScoredJson(1)),
+            "the rejected batch must not have written the oversized value");
+    }
+
+    [TestCaseSource(nameof(AtomicWrites))]
+    public void Atomic_batch_rejects_oversized_key_before_the_saga_starts(
+        Func<ILattice, List<KeyValuePair<string, byte[]>>, Task> write)
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>($"wsl-atomic-key-{Guid.NewGuid():N}");
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new(OverlongKey(), ScoredJson(2)),
+        };
+
+        Assert.That(async () => await write(tree, entries), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [TestCaseSource(nameof(AtomicWrites))]
+    public async Task Atomic_batch_accepts_within_bound_write(
+        Func<ILattice, List<KeyValuePair<string, byte[]>>, Task> write)
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>($"wsl-atomic-ok-{Guid.NewGuid():N}");
+        await tree.SetAsync("k", ScoredJson(1));
+
+        await write(tree, new List<KeyValuePair<string, byte[]>> { new("k", ScoredJson(2)) });
+
+        Assert.That(await tree.GetAsync("k"), Is.EqualTo(ScoredJson(2)));
+    }
 }

@@ -206,8 +206,17 @@ public sealed partial class CrdtShape
                 continue;
             }
 
-            foreach (var dot in source)
+            // Indexed over a resolved span rather than foreach: the selector
+            // returns IReadOnlyList, so foreach binds
+            // IEnumerable<T>.GetEnumerator and HEAP-ALLOCATES a boxed
+            // enumerator per delta in the run - for arrays as well as for
+            // List<T>. Folding a run of N deltas therefore paid N boxes on a
+            // path that otherwise allocates only its result.
+            var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+            var count = source.Count;
+            for (var j = 0; j < count; j++)
             {
+                var dot = spanned ? span[j] : source[j];
                 if (seen.Add(dot))
                 {
                     result.Add(dot);

@@ -434,6 +434,43 @@ public sealed class AuthAdminMcpPermissionResolverTests
         });
     }
 
+    /// <summary>
+    /// Security regression. <see cref="LatticeOperation.AppInstall"/> is the second
+    /// scopeless cluster-wide capability (the authorizer resolves it over the
+    /// cluster-wide tree id), so it must be masked off a tree-scoped rule exactly
+    /// as telemetry is. Omitting it from the mask let a rule on any single tree
+    /// carry the installation capability into the granted operation set.
+    /// </summary>
+    [Test]
+    public async Task App_install_over_a_tree_scope_is_not_carried_into_the_granted_operations()
+    {
+        var resolver = CreateResolver(AdminReturning(
+            Rule(LatticeOperation.Read | LatticeOperation.AppInstall, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.AppInstall), Is.False,
+                "AppInstall names no tree, so a tree-scoped rule must not carry it.");
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.Read), Is.True,
+                "Masking must remove only the cluster-wide-only bits, never the rule's data-plane grant.");
+        });
+    }
+
+    [Test]
+    public async Task App_install_over_a_cluster_wide_scope_is_carried_into_the_granted_operations()
+    {
+        // The mask must not turn into a denial: a cluster-wide rule is the scope
+        // the capability is actually authorized over, so it has to survive.
+        var resolver = CreateResolver(AdminReturning(
+            ClusterWideRule(LatticeOperation.AppInstall, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.AppInstall), Is.True);
+    }
+
     [Test]
     public async Task A_tree_scoped_rule_still_grants_its_data_plane_groups()
     {
