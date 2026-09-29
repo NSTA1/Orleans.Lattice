@@ -219,15 +219,6 @@ internal static class LeafSnapshotCodec
     /// </para>
     /// </summary>
     /// <param name="frame">Candidate frame bytes.</param>
-    // Deliberately not inlined, for the same reason as the aggregate walk and
-    // the order check below: this loop's speed comes from the JIT inlining
-    // TrySkipRow's row parser into it, and that only happens while this method
-    // is the inline root. Validate is called from several wrappers and is small
-    // enough for the JIT to inline into them, which spends the caller's inline
-    // budget on the walk and leaves none for the per-row parser - so the parser
-    // degrades to a real call once per row. See the leafsnapshotframetrims
-    // microbench suite.
-    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static bool Validate(ReadOnlySpan<byte> frame)
     {
         if (!TryReadHeader(frame, out var rowCount, out var indexOffset))
@@ -278,10 +269,19 @@ internal static class LeafSnapshotCodec
     /// </summary>
     /// <param name="frame">Frame bytes.</param>
     /// <param name="stateBytes">Receives the summed footprint on success.</param>
-    // Not inlined, for the same reason as the aggregate walk below: the walk
-    // calls TryMeasureRowFootprint once per row and gets its speed from the JIT
-    // inlining that callee into it, which only happens while this method is the
-    // inline root rather than part of a larger caller.
+    // Deliberately not inlined. This walk calls TryMeasureRowFootprint once per
+    // row and gets its speed from the JIT inlining that callee into it, which
+    // only happens while this method is the inline root. Left inlinable, the
+    // JIT instead inlines THIS method into its callers, spends their inline
+    // budget on the walk body, and leaves none for the per-row parser - which
+    // then degrades to a real call per row. Measured 228us -> 73us (-68%) over
+    // a 4096-row frame; see group (6) of the leafsnapshotframetrims suite.
+    //
+    // Note the sibling Validate walk was swept at the same time and did NOT
+    // benefit (-1.8%, inside noise): its body carries the frame hash check
+    // inline, which already puts it over the inline budget, so it was the
+    // inline root regardless. The attribute is therefore shipped here and
+    // deliberately NOT there - the shape alone does not imply the win.
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static bool TryComputeStateBytes(ReadOnlySpan<byte> frame, out long stateBytes)
     {
@@ -884,7 +884,7 @@ internal static class LeafSnapshotCodec
         ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row, out int keyUtf8Length)
         => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out keyUtf8Length);
 
-    private static bool TrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
+    internal static bool TrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
         => TryReadRowCore(frame, limit, ref pos, materialize: false, out _, out _);
 
     // Single parser for both the materialising and the skipping walk so the
@@ -1015,7 +1015,7 @@ internal static class LeafSnapshotCodec
     // Walks a row far enough to total its logical footprint, skipping every
     // field that does not contribute to it, and reports its tombstone flag so
     // one pass can serve both the footprint and the live-row aggregate.
-    private static bool TryMeasureRowFootprint(
+    internal static bool TryMeasureRowFootprint(
         ReadOnlySpan<byte> frame, int limit, ref int pos, out long rowBytes, out bool isTombstone)
     {
         rowBytes = 0;
