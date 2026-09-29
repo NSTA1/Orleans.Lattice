@@ -63,4 +63,18 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// Returns <c>false</c> while a resize is in flight.
     /// </summary>
     Task<bool> IsIdleAsync();
+
+    /// <summary>
+    /// Reports whether this tree's resize state still names
+    /// <paramref name="physicalTreeId"/> - as the old physical tree an undo would
+    /// recover, or as the destination an in-flight or completed resize built. A
+    /// retired copy that is no longer named can never be recovered through this
+    /// coordinator, which is what lets the WAL GC release the retention of an
+    /// undone resize's destination deleted by a build that predates the discard
+    /// (issue #3930). A pure read of in-memory state, interleaved so it never
+    /// queues behind a snapshot pass.
+    /// </summary>
+    /// <param name="physicalTreeId">The physical tree id to look for.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> ReferencesPhysicalTreeAsync(string physicalTreeId);
 }

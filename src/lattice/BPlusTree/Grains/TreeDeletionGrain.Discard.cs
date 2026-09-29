@@ -67,6 +67,58 @@ internal sealed partial class TreeDeletionGrain
     }
 
     /// <inheritdoc />
+    public async Task<bool> DiscardIfAbandonedDerivedCopyAsync()
+    {
+        EnsureLifecycleOrigin();
+
+        var s = state.State;
+        if (s.Discarded && s.IsDeleted)
+            return true;
+
+        // Only a copy a resize retired through DeleteDerivedPhysicalTreeAsync:
+        // deleted silently, not a first resize's retired copy (which shares the
+        // live logical id), not a delegated deletion (which a logical recover
+        // reverses), and not yet purged. A caller's own DeleteTreeAsync never
+        // suppresses lifecycle events, so a tree a user may still recover is
+        // never taken for one.
+        if (!s.IsDeleted || s.PurgeComplete || !s.SuppressLifecycleEvents || s.RetainsRegistryEntry || s.Delegated)
+            return false;
+
+        if (ResizeLogicalTreeId(TreeId) is not { } logicalTreeId)
+            return false;
+
+        // An undo recovers only the copy its coordinator still names, so a copy
+        // it does not name can never be read again.
+        if (await grainFactory.GetGrain<ITreeResizeGrain>(logicalTreeId).ReferencesPhysicalTreeAsync(TreeId))
+            return false;
+
+        logger.LogInformation(
+            "Discarding physical tree {TreeId}: a resize retired it and no resize can recover it any longer, so its write-ahead-log retention is released.",
+            TreeId);
+        await DiscardDerivedPhysicalTreeAsync();
+        return true;
+    }
+
+    /// <summary>
+    /// The logical tree a resize's derived copy belongs to, parsed from the
+    /// <c>{logicalTreeId}/resized/{operationId}</c> id the resize coordinator
+    /// composes, or <see langword="null"/> for any other id.
+    /// </summary>
+    internal static string? ResizeLogicalTreeId(string physicalTreeId)
+    {
+        const string marker = "/resized/";
+        var index = physicalTreeId.LastIndexOf(marker, StringComparison.Ordinal);
+        if (index <= 0)
+            return null;
+
+        var operationId = physicalTreeId.AsSpan(index + marker.Length);
+        if (operationId.IsEmpty || operationId.Contains('/'))
+            return null;
+
+        return physicalTreeId[..index];
+    }
+
+    /// <inheritdoc />
     public Task<PhysicalTreeRetention> GetPhysicalRetentionAsync()
     {
         var s = state.State;

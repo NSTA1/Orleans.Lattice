@@ -111,6 +111,33 @@ public sealed class UndoneResizeWalReleaseIntegrationTests
         Assert.That((await deletion.GetDeletionStatusAsync()).PurgeComplete, Is.True);
     }
 
+    [Test]
+    public async Task A_destination_retired_by_an_earlier_build_is_discarded_once_no_resize_names_it()
+    {
+        // The state an estate is already in when it upgrades: an undone resize's
+        // destination soft-deleted by DeleteDerivedPhysicalTreeAsync, holding its
+        // pins and its WAL for the soft-delete window. The WAL GC asks the
+        // deletion grain to discard such a copy; this drives that call directly.
+        var source = $"legacy-src-{Guid.NewGuid():N}";
+        var destination = $"{source}/resized/{Guid.NewGuid():N}";
+        await WriteKeysAsync(_cluster.GrainFactory.GetGrain<ILattice>(source));
+
+        var snapshot = _cluster.GrainFactory.GetGrain<ITreeSnapshotGrain>(source);
+        await snapshot.SnapshotAsync(destination, SnapshotMode.Online, maxLeafKeys: 4, maxInternalChildren: 4);
+        await snapshot.RunSnapshotPassAsync();
+        Assert.That(await _cluster.GrainFactory.GetGrain<ILattice>(destination).GetAsync("key-0000"), Is.Not.Null);
+
+        var deletion = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(destination);
+        await deletion.DeleteDerivedPhysicalTreeAsync();
+        await AssertHoldsRetentionAsync(destination);
+        Assert.That(await deletion.GetPhysicalRetentionAsync(), Is.EqualTo(PhysicalTreeRetention.Deleted));
+
+        Assert.That(await deletion.DiscardIfAbandonedDerivedCopyAsync(), Is.True);
+
+        await AssertRetentionReleasedAsync(destination);
+        Assert.That(await deletion.GetPhysicalRetentionAsync(), Is.EqualTo(PhysicalTreeRetention.Discarded));
+    }
+
     private ILatticeRegistry Registry =>
         _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 

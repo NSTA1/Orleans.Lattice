@@ -801,4 +801,13 @@ internal sealed class TreeResizeGrain(
     /// <inheritdoc />
     public Task<bool> IsIdleAsync() =>
         Task.FromResult(!state.State.InProgress);
+
+    /// <inheritdoc />
+    public Task<bool> ReferencesPhysicalTreeAsync(string physicalTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(physicalTreeId);
+        return Task.FromResult(
+            string.Equals(state.State.OldPhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+            || string.Equals(state.State.SnapshotTreeId, physicalTreeId, StringComparison.Ordinal));
+    }
 }

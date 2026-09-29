@@ -69,6 +69,20 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     [Orleans.Concurrency.AlwaysInterleave]
     Task<PhysicalTreeRetention> GetPhysicalRetentionAsync();
 
+    /// <summary>
+    /// Discards this physical copy, as <see cref="DiscardDerivedPhysicalTreeAsync"/>
+    /// does, when it is a resize's derived copy that was retired by a build
+    /// predating the discard and that no resize can still recover - its logical
+    /// tree's resize coordinator no longer names it. That is the undone resize
+    /// destination issue #3930 left holding its WAL. Returns <see langword="true"/>
+    /// when the copy is discarded (now or already), and <see langword="false"/>,
+    /// changing nothing, for anything else: a live copy, one deleted by a caller
+    /// who may recover it, a resize's own retired copy an undo can still recover,
+    /// or a purged one. Called by the WAL GC so estates already in that state heal
+    /// without an operator.
+    /// </summary>
+    Task<bool> DiscardIfAbandonedDerivedCopyAsync();
+
     /// <summary>Reports deletion or partially applied delegated deletion of the local physical copy, not the logical alias.</summary>
     Task<bool> IsPhysicalDeletedAsync();
 

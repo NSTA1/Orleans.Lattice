@@ -2590,7 +2590,7 @@ internal sealed class LatticeWalGcScheduler(
             if (retention != PhysicalTreeRetention.Live)
             {
                 WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
-                await HoldDeletedTreeAsync(treeId, retention, floorBlocked).ConfigureAwait(false);
+                await HoldDeletedTreeAsync(treeId, retention, floorBlocked, stoppingToken).ConfigureAwait(false);
             }
             else if (floorBlocked)
             {
@@ -5570,6 +5570,36 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Asks a deleted tree's deletion grain to discard it if it is a resize's
+    /// retired copy no resize can recover (issue #3930). Fails closed: a fault or
+    /// an overrun of <see cref="RetentionProbeBudget"/> discards nothing and
+    /// leaves the copy held.
+    /// </summary>
+    private async Task<bool> TryDiscardAbandonedCopyAsync(string treeId, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await Bounded(
+                    grainFactory.GetGrain<ITreeDeletionGrain>(treeId).DiscardIfAbandonedDerivedCopyAsync(),
+                    RetentionProbeBudget,
+                    stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "WAL GC could not ask deleted tree {Tree} whether it is an abandoned resize copy; its WAL stays held and the next pass asks again.",
+                treeId);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Handles a tree whose retention floor is stuck on a deleted physical copy
     /// instead of applying the leaf-touching remedies (issue #3930).
     /// </summary>
@@ -5590,14 +5620,21 @@ internal sealed class LatticeWalGcScheduler(
     /// </para>
     /// <para>
     /// A <see cref="PhysicalTreeRetention.Deleted"/> copy is still recoverable,
-    /// so its pins must keep protecting the log its leaves would replay. Its
-    /// floor is terminally blocked until it is recovered or purged, and that is
-    /// reported once per episode at error level, distinctly from a floor that is
-    /// merely behind: no activation can lift it, so a warning that reads as
-    /// transient would be the wrong signal.
+    /// so its pins must keep protecting the log its leaves would replay - unless
+    /// it is a resize's retired copy that no resize can recover any longer, which
+    /// is what an undone resize's destination looks like when a build predating
+    /// the discard deleted it. The deletion grain is asked to discard such a copy,
+    /// which is how an estate already holding one heals without an operator; the
+    /// operator could not reach it anyway, because a derived copy's id is not a
+    /// tree the admin grants name. Any other deleted tree's floor is terminally
+    /// blocked until it is recovered or purged, and that is reported once per
+    /// episode at error level, distinctly from a floor that is merely behind: no
+    /// activation can lift it, so a warning that reads as transient would be the
+    /// wrong signal.
     /// </para>
     /// </remarks>
-    private async Task HoldDeletedTreeAsync(string treeId, PhysicalTreeRetention retention, bool floorBlocked)
+    private async Task HoldDeletedTreeAsync(
+        string treeId, PhysicalTreeRetention retention, bool floorBlocked, CancellationToken stoppingToken)
     {
         _blockedConsumers.Remove(treeId);
         _repairableFloorHolders.Remove(treeId);
@@ -5627,6 +5664,14 @@ internal sealed class LatticeWalGcScheduler(
                     treeId);
             }
 
+            return;
+        }
+
+        if (retention == PhysicalTreeRetention.Deleted
+            && await TryDiscardAbandonedCopyAsync(treeId, stoppingToken).ConfigureAwait(false))
+        {
+            // The discard retired the pins and trimmed the log itself; the next
+            // pass finds the floor clear or reports the copy as discarded.
             return;
         }
 

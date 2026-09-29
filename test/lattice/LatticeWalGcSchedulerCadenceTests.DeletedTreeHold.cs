@@ -47,6 +47,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
 
         await deletion.Received().GetPhysicalRetentionAsync();
+        await deletion.Received().DiscardIfAbandonedDerivedCopyAsync();
         await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
         factory.DidNotReceive().GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>());
 
@@ -94,6 +95,34 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             e.Level == Microsoft.Extensions.Logging.LogLevel.Error
             && e.Message.Contains("physical tree that has been deleted", StringComparison.Ordinal));
         Assert.That(holds, Is.EqualTo(1), "a terminal hold must be reported, once, distinctly from a floor that is merely behind");
+
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_discards_a_deleted_tree_that_is_an_abandoned_resize_copy()
+    {
+        // The self-heal for an estate a build predating the discard left
+        // holding an undone resize's destination: the copy reports Deleted,
+        // and its deletion grain confirms no resize can recover it.
+        var time = new VirtualTimeProvider();
+        var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
+        var deletion = DeletionReporting(factory, PhysicalTreeRetention.Deleted);
+        deletion.DiscardIfAbandonedDerivedCopyAsync().Returns(Task.FromResult(true));
+        var logs = new RecordingLoggerFactory();
+
+        var scheduler = CreateScheduler(
+            factory, BlockedGc(), Adaptive(), time,
+            logger: new Microsoft.Extensions.Logging.Logger<LatticeWalGcScheduler>(logs));
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
+
+        await deletion.Received().DiscardIfAbandonedDerivedCopyAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
+        Assert.That(
+            logs.Entries.Any(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error),
+            Is.False,
+            "a copy the GC has just discarded is healing, not terminally held");
 
         await scheduler.StopAsync(CancellationToken.None);
     }

@@ -36,13 +36,16 @@ public partial class TreeDeletionGrainTests
     /// A deletion grain whose options resolver resolves every WAL partition to
     /// one substitute provider, whose partition heads are <paramref name="heads"/>.
     /// </summary>
-    private static DiscardHarness CreateDiscardHarness(params long[] heads)
+    private static DiscardHarness CreateDiscardHarness(params long[] heads) =>
+        CreateDiscardHarnessFor(TreeId, heads);
+
+    private static DiscardHarness CreateDiscardHarnessFor(string treeId, params long[] heads)
     {
         var reporter = Substitute.For<ILeafCursorReporter>();
         var services = new ServiceCollection().AddSingleton(reporter).BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("deletion", TreeId));
+        context.GrainId.Returns(GrainId.Create("deletion", treeId));
         context.ActivationServices.Returns(services);
 
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -58,15 +61,15 @@ public partial class TreeDeletionGrainTests
         for (int i = 0; i < ShardCount; i++)
         {
             var shardRoot = Substitute.For<IShardRootGrain>();
-            grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}").Returns(shardRoot);
+            grainFactory.GetGrain<IShardRootGrain>($"{treeId}/{i}").Returns(shardRoot);
             shardRoot.MarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.PurgeAsync().Returns(Task.CompletedTask);
         }
 
-        grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).Returns(Substitute.For<ITombstoneCompactionGrain>());
+        grainFactory.GetGrain<ITombstoneCompactionGrain>(treeId).Returns(Substitute.For<ITombstoneCompactionGrain>());
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
-        registry.ResolveAsync(TreeId).Returns(TreeId);
+        registry.ResolveAsync(treeId).Returns(treeId);
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = ShardCount }));
         registry.GetWalPlacementAsync(Arg.Any<string>()).Returns(Task.FromResult(WalPlacementPin.Create()));
@@ -74,7 +77,7 @@ public partial class TreeDeletionGrainTests
         var wal = Substitute.For<IWalStorageProvider>();
         for (var partition = 0; partition < heads.Length; partition++)
         {
-            wal.GetHighestOffsetAsync(TreeId, partition, Arg.Any<CancellationToken>())
+            wal.GetHighestOffsetAsync(treeId, partition, Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(heads[partition]));
         }
 
@@ -303,5 +306,120 @@ public partial class TreeDeletionGrainTests
         await h.Grain.PurgeNowAsync();
 
         Assert.That(await h.Grain.GetPhysicalRetentionAsync(), Is.EqualTo(PhysicalTreeRetention.Live));
+    }
+
+    // --- DiscardIfAbandonedDerivedCopyAsync ---
+
+    private const string AbandonedCopy = "logical-tree/resized/0123456789abcdef";
+
+    private static ITreeResizeGrain ResizeNaming(IGrainFactory factory, bool references)
+    {
+        var resize = Substitute.For<ITreeResizeGrain>();
+        resize.ReferencesPhysicalTreeAsync(Arg.Any<string>()).Returns(Task.FromResult(references));
+        factory.GetGrain<ITreeResizeGrain>("logical-tree").Returns(resize);
+        return resize;
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_discards_a_retired_resize_copy_no_resize_names()
+    {
+        // The state a build predating the discard left an undone resize's
+        // destination in: retired silently by DeleteDerivedPhysicalTreeAsync,
+        // its coordinator reset by the undo.
+        var h = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        var resize = ResizeNaming(h.GrainFactory, references: false);
+        await h.Grain.DeleteDerivedPhysicalTreeAsync();
+
+        var discarded = await h.Grain.DiscardIfAbandonedDerivedCopyAsync();
+
+        Assert.That(discarded, Is.True);
+        Assert.That(h.State.State.Discarded, Is.True);
+        await resize.Received(1).ReferencesPhysicalTreeAsync(AbandonedCopy);
+        await h.Reporter.Received(1).UnregisterTreeAsync(AbandonedCopy, Arg.Any<CancellationToken>());
+        await h.Wal.Received(1).TrimAsync(AbandonedCopy, 2, 9, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_keeps_a_retired_copy_an_undo_can_still_recover()
+    {
+        var h = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        ResizeNaming(h.GrainFactory, references: true);
+        await h.Grain.DeleteDerivedPhysicalTreeAsync();
+
+        Assert.That(await h.Grain.DiscardIfAbandonedDerivedCopyAsync(), Is.False);
+        Assert.That(h.State.State.Discarded, Is.False);
+        await h.Reporter.DidNotReceive().UnregisterTreeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await h.Wal.DidNotReceive().TrimAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_keeps_a_tree_a_caller_deleted_and_may_recover()
+    {
+        // DeleteTreeAsync never suppresses lifecycle events, whatever the id.
+        var h = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        var resize = ResizeNaming(h.GrainFactory, references: false);
+        h.GrainFactory.GetLatticeRegistry().GetAliasesTargetingAsync(Arg.Any<string>()).Returns(Array.Empty<string>());
+        await h.Grain.DeleteTreeAsync();
+
+        Assert.That(h.State.State.IsDeleted, Is.True, "precondition: the caller's delete landed");
+        Assert.That(await h.Grain.DiscardIfAbandonedDerivedCopyAsync(), Is.False);
+        Assert.That(h.State.State.Discarded, Is.False);
+        await resize.DidNotReceive().ReferencesPhysicalTreeAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_keeps_a_delegated_deletion()
+    {
+        var h = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        ResizeNaming(h.GrainFactory, references: false);
+        await h.Grain.DeleteDelegatedAsync();
+
+        Assert.That(h.State.State.IsDeleted, Is.True, "precondition: the delegated delete landed");
+        Assert.That(await h.Grain.DiscardIfAbandonedDerivedCopyAsync(), Is.False);
+        Assert.That(h.State.State.Discarded, Is.False);
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_leaves_a_live_copy_alone()
+    {
+        var h = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        var resize = ResizeNaming(h.GrainFactory, references: false);
+
+        Assert.That(await h.Grain.DiscardIfAbandonedDerivedCopyAsync(), Is.False);
+        await resize.DidNotReceive().ReferencesPhysicalTreeAsync(Arg.Any<string>());
+        await h.GrainFactory.GetGrain<IShardRootGrain>($"{AbandonedCopy}/0").DidNotReceive().MarkDeletedAsync();
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_ignores_an_id_that_is_not_a_resize_copy()
+    {
+        var h = CreateDiscardHarness(4, 7, 9);
+        await h.Grain.DeleteDerivedPhysicalTreeAsync();
+
+        Assert.That(await h.Grain.DiscardIfAbandonedDerivedCopyAsync(), Is.False);
+        Assert.That(h.State.State.Discarded, Is.False);
+    }
+
+    [Test]
+    public async Task DiscardIfAbandoned_reports_an_already_discarded_copy_without_asking_the_resize()
+    {
+        var h = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        var resize = ResizeNaming(h.GrainFactory, references: true);
+        await h.Grain.DiscardDerivedPhysicalTreeAsync();
+
+        Assert.That(await h.Grain.DiscardIfAbandonedDerivedCopyAsync(), Is.True);
+        await resize.DidNotReceive().ReferencesPhysicalTreeAsync(Arg.Any<string>());
+    }
+
+    [TestCase("t/resized/abc", "t")]
+    [TestCase("a/b/resized/abc", "a/b")]
+    [TestCase("t/resized/abc/resized/def", "t/resized/abc")]
+    [TestCase("t", null)]
+    [TestCase("/resized/abc", null)]
+    [TestCase("t/resized/", null)]
+    [TestCase("t/resized/abc/0", null)]
+    public void ResizeLogicalTreeId_parses_only_a_resize_copy_id(string physicalTreeId, string? expected)
+    {
+        Assert.That(TreeDeletionGrain.ResizeLogicalTreeId(physicalTreeId), Is.EqualTo(expected));
     }
 }
