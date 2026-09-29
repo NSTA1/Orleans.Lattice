@@ -42,6 +42,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Aggregation group re-materialise.** Re-folding a group decoded every shard into a keyed map, materialising a source-key string per entry that the fold never looks up. It now walks the row directly: the min/max gather allocates nothing at all, and the set-union gather 59% less. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation saga operation id.** Every numeric contribution and retraction interpolated a payload string purely to transcode it into the buffer that hashes it, then built the id from three more. It now composes those bytes in place and formats once, a third faster. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
+
 - **Performance - Leaf frame structural row walk.** The frame codec's row parser took its materialise-or-skip mode as a runtime flag, so the skipping walk behind frame validation still ran every branch of the materialising one. The mode is now a type argument the JIT specialises away, halving the walk. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation contribution slots.** A numeric contribution touches at most two accumulator slots, yet accumulated them in a dictionary and then walked it back out to rebuild the same keys for cleanup. Two locals now carry both, removing 44% of the flip's allocation. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
