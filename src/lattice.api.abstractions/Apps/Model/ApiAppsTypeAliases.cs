@@ -83,4 +83,8 @@ public static class ApiAppsTypeAliases
     public const string AppBridgeException = "oia.bx";
     /// <summary>Alias for <see cref="LatticeAppCatalogCapabilities"/>.</summary>
     public const string LatticeAppCatalogCapabilities = "oia.gc";
+    /// <summary>Alias for <see cref="AppRoleBindingsUpdate"/>.</summary>
+    public const string AppRoleBindingsUpdate = "oia.bu";
+    /// <summary>Alias for <see cref="AppRoleBindingsReport"/>.</summary>
+    public const string AppRoleBindingsReport = "oia.br";
 }

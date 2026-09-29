@@ -22,6 +22,7 @@ internal sealed class AppsFacades(IServiceProvider services)
     private readonly Lazy<ILatticeAppsControl?> _control = new(services.GetShellFacade<ILatticeAppsControl>);
     private readonly Lazy<ILatticeAppWorkspace?> _workspace = new(services.GetShellFacade<ILatticeAppWorkspace>);
     private readonly Lazy<ILatticeAuthAdmin?> _auth = new(services.GetShellFacade<ILatticeAuthAdmin>);
+    private readonly Lazy<ILatticeAppRoleBindings?> _roleBindings = new(services.GetShellFacade<ILatticeAppRoleBindings>);
 
     /// <summary>The administrative catalogue, or <see langword="null"/> when the head serves none.</summary>
     public ILatticeAppCatalog? Catalog => Resolve(_catalog);
@@ -34,6 +35,9 @@ internal sealed class AppsFacades(IServiceProvider services)
 
     /// <summary>The auth facade whose read-only group search binds roles, or <see langword="null"/>.</summary>
     public ILatticeAuthAdmin? Auth => Resolve(_auth);
+
+    /// <summary>Re-binding an installed app's roles to groups, or <see langword="null"/> when the head serves none.</summary>
+    public ILatticeAppRoleBindings? RoleBindings => Resolve(_roleBindings);
 
     private static T? Resolve<T>(Lazy<T?> facade)
         where T : class
