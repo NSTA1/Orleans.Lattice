@@ -12,9 +12,11 @@ namespace Orleans.Lattice.Replication.Grains;
 /// what the WAL is keyed by after an alias swap (shadow-cutover restore, resize,
 /// reshard), so for an aliased tree constructed with its logical name this source
 /// reads the partitions of that name rather than the physical tree's. It reads
-/// oldest-first per partition up to a bounded budget; a partition
-/// whose oldest retained entry sits at a sequence greater than zero is reported
-/// as trimmed so the engine can detect a garbage-collected-past-divergence gap.
+/// oldest-first per partition up to a bounded budget shared across partitions; a
+/// partition whose oldest retained entry sits at a sequence greater than zero is
+/// reported as trimmed so the engine can detect a garbage-collected-past-divergence
+/// gap, including a partition an earlier one left no budget to read, whose oldest
+/// retained entry is probed without being collected.
 /// Strictly read-only.
 /// </summary>
 internal sealed class WalGrainReReplaySource(
@@ -44,9 +46,15 @@ internal sealed class WalGrainReReplaySource(
             var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{p}");
             var cursor = 0L;
             var first = true;
-            while (collected.Count < budget)
+
+            // The budget is shared, so an earlier partition can exhaust it before
+            // this one is read. Its trim point is still probed (one entry, not
+            // collected): an unexamined partition would read as untrimmed and let
+            // the repair proceed past a gap its WAL can no longer fill.
+            while (first || collected.Count < budget)
             {
-                var result = await grain.ReadAsync(cursor, page, cancellationToken).ConfigureAwait(false);
+                var probeOnly = collected.Count >= budget;
+                var result = await grain.ReadAsync(cursor, probeOnly ? 1 : page, cancellationToken).ConfigureAwait(false);
                 if (result.Entries.Count == 0)
                 {
                     break;
@@ -65,6 +73,11 @@ internal sealed class WalGrainReReplaySource(
                     }
                 }
                 first = false;
+
+                if (probeOnly)
+                {
+                    break;
+                }
 
                 foreach (var sequenced in result.Entries)
                 {
