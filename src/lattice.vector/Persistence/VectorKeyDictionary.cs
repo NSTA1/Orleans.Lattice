@@ -46,6 +46,14 @@ public sealed class VectorKeyDictionary
     private string? _loadCursor;
     private long _loadHighest = -1L;
 
+    // Key-map records assigned but not yet durable, awaiting one batched write.
+    // Cleared ONLY by a flush that succeeded: a failed flush leaves them here so
+    // the next flush retries them. That is load-bearing, because the in-memory
+    // maps above have already adopted these identifiers, so GetOrAddBufferedAsync
+    // will not re-buffer them - dropping the buffer on failure would lose the
+    // record permanently while the mapping claimed it existed.
+    private readonly List<KeyValuePair<string, byte[]>> _pendingWrites = [];
+
     /// <summary>
     /// Creates a dictionary over a store. Call <see cref="LoadAsync"/> before use
     /// so it adopts whatever a previous process already assigned.
@@ -134,6 +142,11 @@ public sealed class VectorKeyDictionary
             _next = 0;
             _reservedTo = 0;
             _loadHighest = -1L;
+
+            // The buffer describes assignments made against the mapping being
+            // replaced here, so carrying it across a fresh load would later write
+            // records for a state this instance no longer holds.
+            _pendingWrites.Clear();
         }
 
         var mapPrefix = VectorIndexStorageKeys.KeyMapPrefix(_prefix);
@@ -214,6 +227,106 @@ public sealed class VectorKeyDictionary
         _forward[id] = key;
         _reverse[key] = id;
         return key;
+    }
+
+    /// <summary>
+    /// How many assigned identifiers are buffered and not yet durable.
+    /// </summary>
+    public int PendingWriteCount => _pendingWrites.Count;
+
+    /// <summary>
+    /// Assigns a key exactly as <see cref="GetOrAddAsync"/> does, but BUFFERS the
+    /// durable record instead of issuing a write per identifier. The caller must
+    /// call <see cref="FlushPendingAsync"/> before it makes the cells that use
+    /// these keys durable.
+    /// <para>
+    /// <b>Why this exists.</b> <see cref="GetOrAddAsync"/> issues one single-key
+    /// <c>WriteAsync</c> per newly seen identifier, awaited in turn. On a build
+    /// that is streaming a whole corpus that is one durable write per vector -
+    /// on the order of 115,000 of them for the repository-context corpus, each
+    /// landing in the write-ahead log - which made the build a significant part
+    /// of the very WAL load it was then throttled by. The store API already takes
+    /// an array, so the per-item call was a missed batch rather than a limit.
+    /// </para>
+    /// <para>
+    /// <b>The reservation is deliberately NOT buffered.</b> The watermark must be
+    /// durable before any identifier in its block is handed out, or a process
+    /// that died mid-block could re-issue a key it had already used - the reuse
+    /// hazard this type exists to make impossible. So a block boundary still
+    /// awaits a real write; only the per-identifier records are batched.
+    /// </para>
+    /// </summary>
+    /// <param name="id">The source identifier.</param>
+    /// <param name="cancellationToken">Cancels the reservation, if one is needed.</param>
+    /// <returns>The key the identifier is mapped to.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty.</exception>
+    public async ValueTask<long> GetOrAddBufferedAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        if (id.Length == 0)
+        {
+            throw new ArgumentException("A vector identifier must not be empty.", nameof(id));
+        }
+
+        if (_forward.TryGetValue(id, out var existing))
+        {
+            return existing;
+        }
+
+        if (_next >= _reservedTo)
+        {
+            await ReserveAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var key = _next++;
+        _pendingWrites.Add(new KeyValuePair<string, byte[]>(
+            VectorIndexStorageKeys.KeyMap(_prefix, id), WriteKey(key)));
+        _forward[id] = key;
+        _reverse[key] = id;
+        return key;
+    }
+
+    /// <summary>
+    /// Makes every buffered assignment from <see cref="GetOrAddBufferedAsync"/>
+    /// durable in one store write. A no-op when nothing is buffered.
+    /// <para>
+    /// <b>Call this BEFORE the cells that use these keys are committed.</b> The
+    /// mapping may legitimately run ahead of the committed cells - an identifier
+    /// is assigned before the vector it names is durable - but it must never fall
+    /// behind them: a committed cell whose identifier is unresolvable is the
+    /// silent wrong-document failure this type exists to prevent, and it is not
+    /// diagnosable after the fact.
+    /// </para>
+    /// <para>
+    /// A failed flush keeps the buffer, so the next flush retries it. The cells
+    /// are not committed on that path either, so the two stay consistent.
+    /// </para>
+    /// <para>
+    /// <b>The non-atomic write is correct here, and the atomic one would buy
+    /// nothing.</b> <c>SetManyAsync</c> can fail part-applied, and the obvious
+    /// reaction is to reach for <c>SetManyAtomicAsync</c> - which is materially
+    /// slower. It is not needed, because the invariant is enforced by the ORDER
+    /// of this flush against the cell checkpoint, not by this write being atomic.
+    /// A part-applied flush throws, so the caller never reaches the checkpoint
+    /// and the cells stay uncommitted; what survives is some mapping records with
+    /// no cells referring to them, which is the mapping running AHEAD - the
+    /// direction that is explicitly allowed. The retry then rewrites the same
+    /// identifier to the same key, because keys are never recycled, so it is
+    /// idempotent rather than merely tolerable.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the buffered records are durable.</returns>
+    public async Task FlushPendingAsync(CancellationToken cancellationToken = default)
+    {
+        if (_pendingWrites.Count == 0)
+        {
+            return;
+        }
+
+        await _store.WriteAsync(_pendingWrites.ToArray(), cancellationToken).ConfigureAwait(false);
+        _pendingWrites.Clear();
     }
 
     /// <summary>Looks up the key an identifier is mapped to, without assigning one.</summary>

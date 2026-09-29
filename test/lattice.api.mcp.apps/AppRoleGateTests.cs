@@ -59,17 +59,28 @@ public sealed class AppRoleGateTests
             Is.EqualTo(new[] { ("t1", LatticeOperation.Read, (string?)"k", "alice"), ("t1", LatticeOperation.Write, (string?)"k", "alice") }));
     }
 
+    /// <summary>
+    /// Security regression (#3863). A key filter is a per-key predicate, so probing it with
+    /// the prefix string itself asks about the single key equal to that prefix - not about
+    /// the prefix. A policy of "deny by default, plus one Allow/Read on the exact key
+    /// <c>p/</c>" compiles to exactly this filter, and used to report a role scoped to the
+    /// whole <c>p/</c> prefix as held. Only an unfiltered allow spans a prefix, so any
+    /// filtered decision must fail closed.
+    /// </summary>
     [Test]
-    public async Task A_filtered_allow_holds_a_prefix_scope_only_when_the_filter_keeps_the_prefix()
+    public async Task A_filtered_allow_never_holds_a_prefix_scope()
     {
-        var keeps = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(k => k.StartsWith("p/", StringComparison.Ordinal)) };
-        var drops = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(_ => false) };
+        var exactKeyOnly = new GrantingAccessGate
+        {
+            Override = _ => LatticeAccessDecision.Filtered(k => string.Equals(k, "p/", StringComparison.Ordinal)),
+        };
+        var keepsEverything = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(_ => true) };
         var prefix = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Prefix("t1", "p/")]);
 
         Assert.Multiple(async () =>
         {
-            Assert.That(await prefix.IsHeldAsync(keeps, Alice, CancellationToken.None), Is.True);
-            Assert.That(await prefix.IsHeldAsync(drops, Alice, CancellationToken.None), Is.False);
+            Assert.That(await prefix.IsHeldAsync(exactKeyOnly, Alice, CancellationToken.None), Is.False);
+            Assert.That(await prefix.IsHeldAsync(keepsEverything, Alice, CancellationToken.None), Is.False);
         });
     }
 

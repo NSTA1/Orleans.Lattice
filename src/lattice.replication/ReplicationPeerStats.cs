@@ -564,7 +564,8 @@ public class WireVersionNegotiationState
     private static Measurement<long> Measure(long value, PeerKey key) =>
         new(value,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer),
+            LatticeTenantLabel.ForTree(key.Tree));
 
     private readonly record struct PeerKey(string Tree, string Peer);
 

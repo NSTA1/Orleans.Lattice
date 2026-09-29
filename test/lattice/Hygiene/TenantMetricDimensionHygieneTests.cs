@@ -363,6 +363,15 @@ public sealed class TenantMetricDimensionHygieneTests
         // five arms are pre-minted so a zero on the starved arm is a measured absence
         // rather than an arm that never existed.
         "_slices",
+        // repocontext.ann.build.slice.items - source items consumed by build
+        // slices, on the same plane and unscopable for the same reason as
+        // "_slices" above: the approximate index is a platform-owned artefact of
+        // one repository's corpus, not of a tenant's data, so a tenant dimension
+        // here would imply an attribution the build does not have. It is the
+        // denominator that makes vectors-per-slice obtainable from metrics alone,
+        // which dividing a cumulative, restart-inherited vector count by a
+        // process-scoped slice counter is not.
+        "_sliceItems",
         // repocontext.ann.sweep.arming - the sweep's arming calls partitioned by
         // result (armed / deferred / faulted), counted once per REPOSITORY
         // VISITED rather than once per sweep, issue #2751. Unscopable for exactly the

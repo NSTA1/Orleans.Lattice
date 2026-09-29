@@ -47,6 +47,12 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     // that happens to fault.
     private readonly RepoContextAnnIndexLoadReporter _load = new();
 
+    /// <summary>
+    /// The host's build-stage reporter, shared by every handle so one subscription
+    /// covers every repository and space.
+    /// </summary>
+    private readonly RepoContextAnnBuildStageReporter _buildStage = new();
+
     // Injected rather than owned, because this one is genuinely shared: the health
     // tool and the /health/ready endpoint read the same instance. Optional so a test
     // can construct the registry without a readiness state, in which case a terminal
@@ -300,6 +306,7 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
         _entries.Clear();
         _partitioning.Dispose();
         _load.Dispose();
+        _buildStage.Dispose();
         _meter.Dispose();
     }
 
@@ -321,7 +328,8 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
             _logger,
             _partitioning,
             _load,
-            _readiness);
+            _readiness,
+            _buildStage);
 
         var winner = _entries.GetOrAdd(key, created);
         if (!ReferenceEquals(winner, created))

@@ -136,7 +136,9 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         var result = new List<CrdtMemberChange>();
         emitter(state, result);
         if (result.Count == 0) return Array.Empty<CrdtMemberChange>();
-        result.Sort(ElementOrderComparer.Instance);
+        // No global sort: the emitter already walks the map's keys in surrogate
+        // order and orders each key's own events causally, which is exactly the
+        // total order the old whole-list sort produced. See EmitStateTyped.
         return result;
     }
 
@@ -450,90 +452,198 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         where TValue : ICrdt<TValue>, new()
     {
         var map = (OrMap<TKey, TValue>)boxed;
+        var adds = map.Adds;
+        var tombstones = map.Tombstones;
 
-        // The two dictionary counts are free (an O(1) field read, not a re-scan
-        // of their contents) and every non-empty key contributes at least one
-        // event, so they are a sound lower bound on the event count. Taking it
-        // up front removes the doubling chain the sink would otherwise climb
-        // from capacity zero, which for a map of any size is several array
-        // allocations and copies before the first useful append.
-        sink.EnsureCapacity(sink.Count + map.Adds.Count + map.Tombstones.Count);
-
-        foreach (var (key, entries) in map.Adds)
+        // Emitted in key order so the caller needs no global re-sort.
+        //
+        // The dictionaries yield their keys in no meaningful order, so this
+        // used to emit in whatever order they enumerated and leave DecodeState
+        // to sort the WHOLE event list with a comparator whose first term walks
+        // the two key surrogates byte by byte. That is O(N log N) byte-array
+        // walks over N events. Sorting the KEYS instead is O(K log K) over the
+        // distinct keys - always no more than N and, on the churned maps this
+        // decoder actually sees, far fewer, because a key's whole dot history
+        // is one key but many events. Once the keys are ordered, every event
+        // for a key is emitted contiguously and only needs ordering against its
+        // own group, which the causal comparator does with no byte compares at
+        // all. This is the shape the OR-set and RW-set twins already use.
+        //
+        // The resulting total order is identical to the global sort's: the old
+        // comparator ordered by key surrogate first and fell back to the causal
+        // comparator, and within a group every event carries the same surrogate
+        // so the first term was always zero.
+        //
+        // The scratch is rented rather than allocated: it is strictly
+        // call-scoped, dies before the method returns, and would otherwise be
+        // the one allocation this emitter adds on a map whose keys carry a
+        // single dot each - the shape where the ordering work it buys is
+        // smallest. A slot is the surrogate and the key it came from, and
+        // nothing wider: the array is sorted, so every extra reference in a
+        // slot is another GC write barrier on every swap the sort makes.
+        var capacity = adds.Count + tombstones.Count;
+        var pool = ArrayPool<KeyRef<TValue>>.Shared;
+        var keys = pool.Rent(capacity);
+        var keyCount = 0;
+        var total = 0;
+        try
         {
-            if (entries.Count == 0) continue;
-            var element = KeyToBytes(key);
-            // Span walk: the loop appends to sink, never to entries, so the
-            // scanned list's length cannot change while the span is alive. The
-            // element is copied rather than held by reference because the body
-            // calls into sink.Add.
-            var entrySpan = CollectionsMarshal.AsSpan(entries);
-            for (var i = 0; i < entrySpan.Length; i++)
+            foreach (var (key, entries) in adds)
             {
-                var e = entrySpan[i];
-                sink.Add(new CrdtMemberChange
+                if (entries.Count == 0) continue;
+                total += entries.Count;
+
+                // A key carrying both adds and tombstones is emitted once, from
+                // a single key-surrogate encode. The global-sort shape encoded
+                // it twice and minted two equal-content arrays for it.
+                List<OrSetDot>? paired = null;
+                if (tombstones.TryGetValue(key, out var dots) && dots.Count > 0)
                 {
-                    Element = element,
-                    Kind = CrdtMemberChangeKind.Added,
-                    ReplicaId = e.ReplicaId,
-                    Ordinal = e.Counter,
-                    WallClock = null,
-                });
+                    paired = dots;
+                    total += dots.Count;
+                }
+
+                keys[keyCount++] = new KeyRef<TValue>(KeyToBytes(key), entries, paired);
             }
+
+            foreach (var (key, dots) in tombstones)
+            {
+                if (dots.Count == 0) continue;
+
+                // Already carried above, alongside the same key's adds.
+                if (adds.TryGetValue(key, out var addEntries) && addEntries.Count > 0) continue;
+
+                total += dots.Count;
+                keys[keyCount++] = new KeyRef<TValue>(KeyToBytes(key), null, dots);
+            }
+            if (total == 0) return;
+
+            Array.Sort(keys, 0, keyCount, KeyRefComparer<TValue>.Instance);
+
+            // Exact, not a lower bound: every event is accounted for above, so
+            // the sink never climbs a doubling chain.
+            sink.EnsureCapacity(sink.Count + total);
+
+            var groupStart = sink.Count;
+            byte[]? groupElement = null;
+            for (var k = 0; k < keyCount; k++)
+            {
+                var group = keys[k];
+                var element = group.Element;
+
+                // Two DISTINCT keys can share a surrogate (the key-to-bytes
+                // projection is not injective - see the type remarks), and the
+                // global sort treated them as one group. Closing a group only
+                // when the surrogate actually changes preserves that exactly.
+                if (groupElement is not null && CompareElementBytes(groupElement, element) != 0)
+                {
+                    SortGroup(sink, groupStart);
+                    groupStart = sink.Count;
+                }
+                groupElement = element;
+
+                if (group.Adds is { } entries)
+                {
+                    // Span walk: the loop appends to sink, never to entries, so
+                    // the scanned list's length cannot change while the span is
+                    // alive. The element is copied rather than held by
+                    // reference because the body calls into sink.Add, and a
+                    // byref into the span held live across a call is pinned to
+                    // a GC-tracked stack slot.
+                    var entrySpan = CollectionsMarshal.AsSpan(entries);
+                    for (var i = 0; i < entrySpan.Length; i++)
+                    {
+                        var e = entrySpan[i];
+                        sink.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Added,
+                            ReplicaId = e.ReplicaId,
+                            Ordinal = e.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+
+                if (group.Tombstones is { } dots)
+                {
+                    var dotSpan = CollectionsMarshal.AsSpan(dots);
+                    for (var i = 0; i < dotSpan.Length; i++)
+                    {
+                        var dot = dotSpan[i];
+                        sink.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Removed,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+            }
+
+            SortGroup(sink, groupStart);
         }
-
-        foreach (var (key, dots) in map.Tombstones)
+        finally
         {
-            if (dots.Count == 0) continue;
-            var element = KeyToBytes(key);
-            var dotSpan = CollectionsMarshal.AsSpan(dots);
-            for (var i = 0; i < dotSpan.Length; i++)
-            {
-                var dot = dotSpan[i];
-                sink.Add(new CrdtMemberChange
-                {
-                    Element = element,
-                    Kind = CrdtMemberChangeKind.Removed,
-                    ReplicaId = dot.ReplicaId,
-                    Ordinal = dot.Counter,
-                    WallClock = null,
-                });
-            }
+            // Only the written prefix is cleared: the slots hold references
+            // into the decoded map, and a rented array is not re-zeroed for the
+            // next tenant, so leaving them in place would root the map's entry
+            // lists for as long as the pool holds the buffer.
+            keys.AsSpan(0, keyCount).Clear();
+            pool.Return(keys);
         }
     }
 
+    /// <summary>
+    /// Orders one surrogate-equal run of the sink in place, causally.
+    /// </summary>
+    /// <remarks>
+    /// A run of one is already ordered, and skipping the call matters: on a map
+    /// whose keys carry a single dot each, every run is a run of one, so this
+    /// is called once per key and would otherwise be the emitter's dominant
+    /// per-key cost for no reordering at all.
+    /// </remarks>
+    private static void SortGroup(List<CrdtMemberChange> sink, int groupStart)
+    {
+        var count = sink.Count - groupStart;
+        if (count > 1) sink.Sort(groupStart, count, CrdtMemberChangeCausalComparer.Instance);
+    }
+
+    /// <summary>
+    /// One key's contribution to the ordered emission: its surrogate bytes and
+    /// the two entry lists that key owns, resolved once during the build pass
+    /// so the emit walk probes neither dictionary.
+    /// </summary>
+    private readonly struct KeyRef<TValue>(
+        byte[] element,
+        List<OrMapEntry<TValue>>? adds,
+        List<OrSetDot>? tombstones)
+        where TValue : ICrdt<TValue>, new()
+    {
+        public byte[] Element { get; } = element;
+
+        public List<OrMapEntry<TValue>>? Adds { get; } = adds;
+
+        public List<OrSetDot>? Tombstones { get; } = tombstones;
+    }
+
+    /// <summary>
+    /// Orders key references by surrogate bytes, which is the first term of the
+    /// total order the pre-trim whole-list sort produced.
+    /// </summary>
+    private sealed class KeyRefComparer<TValue> : IComparer<KeyRef<TValue>>
+        where TValue : ICrdt<TValue>, new()
+    {
+        public static KeyRefComparer<TValue> Instance { get; } = new();
+
+        public int Compare(KeyRef<TValue> x, KeyRef<TValue> y)
+            => CompareElementBytes(x.Element, y.Element);
+    }
     private static byte[] KeyToBytes<TKey>(TKey key)
     {
         var text = key as string ?? Convert.ToString(key, CultureInfo.InvariantCulture) ?? string.Empty;
         return text.Length == 0 ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(text);
-    }
-
-    /// <summary>
-    /// Orders OR-map member-change events deterministically by key surrogate
-    /// (the decoded <see cref="CrdtMemberChange.Element"/> bytes) first, then by
-    /// replica, causal ordinal, and kind, so the folded-state projection is
-    /// grouped per key and stable across replicas.
-    /// </summary>
-    private sealed class ElementOrderComparer : IComparer<CrdtMemberChange>
-    {
-        public static ElementOrderComparer Instance { get; } = new();
-
-        public int Compare(CrdtMemberChange x, CrdtMemberChange y)
-        {
-            var byElement = CompareBytes(x.Element, y.Element);
-            if (byElement != 0) return byElement;
-            return CrdtMemberChangeCausalComparer.Instance.Compare(x, y);
-        }
-
-        private static int CompareBytes(byte[] a, byte[] b)
-        {
-            var min = Math.Min(a.Length, b.Length);
-            for (var i = 0; i < min; i++)
-            {
-                var c = a[i].CompareTo(b[i]);
-                if (c != 0) return c;
-            }
-            return a.Length.CompareTo(b.Length);
-        }
     }
 }

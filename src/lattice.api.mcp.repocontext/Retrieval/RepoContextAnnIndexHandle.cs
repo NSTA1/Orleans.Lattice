@@ -153,6 +153,11 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// for a test driving the handle directly; the registry supplies the host's
     /// singleton.
     /// </param>
+    /// <param name="buildStage">
+    /// The reporter that publishes per-stage build-slice timings, or
+    /// <see langword="null"/> to publish none. Null is for a test driving the
+    /// handle directly; the registry supplies the host's singleton.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextAnnIndexHandle(
         string repoId,
@@ -164,7 +169,8 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         ILogger logger,
         RepoContextAnnPartitioningReporter? partitioning = null,
         RepoContextAnnIndexLoadReporter? load = null,
-        RepoContextRetrievalReadinessState? readiness = null)
+        RepoContextRetrievalReadinessState? readiness = null,
+        RepoContextAnnBuildStageReporter? buildStage = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(source);
@@ -183,6 +189,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _store = store;
         _options = options;
         _durableOptions = options.ToDurableOptions(space, keyPrefix);
+        _durableOptions.BuildObserver = buildStage;
         _logger = logger;
         _partitioning = partitioning;
         _load = load;

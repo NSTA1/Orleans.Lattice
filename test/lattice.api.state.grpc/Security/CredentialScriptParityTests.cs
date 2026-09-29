@@ -74,16 +74,33 @@ public class CredentialScriptParityTests
         psi.Environment["LATTICE_TEST_PW"] = Password;
 
         using var process = Process.Start(psi);
-        Assert.That(process, Is.Not.Null);
-        var stdout = process!.StandardOutput.ReadToEnd();
-        process.StandardError.ReadToEnd();
+        Assert.That(process, Is.Not.Null, $"Failed to start '{fileName}'.");
+
+        // Both pipes must be drained concurrently. Reading one to EOF while the
+        // other is unread deadlocks the moment the child fills the unread pipe's
+        // buffer - and it deadlocks INSIDE the read, before WaitForExit is ever
+        // reached, so the timeout below cannot bound it and the run hangs until
+        // CI's blame-hang timer fires. A script that fails verbosely (a PowerShell
+        // error record is written to stderr) is exactly the case that reaches it.
+        var stdoutTask = process!.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
         if (!process.WaitForExit(30_000))
         {
             process.Kill(entireProcessTree: true);
-            Assert.Fail("Credential script timed out.");
+            Assert.Fail("Credential script timed out after 30s.");
         }
 
-        Assert.That(process.ExitCode, Is.EqualTo(0), "Credential script exited non-zero.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+
+        // stderr was previously read and discarded, so a non-zero exit named no
+        // cause. The script's own error record is the whole diagnosis.
+        Assert.That(process.ExitCode, Is.EqualTo(0),
+            $"Credential script exited {process.ExitCode}."
+            + Environment.NewLine + "stderr: " + stderr
+            + Environment.NewLine + "stdout: " + stdout);
+
         return stdout.Trim();
     }
 
