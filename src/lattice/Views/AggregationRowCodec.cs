@@ -280,6 +280,101 @@ internal static class AggregationRowCodec
     /// <param name="Member">The member contributed (set-union), or <see langword="null"/>.</param>
     internal readonly record struct MemberEntry(double Numeric, string? Member);
 
+    /// <summary>
+    /// A forward-only, allocation-free cursor over an inverse row for a reader
+    /// that folds the row's contributions and discards the source keys.
+    /// <para>
+    /// <see cref="DecodeInverse"/> exists for the read-modify-write path, which
+    /// genuinely needs a keyed map. The group re-materialise path does not: it
+    /// reduces every shard's entries to one extremum or one member set and never
+    /// looks a source key up, yet it paid for a whole
+    /// <see cref="Dictionary{TKey,TValue}"/> per shard plus a freshly-decoded
+    /// string for every source key in it, then dropped the lot. This cursor walks
+    /// the identical byte layout and materialises nothing: a source key is
+    /// stepped over with <see cref="RowReader.SkipString"/> rather than
+    /// transcoded.
+    /// </para>
+    /// <para>
+    /// The member string is the caller's choice rather than a flag on the cursor,
+    /// so neither walk carries the other's branch: <see cref="MoveNextNumeric"/>
+    /// skips the member (min / max, which read only the numeric) and
+    /// <see cref="MoveNext"/> materialises it (set-union, which unions the
+    /// members). Both validate exactly what <see cref="DecodeInverse"/> validates,
+    /// so a truncated or corrupt row still raises
+    /// <see cref="InvalidDataException"/> at the same byte.
+    /// </para>
+    /// </summary>
+    internal ref struct InverseRowScan
+    {
+        private RowReader _reader;
+        private int _remaining;
+
+        /// <summary>Opens a cursor over an encoded inverse row.</summary>
+        /// <param name="bytes">A row produced by <see cref="EncodeInverse"/>.</param>
+        internal InverseRowScan(ReadOnlySpan<byte> bytes)
+        {
+            _reader = new RowReader(bytes);
+            _remaining = _reader.ReadBoundedCount(MinimumInverseEntrySize);
+        }
+
+        /// <summary>The number of entries not yet walked.</summary>
+        public readonly int Remaining => _remaining;
+
+        /// <summary>The numeric the current entry contributed.</summary>
+        public double Numeric { get; private set; }
+
+        /// <summary>
+        /// The member the current entry contributed, or <see langword="null"/>
+        /// when it contributed none or the walk skipped it.
+        /// </summary>
+        public string? Member { get; private set; }
+
+        /// <summary>
+        /// Advances to the next entry, reading its numeric and stepping over both
+        /// its source key and its member. For min / max, which consume neither.
+        /// </summary>
+        /// <returns><see langword="true"/> when an entry was read.</returns>
+        public bool MoveNextNumeric()
+        {
+            if (_remaining == 0)
+            {
+                return false;
+            }
+
+            _remaining--;
+            _reader.SkipString();
+            var hasMember = _reader.ReadBool();
+            Numeric = _reader.ReadDouble();
+            if (hasMember)
+            {
+                _reader.SkipString();
+            }
+
+            Member = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Advances to the next entry, reading its numeric and its member and
+        /// stepping over its source key. For set-union, which consumes members.
+        /// </summary>
+        /// <returns><see langword="true"/> when an entry was read.</returns>
+        public bool MoveNext()
+        {
+            if (_remaining == 0)
+            {
+                return false;
+            }
+
+            _remaining--;
+            _reader.SkipString();
+            var hasMember = _reader.ReadBool();
+            Numeric = _reader.ReadDouble();
+            Member = hasMember ? _reader.ReadString() : null;
+            return true;
+        }
+    }
+
     /// <summary>Encodes a fold-contribution row (a source-key to member-value map for a custom fold group shard).</summary>
     internal static byte[] EncodeFoldInverse(IReadOnlyDictionary<string, FoldMember> entries)
     {
@@ -337,6 +432,68 @@ internal static class AggregationRowCodec
     /// <param name="Value">The source value bytes the source key last contributed.</param>
     /// <param name="Timestamp">The source entry HLC, used to order the re-fold.</param>
     internal readonly record struct FoldMember(byte[] Value, HybridLogicalClock Timestamp);
+
+    /// <summary>
+    /// A forward-only, allocation-free cursor over a fold-inverse row for a
+    /// reader that flattens the row rather than looking keys up in it.
+    /// <para>
+    /// The counterpart of <see cref="InverseRowScan"/> for the custom-fold path,
+    /// and it removes a strictly larger waste: the re-fold decoded each shard
+    /// into a <see cref="Dictionary{TKey,TValue}"/> and then immediately walked
+    /// that dictionary back out into a flat list, so every entry paid a hash, a
+    /// bucket insert and a second copy for a map that was never probed. This
+    /// cursor yields the same source key, value bytes and timestamp straight from
+    /// the row, and <see cref="Remaining"/> lets the caller grow its list to the
+    /// exact incoming count instead of doubling into it.
+    /// </para>
+    /// <para>
+    /// The source key IS materialised here, unlike the inverse cursor: the re-fold
+    /// orders its members by (HLC, source key), so the key is consumed rather
+    /// than discarded. Validation matches <see cref="DecodeFoldInverse"/> byte for
+    /// byte.
+    /// </para>
+    /// </summary>
+    internal ref struct FoldInverseRowScan
+    {
+        private RowReader _reader;
+        private int _remaining;
+
+        /// <summary>Opens a cursor over an encoded fold-inverse row.</summary>
+        /// <param name="bytes">A row produced by <see cref="EncodeFoldInverse"/>.</param>
+        internal FoldInverseRowScan(ReadOnlySpan<byte> bytes)
+        {
+            _reader = new RowReader(bytes);
+            _remaining = _reader.ReadBoundedCount(MinimumFoldInverseEntrySize);
+        }
+
+        /// <summary>The number of entries not yet walked.</summary>
+        public readonly int Remaining => _remaining;
+
+        /// <summary>The source key that contributed the current entry.</summary>
+        public string SourceKey { get; private set; } = string.Empty;
+
+        /// <summary>The current entry's contributed value and source HLC.</summary>
+        public FoldMember Member { get; private set; }
+
+        /// <summary>Advances to the next entry.</summary>
+        /// <returns><see langword="true"/> when an entry was read.</returns>
+        public bool MoveNext()
+        {
+            if (_remaining == 0)
+            {
+                return false;
+            }
+
+            _remaining--;
+            SourceKey = _reader.ReadString();
+            var ticks = _reader.ReadInt64();
+            var counter = _reader.ReadInt32();
+            var length = _reader.ReadInt32();
+            var value = _reader.ReadBytes(length);
+            Member = new FoldMember(value, new HybridLogicalClock { WallClockTicks = ticks, Counter = counter });
+            return true;
+        }
+    }
 
     /// <summary>
     /// Returns the number of bytes <see cref="RowWriter.WriteString"/> emits for
@@ -533,6 +690,35 @@ internal static class AggregationRowCodec
 
         public string ReadString()
         {
+            var byteCount = ReadStringLength();
+            var value = Encoding.UTF8.GetString(_buffer.Slice(_pos, byteCount));
+            _pos += byteCount;
+            return value;
+        }
+
+        /// <summary>
+        /// Steps over a length-prefixed UTF-8 string without transcoding it.
+        /// Validates the prefix exactly as <see cref="ReadString"/> does, so a
+        /// corrupt row is rejected at the same byte whether the caller wanted the
+        /// string or not - a skip must not be a weaker gate than a read.
+        /// </summary>
+        public void SkipString()
+        {
+            // The byte count must land in a local first. Written as
+            // `_pos += ReadStringLength()`, C# loads `_pos` BEFORE the call, so
+            // the cursor advance that call makes over the length prefix is
+            // overwritten by the store - leaving the reader one prefix short and
+            // parsing the following fields from inside the previous string.
+            var byteCount = ReadStringLength();
+            _pos += byteCount;
+        }
+
+        /// <summary>
+        /// Reads and bounds a string's 7-bit-encoded UTF-8 byte-count prefix,
+        /// leaving the cursor on the first content byte.
+        /// </summary>
+        private int ReadStringLength()
+        {
             var byteCount = Read7BitEncodedInt();
             if (byteCount < 0 || byteCount > Remaining)
             {
@@ -540,9 +726,7 @@ internal static class AggregationRowCodec
                     $"An aggregation row declares a {byteCount}-byte string but only {Remaining} byte(s) remain; the row is truncated or corrupt.");
             }
 
-            var value = Encoding.UTF8.GetString(_buffer.Slice(_pos, byteCount));
-            _pos += byteCount;
-            return value;
+            return byteCount;
         }
 
         /// <summary>

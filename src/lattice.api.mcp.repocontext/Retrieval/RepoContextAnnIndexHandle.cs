@@ -918,6 +918,30 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
             return null;
         }
+        catch (VectorIndexRecordUnavailableException ex)
+        {
+            // A RECORD ONE READ OMITTED AND ANOTHER RETURNED (issue #3905). The
+            // durable index is intact and nothing was discarded; the store could
+            // not serve a consistent read at this moment, which is what a WAL
+            // replay-permit storm looks like from here. Deferred rather than
+            // faulted, because it is the same "retry after a backoff" answer as a
+            // spent open budget, and the instance keeps its completed key walk so
+            // the next tick re-reads only the restore. Counting it as a discard is
+            // what destroyed a converged index; counting it as a fault would page
+            // for back-pressure.
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Deferred);
+            _logger.LogWarning(
+                ex,
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not be "
+                + "read consistently from its store: a record its committed state names was missing from one "
+                + "read and present in another. The durable index was kept, not discarded, and the load is "
+                + "retried on the next tick.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension);
+
+            return null;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Recorded before the rethrow so the fault arm cannot be lost to the
@@ -941,9 +965,24 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 _ => "unloadable_record",
             };
             _load?.Record(RepoContextAnnIndexLoadOutcome.Discarded, reason);
-            _logger.LogWarning(
-                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} discarded durable state: {Reason}. Rebuilding from source.",
-                _repoId, _space.ModelId, _space.Dimension, reason);
+            if (_loading.LoadDiscardedManifest is { } destroyed)
+            {
+                // The cost has to be visible (issue #3905): a discard reads as
+                // phase NotStarted afterwards, which is indistinguishable from a
+                // first-ever build, so this line is the only place an operator can
+                // learn that a converged index was destroyed and how big it was.
+                _logger.LogWarning(
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} discarded durable state: {Reason}. "
+                    + "Destroyed generation {Generation} holding {VectorCount} vectors in {PartitionCount} partitions; rebuilding from source.",
+                    _repoId, _space.ModelId, _space.Dimension, reason,
+                    destroyed.Generation, destroyed.IndexedCount, destroyed.Header.PartitionCount);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} discarded durable state: {Reason}. Rebuilding from source.",
+                    _repoId, _space.ModelId, _space.Dimension, reason);
+            }
         }
         else
         {

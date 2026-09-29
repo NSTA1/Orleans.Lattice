@@ -52,4 +52,23 @@ public sealed record TreeDeletionStatus
     /// soft-deleted, no purge has completed, and no purge is in progress.
     /// </summary>
     [Id(6)] public bool CanRecover { get; init; }
+
+    /// <summary>
+    /// The number of shards the hard purge has finished: while
+    /// <see cref="PurgeInProgress"/> is <see langword="true"/>, how far the walk
+    /// has durably got (it never runs ahead of what a resumed purge would start
+    /// from); once <see cref="PurgeComplete"/> is <see langword="true"/>, every
+    /// shard it walked; otherwise 0. Read it against
+    /// <see cref="PurgeShardCount"/> to follow a purge that outlasted the purge
+    /// verb's call.
+    /// </summary>
+    [Id(7)] public int PurgedShardCount { get; init; }
+
+    /// <summary>
+    /// The number of shards the hard purge walks - one past the highest physical
+    /// shard the tree has ever allocated - while it is in progress or once it has
+    /// completed, or 0 when no purge has started (or a purge recorded by an
+    /// earlier build did not record it).
+    /// </summary>
+    [Id(8)] public int PurgeShardCount { get; init; }
 }

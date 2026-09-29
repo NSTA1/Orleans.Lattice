@@ -9,7 +9,9 @@ internal sealed partial class TreeDeletionGrain
 
     public async Task EnsureAliasWritableAsync()
     {
-        if (await IsDeletedAsync() || state.State.LocalDeleteTargetPinned)
+        // Interleaved, so it may only read: a purged tree whose id was
+        // registered again is live, whatever its record says.
+        if (state.State.LocalDeleteTargetPinned ? !await IsReusedAfterPurgeAsync() : await IsDeletedAsync())
             throw Refuse($"Cannot change an alias involving deleted tree '{TreeId}'; recover it first.");
     }
 
@@ -17,13 +19,14 @@ internal sealed partial class TreeDeletionGrain
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);
         EnsureLifecycleOrigin();
+        await ClearRecordIfReusedAfterPurgeAsync();
         if (await IsDeletedAsync() || state.State.LocalDeleteTargetPinned)
             throw Refuse($"Tree '{TreeId}' is logically deleted; recover it before changing its alias.");
         if (state.State.AliasOperationId is { } active && active != operationId)
             throw Refuse($"Tree '{TreeId}' has alias operation '{active}' in progress; retry after it completes.");
         if (state.State.AliasOperationId == operationId) return;
         state.State.AliasOperationId = operationId;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.AliasOperationId = null; throw; }
     }
 
@@ -33,7 +36,7 @@ internal sealed partial class TreeDeletionGrain
         EnsureLifecycleOrigin();
         if (state.State.AliasOperationId != operationId) return;
         state.State.AliasOperationId = null;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.AliasOperationId = operationId; throw; }
     }
 
@@ -44,7 +47,7 @@ internal sealed partial class TreeDeletionGrain
         var suppressed = state.State.SuppressLifecycleEvents;
         state.State.Delegated = true;
         state.State.SuppressLifecycleEvents = true;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch
         {
             state.State.Delegated = delegated;
@@ -57,6 +60,9 @@ internal sealed partial class TreeDeletionGrain
     public async Task DeleteTreeAsync()
     {
         EnsureLifecycleOrigin();
+        // A purged tree's record would otherwise make this a silent no-op on the
+        // live tree now registered under its id.
+        await ClearRecordIfReusedAfterPurgeAsync();
         if (state.State.AliasOperationId is { } operation)
             throw Refuse($"Cannot delete tree '{TreeId}': alias operation '{operation}' is in progress.");
         if (state.State.LocalDeleteTargetPinned)
@@ -64,7 +70,7 @@ internal sealed partial class TreeDeletionGrain
             if (state.State.DeletePending)
             {
                 state.State.DeletePending = false;
-                try { await state.WriteStateAsync(); }
+                try { await PersistAsync(); }
                 catch { state.State.DeletePending = true; throw; }
             }
             await SoftDeleteAsync(retainsRegistryEntry: false);
@@ -76,7 +82,7 @@ internal sealed partial class TreeDeletionGrain
             // Published before the exclusive registry read: earlier alias writers
             // drain before validation, and subsequent writers see this fence.
             state.State.DeletePending = true;
-            try { await state.WriteStateAsync(); }
+            try { await PersistAsync(); }
             catch { state.State.DeletePending = false; throw; }
 
             try
@@ -95,7 +101,7 @@ internal sealed partial class TreeDeletionGrain
                         await ResetPurgedRetirementAsync();
                     }
                     state.State.LocalDeleteTargetPinned = true;
-                    try { await state.WriteStateAsync(); }
+                    try { await PersistAsync(); }
                     catch { state.State.LocalDeleteTargetPinned = false; throw; }
                     await SoftDeleteAsync(retainsRegistryEntry: false);
                 }
@@ -107,7 +113,7 @@ internal sealed partial class TreeDeletionGrain
                     state.State.LogicalDeleteComplete = false;
                     state.State.LogicalPurgeComplete = false;
                     state.State.LogicalPurgeInProgress = false;
-                    try { await state.WriteStateAsync(); }
+                    try { await PersistAsync(); }
                     catch
                     {
                         state.State.LogicalPhysicalTreeId = null;
@@ -139,7 +145,7 @@ internal sealed partial class TreeDeletionGrain
         await grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).UnregisterReminderAsync();
         state.State.LogicalDeleteComplete = true;
         state.State.DeletePending = false;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.LogicalDeleteComplete = false; throw; }
         await PublishLogicalLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
     }
@@ -158,7 +164,7 @@ internal sealed partial class TreeDeletionGrain
     private async Task ClearDeletePendingAsync()
     {
         state.State.DeletePending = false;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.DeletePending = true; throw; }
     }
 
@@ -171,7 +177,7 @@ internal sealed partial class TreeDeletionGrain
         state.State.RetainsRegistryEntry = false;
         state.State.PurgeComplete = false;
         state.State.SuppressLifecycleEvents = false;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch
         {
             (state.State.IsDeleted, state.State.DeletedAtUtc,
@@ -191,7 +197,7 @@ internal sealed partial class TreeDeletionGrain
         // from before that recovery attempt.
         var wasComplete = state.State.LogicalDeleteComplete;
         state.State.LogicalDeleteComplete = false;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.LogicalDeleteComplete = wasComplete; throw; }
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(physical);
         if (await deletion.IsPhysicalDeletedAsync())
@@ -203,7 +209,7 @@ internal sealed partial class TreeDeletionGrain
         state.State.LogicalPhysicalTreeId = null;
         state.State.LogicalDeletedAtUtc = null;
         state.State.DeletePending = false;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch
         {
             state.State.LogicalPhysicalTreeId = physical;
@@ -229,7 +235,7 @@ internal sealed partial class TreeDeletionGrain
             await ValidateOwnedTargetAsync(physical);
         var wasPurging = state.State.LogicalPurgeInProgress;
         state.State.LogicalPurgeInProgress = true;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.LogicalPurgeInProgress = wasPurging; throw; }
 
         await deletion.PurgePhysicalAsync();
@@ -239,7 +245,7 @@ internal sealed partial class TreeDeletionGrain
         await RemoveLogicalReminderAsync();
         state.State.LogicalPurgeInProgress = false;
         state.State.LogicalPurgeComplete = true;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch
         {
             state.State.LogicalPurgeInProgress = true;

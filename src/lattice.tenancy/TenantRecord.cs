@@ -533,6 +533,79 @@ public sealed class TenantRecord
     }
 
     /// <summary>
+    /// Applies the single legal forward lifecycle step
+    /// (<see cref="TenantRegionLifecycle.TryNextPromotion"/>) to
+    /// <paramref name="regionId"/>, stamped as the <b>immediate successor</b> of the
+    /// status this record holds for it rather than at wall-clock now.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The successor stamp is what makes a read-promote-write safe against a
+    /// concurrent residency change. A promotion supersedes exactly the version it
+    /// was computed from, and nothing written after it: when a tenant admin drains
+    /// or re-adds the region between this record being read and the promotion
+    /// being written back through <see cref="ITenantRegistry.PutAsync"/>, the
+    /// admin's later stamp still wins the per-field last-writer-wins join, so a
+    /// stale promotion can never silently undo a residency change. A promotion
+    /// stamped at wall-clock now would win that join instead.
+    /// </para>
+    /// <para>
+    /// Returns <c>false</c> and leaves the record unchanged at a terminal or
+    /// non-transitional status (<see cref="TenantRegionStatus.None"/>,
+    /// <see cref="TenantRegionStatus.Online"/>, <see cref="TenantRegionStatus.Removed"/>),
+    /// so repeated promotion attempts are idempotent there. Every writer that
+    /// computes the same promotion from the same version with the same
+    /// <paramref name="writerId"/> mints an identical slot, so racing promoters
+    /// converge on one result.
+    /// </para>
+    /// </remarks>
+    /// <param name="regionId">The region to promote. Must not be <c>null</c> or empty.</param>
+    /// <param name="writerId">The writer id stamped on the promotion (may be <c>null</c>).</param>
+    /// <param name="promoted">The status the region holds after the call: the promoted status when this returns <c>true</c>, otherwise its unchanged status.</param>
+    /// <returns><c>true</c> when a promotion was applied.</returns>
+    /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
+    public bool TryPromoteRegionStatus(string regionId, string? writerId, out TenantRegionStatus promoted)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+
+        if (!RegionStatuses.TryGetValue(regionId, out var observed)
+            || !TenantRegionLifecycle.TryNextPromotion(observed.Status, out var next)
+            || !TryImmediateSuccessor(observed.Clock, out var stamp))
+        {
+            promoted = GetRegionStatus(regionId);
+            return false;
+        }
+
+        RegionStatuses[regionId] = new TenantRegionStatusSlot { Status = next, Clock = stamp, WriterId = writerId };
+        promoted = next;
+        return true;
+    }
+
+    /// <summary>
+    /// The smallest clock that strictly follows <paramref name="clock"/>: the same
+    /// wall-clock tick with the next counter, or the next wall-clock tick once the
+    /// counter is saturated. <c>false</c> only at the representable ceiling, where no
+    /// successor exists and the caller must not write.
+    /// </summary>
+    private static bool TryImmediateSuccessor(HybridLogicalClock clock, out HybridLogicalClock successor)
+    {
+        if (clock.Counter < int.MaxValue)
+        {
+            successor = new HybridLogicalClock { WallClockTicks = clock.WallClockTicks, Counter = clock.Counter + 1 };
+            return true;
+        }
+
+        if (clock.WallClockTicks < long.MaxValue)
+        {
+            successor = new HybridLogicalClock { WallClockTicks = clock.WallClockTicks + 1, Counter = 0 };
+            return true;
+        }
+
+        successor = clock;
+        return false;
+    }
+
+    /// <summary>
     /// <c>true</c> when the tenant has any region with a status other than
     /// <see cref="TenantRegionStatus.None"/>, i.e. residency has been configured at
     /// least once. When <c>false</c>, the tenant is unconfigured and treated as

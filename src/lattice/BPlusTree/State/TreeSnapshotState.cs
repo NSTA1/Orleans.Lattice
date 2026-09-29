@@ -149,6 +149,30 @@ internal sealed class TreeSnapshotState
     /// shard that gave its slots up is kept out of the destination.
     /// </summary>
     [Id(16)] public ShardMap? SourceShardMap { get; set; }
+
+    /// <summary>
+    /// Resume keys for the online copy of shards <b>beyond</b> the one at
+    /// <see cref="NextShardIndex"/>, keyed by their position in
+    /// <see cref="ShardIndices"/>. The concurrent online drain copies several
+    /// shards at once inside one wall-clock-bounded slice (issue 3904), so when
+    /// a slice ends part-way through a shard that is not the head, its progress
+    /// has to be banked here rather than in <see cref="CopyCursorKey"/>, which
+    /// remains the cursor of the head shard alone. A position with no entry
+    /// starts at its shard's leftmost leaf. <see langword="null"/> when empty,
+    /// which is also what legacy persisted state decodes to.
+    /// </summary>
+    [Id(17)] public Dictionary<int, string>? DrainCursors { get; set; }
+
+    /// <summary>
+    /// Positions in <see cref="ShardIndices"/> <b>beyond</b>
+    /// <see cref="NextShardIndex"/> whose online copy has already completed and
+    /// whose source shard has been marked drained. A concurrent slice can finish
+    /// a later shard before the head one; recording it here lets the head
+    /// cursor skip it when the head advances rather than copying it again.
+    /// <see langword="null"/> when empty, which is also what legacy persisted
+    /// state decodes to.
+    /// </summary>
+    [Id(18)] public HashSet<int>? DrainedPositions { get; set; }
 }
 
 /// <summary>

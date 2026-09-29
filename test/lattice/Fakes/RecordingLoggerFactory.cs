@@ -14,10 +14,12 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// not an <see cref="IReadOnlyList{T}"/> of key/value pairs, which is the shape
 /// the templated <c>LogWarning</c> overloads produce.
 /// </param>
+/// <param name="Exception">The exception the entry was written with, if any.</param>
 public sealed record RecordedLogEntry(
     LogLevel Level,
     string Message,
-    IReadOnlyDictionary<string, object?> State)
+    IReadOnlyDictionary<string, object?> State,
+    Exception? Exception = null)
 {
     /// <summary>
     /// Reads a structured value by its template placeholder name.
@@ -105,7 +107,7 @@ public sealed class RecordingLoggerFactory : ILoggerFactory
                 }
             }
 
-            entries.Enqueue(new RecordedLogEntry(logLevel, formatter(state, exception), values));
+            entries.Enqueue(new RecordedLogEntry(logLevel, formatter(state, exception), values, exception));
         }
 
         private sealed class NullScope : IDisposable

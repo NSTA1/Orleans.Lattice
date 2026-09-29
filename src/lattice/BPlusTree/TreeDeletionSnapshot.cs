@@ -34,6 +34,19 @@ internal readonly record struct TreeDeletionSnapshot
     [Id(4)] public bool PurgeComplete { get; init; }
 
     /// <summary>
+    /// The number of shards the in-flight purge has finished, or 0 when no purge
+    /// is in progress. Reported only as durably recorded, so it never runs ahead
+    /// of what a reactivated purge would resume from.
+    /// </summary>
+    [Id(5)] public int PurgedShardCount { get; init; }
+
+    /// <summary>
+    /// The number of shards the in-flight purge walks, or 0 when no purge is in
+    /// progress (or its walk has not resolved the count yet).
+    /// </summary>
+    [Id(6)] public int PurgeShardCount { get; init; }
+
+    /// <summary>
     /// Whether the tree can still be recovered: it is soft-deleted, no purge has
     /// completed, and no purge is currently in progress.
     /// </summary>

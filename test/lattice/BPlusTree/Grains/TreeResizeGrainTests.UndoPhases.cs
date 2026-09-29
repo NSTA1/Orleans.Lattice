@@ -69,9 +69,9 @@ public partial class TreeResizeGrainTests
         // Alias removed so the logical tree maps back to the old physical tree.
         await registry.Received(1).RemoveAliasAsync(TreeId);
 
-        // Destination (snapshot) tree deleted.
+        // Destination (snapshot) tree discarded (issue #3930).
         await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+            .Received(1).DiscardDerivedPhysicalTreeAsync();
 
         // Pre-resize registry entry restored.
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
@@ -114,7 +114,7 @@ public partial class TreeResizeGrainTests
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
             .DidNotReceive().RecoverPhysicalAsync();
         await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+            .Received(1).DiscardDerivedPhysicalTreeAsync();
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());

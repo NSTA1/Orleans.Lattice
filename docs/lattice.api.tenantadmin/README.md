@@ -140,9 +140,12 @@ Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` packa
   registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`,
   `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, and the read-only
   `ILatticeTenantSelfService` and `ILatticeTenantQuotaUsage`, together with the
-  fail-closed authorizers they consult and the internal single-step region
-  promotion driver, which no shipped component invokes - so a region set through
-  `SetResidencyAsync` stays at `Provisioning` or `Draining` (see
+  fail-closed authorizers they consult, and a residency listener that completes the
+  drain of the silo's own region: a region dropped by `SetResidencyAsync` moves
+  `Draining` -> `Offline` -> `Removed` on its own. A region it adds stays at
+  `Provisioning` until an operator advances it with
+  `TenantRecord.TryPromoteRegionStatus`, because nothing backfills the tenant's
+  existing data into it (see
   [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)).
 - `AddLatticeTenantScopedTreeAdminApi(this ISiloBuilder builder)` - registers
   `ILatticeTenantScopedTreeAdmin`.

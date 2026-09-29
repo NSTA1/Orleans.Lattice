@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -248,6 +250,8 @@ internal sealed class TreeSnapshotGrain(
         var prevSourcePhysicalTreeId = state.State.SourcePhysicalTreeId;
         var prevShardIndices = state.State.ShardIndices;
         var prevSourceShardMap = state.State.SourceShardMap;
+        var prevDrainCursors = state.State.DrainCursors;
+        var prevDrainedPositions = state.State.DrainedPositions;
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
@@ -272,6 +276,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.SourcePhysicalTreeId = sourcePhysicalTreeId;
         state.State.ShardIndices = shardIndices;
         state.State.SourceShardMap = sourceMap;
+        state.State.DrainCursors = null;
+        state.State.DrainedPositions = null;
         try
         {
             await state.WriteStateAsync();
@@ -295,6 +301,8 @@ internal sealed class TreeSnapshotGrain(
             state.State.SourcePhysicalTreeId = prevSourcePhysicalTreeId;
             state.State.ShardIndices = prevShardIndices;
             state.State.SourceShardMap = prevSourceShardMap;
+            state.State.DrainCursors = prevDrainCursors;
+            state.State.DrainedPositions = prevDrainedPositions;
             throw;
         }
     }
@@ -370,6 +378,67 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
+    /// The longest a single <see cref="RunSnapshotSliceAsync"/> call may keep
+    /// advancing before it banks its progress and returns. It sits well below
+    /// Orleans' default thirty-second response timeout, so the caller never times
+    /// out a slice that is behaving correctly, and it caps a large
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/> - which has no upper
+    /// bound of its own - for the same reason (issue 3904).
+    /// </summary>
+    internal static readonly TimeSpan MaxSnapshotSliceDuration = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The wall-clock length of one snapshot slice:
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/> capped at
+    /// <see cref="MaxSnapshotSliceDuration"/>. A zero or negative value, which
+    /// disables the per-pass wall clock elsewhere, does not disable the slice: the
+    /// slice bound is exactly the guarantee a timer-driven caller relies on, so it
+    /// falls back to the cap instead.
+    /// </summary>
+    internal static TimeSpan SliceDuration(LatticeOptions options)
+    {
+        var configured = options.BackgroundDrainMaxDuration;
+        return configured > TimeSpan.Zero && configured < MaxSnapshotSliceDuration
+            ? configured
+            : MaxSnapshotSliceDuration;
+    }
+
+    private static bool SliceExpired(long sliceStart, TimeSpan sliceDuration) =>
+        Stopwatch.GetElapsedTime(sliceStart) >= sliceDuration;
+
+    /// <inheritdoc />
+    public async Task<bool> RunSnapshotSliceAsync()
+    {
+        if (!state.State.InProgress) return true;
+
+        var sliceStart = Stopwatch.GetTimestamp();
+        var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
+        var sliceDuration = SliceDuration(drainOptions);
+
+        // Always take at least one step, so a slice whose prologue already spent
+        // the budget still makes progress; then keep stepping until the snapshot
+        // completes or the slice expires. Each step is itself bounded: the phase
+        // transitions are single fan-outs, and the online copy yields at the
+        // slice deadline.
+        do
+        {
+            if (state.State.Mode == SnapshotMode.Online
+                && state.State.Phase == SnapshotPhase.Copy
+                && state.State.NextShardIndex < CopiedShardIndices.Length)
+            {
+                await DrainOnlineSliceAsync(drainOptions, sliceStart, sliceDuration);
+            }
+            else
+            {
+                await ProcessNextPhaseAsync();
+            }
+        }
+        while (state.State.InProgress && !SliceExpired(sliceStart, sliceDuration));
+
+        return !state.State.InProgress;
+    }
+
+    /// <summary>
     /// Processes the next phase of the current shard. If all shards are done,
     /// completes the snapshot. Exposed as <c>internal</c> via <c>protected</c>
     /// override for unit testing.
@@ -439,34 +508,32 @@ internal sealed class TreeSnapshotGrain(
                         break;
                     }
 
+                    if (state.State.Mode == SnapshotMode.Online)
+                    {
+                        // Online mode: mark this shard drained (shadow-forward
+                        // continues until the coordinator transitions to
+                        // Rejecting) and advance the head past it - and past any
+                        // later shard a concurrent slice already drained - taking
+                        // up the new head's banked cursor.
+                        await MarkShardDrainedAsync(shardIndex);
+                        await CommitDrainProgressAsync(
+                            [new ShardDrainOutcome(state.State.NextShardIndex, Drained: true, null, Progressed: true, null)]);
+                        break;
+                    }
+
                     // Snapshot the fields the Copy-success flip mutates
-                    // so a failing persist doesn't leak Phase=Unmark/Copy /
-                    // NextShardIndex+1 / ShardRetries=0 ahead of disk. The
-                    // outer try/catch below would otherwise see the dirty
-                    // in-memory state, increment ShardRetries from the
-                    // already-zeroed value, and on a subsequent re-entry
-                    // skip a shard (NextShardIndex was advanced) while disk
-                    // still pointed at this one. Bundled with the
-                    // high-priority guarded sites per the same-grain Class B
-                    // rule.
+                    // so a failing persist doesn't leak Phase=Unmark /
+                    // ShardRetries=0 ahead of disk. The outer try/catch below
+                    // would otherwise see the dirty in-memory state and
+                    // increment ShardRetries from the already-zeroed value.
+                    // Bundled with the high-priority guarded sites per the
+                    // same-grain Class B rule.
                     var prevPhaseCopy = state.State.Phase;
                     var prevNextShardIndexCopy = state.State.NextShardIndex;
                     var prevShardRetriesCopy = state.State.ShardRetries;
                     var prevCopyCursorKey = state.State.CopyCursorKey;
 
-                    if (state.State.Mode == SnapshotMode.Offline)
-                    {
-                        state.State.Phase = SnapshotPhase.Unmark;
-                    }
-                    else
-                    {
-                        // Online mode: mark this shard drained (shadow-forward
-                        // continues until the coordinator transitions to
-                        // Rejecting), advance to the next shard.
-                        await MarkShardDrainedAsync(shardIndex);
-                        state.State.NextShardIndex++;
-                        state.State.Phase = SnapshotPhase.Copy;
-                    }
+                    state.State.Phase = SnapshotPhase.Unmark;
                     state.State.ShardRetries = 0;
                     // Each shard owns its own sweep, so the cursor never carries
                     // across a shard advance - a stale key would re-descend into
@@ -695,32 +762,63 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Copies one shard through to the end of its leaf chain, running as many
-    /// bounded passes as it takes and carrying the resume key in a local rather
-    /// than in persisted state.
-    /// <para>
-    /// Used by the concurrent online drain, where several shards are in flight
-    /// at once and so cannot share the single persisted
-    /// <see cref="TreeSnapshotState.CopyCursorKey"/> - one shard's cursor would
-    /// overwrite another's. Bounding each pass still holds peak memory to a
-    /// batch of leaves rather than a whole shard.
-    /// </para>
-    /// <para>
-    /// A fresh budget is built for every pass. A <see cref="LeafWalkBudget"/>
-    /// fixes its wall-clock deadline at construction, so reusing one across
-    /// passes would leave every pass after the first already past its deadline
-    /// and yielding at the first leaf it could resume from.
-    /// </para>
+    /// The outcome of one shard's share of a concurrent online drain slice.
     /// </summary>
-    private async Task CopyShardToEndAsync(int shardIndex, LatticeOptions options)
+    /// <param name="Position">The shard's position in <see cref="CopiedShardIndices"/>.</param>
+    /// <param name="Drained">Whether the shard's whole leaf chain was copied and the shard marked drained.</param>
+    /// <param name="ResumeFrom">The key the shard's next pass resumes from when it is not drained; <see langword="null"/> to start at its leftmost leaf.</param>
+    /// <param name="Progressed">Whether the shard's copy moved forward in this slice.</param>
+    /// <param name="Fault">The failure that stopped the shard's copy, if any; its progress up to the fault is still banked.</param>
+    private readonly record struct ShardDrainOutcome(
+        int Position, bool Drained, string? ResumeFrom, bool Progressed, Exception? Fault);
+
+    /// <summary>
+    /// The resume key of the shard at <paramref name="position"/>: the head
+    /// shard's lives in <see cref="TreeSnapshotState.CopyCursorKey"/>, every
+    /// later one's in <see cref="TreeSnapshotState.DrainCursors"/>.
+    /// </summary>
+    private string? CursorFor(int position) =>
+        position == state.State.NextShardIndex
+            ? state.State.CopyCursorKey
+            : state.State.DrainCursors is { } cursors && cursors.TryGetValue(position, out var key) ? key : null;
+
+    /// <summary>
+    /// Copies one shard for as many bounded passes as fit in the current slice.
+    /// Every pass shares the slice's deadline, so the copy stops at the first
+    /// leaf past it rather than being granted a fresh wall-clock allowance per
+    /// pass. A fault is returned, not thrown, so the progress every other shard
+    /// made in the same slice is still banked before it surfaces.
+    /// </summary>
+    private async Task<ShardDrainOutcome> DrainShardForSliceAsync(
+        int position, int shardIndex, string? cursor, LatticeOptions options,
+        long sliceStart, TimeSpan sliceDuration, SemaphoreSlim sem)
     {
-        string? cursor = null;
-        while (true)
+        var progressed = false;
+        try
         {
-            var (complete, resumeFrom) = await CopyShardAsync(
-                shardIndex, cursor, LeafWalkBudget.ForBackgroundDrain(options));
-            if (complete) return;
-            cursor = resumeFrom;
+            while (true)
+            {
+                var budget = new LeafWalkBudget(options.BackgroundDrainLeavesPerPass, sliceDuration, sliceStart);
+                var (complete, resumeFrom) = await CopyShardAsync(shardIndex, cursor, budget);
+                if (complete)
+                {
+                    await MarkShardDrainedAsync(shardIndex);
+                    return new ShardDrainOutcome(position, Drained: true, null, Progressed: true, null);
+                }
+
+                progressed |= !string.Equals(resumeFrom, cursor, StringComparison.Ordinal);
+                cursor = resumeFrom;
+                if (SliceExpired(sliceStart, sliceDuration))
+                    return new ShardDrainOutcome(position, Drained: false, cursor, progressed, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            return new ShardDrainOutcome(position, Drained: false, cursor, progressed, ex);
+        }
+        finally
+        {
+            sem.Release();
         }
     }
 
@@ -790,42 +888,131 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Drains every remaining source shard into the destination with bounded
-    /// concurrency (<see cref="LatticeOptions.MaxConcurrentDrains"/>). Each
-    /// shard is copied then transitioned to
-    /// <c>ShadowForwardPhase.Drained</c>. Online-mode only. Exposed as
-    /// <c>internal</c> for unit testing.
+    /// Drains every remaining source shard into the destination, running
+    /// wall-clock-bounded slices of the concurrent drain back to back until
+    /// every shard is drained. Online-mode only. Unbounded in wall clock by
+    /// design: it backs the run-to-completion <see cref="RunSnapshotPassAsync"/>.
+    /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
     internal async Task DrainAllShardsOnlineAsync()
     {
+        var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
+        var sliceDuration = SliceDuration(drainOptions);
+        while (state.State.NextShardIndex < CopiedShardIndices.Length)
+        {
+            await DrainOnlineSliceAsync(drainOptions, Stopwatch.GetTimestamp(), sliceDuration);
+        }
+    }
+
+    /// <summary>
+    /// Runs one wall-clock-bounded slice of the online drain: copies up to
+    /// <see cref="LatticeOptions.MaxConcurrentDrains"/> source shards at once,
+    /// each for as many bounded passes as fit before the slice deadline, then
+    /// persists every shard's progress in one write (issue 3904). No new shard
+    /// is started once the slice has expired, and a shard still copying when it
+    /// expires stops at its next leaf and banks its resume key, so the slice
+    /// returns the turn instead of holding it until the whole tree is copied.
+    /// </summary>
+    private async Task DrainOnlineSliceAsync(LatticeOptions drainOptions, long sliceStart, TimeSpan sliceDuration)
+    {
         var shardIndices = CopiedShardIndices;
-        var shardTotal = shardIndices.Length;
-        var start = state.State.NextShardIndex;
         var cap = Math.Max(1, Options.MaxConcurrentDrains);
 
         using var sem = new SemaphoreSlim(cap);
-        var tasks = new List<Task>(Math.Max(0, shardTotal - start));
-        // Resolve options once; each pass builds its own budget from them, so
-        // the leaf cap and the wall-clock net apply per pass rather than
-        // across the whole concurrent drain.
-        var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
-        for (int i = start; i < shardTotal; i++)
+        var tasks = new List<Task<ShardDrainOutcome>>(Math.Min(cap, shardIndices.Length));
+        for (int position = state.State.NextShardIndex; position < shardIndices.Length; position++)
         {
-            var idx = shardIndices[i];
-            await sem.WaitAsync();
-            tasks.Add(DrainOneShardOnlineAsync(idx, sem, drainOptions));
-        }
-        await Task.WhenAll(tasks);
+            // The head is never skipped: it is the one position a slice must
+            // always be able to advance, so even a stray record naming it cannot
+            // leave the drain spinning without launching any work.
+            if (position != state.State.NextShardIndex
+                && state.State.DrainedPositions?.Contains(position) == true) continue;
 
-        // Snapshot the two fields the bulk-cursor advance mutates so a
-        // failing persist doesn't leak NextShardIndex=shardTotal /
-        // ShardRetries=0 ahead of disk. The DrainOneShardOnlineAsync
-        // side effects above are deliberately not reverted (each shard's
-        // MarkDrainedAsync transition is idempotent on the operationId).
+            await sem.WaitAsync();
+
+            // The first shard always starts, so a slice whose budget was spent
+            // before it got here still makes progress.
+            if (tasks.Count > 0 && SliceExpired(sliceStart, sliceDuration))
+            {
+                sem.Release();
+                break;
+            }
+
+            tasks.Add(DrainShardForSliceAsync(position, shardIndices[position], CursorFor(position),
+                drainOptions, sliceStart, sliceDuration, sem));
+        }
+
+        var outcomes = await Task.WhenAll(tasks);
+        await CommitDrainProgressAsync(outcomes);
+
+        foreach (var outcome in outcomes)
+        {
+            if (outcome.Fault is { } fault) ExceptionDispatchInfo.Capture(fault).Throw();
+        }
+    }
+
+    /// <summary>
+    /// Persists the progress a set of online-drain outcomes represents: drained
+    /// shards are recorded, the head advances past every leading drained shard
+    /// and takes up the new head's banked cursor, and every partly copied
+    /// shard's resume key is banked. The in-memory state is left untouched if
+    /// the write fails, so a retry resumes from what disk actually holds.
+    /// </summary>
+    private async Task CommitDrainProgressAsync(IReadOnlyList<ShardDrainOutcome> outcomes)
+    {
+        var total = CopiedShardIndices.Length;
+        var head = state.State.NextShardIndex;
+        var headCursor = state.State.CopyCursorKey;
+        var cursors = state.State.DrainCursors is { } existingCursors ? new Dictionary<int, string>(existingCursors) : null;
+        var drained = state.State.DrainedPositions is { } existingDrained ? new HashSet<int>(existingDrained) : null;
+        var progressed = false;
+        var headDrained = false;
+
+        foreach (var outcome in outcomes)
+        {
+            progressed |= outcome.Progressed;
+            if (outcome.Drained)
+            {
+                cursors?.Remove(outcome.Position);
+                if (outcome.Position == head) headDrained = true;
+                else (drained ??= new HashSet<int>()).Add(outcome.Position);
+            }
+            else if (outcome.Position == head)
+            {
+                headCursor = outcome.ResumeFrom;
+            }
+            else if (outcome.ResumeFrom is { } key)
+            {
+                (cursors ??= new Dictionary<int, string>())[outcome.Position] = key;
+            }
+            else
+            {
+                cursors?.Remove(outcome.Position);
+            }
+        }
+
+        var next = head;
+        if (headDrained)
+        {
+            next++;
+            while (next < total && drained is not null && drained.Remove(next)) next++;
+            headCursor = cursors is not null && cursors.Remove(next, out var nextCursor) ? nextCursor : null;
+        }
+
+        if (cursors is { Count: 0 }) cursors = null;
+        if (drained is { Count: 0 }) drained = null;
+
         var prevNextShardIndex = state.State.NextShardIndex;
+        var prevCopyCursorKey = state.State.CopyCursorKey;
         var prevShardRetries = state.State.ShardRetries;
-        state.State.NextShardIndex = shardTotal;
-        state.State.ShardRetries = 0;
+        var prevDrainCursors = state.State.DrainCursors;
+        var prevDrainedPositions = state.State.DrainedPositions;
+
+        state.State.NextShardIndex = next;
+        state.State.CopyCursorKey = headCursor;
+        state.State.DrainCursors = cursors;
+        state.State.DrainedPositions = drained;
+        if (progressed) state.State.ShardRetries = 0;
         try
         {
             await state.WriteStateAsync();
@@ -833,21 +1020,11 @@ internal sealed class TreeSnapshotGrain(
         catch
         {
             state.State.NextShardIndex = prevNextShardIndex;
+            state.State.CopyCursorKey = prevCopyCursorKey;
             state.State.ShardRetries = prevShardRetries;
+            state.State.DrainCursors = prevDrainCursors;
+            state.State.DrainedPositions = prevDrainedPositions;
             throw;
-        }
-    }
-
-    private async Task DrainOneShardOnlineAsync(int shardIndex, SemaphoreSlim sem, LatticeOptions options)
-    {
-        try
-        {
-            await CopyShardToEndAsync(shardIndex, options);
-            await MarkShardDrainedAsync(shardIndex);
-        }
-        finally
-        {
-            sem.Release();
         }
     }
 
@@ -899,6 +1076,8 @@ internal sealed class TreeSnapshotGrain(
         var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
         var prevShardIndices = state.State.ShardIndices;
         var prevSourceShardMap = state.State.SourceShardMap;
+        var prevDrainCursors = state.State.DrainCursors;
+        var prevDrainedPositions = state.State.DrainedPositions;
 
         state.State.InProgress = false;
         state.State.Complete = true;
@@ -908,6 +1087,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.ReleasesShadowForwardOnCompletion = false;
         state.State.ShardIndices = null;
         state.State.SourceShardMap = null;
+        state.State.DrainCursors = null;
+        state.State.DrainedPositions = null;
         try
         {
             await state.WriteStateAsync();
@@ -922,6 +1103,8 @@ internal sealed class TreeSnapshotGrain(
             state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
             state.State.ShardIndices = prevShardIndices;
             state.State.SourceShardMap = prevSourceShardMap;
+            state.State.DrainCursors = prevDrainCursors;
+            state.State.DrainedPositions = prevDrainedPositions;
             throw;
         }
 
@@ -1014,6 +1197,8 @@ internal sealed class TreeSnapshotGrain(
         var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
         var prevShardIndices = state.State.ShardIndices;
         var prevSourceShardMap = state.State.SourceShardMap;
+        var prevDrainCursors = state.State.DrainCursors;
+        var prevDrainedPositions = state.State.DrainedPositions;
 
         state.State.InProgress = false;
         state.State.Complete = false;
@@ -1028,6 +1213,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.ReleasesShadowForwardOnCompletion = false;
         state.State.ShardIndices = null;
         state.State.SourceShardMap = null;
+        state.State.DrainCursors = null;
+        state.State.DrainedPositions = null;
         try
         {
             await state.WriteStateAsync();
@@ -1047,6 +1234,8 @@ internal sealed class TreeSnapshotGrain(
             state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
             state.State.ShardIndices = prevShardIndices;
             state.State.SourceShardMap = prevSourceShardMap;
+            state.State.DrainCursors = prevDrainCursors;
+            state.State.DrainedPositions = prevDrainedPositions;
             throw;
         }
 
