@@ -52,7 +52,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `TreeId` | `string` | The enrolled tree. |
 | `Enabled` | `bool` | Whether the tree is enrolled: the runtime enablement flag when the runtime entry is in force, and always `true` when the static declaration is - the static map is a floor, so a runtime disable does not remove it. An ambiguous entry reports its runtime flag, because ambiguity wins over the static declaration. |
 | `Mode` | `LatticeMergeMode?` | The merge mode in force (for a disabled tree known only to the runtime config, the mode its entry retains), or `null` when no mode has been assigned or the mode is ambiguous (see `Ambiguous`). |
-| `Ambiguous` | `bool` | `true` when concurrent divergent mode writes have not yet been resolved. Resolution then fails closed - no mode is picked and `Mode` is `null` - but shipping does not pause. Ambiguity wins over a static declaration. |
+| `Ambiguous` | `bool` | `true` when concurrent mode writes naming different modes have not yet been resolved; concurrent writes of the same mode are not ambiguous. Resolution then fails closed - no mode is picked and `Mode` is `null` - but shipping does not pause. Ambiguity wins over a static declaration. |
 | `Source` | `ReplicationEnrollmentSource` | Which enrollment source put the entry in force. Defaults to `Runtime`. |
 
 ### `ReplicationEnrollmentSource`

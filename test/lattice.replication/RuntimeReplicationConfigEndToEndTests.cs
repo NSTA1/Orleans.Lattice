@@ -152,6 +152,67 @@ public sealed class RuntimeReplicationConfigEndToEndTests
         Assert.That(status!.Value.Ambiguous, Is.True);
     }
 
+    // ── Scenario 4b: two same-mode enables converge unambiguous (issue #3899) ──
+
+    [Test]
+    public async Task Concurrent_same_mode_enables_from_two_regions_converge_resolvable_and_keep_replicating()
+    {
+        // Each region's operator enables the same tree under the same mode before
+        // either has learned of the other's enrolment. Author each on its own
+        // store through the real authority so two concurrent MvRegister dots
+        // carrying the same mode are genuinely minted.
+        var storeA = new ConvergingConfigStore();
+        var storeB = new ConvergingConfigStore();
+        await CreateAuthority(storeA, localReplicaId: SiteA)
+            .EnableReplicationAsync(Tree, LatticeMergeMode.OrSet);
+        await CreateAuthority(storeB, localReplicaId: SiteB)
+            .EnableReplicationAsync(Tree, LatticeMergeMode.OrSet);
+
+        // Each region then receives the other's enrolment through the config tree.
+        await storeA.DeliverAsync(Tree, (await storeB.ReadEntryAsync(Tree))!);
+        await storeB.DeliverAsync(Tree, (await storeA.ReadEntryAsync(Tree))!);
+
+        foreach (var (site, store) in new[] { (SiteA, storeA), (SiteB, storeB) })
+        {
+            var maintainer = await WarmMaintainerAsync(store);
+            var resolver = Resolver(maintainer, staticSeed: null);
+            var membership = Membership(maintainer, staticSeed: null);
+            var status = await CreateAuthority(store, localReplicaId: site).GetTreeStatusAsync(Tree);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(maintainer.Current.TryGetTree(Tree, out var projection), Is.True, site);
+                Assert.That(projection.Ambiguous, Is.False, $"{site}: agreeing modes are not ambiguous");
+                Assert.That(projection.Mode, Is.EqualTo(LatticeMergeMode.OrSet), site);
+                Assert.That(projection.Enabled, Is.True, site);
+
+                // The receiver-side enrollment gate resolves through this seam: a
+                // null here is what made receivers drop the tree's data.
+                Assert.That(resolver.Resolve(Tree), Is.EqualTo(LatticeMergeMode.OrSet),
+                    $"{site}: the receiver must resolve the agreed mode and keep accepting the tree");
+                Assert.That(membership.IsReplicated(Tree), Is.True, site);
+
+                Assert.That(status, Is.Not.Null, site);
+                Assert.That(status!.Value.Ambiguous, Is.False, site);
+                Assert.That(status.Value.Mode, Is.EqualTo(LatticeMergeMode.OrSet), site);
+            });
+
+            // A repeat enable under the agreed mode is an idempotent no-op in
+            // either region, and a different mode is still refused in place.
+            var authority = CreateAuthority(store, localReplicaId: site);
+            var repeat = await authority.EnableReplicationAsync(Tree, LatticeMergeMode.OrSet);
+            var change = Assert.ThrowsAsync<LatticeReplicationModeChangeRejectedException>(
+                async () => await authority.EnableReplicationAsync(Tree, LatticeMergeMode.LwwRegister));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(repeat.AlreadyEnabled, Is.True, site);
+                Assert.That(change!.CurrentModeAmbiguous, Is.False, site);
+                Assert.That(change.CurrentMode, Is.EqualTo(LatticeMergeMode.OrSet), site);
+            });
+        }
+    }
+
     // ── Scenario 5: in-place mode change is rejected; disable-then-re-enable is the path ──
 
     [Test]
