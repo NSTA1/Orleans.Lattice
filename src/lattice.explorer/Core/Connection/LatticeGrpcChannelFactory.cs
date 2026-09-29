@@ -74,28 +74,55 @@ public static class LatticeGrpcChannelFactory
     }
 
     /// <summary>
-    /// Builds the call invoker for <paramref name="channel"/>: the
-    /// sign-in-independent transport headers, then the authentication the
-    /// settings carry.
+    /// Builds the call invoker for <paramref name="channel"/>: the circuit's
+    /// asserted tenant, the sign-in-independent transport headers, then the
+    /// authentication the settings carry.
     /// </summary>
     /// <remarks>
     /// Transport headers accompany every call regardless of the auth mode (for
     /// example an origin-routing header a fronting proxy requires), so they are
     /// applied before, and independently of, the authentication interceptor - a
     /// sign-in replaces <see cref="LatticeConnectionSettings.Authentication"/>
-    /// but never <see cref="LatticeConnectionSettings.TransportHeaders"/>.
+    /// but never <see cref="LatticeConnectionSettings.TransportHeaders"/>. The
+    /// active tenant is applied innermost, so it sees every header the other
+    /// interceptors added and owns its own (see <see cref="ApplyActiveTenant"/>).
     /// </remarks>
     /// <param name="channel">The channel to invoke over. Must not be <see langword="null"/>.</param>
     /// <param name="settings">The endpoint settings. Must not be <see langword="null"/>.</param>
-    /// <returns>The invoker, with headers and credentials attached per call.</returns>
+    /// <returns>The invoker, with the tenant, headers and credentials attached per call.</returns>
     /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
     public static CallInvoker CreateCallInvoker(GrpcChannel channel, LatticeConnectionSettings settings)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(settings);
 
-        var invoker = ApplyTransportHeaders(channel.CreateCallInvoker(), settings.TransportHeaders);
+        var invoker = ApplyActiveTenant(channel.CreateCallInvoker(), settings.ActiveTenantProvider);
+        invoker = ApplyTransportHeaders(invoker, settings.TransportHeaders);
         return ApplyAuthentication(invoker, settings);
+    }
+
+    /// <summary>
+    /// Asserts the tenant <paramref name="provider"/> reports on every call on
+    /// <paramref name="invoker"/>, through the
+    /// <see cref="LatticeActiveTenantAssertion.DefaultHeaderName"/> header,
+    /// returning the invoker unchanged when there is no provider.
+    /// </summary>
+    /// <remarks>
+    /// The provider is asked on each call, so the header always names the tenant
+    /// the circuit is scoped to at that moment and is omitted entirely when it
+    /// asserts none. The decorated invoker owns the header: a value for it that
+    /// reaches it by any other route is replaced, or removed when the provider
+    /// asserts none. Apply it innermost, beneath every other header decoration.
+    /// </remarks>
+    /// <param name="invoker">The invoker to decorate. Must not be <see langword="null"/>.</param>
+    /// <param name="provider">The circuit's live tenant source, or <see langword="null"/> to assert none.</param>
+    /// <returns>The decorated invoker, or <paramref name="invoker"/> unchanged.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="invoker"/> is <see langword="null"/>.</exception>
+    public static CallInvoker ApplyActiveTenant(CallInvoker invoker, ILatticeActiveTenantProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(invoker);
+
+        return provider is null ? invoker : invoker.Intercept(new ActiveTenantInterceptor(provider));
     }
 
     /// <summary>

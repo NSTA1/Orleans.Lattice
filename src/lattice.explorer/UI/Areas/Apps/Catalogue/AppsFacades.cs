@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
@@ -23,6 +24,14 @@ internal sealed class AppsFacades(IServiceProvider services)
     private readonly Lazy<ILatticeAppWorkspace?> _workspace = new(services.GetShellFacade<ILatticeAppWorkspace>);
     private readonly Lazy<ILatticeAuthAdmin?> _auth = new(services.GetShellFacade<ILatticeAuthAdmin>);
     private readonly Lazy<ILatticeAppRoleBindings?> _roleBindings = new(services.GetShellFacade<ILatticeAppRoleBindings>);
+    private readonly Lazy<ILatticeActiveTenantProvider?> _tenant = new(services.GetService<ILatticeActiveTenantProvider>);
+
+    /// <summary>
+    /// The tenant the circuit's calls assert right now, or <see langword="null"/>
+    /// when they assert none. Everything the area remembers is keyed on it, so an
+    /// answer read under one tenant is never served under another.
+    /// </summary>
+    public string? AssertedTenant => _tenant.Value?.AssertedTenant;
 
     /// <summary>The administrative catalogue, or <see langword="null"/> when the head serves none.</summary>
     public ILatticeAppCatalog? Catalog => Resolve(_catalog);

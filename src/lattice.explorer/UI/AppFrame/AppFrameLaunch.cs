@@ -20,9 +20,11 @@ internal sealed class AppFrameLaunch
         AppFrameBundleLoader issuer,
         WorkspaceAppDescriptor descriptor,
         AppUiDescriptor ui,
-        ImmutableArray<string> roles)
+        ImmutableArray<string> roles,
+        string? tenant = null)
     {
         Issuer = issuer;
+        Tenant = tenant;
         Slug = descriptor.Slug;
         Version = descriptor.Version;
         InstallRevision = descriptor.InstallRevision;
@@ -40,6 +42,14 @@ internal sealed class AppFrameLaunch
 
     /// <summary>The loader, and therefore the circuit, that authorised this launch.</summary>
     internal AppFrameBundleLoader Issuer { get; }
+
+    /// <summary>
+    /// The tenant the circuit asserted when the launch was authorised - the tenant the
+    /// app is installed in - or <see langword="null"/> when it asserted none. Every
+    /// bridge call runs in this tenant: the broker refuses a request once the circuit
+    /// asserts any other, rather than run it in the wrong tenant.
+    /// </summary>
+    public string? Tenant { get; }
 
     /// <summary>The app slug.</summary>
     public string Slug { get; }

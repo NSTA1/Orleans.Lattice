@@ -27,11 +27,26 @@ A tenant-rooted address for a tenant other than the active one asks the shell to
 
 Successful switches and successful all-tenant toggles are remembered through the preference contract as `shell.tenant` and `shell.all-tenants`. Persistence is a convenience, not the authority; the current circuit's tenant context is updated first and every read is revalidated.
 
+## Every call carries the tenant
+
+Every call the Explorer makes to the cluster asserts the active tenant through the `lattice-active-tenant` header. That covers catalogue and data reads, live tails, every administration area, and an app's bridge calls. The header is read as each call starts, so the first call after a switch already carries the new tenant, and one circuit's tenant never reaches another circuit's calls. With tenancy off, with no tenant established, or scoped to the reserved `default` tenant, no header is sent, and the call is exactly what a tenant-unaware client sends.
+
+The header is an assertion, not a grant. The cluster checks it against the caller's own tenants before it scopes anything, so asserting a tenant gives no standing in it. An install at `/t/{tenant}/apps` lands in that tenant, and a tenant admin's Data and Apps pages list that tenant's trees and apps.
+
+The Explorer fails closed around it:
+
+- If a signed-in caller's tenant cannot be established, no tenant-scoped page is shown, so no call falls back to the `default` tenant.
+- While a switch is in flight the page is withheld. After it, every page is built afresh and every remembered answer is read again, so nothing read under one tenant is shown under another.
+- An open app is bound to the tenant it was opened in, and is closed once the Explorer is scoped to another tenant.
+- A staged backup operation finishes in the tenant it started in, and is listed only under that tenant.
+
 ## The reserved default tenant
 
 `default` is the reserved tenant that owns legacy, un-prefixed trees. The shipped chrome hides tenancy for a non-operator whose active tenant is `default`: there is no tenant root, `t/` offers no tenant, and `/t/default/...` canonicalises to the plain address. The Explorer treats a caller as a platform operator exactly when the Access area is visible to them. The layout refreshes the operator verdict before it resolves each navigation. Until that verdict proves the caller is an operator for `default`, the safe answer is to hide tenancy chrome.
 
 An operator on `default` does see tenancy chrome, because the `default` root is the way they reach tenant-aware addresses and switch to other tenants.
+
+The cluster lists only the tenants a caller administers, which never includes `default`, so the Tenancy area adds `default` to the reachable-tenant list for a platform operator. An operator can therefore always pick it and open `/t/default/...`, and an operator with no remembered tenant starts there. A non-operator's list is exactly what the cluster returned.
 
 ## The Tenancy area
 

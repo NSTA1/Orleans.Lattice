@@ -13,8 +13,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Telemetry;
 /// </summary>
 /// <remarks>
 /// The answer is kept whatever it was - a catalogue or a fault - until something
-/// that could change it happens: a sign-in or sign-out, a new connection, or an
-/// explicit refresh. A caller's cancellation only abandons that caller's wait; the
+/// that could change it happens: a sign-in or sign-out, a new connection, a
+/// different asserted tenant, or an explicit refresh. A caller's cancellation only abandons that caller's wait; the
 /// shared read carries on for the next one.
 /// </remarks>
 internal sealed class TelemetryCatalogCache : IDisposable
@@ -22,19 +22,27 @@ internal sealed class TelemetryCatalogCache : IDisposable
     private readonly ILatticeTelemetry _telemetry;
     private readonly IExplorerAuthSession? _auth;
     private readonly IExplorerSession? _session;
+    private readonly ShellAssertedTenant _tenant;
     private readonly object _gate = new();
     private Task<TelemetryQueryCatalog>? _read;
+    private string? _readTenant;
 
     /// <summary>Creates the cache over the circuit's telemetry facade.</summary>
     /// <param name="telemetry">The telemetry facade.</param>
     /// <param name="auth">The circuit's sign-in session, whose changes invalidate the cache.</param>
     /// <param name="session">The circuit's connection session, whose changes invalidate the cache.</param>
-    public TelemetryCatalogCache([FromKeyedServices(ShellFacades.Key)] ILatticeTelemetry telemetry, IExplorerAuthSession? auth = null, IExplorerSession? session = null)
+    /// <param name="tenant">The circuit's asserted tenant, which keys the cached answer.</param>
+    public TelemetryCatalogCache(
+        [FromKeyedServices(ShellFacades.Key)] ILatticeTelemetry telemetry,
+        IExplorerAuthSession? auth = null,
+        IExplorerSession? session = null,
+        ShellAssertedTenant? tenant = null)
     {
         ArgumentNullException.ThrowIfNull(telemetry);
         _telemetry = telemetry;
         _auth = auth;
         _session = session;
+        _tenant = tenant ?? ShellAssertedTenant.None;
 
         if (_auth is not null)
         {
@@ -50,13 +58,16 @@ internal sealed class TelemetryCatalogCache : IDisposable
     /// <summary>Raised when the cached answer is dropped, so a page re-reads it.</summary>
     public event Action? Changed;
 
-    /// <summary>The catalogue, when it has been read successfully; otherwise <see langword="null"/>.</summary>
+    /// <summary>The catalogue, when it has been read successfully under the tenant asserted now; otherwise <see langword="null"/>.</summary>
     public TelemetryQueryCatalog? Current
     {
         get
         {
-            var read = _read;
-            return read is { IsCompletedSuccessfully: true } ? read.Result : null;
+            var tenant = _tenant.AssertedTenant;
+            lock (_gate)
+            {
+                return _read is { IsCompletedSuccessfully: true } read && ShellAssertedTenant.Same(_readTenant, tenant) ? read.Result : null;
+            }
         }
     }
 
@@ -65,12 +76,14 @@ internal sealed class TelemetryCatalogCache : IDisposable
     /// <returns>The catalogue.</returns>
     public Task<TelemetryQueryCatalog> GetAsync(CancellationToken cancellationToken = default)
     {
+        var tenant = _tenant.AssertedTenant;
         Task<TelemetryQueryCatalog> read;
         lock (_gate)
         {
-            if (_read is null || _read.IsCanceled)
+            if (_read is null || _read.IsCanceled || !ShellAssertedTenant.Same(_readTenant, tenant))
             {
                 _read = ReadAsync();
+                _readTenant = tenant;
             }
 
             read = _read;
