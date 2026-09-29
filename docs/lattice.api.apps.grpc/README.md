@@ -72,7 +72,14 @@ The gRPC service name is `orleans.lattice.api.apps`, so each method's full path 
 | `GetConsent` | `GetConsentAsync` |
 | `UpdateConsent` | `UpdateConsentAsync` |
 | `GetCapabilities` | `GetCapabilitiesAsync` |
+| `UpdateRoleBindings` | `ILatticeAppRoleBindings.UpdateRoleBindingsAsync` |
 | `GetAuthScheme` | Auth-scheme advertisement (unauthenticated). |
+
+`UpdateRoleBindings` is served by the host's registered `ILatticeAppRoleBindings`,
+or by an `ILatticeAppsControl` that also implements it; a host that serves neither
+answers `Unimplemented`. Authorizers see it as
+`LatticeAppsApiOperation.UpdateRoleBindings`. `LatticeAppsApiGrpcClient` implements
+both `ILatticeAppsControl` and `ILatticeAppRoleBindings`.
 
 ### Catalogue, workspace and bridge services
 

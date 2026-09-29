@@ -1,6 +1,8 @@
 # Tenant scope in the Explorer
 
-The Explorer is tenant-aware only when the host opts Core into tenancy. In that mode Core publishes the caller's active tenant, the reachable tenant list, and an operator-gated switcher. When the host does not opt in, the tenant view is inactive: addresses are plain, `/t/{tenant}` roots are removed during canonicalisation, and catalog reads are the same as a non-tenant cluster.
+The Explorer's tenant view is part of Core. The web head (`AddLatticeExplorerWeb`) always registers it, through `AddExplorerTenantView()`, after the UI, so the Tenancy area's reachable-tenant list and operator gate take effect. The view publishes the caller's active tenant, the reachable tenant list and an operator-gated switcher. A head that does not register it has an inactive view: addresses are plain, `/t/{tenant}` roots are removed during canonicalisation, and catalogue reads are the same as a non-tenant cluster.
+
+On a cluster without the tenancy add-on, every tree belongs to the reserved `default` tenant, so the active tenant is `default`. What that means for addresses is described under [The reserved default tenant](#the-reserved-default-tenant).
 
 With tenancy on, the address grammar gains a root node: `/t/{tenant}`. A tenant-rooted address scopes Home and every tenant-scoped area to that tenant. Typing `t/{tenant}` in the address line offers reachable tenants and re-roots the current address. Choosing a different tenant is still a request, not an authority: the switch goes through the operator-gated switcher and is refused unless the caller is a platform operator.
 
@@ -27,7 +29,7 @@ Successful switches and successful all-tenant toggles are remembered through the
 
 ## The reserved default tenant
 
-`default` is the reserved tenant that owns legacy, un-prefixed trees. The shipped chrome hides tenancy for a non-operator whose active tenant is `default`: there is no tenant root, no tenant selector, and `/t/default/...` canonicalises to the plain address. The layout refreshes the operator verdict before it resolves each navigation. Until that verdict proves the caller is an operator for `default`, the safe answer is to hide tenancy chrome.
+`default` is the reserved tenant that owns legacy, un-prefixed trees. The shipped chrome hides tenancy for a non-operator whose active tenant is `default`: there is no tenant root, `t/` offers no tenant, and `/t/default/...` canonicalises to the plain address. The Explorer treats a caller as a platform operator exactly when the Access area is visible to them. The layout refreshes the operator verdict before it resolves each navigation. Until that verdict proves the caller is an operator for `default`, the safe answer is to hide tenancy chrome.
 
 An operator on `default` does see tenancy chrome, because the `default` root is the way they reach tenant-aware addresses and switch to other tenants.
 

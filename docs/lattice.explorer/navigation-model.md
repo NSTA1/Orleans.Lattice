@@ -182,8 +182,13 @@ and **Skip to content**.
 
 ## Tenancy and re-rooting
 
-When the host enables tenancy, the active tenant is the root node of Home and of
-every tenant-scoped address: `/t/acme/data/orders` rather than `/data/orders`.
+The web head always registers the tenant view, so whether an address carries a
+tenant root depends on the caller. For a caller whose tenancy is on, the active
+tenant is the root node of Home and of every tenant-scoped address:
+`/t/acme/data/orders` rather than `/data/orders`. Tenancy is off for a caller
+scoped to the reserved `default` tenant who is not a platform operator (on a
+cluster without the tenancy add-on, that is every caller who cannot see the
+Access area), and in a head that does not register the tenant view.
 Access and Cluster are cluster-wide and never carry a tenant root. The Tenancy
 area's operator directory at `/tenancy` is cluster-wide, while its My tenant
 pages at `/t/{tenant}/tenancy` are tenant-rooted. Every other area is

@@ -58,6 +58,17 @@ the palette offers `apps.upgrade.{slug}` for an app with an update and
 An upgrade shows what changed between the two versions. An install whose ceiling or
 bridge grants no longer cover its manifest is shown as needing re-consent.
 
+Role bindings can be changed after install. On the manage page of an installed app,
+`/apps/catalogue/{source}/{slug}`, **Change role bindings...** lets you pick a
+membership group for each declared role; an app's own page links there for an
+`AppInstall` holder. A confirmation step shows each role's group now and after the
+change, and **Apply bindings...** asks once more before anything is sent. Only the
+bindings change: the consent, the ceiling and whether the app is enabled stay as they
+are. For an enabled app its access rules are replaced at once, so members of a group
+a role leaves lose that role. For an installed or disabled app the bindings take
+effect when it is enabled. The change goes through
+[`ILatticeAppRoleBindings`](../lattice.api.apps/README.md#re-binding-roles).
+
 App-supplied text (names, descriptions, categories) is shown as text only, and icons
 only through `<img>`. An app can never inject markup into the Explorer.
 

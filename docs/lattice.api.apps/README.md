@@ -30,8 +30,10 @@ siloBuilder.AddLatticeApps();
 siloBuilder.AddLatticeAppsApi();
 ```
 
-`AddLatticeAppsApi` registers `ILatticeAppsControl` as a singleton. Calling it
-before `AddLatticeApps` fails fast.
+`AddLatticeAppsApi` registers `ILatticeAppsControl` as a singleton, and the same
+facade as the `ILatticeAppRoleBindings` singleton (see
+[Re-binding roles](#re-binding-roles)). Calling it before `AddLatticeApps` fails
+fast.
 
 ## Verbs
 
@@ -46,6 +48,32 @@ before `AddLatticeApps` fails fast.
 | `GetConsentAsync(slug)` | The ceiling pinned to the installed version, or `null` when the app is not installed. |
 | `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. If that re-application fails, the failure is thrown with a note that the consent itself was recorded; a failure the consent or manifest causes, such as a ceiling excess, also withdraws the app's grants. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
+
+### Re-binding roles
+
+`ILatticeAppRoleBindings` is a separate contract beside `ILatticeAppsControl`, so the
+control contract is unchanged. Its one verb,
+`UpdateRoleBindingsAsync(AppRoleBindingsUpdate)`, replaces every role-to-group binding
+of an installed app and returns an `AppRoleBindingsReport`: the slug, the installed
+version, the recorded bindings and the lifecycle state.
+
+- **Full replacement, group-only.** The update names the slug, the exact installed
+  version and the complete bindings. A role it leaves out ends up bound to no group.
+  Each binding must name a role the installed manifest declares, no role may appear
+  twice, and a role is bound to a membership group, never to a user.
+- **Pinned.** A version mismatch is refused. The change is also pinned to the install
+  revision just read, so a concurrent re-binding, consent update, upgrade or enable
+  refuses this one instead of being rolled back. An install whose consent was never
+  recorded for the installed version must be re-consented first.
+- **Nothing else moves.** The consent, the ceiling, the bridge consent and the
+  lifecycle state are kept, and a disabled or merely installed app is never enabled.
+- **Re-applied when enabled.** An enabled app is re-applied, so its compiled role
+  rules are replaced and a removed binding leaves no stale grant. If that fails, the
+  failure is thrown with a note that the bindings themselves were recorded.
+
+It authorizes `AppInstall` over the cluster-wide scope before reading anything, like
+every control verb (see [Authorization](#authorization)), and it follows the same
+[no physical ids](#no-physical-ids-on-the-wire) rule.
 
 Lifecycle results report the slug, version, resulting `AppLifecycleState` and whether
 anything changed. A lifecycle mutation only ever returns `Installed`, `Enabled`,
