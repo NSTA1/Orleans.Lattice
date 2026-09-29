@@ -1,117 +1,58 @@
-# Tenant scope
+# Tenant scope in the Explorer
 
-Three different things in the Explorer involve tenants, and conflating them is
-the single most common source of confusion. This page separates them.
+The Explorer's tenant view is part of Core. The web head (`AddLatticeExplorerWeb`) always registers it, through `AddExplorerTenantView()`, after the UI, so the Tenancy area's reachable-tenant list and operator gate take effect. The view publishes the caller's active tenant, the reachable tenant list and an operator-gated switcher. A head that does not register it has an inactive view: addresses are plain, `/t/{tenant}` roots are removed during canonicalisation, and catalogue reads are the same as a non-tenant cluster.
 
-## Three things, not one
+On a cluster without the tenancy add-on, every tree belongs to the reserved `default` tenant, so the active tenant is `default`. What that means for addresses is described under [The reserved default tenant](#the-reserved-default-tenant).
 
-| Concept | What it is | Where it lives |
-| --- | --- | --- |
-| **Tenant scope** | Which tenant's data you are currently looking at. It re-scopes the catalog and every surface below it. | A control in the console banner |
-| **Tenant administration** | Administering *other people's* tenants as a platform operator: lifecycle, quota, region authorization, admin subjects (including the initial tenant-admin grant made at creation), and cross-tenant grants. | An area in the rail |
-| **My tenant** | Managing *your own* tenant as its administrator: membership, cross-tenant grants, region residency, usage against quota. | An area in the rail |
+With tenancy on, the address grammar gains a root node: `/t/{tenant}`. A tenant-rooted address scopes Home and every tenant-scoped area to that tenant. Typing `t/{tenant}` in the address line offers reachable tenants and re-roots the current address. Choosing a different tenant is still a request, not an authority: the switch goes through the operator-gated switcher and is refused unless the caller is a platform operator.
 
-The first is a lens. The second and third are places. The areas were previously
-called "Tenants" and "My Tenant", which read as two names for one idea, and the
-Tenant administration area's own first sub-surface was also called "Tenants", so
-the word appeared twice in adjacent tiers. The areas are now **Tenant
-administration** and **My tenant**, and the bare word "Tenants" is retired.
+## What is scoped
 
-## The picker adapts to what you can reach
+Tenant ownership is derived from physical tree ids. A tree named `t/{tenant}/{name}` belongs to that tenant. A tree with no `t/` ownership prefix belongs to the reserved `default` tenant. Platform-internal trees are not attributed to any tenant.
 
-The scope control's shape follows both what the caller may do and how many
-tenants they can actually reach, so a deployment that has no tenancy story shows
-no tenancy chrome.
+The visible address determines whether the tenant root is kept:
 
-| Situation | What is shown |
-| --- | --- |
-| No tenant is established, and the caller is not a platform operator | Nothing. A non-tenant deployment looks unchanged. |
-| A caller who is not a platform operator, scoped to one tenant | A quiet, non-interactive display of the current tenant. |
-| A platform operator who can reach one tenant | The same quiet display. No picker, because there is nothing to pick. |
-| A platform operator who can reach more than one | A drop-down listing the reachable tenants with the current one marked. |
+- Tenant-scoped areas keep `/t/{tenant}` when tenancy is active. The native areas that do not opt out are Data, Apps, Schema, Replication, Backups and Telemetry.
+- Access and Cluster are cluster-wide. They never keep a tenant root.
+- Tenancy has both shapes: `/tenancy` and `/tenancy/{tenant}...` are cluster-wide administration addresses, while `/t/{tenant}/tenancy...` is that tenant's workspace.
+- Home is tenant-rooted when tenancy is active, unless the current caller is on the hidden `default` path described below.
 
-The drop-down is offered only to a caller who validates as a platform operator,
-because only such a caller may switch: fail-closed by construction, rather than
-rendering a control that would always refuse. A caller scoped to the reserved
-`default` tenant and holding no operator standing is shown nothing at all, which
-is what keeps a single-tenant deployment free of tenancy chrome.
+Core applies the same rule to listings. The active-tenant view keeps only items owned by the active tenant. The all-tenant view returns the list unchanged only when the caller requested all tenants and the platform-operator gate validates them. A non-operator all-tenant request falls back to the active tenant.
 
-It is never a free-text box. Requiring a tenant id from memory was the previous
-design, and it meant the console listed every tenant in one place while
-offering no way to make one active from there.
+Telemetry also has an address-level all-tenant view. Its `scope=all` query asks telemetry queries to request all tenants; the UI exposes the scope chooser only while tenancy is active and the caller is an operator, or while the current address already asks for all tenants. If the request is not admitted, Core's tenant view still falls back to the active tenant.
 
-The picker and the Tenant administration list read from one source of truth, so
-they cannot diverge, and the list offers a "set as active tenant" action that
-drives the picker directly.
+## Switching tenants
 
-Alongside whichever shape applies, a platform operator is also offered an **All
-tenants** toggle, which lists items across every tenant they can reach instead
-of only the active one. The setting is remembered (`shell.all-tenants`) and is
-re-applied on a later visit only for a caller who still validates as a platform
-operator.
+A tenant-rooted address for a tenant other than the active one asks the shell to switch. If the switch is accepted, the address becomes canonical for the requested tenant and the shell announces the new scope. If it is refused, the shell redirects to the same address under the active tenant and shows a warning toast such as `You can't scope to tenant acme, so this shows tenant default instead.` If no active tenant is established, the redirect is to the unrooted canonical form and the warning names only the refused tenant.
 
-## Switching is confirmed, refusals are explained
+Successful switches and successful all-tenant toggles are remembered through the preference contract as `shell.tenant` and `shell.all-tenants`. Persistence is a convenience, not the authority; the current circuit's tenant context is updated first and every read is revalidated.
 
-A switch reports its outcome rather than appearing to work:
+## The reserved default tenant
 
-- a successful switch is confirmed;
-- a fail-closed refusal is explained rather than silently ignored;
-- an unknown or unreachable tenant is reported as such.
+`default` is the reserved tenant that owns legacy, un-prefixed trees. The shipped chrome hides tenancy for a non-operator whose active tenant is `default`: there is no tenant root, `t/` offers no tenant, and `/t/default/...` canonicalises to the plain address. The Explorer treats a caller as a platform operator exactly when the Access area is visible to them. The layout refreshes the operator verdict before it resolves each navigation. Until that verdict proves the caller is an operator for `default`, the safe answer is to hide tenancy chrome.
 
-Each outcome is announced in a live region, so it reaches a screen-reader user
-and is not sighted-only.
+An operator on `default` does see tenancy chrome, because the `default` root is the way they reach tenant-aware addresses and switch to other tenants.
 
-A non-operator cannot switch tenant, and cannot elevate themselves into the
-all-tenant view. That is enforced on the server; the console simply reports the
-refusal honestly.
+## The Tenancy area
 
-## An emptied catalog says why it is empty
+The Tenancy area exists only when tenancy is active and the tenant self-service facade is available. It probes the caller's standing before it appears. A platform operator sees it. A tenant admin for their own scoped tenant also sees it. An unauthenticated caller gets an unavailable area with `Sign in to see the tenants you administer.` Other refusals and faults hide the area fail-closed.
 
-An empty catalog is not one situation but three, and they have different
-remedies:
+The area has two address families:
 
-| What happened | What the console says | What fixes it |
-| --- | --- | --- |
-| The cluster holds nothing | It is empty | Nothing to fix |
-| The tenant scope filtered everything out | It names the tenant responsible | Switch tenant, or list across every tenant you can reach |
-| The server refused the read | It says which is missing, a sign-in or a grant | Sign in, or ask for the grant |
+- `/tenancy` is the operator directory. It lists every tenant the caller can reach, shows lifecycle state, quota use, resident regions, installed-app counts, and links to the tenant workspace or Apps area. The `tenancy.create-tenant` command opens this page with `?new=true`, the same form as the visible `New tenant` button.
+- `/tenancy/{tenant}` is the operator administration overview for one tenant. It links to `/tenancy/{tenant}/grants`, `/tenancy/{tenant}/access`, and `/tenancy/{tenant}/regions`. Non-operators who reach an administration address are redirected to the equivalent `/t/{tenant}/tenancy` workspace section.
+- `/t/{tenant}/tenancy` is My tenant. Its sections are `/t/{tenant}/tenancy/members`, `/t/{tenant}/tenancy/quota`, `/t/{tenant}/tenancy/regions`, and `/t/{tenant}/tenancy/sharing`. It shows the tenant's state, the caller's standing, quota, residency, installed apps, and reachable sibling tenants.
+- `tenancy.offer-grant` opens `/t/{tenant}/tenancy/sharing?new=true`. The visible `Offer a grant` button uses the same command id. The reserved `default` tenant does not offer or receive cross-tenant grants.
 
-The scoped-out case is judged on whether the scope actually removed anything,
-not on whether a scope is active. A tenant that genuinely holds no trees still
-reports an empty catalog, because claiming a filter that removed nothing would
-be as misleading as concealing one that did.
-
-A refusal is reported as a refusal rather than as a failure, and is not offered
-a "Try again" button: retrying a read the server declined changes nothing. A
-caller who is already signed in and merely lacks a grant is never asked to sign
-in again, because that is a loop rather than a remedy.
-
-## Remembered, and re-validated on restore
-
-The last selected tenant is remembered per user and per cluster, and is
-re-selected on your next session rather than only your next page load.
-
-Restore is **fail-closed**. A remembered tenant can become unreachable because a
-grant was revoked or the tenant was suspended or deleted, so the id is
-re-validated against the caller's *current* accessible list every time it is
-restored. If it no longer resolves, the console falls back to the default or
-first reachable tenant **and says why**, rather than silently landing you
-somewhere you did not choose. A tenant you can no longer reach is never
-restored on the strength of having once been allowed.
-
-The identity resolver establishes a tenant only when none is set. It does not
-overwrite an explicit in-session switch, which is a behaviour worth stating
-because the opposite once made every switch appear to do nothing.
-
-## The reserved `default` tenant
-
-`default` is the tenant that owns the un-prefixed trees a non-tenant deployment
-writes. On a single-tenant cluster it is the only tenant and the console shows
-no tenancy chrome at all. The term is explained in-product wherever it appears,
-as is the all-tenant view.
+The Tenancy area supplies the reachable-tenant list used by the directory and by the `t/` completions in the address line. The established tenant is listed first and suspended tenants are not offered, except that the established tenant remains available so the current scope never disappears under the caller.
 
 ## See also
 
-- [The Explorer navigation model](navigation-model.md)
-- [What the Explorer remembers](what-the-explorer-remembers.md)
-- [Orleans.Lattice.Tenancy](../lattice.tenancy/README.md)
+- [Explorer overview](README.md)
+- [Navigation model](navigation-model.md)
+- [Area availability](area-availability.md)
+- [Areas](areas.md#tenancy)
+- [Lattice Apps](lattice-apps.md)
+- [Accessibility conformance](accessibility-conformance.md)
+- [Apps package documentation](../lattice.api.apps/README.md)
+- [Auth package documentation](../lattice.api.auth/README.md)

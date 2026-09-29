@@ -1,209 +1,178 @@
 # Managing backups from the Explorer
 
-The Orleans.Lattice Explorer's top-level areas sit in a vertical rail down the
-left of the shell. The rail carries **Explore** (the tree browser), **Backups**
-(backup and restore management), **Access** (membership and access-control
-admin), **Tenant administration**, **My tenant**, and **Telemetry**, plus
-**Schema** (schema-policy management) when a head registers it, and a new area
-joins the rail by registering its plugin, without reworking the shell.
+The **Backups** area is the Explorer surface for listing, capturing, restoring, checking, scheduling, and maintaining Lattice backups. It drives the backup control facade. The Explorer probes capabilities to shape the UI, but the cluster authorizes every real operation when it runs.
 
-## The area rail
+Backups is tenant-scoped. In a tenant-rooted Explorer, caller-supplied tree names are scoped to the active tenant before the cluster authorizes or acts on them. Backups that the caller may not read are not listed.
 
-The rail is the app-level navigation tier. It is deliberately separate from the
-per-selection surfaces (Data, Topology, Metrics, Dead-letter), which live inside
-the Explore area and describe the selected tree or view. Selecting an area swaps
-the whole working surface: Explore shows the catalog and the selected tree's
-surfaces; Backups shows the backup catalog and its controls.
+## Availability
 
-Each area is a plugin registered by its own package, so adding a new area is a
-registration rather than a shell rewrite. Each plugin carries its display label
-and its own advisory access gate, which decides whether the area is currently
-available to the connected user.
+Backups is visible when the backup capability probe says the caller can list backups for the area-level sentinel scope. A definite answer is remembered for the circuit. A fault is not remembered, so the next navigation asks again.
 
-## Area entry: demote, do not hide
+The area is unavailable, not hidden, when the cluster serves backup control but the caller holds no backup grant. The exact sentence shown is:
 
-An area the connected user cannot use is shown **visible but demoted**, not
-hidden: it is grouped below a divider at lower visual weight and states the
-permission it needs and who to ask. The Backups area entry is `Allowed` when the
-connected endpoint's capability probe reports list access; if the probe answers
-without it, or the endpoint faults, the grant is withheld and the area resolves
-`Denied` and is demoted, so the user can see the capability exists and ask for
-the grant. A caller who has not signed in gets `AuthenticationRequired` and an
-invitation to sign in, never a denial, and so does a caller whose credential the
-server rejects as `Unauthenticated`. The one case that hides the area instead
-is a cluster that does not serve backup control at all: that answers
-`Unimplemented`, resolves `Unavailable`, and renders no entry, with the absence
-named in the rail's capabilities affordance. This area-entry check is the one
-advisory capability gate on the backups path; see
-[Navigation visibility policy](navigation-visibility-policy.md).
+> You do not hold a backup grant on this cluster. Ask an administrator for one.
 
-Inside the Backups area there is **no client-side permission pre-check**: the
-capture, schedule, restore, and delete controls enable or disable purely on local
-UI state - whether an operation is in flight, whether a valid capture scope and
-name are selected, and (for a restore) whether a restore target is present - not
-on any per-scope capability report. The controls simply submit, and the server is
-the fail-closed authorization point (see below), so a backup the caller may read
-and restore is actionable regardless of what scope is currently selected for a new
-capture, and a denial is folded into a clean "not permitted" status message.
+A denial from the probe is shown the same way. The area is hidden when the cluster does not serve backup control, the backup control facade is absent, the connection is not configured, or the probe faults.
 
-## Advisory, not a security boundary
+Backup page actions also use per-scope probes. If a probe denies a page action, the control is replaced with text such as **You may not restore this backup's tree**, **You may not delete this backup**, or **You may not schedule backups of this tree**. If the server denies an operation anyway, the page shows:
 
-The area-entry demotion is a usability affordance only. The **server remains the
-fail-closed enforcement point**: every real backup or restore action is
-authorized on the server when it runs, regardless of what the cached area-entry
-capability report said. If the report was over-optimistic - for example the grant
-changed after it was cached - the action still fails closed on the server, and the
-Explorer surfaces a clean "not permitted" message rather than an unhandled
-error. The capability probe itself has no side effects; it never captures,
-restores, or deletes anything.
+> You are not permitted to do this. Ask an administrator for the backup grant on this tree.
 
-## What the Backups area can do
+Other faults are shown as plain sentences, including missing backups, unsupported in-process maintenance operations, unreachable cluster, invalid requests, restore-validation failures, and the special message for a multi-cluster restore whose backup store is not shared by every cluster.
 
-- List the backups visible to the connected user, with their scope, kind
-  (full or incremental), and creation time.
-- Work across two sub-tabs, **New backup** and **Existing backups**. The panel
-  remembers which sub-tab was last open (a durable UI preference), so it reopens
-  where you left it.
-- **New backup**: pick the scope by clicking trees in the tree list; each click
-  adds the tree to an *Included in backup* list, one line per tree, with an *x*
-  to its left to remove it again. Selecting a single tree is a single-tree
-  capture; selecting more than one tree captures a **backup set** - one member
-  backup per tree under one set manifest, always at a shared cross-tree
-  consistency fence (multiple trees imply cross-tree consistency, so there is no
-  separate toggle). Choose Full or Incremental with the kind radios; the
-  base-backup dropdown appears only when Incremental is selected and lists the
-  existing full backups. An incremental capture needs exactly one selected tree
-  and a chosen base, so with more than one tree selected only a full backup set
-  can be captured. A single **Backup** button dispatches by the selected kind and
-  selection.
-- Optionally **schedule a recurring backup** while creating one: tick *Schedule
-  recurring* and pick an interval in hours and minutes. Clicking **Backup** then
-  both captures immediately and registers a recurring schedule for the selected
-  tree, following the chosen kind (full or incremental). The schedule is a
-  first-class runtime registration - an Orleans reminder that survives silo
-  restarts - and overrides the startup-configured cadence for that kind. An
-  interval below the scheduler minimum (one minute) is clamped up. Scheduling
-  targets a single tree, so it is unavailable for a multi-tree backup set.
-- On a successful capture the panel switches to **Existing backups** and
-  highlights the backup that was just created.
-- **Existing backups**: click a row to select it; its restore and delete
-  controls appear only while the row is selected. A filter row above the list
-  narrows it by kind and scope (each a drop-down of just the values actually
-  present), and by name and creation time (starts-with text boxes with the same
-  debounce and clear button as the tree key search). The list is ordered
-  newest-first and shown one page at a time. Restore a backup into a target
-  tree - the backup's own tree by default, which you can retype - choosing the
-  restore mode from the dropdown: **Repair missing items (non-destructive)**
-  (in-place) or **Point-in-time replace (destructive)** (shadow-cutover). The two
-  modes are explained below. A restore runs only after a confirmation prompt that
-  states the tree each backup lands in (and, for an incremental chain, the point
-  in time it restores to) and what the chosen mode does to it. A multi-tree
-  backup-set row has no target box: restoring it restores every member backup
-  back into its own tree, and the prompt lists each one. Delete a backup behind a
-  confirmation prompt that warns the action cannot be undone; deleting a
-  multi-tree backup-set row removes every member backup of the set, and the
-  prompt states how many that is.
-- **Incremental chains show as one row.** An incremental backup builds on a
-  base, forming a chain (a full base backup followed by successive increments).
-  The list collapses that whole chain to a single row - its most recent
-  increment (the tip) - rather than one row per increment. Selecting the row
-  reveals a **restore point** dropdown listing each capture time in the chain, so
-  you can restore the tree as it stood at any point in the history; the tip is
-  chosen by default. Deleting an incremental-chain row removes *every* backup in
-  the chain (the base and all increments), and the confirmation prompt states how
-  many that is.
-- **Edit or remove a recurring schedule.** A selected single-tree row shows a
-  **Schedule** button. It opens a dialog listing the tree's full and incremental
-  schedules, each prefilled with its current cadence. Change the interval and
-  click **Save** to update it, or **Remove** to unregister it. (Multi-tree set
-  rows have no schedule button, mirroring the single-tree scheduling rule in New
-  backup.)
+## Addresses
 
-### Choosing a restore mode
+The Backups area is tenant-scoped. These route forms exist in the shipped pages:
 
-The dropdown offers two modes with very different semantics:
+| Page | Plain address | Tenant-rooted form | Notes |
+| --- | --- | --- | --- |
+| Catalogue | `/backups` | `/t/{tenant}/backups` | Lists backups newest first. Query keys: `kind`, `name`, `tree`. |
+| Backup details | `/backups/{backupId}` | `/t/{tenant}/backups/{backupId}` | Describes one backup and offers export, restore, and delete. |
+| Capture | `/backups/new` | `/t/{tenant}/backups/new` | Captures a full, incremental, or set backup. `?tree={tree}` seeds the tree field. |
+| Schedules | `/backups/schedules` | `/t/{tenant}/backups/schedules` | Manages a tree's full and incremental schedules. Query key: `tree`. |
+| Health | `/backups/health` | `/t/{tenant}/backups/health` | Lists backup health where health monitoring applies. `?backup={id}` focuses one backup. |
+| Maintenance | `/backups/maintenance` | `/t/{tenant}/backups/maintenance` | Rebuilds and checks the catalogue where the connection serves the in-process extensions. |
+| Operation status | `/backups/operations/{operationId}` | `/t/{tenant}/backups/operations/{operationId}` | Shows a staged operation started in this Explorer circuit. |
 
-- **Repair missing items (non-destructive)** - the in-place mode. The backup is merged
-  into the live tree by last-writer-wins. Every restored entry keeps its original
-  hybrid-logical-clock timestamp from when it was captured, and any entry already
-  present in the tree was necessarily written *later* than the backup was taken.
-  Because last-writer-wins keeps the entry with the higher timestamp, a restored
-  entry can never out-rank anything currently in the tree: it can only ever fill a
-  slot that is *absent*. So this mode is purely additive - it heals keys that are
-  missing (lost, corrupted, or deleted and already reaped) and **never clobbers a
-  newer live write**. It is safe to run online, alongside live traffic, and can be
-  repeated without harm. It is *not* a rollback: a key whose value changed after
-  the backup keeps its newer value, and a key deleted after the backup stays
-  deleted until its tombstone is reaped.
-- **Point-in-time replace (destructive)** - the shadow-cutover mode. Instead of
-  merging, it builds a fresh shadow tree from the backup while live traffic keeps
-  running, then atomically swaps the tree registry alias so the logical tree
-  points at the shadow. A reader sees the whole old tree or the whole new tree,
-  never a mix. Because it replaces rather than merges, it does not fight
-  last-writer-wins against live data, so the restored tree holds *exactly* the
-  backup contents and all writes made after the backup are dropped. This is the
-  true point-in-time-recovery path. The previous physical tree is retained, so the
-  restore is revertible.
+## Navigation row
 
-Rule of thumb: reach for **Repair missing** to fill gaps in a running tree
-without risking newer data; reach for **Point-in-time replace** to roll a tree
-back to exactly how it looked when the backup was taken.
+Every Backups page has the Backups page row:
 
-Backups are always enumerated through the backup control API, so a backup whose
-scope the caller may not read never appears in the list. Every action reports
-its outcome inline, and a server denial is shown as a "not permitted" affordance
-rather than an error.
+- **Catalogue**;
+- **Schedules**;
+- **Health**, only when health monitoring is available for this deployment;
+- **Maintenance**.
 
-When a restore fails a precondition rather than an authorization check, the
-outcome carries the server's reason. A common misconfiguration is a coordinated
-(replicated-tree) restore whose backup sink is not actually shared across every
-cluster: the peer that did not capture the backup cannot resolve it, so the
-saga aborts. Rather than an opaque internal error, the Explorer surfaces a
-friendly message explaining that the backup store must be reachable from every
-cluster - a configuration problem for the operator to fix, not a transient
-failure to retry.
+The Health address is not found when health monitoring is unavailable.
 
-## Filtering, sorting, and paging the list
+## Catalogue
 
-The Existing backups filters, the newest-first ordering, and the paging are all
-evaluated on the server, not by fetching the whole catalog and trimming it in
-the browser. To keep that efficient no matter how many backups have
-accumulated, the backup service maintains a catalog **index** that keeps the
-list query fast: only the rows that match the active filter are read, already in
-newest-first order, one page at a time. The index is maintained automatically
-and kept in step with the catalog; you do not create, refresh, or manage it. It
-can be turned off in configuration (`LatticeBackupOptions.EnableBackupCatalogIndexView`,
-on by default), in which case the same list is served by a slower full scan with
-identical results.
+The Catalogue page lists the newest backups first, 25 at a time. Filters are sent to the server:
 
-## Backup health monitoring
+- `kind=full` or `kind=incremental`;
+- `name={prefix}` for backup-name prefix;
+- `tree={treeId}` for one tree.
 
-When the configured backup sink is durable and external, the Explorer surfaces an
-optional **health** column in the Existing backups list. Availability is probed
-once against the server; when health monitoring is not available (an in-process or
-non-durable sink, or the probe is denied), the column is hidden entirely.
+When inventory extensions are served, the lede summarises total backups, full and incremental counts, catalogue bytes, and newest backup time. If inventory is not served, the area falls back to the newest catalogue row. A selected tree filter also shows schedule status for that tree: full and incremental schedule registration, last successes, last scheduled run outcome, and chain depth, with a link to that tree's Schedules page.
 
-- Each row shows a health indicator: an unknown/not-yet-verified marker, a
-  healthy marker (with the last verification time), or a warning marker for a
-  backup whose manifest is missing or unresolvable. Clicking a warning opens a
-  details dialog that names the missing-or-uncommitted artifacts and any
-  content-hash mismatches, reports when the backup was last checked, and offers a
-  **Re-check now** button to run a fresh on-demand verification.
-- The per-backup schedule dialog carries a **Health monitoring** section: tick to
-  verify that backup's sink payload periodically, choose an interval in hours and
-  minutes, and click **Save**.
+Rows link to the Backup details page. When health monitoring is available, rows also show the latest stored health report as a health pill. The page lists recent operations from the current circuit and links to their status pages.
 
-The corresponding `IBackupCatalogReader` members drive this: availability
-(`IsHealthMonitoringAvailableAsync`), the latest stored report
-(`GetHealthAsync`), an on-demand verification (`CheckHealthAsync`), and the
-per-backup monitor override (`ConfigureHealthAsync`). Each folds a denial or
-transport failure into a safe empty/false result rather than throwing, and the
-server remains the fail-closed authorization point for every health action.
+## Capture
+
+The Capture page can start three staged operations:
+
+- **Full** captures a whole tree, a key prefix, or one key.
+- **Incremental** captures changes since a selected full backup. The page can find up to 50 newest full backups for the named tree and requires a base before capture.
+- **Set of trees** captures one full backup per tree under one set manifest. The set can be captured at one cross-tree consistency fence.
+
+A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. The first operation stage checks access before the capture call.
+
+Capture operations report links to the captured backup pages, the number of backups captured, artifact count, and size.
+
+## Backup details
+
+The Backup details page describes one backup: id, tree, scope, kind, captured time, base backup when present, set name when present, capturing cluster, total artifact size, and health link when monitoring is available. App-owned trees are labelled with their owning app when the Apps surfaces can be read; if the app declares the tree rebuildable, the page says re-deriving may replace a restore.
+
+The **Restore chain** section lists the backups replayed in order, oldest first. Incremental chains can therefore be restored to the selected restore point.
+
+The **Artifacts** section lists artifact id, size, chunk count, and an **Export** action. Export streams the artifact to the browser. Export denials and faults are shown inline.
+
+### Restore
+
+Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where in-process extensions are served, a cold-restore option that reads from the backup store alone.
+
+Both restore modes are confirmed before the operation starts:
+
+- **Repair missing items (non-destructive)** uses in-place restore. It merges the backup into the live tree so restored entries fill missing keys while newer live writes win.
+- **Point-in-time replace (destructive)** builds a fresh copy from the backup and cuts the tree over to it. Writes after the backup are dropped. The previous tree is kept so the restore can be reverted.
+
+The confirmation is named **Restore this backup?** and requires the target tree name. If the target belongs to an app that declares the tree rebuildable, the confirmation warns that re-deriving may be a better choice.
+
+A restore starts a staged operation and navigates to its operation status page. A finished point-in-time restore can be reverted from that status page.
+
+### Delete
+
+Delete is offered only when the scope probe grants delete. It opens a destructive confirmation named **Delete this backup?** and requires the backup name. The confirmation says the backup is removed from the catalogue and the backup store, unshared artifacts are deleted, incremental backups built on it can no longer be restored, and the action cannot be undone.
+
+## Schedules
+
+The Schedules page works on one tree, selected with `?tree={tree}` or the **Show schedules** form. It probes the whole-tree backup scope, then shows full and incremental schedule rows when the caller may list backup status.
+
+Each row shows whether a schedule is registered, its interval, last run, and last success. A registered schedule can be cancelled when the caller may capture that backup kind. Cancelling opens a dialog named **Cancel this schedule?** and states that existing backups are kept.
+
+The registration form can create or change a full or incremental schedule. It asks for hours and minutes, rejects non-whole or zero total intervals, and notes that an interval under one minute is raised to one minute by the scheduler. Successful saves and cancellations reload the schedule status.
+
+## Health
+
+Health appears only when the backup sink is durable and external. The Health page lists the newest 25 backups and their latest stored health reports. A focused address, `/backups/health?backup={id}`, shows one backup, its latest report, **Check now**, and periodic monitoring settings.
+
+A health report shows status, checked time, explanation, whether the manifest is present, missing or uncommitted artifacts, hash mismatches, and peer-cluster visibility when applicable. Focused health actions are offered only when the scope probe grants list authority for that backup.
+
+Periodic monitoring can be turned on or off per backup. The form asks for hours and minutes and saves a monitoring interval; the monitor applies the config on its next sweep.
+
+## Maintenance
+
+Maintenance covers in-process catalogue extensions. A connection that does not serve them shows:
+
+> This connection does not serve this operation. Run it from a silo host, where the backup control API is in process.
+
+**Rebuild the catalogue** scans every manifest in the backup store and records it in the catalogue. It is safe to run again because existing rows are reconciled in place. Starting it opens a dialog named **Rebuild the catalogue?**.
+
+**Check the catalogue against the store** finds catalogue rows whose backup is gone from the store. The check changes nothing. If a check finds orphan rows, **Remove orphan rows...** opens a destructive confirmation named **Remove orphan rows?**. Removing orphan rows touches only the catalogue; the store is not touched, and a rebuild restores any row whose backup reappears.
+
+All maintenance actions run as staged operations with status pages.
+
+## Operation status pages
+
+Every capture, restore, revert, rebuild, and scrub operation started from the Explorer creates a circuit-scoped status page at `/backups/operations/{id}`. The page can be left and resumed while the circuit lives. It shows:
+
+- title and start or finish time;
+- a status pill and message;
+- ordered stages, with the current stage marked;
+- facts and links reported by the operation;
+- orphan rows for catalogue scrub operations;
+- revert controls for a completed point-in-time restore.
+
+Reverting a point-in-time restore opens a destructive confirmation named **Revert this restore?**. It says the tree returns to the copy it held before the restore and every write made since the restore is dropped. The revert itself becomes a new operation status page.
+
+## Palette and address completions
+
+Backups contributes one command:
+
+| Command id | Label | Target |
+| --- | --- | --- |
+| `backups.capture` | `Capture backup...` | `/backups`, invoking it opens `/backups/new` |
+
+The visible **Capture backup...** link on the Catalogue page carries the same command id.
+
+The address line completes backups in two ways:
+
+- `backup:{idPrefix}` and `/backups/{idPrefix}` scan catalogued ids in id order, up to 2000 scanned ids, and stop early when the id order proves no later id can match.
+- free text searches backup names by prefix, newest first, using the current address-query result limit.
+
+Only backups the caller may read are returned.
+
+## Limits and caching
+
+- Catalogue and Health lists show 25 rows per page.
+- Incremental base lookup reads up to 50 newest full backups of the tree.
+- Backup-id completions scan at most 2000 ids.
+- Scope probes return no capabilities when they fault.
+- Health availability is remembered once known; a fault reads as unavailable but is not remembered as a definitive true value.
+- Inventory not served withdraws the in-process extensions for the circuit; a denied inventory keeps them offered.
+- Staged operations are kept in the current Explorer circuit. Ending the circuit cancels still-running client-side operations.
+
+## Server authority
+
+The backup control facade composes caller-supplied tree names through the active tenant, then uses the same effective scope for authorization and operation. Listing hides manifests the caller may not read. Capture, schedule, delete, health, export, restore, cold restore, catalogue rebuild, catalogue scrub, and revert each authorize on the server before touching data.
 
 ## See also
 
-- [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)
-- [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) - the backup
-  control facade, including its read-only capability probe.
-- [`Orleans.Lattice.Api.Backup.Grpc`](../lattice.api.backup.grpc/README.md) - the
-  gRPC binding and typed client the Explorer drives.
+- [Explorer overview](README.md)
+- [Navigation model](navigation-model.md)
+- [Area availability](area-availability.md)
+- [Areas reference](areas.md#backups)
+- [Lattice Apps](lattice-apps.md)
+- [Backup engine](../lattice.backup/README.md)
+- [Backup API](../lattice.api.backup/README.md)
+- [Backup gRPC binding](../lattice.api.backup.grpc/README.md)
