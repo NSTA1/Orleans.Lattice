@@ -241,6 +241,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - The azure-throughput rig ignored a documented `0`.** The silo now honours `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=0` (coalescing off) and the TCP producer `BENCH_DURATION_SEC=0` (run forever) instead of running the default, and a gate checks every documented `0`. ([#3854](https://github.com/NSTA1/Orleans.Lattice/issues/3854)) (`repository-wide`)
 
+- **Core - History continuation pages misreported the trim point.** On the WAL-window history fallback, a truncated continuation page named its own first revision, or zero when it returned none, as `EarliestAvailable`. Every truncated page now names the oldest still-readable revision. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice`)
+
+- **Replication - Leaf re-replay missed a trimmed partition.** Once an earlier partition spent the shared read budget, later ones went unexamined, so a trimmed one read as untrimmed and re-replay ran past a WAL gap instead of reporting `wal_trimmed`. Their trim point is now probed. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice.Replication`)
+
+- **Config - NaN ratios passed range checks.** A NaN `LatticeViewOptions.ThrottledBatchRatio` was accepted, draining one entry per throttled pass, and a NaN `RetainedBytesAdvisoryRatio` zeroed every storage-pressure threshold. The validator now rejects NaN and the collector falls back to `0.8`. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice`, `Orleans.Lattice.Scaling`)
+
 ### Security
 
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
