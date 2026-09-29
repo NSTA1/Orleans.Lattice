@@ -42,6 +42,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Leaf frame structural row walk.** The frame codec's row parser took its materialise-or-skip mode as a runtime flag, so the skipping walk behind frame validation still ran every branch of the materialising one. The mode is now a type argument the JIT specialises away, halving the walk. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation contribution slots.** A numeric contribution touches at most two accumulator slots, yet accumulated them in a dictionary and then walked it back out to rebuild the same keys for cleanup. Two locals now carry both, removing 44% of the flip's allocation. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation shard slot derivation.** A re-grouping contribution derived its shard slot once per accumulator key, transcoding the source key to UTF-8 and hashing it twice for an answer that cannot differ. It is derived once, making the pair 39% faster. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
 - **Performance - Event publish fan-out.** A multi-key set, conditional set or CRDT delta apply published its per-key stream events one await at a time. They now go out in bounded concurrent windows of 32, so a 500-key request costs 16 grain-call rounds instead of 500. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
 
 - **Performance - Leaf frame state-bytes walk.** The row walker that sums a frame's state bytes is now pinned as an inline root, so the JIT inlines its per-row parser into the walk instead of inlining the walk into its callers. The walk is 68% faster over a 4096-row frame. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
