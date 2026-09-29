@@ -49,7 +49,8 @@ internal static class AppMcpTestData
         AppSlug slug,
         AppVersion version,
         AppRegistryLifecycleState state = AppRegistryLifecycleState.Enabled,
-        AppVersion? ceilingVersion = null) =>
+        AppVersion? ceilingVersion = null,
+        IReadOnlyList<AppRoleBinding>? bindings = null) =>
         new()
         {
             Isolation = new AppIsolationContext { Tenant = tenant, ClusterId = "test-cluster" },
@@ -58,9 +59,21 @@ internal static class AppMcpTestData
             Provenance = new AppProvenance(),
             Ceiling = AppCapabilityCeiling.Structural(LatticeOperation.Read | LatticeOperation.Write),
             CeilingVersion = ceilingVersion ?? version,
+            RoleBindings = bindings ?? DefaultBindings,
             State = state,
             Revision = 1,
         };
+
+    /// <summary>The group the default test bindings bind to <paramref name="role"/>.</summary>
+    public static string GroupFor(string role) => "g-" + role;
+
+    /// <summary>The default bindings: each of the fixtures' role names bound to its own group.</summary>
+    public static readonly AppRoleBinding[] DefaultBindings =
+    [
+        AppRoleBinding.Create("reader", GroupFor("reader")),
+        AppRoleBinding.Create("writer", GroupFor("writer")),
+        AppRoleBinding.Create("editor", GroupFor("editor")),
+    ];
 
     /// <summary>Compiles a registry snapshot through the real (internal) snapshot factory.</summary>
     public static CompiledAppRegistrySnapshot Snapshot(long epoch, params AppRegistryRecord[] records)

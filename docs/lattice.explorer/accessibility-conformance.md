@@ -102,7 +102,7 @@ Three disciplines make those results mean something:
   [`AxeMutationProof.md`](../../test/lattice.explorer.uitests/AxeMutationProof.md)
   records that the axe sweep passes an ARIA state bound to a C# `bool` (a valueless
   `aria-pressed`) and that a named assertion is what catches it.
-  `test/lattice.explorer.uitests/Apps/IsolationMutationProof.md`
+  [`IsolationMutationProof.md`](../../test/lattice.explorer.uitests/Apps/IsolationMutationProof.md)
   records that the app frame stays contained when either of its two sandbox locks
   (the frame attribute or the bootstrap document's policy) is removed, and that
   removing both fails the isolation tests in all three engines.
@@ -143,7 +143,7 @@ technology or interaction involved.
 ## See also
 
 - [`ConformanceChecklist.md`](../../test/lattice.explorer.uitests/ConformanceChecklist.md) - the ten criteria and their enforcing tests
-- [`AxeMutationProof.md`](../../test/lattice.explorer.uitests/AxeMutationProof.md) and `test/lattice.explorer.uitests/Apps/IsolationMutationProof.md` - the mutation evidence
+- [`AxeMutationProof.md`](../../test/lattice.explorer.uitests/AxeMutationProof.md) and [`IsolationMutationProof.md`](../../test/lattice.explorer.uitests/Apps/IsolationMutationProof.md) - the mutation evidence
 - [Theming and density](theming-and-density.md)
 - [The Explorer navigation model](navigation-model.md)
 - [Lattice Apps in the Explorer](lattice-apps.md)

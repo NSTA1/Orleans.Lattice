@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using Orleans.Lattice.Apps;
+using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
@@ -28,7 +29,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task An_advertised_tool_invokes_the_apps_implementation()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
 
         var tool = await host.SessionToolAsync("notes_search");
         var result = await host.InvokeAsync(tool!);
@@ -44,23 +45,74 @@ public sealed class AppMcpToolSourceInvocationTests
         Assert.That(await host.SessionToolAsync("notes_search"), Is.Null);
     }
 
-    [Test]
-    public async Task Revoking_the_grant_after_advertisement_denies_the_invocation()
+    /// <summary>
+    /// Coordinator review of #3902: a role is held by binding, but an explicit deny on the caller still takes it
+    /// away, as it did when the tool gate asked the access gate. A deny on the role's tree or a cluster-wide deny
+    /// refuses a tool advertised before the deny landed, and the next session no longer advertises it.
+    /// </summary>
+    [TestCase("a/notes/notes")]
+    [TestCase(LatticeScope.ClusterWideTreeId)]
+    public async Task An_explicit_deny_on_a_bound_member_refuses_the_invocation_and_withholds_the_tool(string deniedTree)
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
+        var tool = await host.SessionToolAsync("notes_search");
+        Assert.That(tool, Is.Not.Null, "a bound member is offered the tool before the deny");
+
+        host.Gate.Deny("alice", deniedTree, LatticeOperation.Read);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!));
+            Assert.That(await host.SessionToolAsync("notes_search"), Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task A_deny_on_another_subject_or_tree_leaves_the_bound_member_its_tool()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        host.Gate.Deny("bob", LatticeScope.ClusterWideTreeId, LatticeOperation.Read);
+        host.Gate.Deny("alice", "a/other/tree", LatticeOperation.Read);
+
         var tool = await host.SessionToolAsync("notes_search");
 
-        host.Gate.RevokeAll();
+        Assert.That((await host.InvokeAsync(tool!)).Text(), Does.Contain("found"));
+    }
+
+    [Test]
+    public async Task Leaving_the_bound_group_after_advertisement_denies_the_invocation()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        var tool = await host.SessionToolAsync("notes_search");
+
+        host.Membership.LeaveAll();
 
         Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!));
+    }
+
+    [Test]
+    public async Task Re_binding_the_role_to_another_group_moves_it_on_the_next_invocation()
+    {
+        var host = NotesHost();
+        host.Bind("alice");
+        var tool = await host.SessionToolAsync("notes_search");
+
+        host.Publish(2, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, bindings: [AppRoleBinding.Create("reader", "g-new-readers")]) with { Revision = 2 });
+
+        Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!));
+
+        host.Membership.Join("alice", "g-new-readers");
+        Assert.That((await host.InvokeAsync(tool!)).Text(), Does.Contain("found"));
     }
 
     [Test]
     public async Task Disabling_the_app_after_advertisement_denies_the_invocation()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
         var tool = await host.SessionToolAsync("notes_search");
 
         host.Publish(2, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, AppRegistryLifecycleState.Disabled));
@@ -73,7 +125,7 @@ public sealed class AppMcpToolSourceInvocationTests
     {
         var host = NotesHost();
         host.Source.Add(AppMcpTestData.ReaderManifest(Notes, AppMcpTestData.V2, "search"));
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
         var tool = await host.SessionToolAsync("notes_search");
 
         host.Publish(2, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V2));
@@ -85,7 +137,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task A_tool_advertised_to_one_tenant_is_denied_when_invoked_under_another()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
         var tool = await host.SessionToolAsync("notes_search");
 
         Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!, TenantId.Parse("acme")));
@@ -95,7 +147,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task The_current_region_is_an_accepted_target_but_a_peer_region_is_rejected()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
         var tool = (await host.SessionToolAsync("notes_search"))!;
         var router = new LatticeApiMcpRegionRouter("home", [
             new LatticeApiMcpRegionDefinition { RegionId = "home", ClusterId = "c1", IsCurrent = true, Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.Data] = null } },

@@ -14,8 +14,10 @@ namespace Orleans.Lattice.Api.Apps;
 /// <para>
 /// <b>Only app-owned grants.</b> A <see cref="TreeGrant"/> is exactly what an <c>app:{slug}</c> rule the role
 /// compiler writes says: a role binding's membership group, the role's operations, and one of the role's
-/// scopes. Nothing here reads the caller's other rules, which is what stops a caller's broad operator rights
-/// flowing into the app's UI.
+/// scopes. The grants are built from the install's compiled <see cref="AppRoleGate"/>s - the same definition of
+/// "holds a role" the app workspace and the app MCP tools report - so a caller is only ever offered what the
+/// bridge then allows. Nothing here reads the caller's other rules, which is what stops a caller's broad
+/// operator rights flowing into the app's UI.
 /// </para>
 /// <para>
 /// <b>The ceiling is re-checked.</b> A grant's operations are the role's operations intersected with the
@@ -100,21 +102,18 @@ internal sealed class AppBridgeInstallPlan
 
     private static TreeGrant[] BuildGrants(AppRoleGrantInstall install, string local, string effective, bool adopted)
     {
-        var record = install.Record;
-        var roles = install.Manifest.Roles ?? [];
-        var ceiling = record.Ceiling;
-        var ceilingOperations = (ceiling?.AllowedOperations ?? LatticeOperation.None) & AppManifestValidator.RoleOperations;
+        var ceiling = install.Record.Ceiling;
         List<TreeGrant>? grants = null;
-        for (var i = 0; i < roles.Length && i < install.Roles.Length; i++)
+        foreach (var role in install.Roles)
         {
-            var role = roles[i];
-            var operations = role.Operations & ceilingOperations;
-            if (operations == LatticeOperation.None)
+            // The same compiled role the workspace and the MCP tool gate report as held: its operations are
+            // already intersected with the ceiling and its groups are the install's bindings.
+            if (!role.ConfersGrant)
             {
                 continue;
             }
 
-            foreach (var scope in install.Roles[i].Scopes)
+            foreach (var scope in role.Scopes)
             {
                 if (!string.Equals(scope.TreeId, effective, StringComparison.Ordinal)
                     || (scope.Kind != LatticeScopeKind.Tree && scope.KeyOrPrefix is null)
@@ -123,14 +122,9 @@ internal sealed class AppBridgeInstallPlan
                     continue;
                 }
 
-                foreach (var binding in record.RoleBindings ?? [])
+                foreach (var groupId in role.GroupIds)
                 {
-                    if (binding is not null
-                        && !string.IsNullOrEmpty(binding.GroupId)
-                        && string.Equals(binding.RoleName, role.Name, StringComparison.Ordinal))
-                    {
-                        (grants ??= []).Add(new TreeGrant(binding.GroupId, operations, scope.Kind, scope.KeyOrPrefix));
-                    }
+                    (grants ??= []).Add(new TreeGrant(groupId, role.Operations, scope.Kind, scope.KeyOrPrefix));
                 }
             }
         }
@@ -203,25 +197,7 @@ internal sealed class AppBridgeInstallPlan
             {
                 if ((grant.Operations & operation) == operation
                     && grant.Covers(key, prefix)
-                    && Contains(groups, grant.GroupId))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool Contains(IReadOnlyCollection<string> groups, string groupId)
-        {
-            if (groups is IReadOnlySet<string> set)
-            {
-                return set.Contains(groupId);
-            }
-
-            foreach (var group in groups)
-            {
-                if (string.Equals(group, groupId, StringComparison.Ordinal))
+                    && AppRoleGate.IsMember(groups, grant.GroupId))
                 {
                     return true;
                 }

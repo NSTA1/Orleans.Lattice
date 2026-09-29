@@ -8,8 +8,9 @@ namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
 /// <summary>
 /// A deterministic, in-memory composition of the discovery core and the app tool surface:
-/// a settable registry projection, an in-memory app source, a granting access gate, a
-/// credential-echo membership context and a header-driven tenant, all behind the real
+/// a settable registry projection, an in-memory app source, a granting access gate (the caller's
+/// own rights, which must never confer an app role), a credential-echo membership context and a
+/// header-driven tenant, all behind the real
 /// <see cref="LatticeApiMcpSessionConfigurator"/> and the real <c>AddAppMcpTools</c> wiring.
 /// </summary>
 internal sealed class AppMcpTestHost
@@ -26,7 +27,7 @@ internal sealed class AppMcpTestHost
             .AddSingleton<IAppRegistryProjection>(Projection)
             .AddSingleton<IAppSource>(Source)
             .AddSingleton<ILatticeAccessGate>(Gate)
-            .AddSingleton<ILatticeMembershipContext, CredentialEchoMembershipContext>()
+            .AddSingleton<ILatticeMembershipContext>(Membership)
             .AddSingleton<ITenantContextResolver, AmbientTenantResolver>();
         services.AddSingleton<IEnumerable<IAppMcpToolProvider>>(_ => Providers);
         if (registerApps)
@@ -40,7 +41,21 @@ internal sealed class AppMcpTestHost
 
     public FakeAppSource Source { get; } = new();
 
-    public GrantingAccessGate Gate { get; } = new();
+    /// <summary>
+    /// The access gate: the whole policy, including the install's compiled app rules. It allows by default
+    /// (the app rules are live and nothing denies), so a fixture removes a role with an explicit deny.
+    /// </summary>
+    public GrantingAccessGate Gate { get; } = new() { AllowByDefault = true };
+
+    /// <summary>The membership the host resolves callers through; join a caller to a bound group to give it a role.</summary>
+    public CredentialEchoMembershipContext Membership { get; } = new();
+
+    /// <summary>Joins <paramref name="subject"/> to the group the test records bind to <paramref name="role"/>.</summary>
+    public AppMcpTestHost Bind(string subject, string role = "reader")
+    {
+        Membership.Join(subject, AppMcpTestData.GroupFor(role));
+        return this;
+    }
 
     public List<IAppMcpToolProvider> Providers { get; } = new();
 

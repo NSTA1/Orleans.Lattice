@@ -92,10 +92,11 @@ signs in as any identity, and **Sign out** sticks.
 ## Walk each area
 
 Start with `dotnet run` (signed in as `explorer-admin`, connected to `east`).
-The console opens at `/t/acme`: the operator administers `acme` and `globex`,
-and the console scopes a signed-in operator to the first tenant it can reach.
-The address is rooted at `/t/{tenant}` for every tenant-scoped area; Access and
-Cluster are cluster-wide and never are.
+The console opens at `/t/default`, the cluster's reserved default tenant: an
+operator can reach it as well as `acme` and `globex`, which it administers, and
+starts there. Type `t/acme` in the address line and choose it, or open
+`/t/acme`, to follow the walk below. The address is rooted at `/t/{tenant}` for
+every tenant-scoped area; Access and Cluster are cluster-wide and never are.
 
 ### Home
 
@@ -108,8 +109,8 @@ one area that stays hidden (see [Telemetry](#telemetry)).
 `/t/acme/data` lists acme's trees: `orders` and the task board's app tree
 `a/task-board/tasks`. Open `orders` to browse its five entries. The default
 tenant's `factory-floor` is not listed here, because the console is scoped to
-`acme`; restart with `--sign-in-as alice` to browse it as a caller in the default
-tenant, or see it in Replication and Cluster.
+`acme`; open `/t/default/data` to browse it, or see it in Replication and
+Cluster.
 
 ### Apps
 
@@ -156,10 +157,10 @@ Backups on the spine (Backups says a backup grant is needed). Tenancy is now
 other tenant in sight. Restart with `--sign-in-as globex-admin` and approve
 acme's offer under `/t/globex/tenancy/sharing`.
 
-A tenant admin's Data and Apps pages read empty: the console does not yet send
-the active tenant to the cluster, so the cluster answers a tenant admin's data
-reads as the default tenant, where it holds no grant. The operator's view is
-unaffected, because the bootstrap administrator bypasses the tenant gate.
+Every call the console makes asserts the tenant its address names, so
+`acme-admin` sees acme's `orders` and task board under Data and Apps, and an
+install at `/t/{tenant}/apps` lands in that tenant. The cluster checks the
+assertion against the caller's own tenants, so it grants nothing by itself.
 
 ### Replication
 

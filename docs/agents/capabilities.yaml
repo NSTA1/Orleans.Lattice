@@ -183,8 +183,8 @@ capabilities:
     guarantees:
       - statement: "Enabled app tools are advertised on the single Lattice MCP endpoint under the {slug}_{tool} namespace."
         source: "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.Compose"
-      - statement: "A tool is advertised only when the caller holds every operation of the tool's declared role on at least one resolved role scope."
-        source: "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate.IsHeldAsync"
+      - statement: "A tool is advertised only when the caller holds the tool's declared role by binding: its group closure contains a group the install binds to the role, and the access gate, asked only after the binding holds, refuses none of the role's operations on at least one resolved role scope."
+        source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
       - statement: "The invocation path re-runs the advertisement decision against the current registry snapshot."
         source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
     non_guarantees:

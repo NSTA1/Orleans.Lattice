@@ -21,8 +21,9 @@ namespace Orleans.Lattice.Api.Apps.Tests.Bridge;
 /// With <c>tenant</c> set, the silo's active-tenant resolver is replaced by one that reads the ambient
 /// <see cref="LatticeActiveTenantContext"/>, and every call is made inside that tenant, so the install, its
 /// compiled rules, its trees and the bridge all use the tenant-composed <c>t/{tenant}/a/{slug}/{tree}</c> ids.
+/// With <c>allTreesGrants</c> set (default tenant only), the all-trees (<c>Tree:*</c>) authorization tier is on.
 /// </remarks>
-internal sealed class AppBridgeClusterFixture(TenantId? tenant)
+internal sealed class AppBridgeClusterFixture(TenantId? tenant, bool allTreesGrants = false)
 {
     public const string BootstrapAdmin = "root-admin";
     public const string Slug = "notes-app";
@@ -86,7 +87,11 @@ internal sealed class AppBridgeClusterFixture(TenantId? tenant)
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder(1);
-        if (Tenant is null)
+        if (allTreesGrants)
+        {
+            builder.AddSiloBuilderConfigurator<AllTreesSiloConfigurator>();
+        }
+        else if (Tenant is null)
         {
             builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         }
@@ -236,6 +241,16 @@ internal sealed class AppBridgeClusterFixture(TenantId? tenant)
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder) => AppBridgeClusterFixture.Configure(siloBuilder);
+    }
+
+    /// <summary>The default-tenant silo with the all-trees (<c>Tree:*</c>) tier on, so a cluster-wide deny applies.</summary>
+    private sealed class AllTreesSiloConfigurator : ISiloConfigurator
+    {
+        public void Configure(ISiloBuilder siloBuilder)
+        {
+            AppBridgeClusterFixture.Configure(siloBuilder);
+            siloBuilder.Services.Configure<LatticeAuthOptions>(options => options.AllTreesGrantsEnabled = true);
+        }
     }
 
     private sealed class TenantSiloConfigurator : ISiloConfigurator

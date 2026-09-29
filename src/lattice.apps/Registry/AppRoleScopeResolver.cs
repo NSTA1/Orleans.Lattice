@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Apps;
 
 /// <summary>
 /// Resolves a manifest role's scope templates to effective tree scopes exactly as
-/// <see cref="AppRoleCompiler"/> does, so a role gate asks the access gate about the same trees the
-/// compiled rules name.
+/// <see cref="AppRoleCompiler"/> does, so a role gate - and the bridge plan built from it - names exactly the
+/// trees the compiled rules name.
 /// </summary>
 /// <remarks>
 /// A template resolves, in the tenant-local vocabulary, to <c>a/{otherApp}/{tree}</c> when it names another

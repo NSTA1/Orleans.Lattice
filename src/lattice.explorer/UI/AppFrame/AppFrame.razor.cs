@@ -39,6 +39,7 @@ public sealed partial class AppFrame : IAsyncDisposable
     private AppBridgeSession? _session;
     private string? _authorizedSlug;
     private string? _deliveredPath;
+    private bool _loaded;
     private ElementReference _frame;
     private bool _attachRequested;
     private bool _srcArmed;
@@ -346,6 +347,26 @@ public sealed partial class AppFrame : IAsyncDisposable
     internal Task HandleFrameReloadedAsync() =>
         _phase is Phase.Failed ? Task.CompletedTask : FailAsync(AppFrameFailure.Reloaded, detach: false);
 
+    /// <summary>
+    /// The frame's last script loaded, so every handler the app registers while it loads is
+    /// listening now. The address's in-app path was first posted when the bundle was
+    /// delivered, before any app script ran and so before any app could listen for it; it is
+    /// posted once more now, so a deep link reaches the app. Only the first report per launch
+    /// counts, so a frame cannot make the host repeat itself.
+    /// </summary>
+    /// <returns>A task that completes when the path has been posted.</returns>
+    internal async Task HandleFrameLoadedAsync()
+    {
+        if (_phase != Phase.Running || _loaded)
+        {
+            return;
+        }
+
+        _loaded = true;
+        _deliveredPath = null;
+        await SyncPathAsync().ConfigureAwait(true);
+    }
+
     private async Task OpenAsync()
     {
         await ResetAsync().ConfigureAwait(true);
@@ -392,6 +413,7 @@ public sealed partial class AppFrame : IAsyncDisposable
         _srcArmed = false;
         _ready = false;
         _deliveredPath = null;
+        _loaded = false;
     }
 
     private async Task<bool> DeliverAsync(AppFrameBundle bundle)

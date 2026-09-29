@@ -7,4 +7,7 @@ internal sealed record ShellTransportRequest(string Path, IReadOnlyDictionary<st
 {
     /// <summary>The <c>authorization</c> header, or <see langword="null"/> when none was sent.</summary>
     public string? Authorization => Headers.TryGetValue("authorization", out var value) ? value : null;
+
+    /// <summary>The asserted active tenant header, or <see langword="null"/> when none was sent.</summary>
+    public string? Tenant => Headers.TryGetValue(LatticeActiveTenantAssertion.DefaultHeaderName, out var value) ? value : null;
 }

@@ -28,9 +28,8 @@ public sealed class AddRepoContextToolsAppRegistrationTests
 
     private static RepoContextAppTestHost EnabledAndGranted()
     {
-        var host = FlagOn();
+        var host = FlagOn().BindReader();
         host.Projection.Publish(1, RepoContextAppTestHost.Record());
-        host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read | LatticeOperation.RangeRead);
         return host;
     }
 
@@ -91,9 +90,8 @@ public sealed class AddRepoContextToolsAppRegistrationTests
     public async Task Flag_on_with_the_app_disabled_is_byte_identical_to_flag_off()
     {
         var flagOff = await FlagOff().SnapshotAsync();
-        var host = FlagOn();
+        var host = FlagOn().BindReader();
         host.Projection.Publish(1, RepoContextAppTestHost.Record(AppRegistryLifecycleState.Disabled));
-        host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read | LatticeOperation.RangeRead);
 
         Assert.That(await host.SnapshotAsync(), Is.EqualTo(flagOff));
     }
@@ -170,12 +168,17 @@ public sealed class AddRepoContextToolsAppRegistrationTests
         });
     }
 
+    /// <summary>
+    /// #3902: an app role is granted by binding, never by the caller's own rights. The caller's gate allows
+    /// everything, but it is not a member of the group the install binds to the reader role, so no app tool
+    /// is offered.
+    /// </summary>
     [Test]
     public async Task Flag_on_with_the_app_enabled_offers_no_app_tools_to_a_caller_without_the_reader_role()
     {
         var host = FlagOn();
         host.Projection.Publish(1, RepoContextAppTestHost.Record());
-        host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read);
+        host.Membership.Join(RepoContextAppTestHost.Principal, "g-somebody-else");
 
         var advertised = await host.AdvertisedAsync();
 
@@ -205,8 +208,28 @@ public sealed class AddRepoContextToolsAppRegistrationTests
         var tool = await host.SessionToolAsync("repo-context_stats");
         Assert.That(tool, Is.Not.Null);
 
-        host.Gate.RevokeAll();
+        host.Membership.LeaveAll();
 
         Assert.That(async () => await host.InvokeAsync(tool!), Throws.InstanceOf<ModelContextProtocol.McpException>());
+    }
+
+    /// <summary>
+    /// #3902: the access gate can only take a bound role away. A deny on the caller everywhere (a cluster-wide deny
+    /// rule) refuses a tool advertised before the deny, and the next session no longer advertises it.
+    /// </summary>
+    [Test]
+    public async Task Flag_on_app_tool_is_refused_once_the_bound_caller_is_explicitly_denied()
+    {
+        var host = EnabledAndGranted();
+        var tool = await host.SessionToolAsync("repo-context_stats");
+        Assert.That(tool, Is.Not.Null);
+
+        host.Gate.DenyEverywhere(RepoContextAppTestHost.Principal);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(async () => await host.InvokeAsync(tool!), Throws.InstanceOf<ModelContextProtocol.McpException>());
+            Assert.That(await host.SessionToolAsync("repo-context_stats"), Is.Null);
+        });
     }
 }

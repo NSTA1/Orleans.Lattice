@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// The schema facade has no "list governed trees" verb, so the tree list comes
 /// from the catalogue. Physical trees are filtered out: a resize or restore
 /// shadow appears in the registry beside the logical tree that aliases it, and the
-/// Schema area never shows a physical id.
+/// Schema area never shows a physical id. The remembered list is keyed on the
+/// tenant the circuit asserts, so a tenant switch reads the catalogue again.
 /// </remarks>
 /// <param name="facades">The area's facades.</param>
 /// <param name="time">The clock the freshness window is measured on.</param>
@@ -26,8 +27,7 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
     /// <summary>What the caller is told when no cluster connection is configured.</summary>
     public const string NotConnected = "Connect to a cluster to list its trees.";
 
-    private IReadOnlyList<string>? _trees;
-    private DateTimeOffset _readAt;
+    private Remembered? _remembered;
 
     /// <summary>Whether the last read stopped at <see cref="MaximumPages"/> with more to come.</summary>
     public bool Truncated { get; private set; }
@@ -39,9 +39,13 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
     /// <exception cref="InvalidOperationException">No cluster connection is configured.</exception>
     public async Task<IReadOnlyList<string>> GetAsync(bool refresh, CancellationToken cancellationToken)
     {
-        if (!refresh && _trees is { } remembered && time.GetUtcNow() - _readAt < Freshness)
+        var tenant = facades.AssertedTenant;
+        if (!refresh
+            && _remembered is { } remembered
+            && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal)
+            && time.GetUtcNow() - remembered.ReadAt < Freshness)
         {
-            return remembered;
+            return remembered.Trees;
         }
 
         if (facades.Session is not { IsConfigured: true } session)
@@ -65,13 +69,20 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
 
         var trees = Project(entries);
         Truncated = token is not null;
-        _trees = trees;
-        _readAt = time.GetUtcNow();
+
+        // Remembered only for the tenant it was read under, and only while the
+        // circuit still asserts it, so one tenant's trees are never listed for
+        // another.
+        if (string.Equals(facades.AssertedTenant, tenant, StringComparison.Ordinal))
+        {
+            _remembered = new Remembered(trees, tenant, time.GetUtcNow());
+        }
+
         return trees;
     }
 
     /// <summary>Forgets the remembered list, so the next read goes to the cluster.</summary>
-    public void Invalidate() => _trees = null;
+    public void Invalidate() => _remembered = null;
 
     /// <summary>Projects catalogue entries onto logical tree ids, dropping every physical shadow.</summary>
     /// <param name="entries">The raw catalogue.</param>
@@ -92,4 +103,7 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
             .Order(StringComparer.Ordinal)
             .ToArray();
     }
+
+    /// <summary>A read catalogue, the tenant it was read under, and when.</summary>
+    private sealed record Remembered(IReadOnlyList<string> Trees, string? Tenant, DateTimeOffset ReadAt);
 }

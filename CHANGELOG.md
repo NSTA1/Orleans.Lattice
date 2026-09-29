@@ -111,6 +111,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - Every call asserts the page's tenant.** Each cluster call carries the active tenant, a switch rebuilds the page and forgets what was read, a signed-in caller whose tenant is not established sees no tenant-scoped page, and an operator can reach the reserved default tenant. ([#3896](https://github.com/NSTA1/Orleans.Lattice/issues/3896)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Apps - An app role is held by binding.** A member of a bound group holds the role; the caller's other rights never add one, and the access gate is asked only to take it away, so a deny on a bound member withholds the role in the workspace and the app's MCP tools and is enforced on the bridge. ([#3902](https://github.com/NSTA1/Orleans.Lattice/issues/3902)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Mcp.Apps`)
+
 - **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)
 
 - **Observability - Logical tree id after an alias.** Mutation observers and the `tree` metric tag keep reporting the logical tree id after a resize, restore or schema remediation moves a tree to a new physical copy, so observers, dashboards and alerts keep their series. ([#3767](https://github.com/NSTA1/Orleans.Lattice/issues/3767), [#3780](https://github.com/NSTA1/Orleans.Lattice/issues/3780)) (`Orleans.Lattice`)

@@ -44,4 +44,7 @@ internal enum AppBridgeDenial
 
     /// <summary>The launch was revoked.</summary>
     Revoked = 13,
+
+    /// <summary>The circuit asserts a different tenant from the one the app was launched in.</summary>
+    TenantChanged = 14,
 }

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Orleans.Lattice.Explorer.Core.Connection;
 
 namespace Orleans.Lattice.Explorer.Core.Tenancy;
 
@@ -26,8 +27,10 @@ public static class ExplorerTenantServiceCollectionExtensions
     /// tenant scope control, the per-circuit scope-notice slot the shell announces
     /// outcomes from, the active
     /// <see cref="IExplorerTenantView"/>, the identity-to-tenant resolver that
-    /// establishes the caller's active tenant from their sign-in, and the
-    /// operator-gated tenant switcher behind the shell's tenant selector - so the
+    /// establishes the caller's active tenant from their sign-in, the
+    /// operator-gated tenant switcher behind the shell's tenant selector, and the
+    /// <see cref="ILatticeActiveTenantProvider"/> through which every call the
+    /// circuit makes asserts its active tenant to the cluster - so the
     /// Explorer scopes its listings to the caller's active tenant and grants the
     /// all-tenant view only to a validated platform operator. Registrations are
     /// scoped per Blazor circuit so each connection carries its own active tenant.
@@ -75,6 +78,7 @@ public static class ExplorerTenantServiceCollectionExtensions
         services.TryAddScoped<IExplorerTenantView, ExplorerTenantView>();
         services.TryAddScoped<IExplorerTenantIdentityResolver, DefaultExplorerTenantIdentityResolver>();
         services.TryAddScoped<IExplorerTenantSwitcher, ExplorerTenantSwitcher>();
+        services.TryAddScoped<ILatticeActiveTenantProvider, ExplorerActiveTenantProvider>();
 
         return services;
     }

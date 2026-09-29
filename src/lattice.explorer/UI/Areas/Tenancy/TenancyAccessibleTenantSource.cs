@@ -17,9 +17,16 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// of refusals, but the established tenant is kept whatever its state.
 /// </para>
 /// <para>
+/// A proven platform operator is also offered the reserved default tenant, which
+/// the cluster never lists (it lists only the tenants a caller administers), so
+/// an operator can always get back to it. Every other caller's list is exactly
+/// what the cluster named.
+/// </para>
+/// <para>
 /// Fail-closed on every unhappy path: a refused, failed or empty read reports
 /// exactly what Core's own default would, the established tenant alone or
-/// nothing, and never a tenant the cluster did not name.
+/// nothing (plus the default tenant for a proven operator), and never a tenant
+/// the cluster did not name.
 /// </para>
 /// </remarks>
 /// <param name="catalog">The circuit's tenancy catalogue.</param>
@@ -60,6 +67,16 @@ internal sealed class TenancyAccessibleTenantSource(TenancyCatalog catalog, IExp
             // Exactly Core's own fail-closed answer: where the caller already is.
         }
 
+        // The cluster lists only the tenants a caller administers, which never
+        // includes the reserved default tenant, so without this an operator who
+        // administers any tenant could never reach it. Only proven operator
+        // standing adds it: a non-operator's list is exactly what the cluster said.
+        if (!reachable.Contains(ExplorerTenantId.Default)
+            && await _catalog.IsOperatorAsync(cancellationToken).ConfigureAwait(true))
+        {
+            reachable.Insert(DefaultTenantPosition(reachable, established is not null), ExplorerTenantId.Default);
+        }
+
         // The settled array is handed out again while the answer is unchanged, so a
         // steady state costs the consumers no new list.
         if (!_settled.AsSpan().SequenceEqual(CollectionsMarshal.AsSpan(reachable)))
@@ -68,5 +85,21 @@ internal sealed class TenancyAccessibleTenantSource(TenancyCatalog catalog, IExp
         }
 
         return _settled;
+    }
+
+    /// <summary>
+    /// Where the default tenant goes in the list: after the established tenant,
+    /// which always leads, in id order among the rest.
+    /// </summary>
+    private static int DefaultTenantPosition(List<ExplorerTenantId> reachable, bool establishedLeads)
+    {
+        var position = establishedLeads ? 1 : 0;
+        while (position < reachable.Count
+            && string.CompareOrdinal(reachable[position].Value, ExplorerTenantId.Default.Value) < 0)
+        {
+            position++;
+        }
+
+        return position;
     }
 }
