@@ -1,0 +1,89 @@
+/*
+  Manifest-derived app pages (A2, issue #3819). Linked by the app page itself, so it
+  loads only where an app page is shown.
+
+  Everything an app supplies is untrusted text, so nothing here styles app markup: there
+  is none. The icon is an img of fixed size, never a tile; the sections are the design
+  system's tabs, raised to the 44px comfortable target.
+
+  Responsive contract (epic #3807): the head wraps, long names and descriptions wrap
+  rather than overflowing at 360px, and every action is at least 44px tall. No colour
+  literal and no width query.
+*/
+
+.lt-app-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lt-space-3);
+  min-width: 0;
+}
+
+.lt-app-head__icon {
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  margin-block-start: var(--lt-space-1);
+  object-fit: contain;
+}
+
+.lt-app-head__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-app-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+}
+
+.lt-app-sections {
+  min-width: 0;
+}
+
+.lt-app-sections .lt-tabs__tab {
+  min-height: 2.75rem;
+}
+
+.lt-app-description {
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-4);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.lt-app-section-title {
+  margin: var(--lt-space-5) 0 var(--lt-space-2);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-app-section-title:first-child {
+  margin-top: 0;
+}
+
+.lt-app-findings {
+  max-width: 42rem;
+  margin: var(--lt-space-2) 0 var(--lt-space-3);
+  padding-inline-start: var(--lt-space-5);
+  overflow-wrap: anywhere;
+}
+
+.lt-app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  margin: var(--lt-space-4) 0 0;
+}
+
+.lt-app-actions > .lt-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  text-decoration: none;
+}

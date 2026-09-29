@@ -1,0 +1,223 @@
+@page "/replication/trees"
+@page "/t/{tenant}/replication/trees"
+@inherits ExplorerPage
+@implements IDisposable
+
+@*
+    /replication/trees: the trees the caller may manage, with merge mode and
+    enrolment source. A tree under a/{slug}/ belongs to that app: its enrolment
+    follows the app install, so the row links to the app instead of offering a
+    toggle. Every other runtime-enrolled tree can be enabled or disabled here,
+    through the enrolment facade, after a confirmation.
+*@
+
+<PageTitle>Enrolled trees - Replication - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Enrolled trees</h1>
+<p class="lt-shell-page-lede">The replicated trees you may manage, how each one merges, and where its enrolment comes from.</p>
+
+<ReplicationSections />
+
+@if (_rows is null && _fault is null)
+{
+    <LtSkeleton Lines="6" Label="Reading replication enrolment" />
+}
+else if (_rows is null)
+{
+    <LtEmptyState Title="@FaultTitle" HeadingLevel="2">
+        <ChildContent>@_fault!.Message</ChildContent>
+        <Actions>
+            @if (_fault?.Kind == ReplicationFaultKind.Failed)
+            {
+                <LtButton OnClick="ReloadAsync">Try again</LtButton>
+            }
+        </Actions>
+    </LtEmptyState>
+}
+else
+{
+    <ReplicationToolbar Regions="@_regions" Apps="@_apps" />
+
+    @if (CanControl)
+    {
+        <div class="lt-replication-actions">
+            <LtButton OnClick="OpenEnableForNew" Disabled="_busy">Enable replication for a tree</LtButton>
+        </div>
+    }
+
+    @if (_statusFault is not null && _filter.Health is not null)
+    {
+        <p class="lt-replication-note">@_statusFault.Message Link health is unknown, so the health filter matches nothing.</p>
+    }
+
+    <LtTable TItem="ReplicationTreeRow"
+             Items="@_filtered"
+             Caption="Enrolled trees"
+             CaptionHidden="true"
+             RowKey="@(row => row.TreeId)"
+             Virtualize="@(_filtered.Count > ReplicationLinkTable.VirtualizeThreshold)"
+             DetailTitle="@(row => row.TreeId)">
+        <ChildContent>
+            <LtColumn TItem="ReplicationTreeRow" Title="Tree" RowHeader="true" Mono="true" SortBy="@(row => row.TreeId)">
+                @if (TreeHref(context.TreeId) is { } href)
+                {
+                    <a href="@href">@context.TreeId</a>
+                }
+                else
+                {
+                    @context.TreeId
+                }
+            </LtColumn>
+            <LtColumn TItem="ReplicationTreeRow" Title="State" SortBy="@(row => row.Entry.Enabled ? 0 : 1)">
+                @RenderState(context)
+            </LtColumn>
+            <LtColumn TItem="ReplicationTreeRow" Title="Merge mode" SortBy="@(row => ReplicationFormat.MergeMode(row.Entry.Mode))" Value="@(row => ReplicationFormat.MergeMode(row.Entry.Mode))" />
+            <LtColumn TItem="ReplicationTreeRow" Title="Enrolment" SortBy="@(row => (int)row.Entry.Source)" Value="@(row => ReplicationFormat.Source(row.Entry.Source))" />
+            <LtColumn TItem="ReplicationTreeRow" Title="Owner" SortBy="@(row => row.AppSlug ?? string.Empty)">
+                @RenderOwner(context)
+            </LtColumn>
+            <LtColumn TItem="ReplicationTreeRow" Title="Link health" SortBy="@(row => row.Health is { } health ? ReplicationHealth.Severity(health) : -1)">
+                @RenderHealth(context)
+            </LtColumn>
+            <LtColumn TItem="ReplicationTreeRow" Title="Action" Align="LtColumnAlign.End">
+                @RenderAction(context)
+            </LtColumn>
+        </ChildContent>
+        <CompactRow>
+            <LtCompactRow Mono="true">
+                <Primary>@context.TreeId</Primary>
+                <State>@RenderState(context)</State>
+                <Secondary>@CompactSummary(context)</Secondary>
+            </LtCompactRow>
+        </CompactRow>
+        <Detail>
+            <LtDefinitionList>
+                <LtDefinition Term="Tree" Mono="true">@context.TreeId</LtDefinition>
+                <LtDefinition Term="State">@RenderState(context)</LtDefinition>
+                <LtDefinition Term="Merge mode">@ReplicationFormat.MergeMode(context.Entry.Mode)</LtDefinition>
+                <LtDefinition Term="Enrolment">@ReplicationFormat.Source(context.Entry.Source)</LtDefinition>
+                <LtDefinition Term="Owner">@RenderOwner(context)</LtDefinition>
+                <LtDefinition Term="Link health">@RenderHealth(context)</LtDefinition>
+            </LtDefinitionList>
+        </Detail>
+        <DetailActions>
+            @if (TreeHref(context.TreeId) is { } href)
+            {
+                <a class="lt-btn" href="@href">Open tree</a>
+            }
+            @RenderAction(context)
+        </DetailActions>
+        <EmptyContent>
+            <span>@(_filter.IsActive ? "No enrolled tree matches these filters." : "No tree you may manage is enrolled for replication.")</span>
+        </EmptyContent>
+    </LtTable>
+}
+
+<LtDialog Open="@_enableOpen"
+          OpenChanged="OnEnableOpenChanged"
+          Title="Enable replication"
+          Placement="@DialogPlacement"
+          Description="The tree's changes ship to every enrolled peer region, which converge on it under the merge mode you choose.">
+    <form class="lt-replication-form" @onsubmit="EnableAsync">
+        <LtTextInput Label="Tree"
+                     Mono="true"
+                     Value="@_enableTree"
+                     ValueChanged="OnEnableTreeChanged"
+                     ReadOnly="@_enableTreeFixed"
+                     Error="@EnableTreeError"
+                     Hint="The logical tree id, such as orders." />
+        <LtSelect Label="Merge mode"
+                  Options="@MergeModeOptions"
+                  Value="@_enableMode"
+                  ValueChanged="OnEnableModeChanged"
+                  Disabled="@_enableModeFixed"
+                  Hint="@(_enableModeFixed ? "Fixed when the tree was first enabled; disable and re-enable cannot change it." : "Fixed once enabled. Choose the CRDT the tree's values are written with.")" />
+        <LtTextInput Label="Bootstrap from cluster (optional)"
+                     Mono="true"
+                     Value="@_enableBootstrap"
+                     ValueChanged="OnEnableBootstrapChanged"
+                     Hint="When the tree already holds data, name the cluster to pull an initial snapshot from. Leave empty to skip." />
+        <div class="lt-dialog__actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEnableAsync">Cancel</LtButton>
+            <LtButton Type="LtButtonType.Submit" Disabled="@(!CanSubmitEnable)">@(_busy ? "Enabling" : "Enable replication")</LtButton>
+        </div>
+    </form>
+</LtDialog>
+
+<LtConfirmDestructive Open="@_disableOpen"
+                      OpenChanged="OnDisableOpenChanged"
+                      Title="Disable replication"
+                      ObjectKind="tree"
+                      ObjectName="@(_disableRow?.TreeId ?? string.Empty)"
+                      ConfirmText="Disable replication"
+                      OnConfirm="DisableAsync">
+    <p>
+        New changes to <code class="lt-shell-mono">@_disableRow?.TreeId</code> stop replicating. Data already on peer
+        regions is not removed, and the tree keeps its merge mode, so a later enable resumes under the same mode.
+    </p>
+    @if (_disableRow?.Entry.Source == ReplicationEnrollmentSource.RuntimeAndStatic)
+    {
+        <p>This tree is also declared in the deployment's static map, which keeps it replicated after the runtime enrolment is removed.</p>
+    }
+</LtConfirmDestructive>
+
+@code {
+    private RenderFragment RenderState(ReplicationTreeRow row) => __builder =>
+    {
+        if (row.Entry.Ambiguous)
+        {
+            <LtStatusPill State="LtStateRole.Drift" Text="Ambiguous" />
+        }
+        else
+        {
+            <LtStatusPill State="@(row.Entry.Enabled ? LtStateRole.Enabled : LtStateRole.Disabled)" Text="@(row.Entry.Enabled ? "Enabled" : "Disabled")" />
+        }
+    };
+
+    private RenderFragment RenderOwner(ReplicationTreeRow row) => __builder =>
+    {
+        if (row.AppSlug is { } slug)
+        {
+            <a class="lt-replication-owner" href="@AppHref(slug)">App <span class="lt-shell-mono">@slug</span></a>
+        }
+        else
+        {
+            <span class="lt-replication-owner">Cluster</span>
+        }
+    };
+
+    private RenderFragment RenderHealth(ReplicationTreeRow row) => __builder =>
+    {
+        if (row.Health is { } health)
+        {
+            <LtStatusPill State="@ReplicationHealth.Role(health)" Text="@ReplicationHealth.Label(health)" />
+        }
+        else
+        {
+            <span class="lt-replication-owner">No links</span>
+        }
+    };
+
+    private RenderFragment RenderAction(ReplicationTreeRow row) => __builder =>
+    {
+        if (row.AppSlug is { } slug)
+        {
+            <a class="lt-btn lt-btn--quiet" href="@AppHref(slug)" data-lt-replication-app="@slug">Managed by <span class="lt-shell-mono">@slug</span></a>
+        }
+        else if (row.Entry.Source == ReplicationEnrollmentSource.Static)
+        {
+            <span class="lt-replication-owner">Declared at deployment</span>
+        }
+        else if (CanControl)
+        {
+            if (row.Entry.Enabled)
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="_busy" OnClick="() => OpenDisable(row)" aria-label="@($"Disable replication for {row.TreeId}")">Disable</LtButton>
+            }
+            else
+            {
+                <LtButton Disabled="_busy" OnClick="() => OpenEnableFor(row)" aria-label="@($"Enable replication for {row.TreeId}")">Enable</LtButton>
+            }
+        }
+    };
+}

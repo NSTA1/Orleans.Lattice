@@ -1,0 +1,68 @@
+@*
+    Every (tree, peer, direction) link as a booktabs table, sortable by health,
+    backlog, consecutive errors and time since contact. Below the compact width
+    each link is a two-line row (the tree or peer, then its health and backlog)
+    that opens the full record in a sheet.
+*@
+
+<LtTable TItem="ReplicationPeerStatusEntry"
+         Items="@Links"
+         Caption="@Caption"
+         CaptionHidden="@CaptionHidden"
+         RowKey="@RowKeyOf"
+         Virtualize="@(Links.Count > VirtualizeThreshold)"
+         DetailTitle="@DetailTitleOf">
+    <ChildContent>
+        @if (ShowTree)
+        {
+            <LtColumn TItem="ReplicationPeerStatusEntry" Title="Tree" RowHeader="true" Mono="true" SortBy="@(link => link.TreeId)">
+                @if (TreeHref(context.TreeId) is { } href)
+                {
+                    <a href="@href">@context.TreeId</a>
+                }
+                else
+                {
+                    @context.TreeId
+                }
+            </LtColumn>
+        }
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Peer" RowHeader="@(!ShowTree)" Mono="true" SortBy="@(link => link.PeerRegionId)" Value="@(link => link.PeerRegionId)" />
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Direction" SortBy="@(link => (int)link.Direction)" Value="@(link => ReplicationFormat.Direction(link.Direction))" />
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Health" SortBy="@(link => ReplicationHealth.Severity(link.Health))">
+            <LtStatusPill State="@ReplicationHealth.Role(context.Health)" Text="@ReplicationHealth.Label(context.Health)" />
+        </LtColumn>
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Entries behind" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.EntriesBehind)" Value="@(link => ReplicationFormat.Count(link.EntriesBehind))" />
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Bytes behind" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.BytesBehind)" Value="@(link => ReplicationFormat.Bytes(link.BytesBehind))" />
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Errors" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.ConsecutiveErrors)" Value="@(link => ReplicationFormat.Count(link.ConsecutiveErrors))" />
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Last contact" Align="LtColumnAlign.End" SortBy="@(link => link.TimeSinceLastContact ?? TimeSpan.MaxValue)" Value="@(link => ReplicationFormat.Contact(link.TimeSinceLastContact))" />
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="In flight" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.InFlight)" Value="@(link => ReplicationFormat.Count(link.InFlight))" />
+    </ChildContent>
+    <CompactRow>
+        <LtCompactRow Mono="true">
+            <Primary>@(ShowTree ? context.TreeId : context.PeerRegionId)</Primary>
+            <State><LtStatusPill State="@ReplicationHealth.Role(context.Health)" Text="@ReplicationHealth.Label(context.Health)" /></State>
+            <Secondary>@CompactSummary(context)</Secondary>
+        </LtCompactRow>
+    </CompactRow>
+    <Detail>
+        <LtDefinitionList>
+            <LtDefinition Term="Tree" Mono="true">@context.TreeId</LtDefinition>
+            <LtDefinition Term="Peer region" Mono="true">@context.PeerRegionId</LtDefinition>
+            <LtDefinition Term="Direction">@ReplicationFormat.Direction(context.Direction)</LtDefinition>
+            <LtDefinition Term="Health"><LtStatusPill State="@ReplicationHealth.Role(context.Health)" Text="@ReplicationHealth.Label(context.Health)" /></LtDefinition>
+            <LtDefinition Term="Backlog">@ReplicationFormat.Backlog(context.EntriesBehind, context.BytesBehind)</LtDefinition>
+            <LtDefinition Term="Consecutive errors" Mono="true">@ReplicationFormat.Count(context.ConsecutiveErrors)</LtDefinition>
+            <LtDefinition Term="Last contact">@ReplicationFormat.Contact(context.TimeSinceLastContact)</LtDefinition>
+            <LtDefinition Term="In flight" Mono="true">@ReplicationFormat.Count(context.InFlight)</LtDefinition>
+        </LtDefinitionList>
+    </Detail>
+    <DetailActions>
+        @if (ShowTree && TreeHref(context.TreeId) is { } href)
+        {
+            <a class="lt-btn" href="@href">Open tree</a>
+        }
+    </DetailActions>
+    <EmptyContent>
+        <span>@EmptyText</span>
+    </EmptyContent>
+</LtTable>

@@ -1,0 +1,76 @@
+@*
+    The estate as an order diagram. This region is the marker node at the head
+    of a spine; each peer region hangs from it as a node, with one edge per
+    direction. Every edge carries its rolled-up health as a glyph and a word
+    (never colour alone), its backlog in entries and bytes, and how many trees
+    ride on it. A peer node is a link that filters the page to that region, and
+    the filtered peer is marked as the current one.
+*@
+
+<figure class="lt-replication-map" aria-labelledby="@_captionId">
+    <figcaption id="@_captionId" class="lt-replication-map__caption">@Caption</figcaption>
+    <div class="lt-replication-map__local">
+        <LtNode Kind="LtNodeKind.Join" Size="LtNodeSize.Large" />
+        <span class="lt-replication-map__region">@LocalRegionDisplay</span>
+        <span class="lt-replication-map__role">This region</span>
+    </div>
+    @if (_peers.Count == 0)
+    {
+        <p class="lt-replication-map__empty">No peer region is linked to this region@(Filtered ? " under these filters" : string.Empty).</p>
+    }
+    else
+    {
+        <ol class="lt-replication-map__peers" aria-label="Peer regions">
+            @foreach (var peer in _peers)
+            {
+                <li class="lt-replication-map__peer" @key="peer.PeerRegionId" data-health="@ReplicationHealth.QueryValue(peer.Health)">
+                    <a class="lt-replication-map__peer-link"
+                       href="@RegionHref(peer.PeerRegionId)"
+                       aria-current="@(IsSelected(peer.PeerRegionId) ? "true" : null)">
+                        <LtNode Kind="LtNodeKind.Filled" />
+                        <span class="lt-replication-map__region">@peer.PeerRegionId</span>
+                        <span class="lt-visually-hidden">@(IsSelected(peer.PeerRegionId) ? ", filtered; show every region" : ", show only this region")</span>
+                    </a>
+                    <ul class="lt-replication-map__edges" aria-label="@($"Links with {peer.PeerRegionId}")">
+                        @RenderEdge(peer.PeerRegionId, ReplicationLinkDirection.Outbound, peer.Outbound)
+                        @RenderEdge(peer.PeerRegionId, ReplicationLinkDirection.Inbound, peer.Inbound)
+                    </ul>
+                </li>
+            }
+        </ol>
+    }
+</figure>
+
+@code {
+    private RenderFragment RenderEdge(string peer, ReplicationLinkDirection direction, ReplicationEdgeSummary? edge) => __builder =>
+    {
+        var outbound = direction == ReplicationLinkDirection.Outbound;
+        <li class="lt-replication-map__edge"
+            data-direction="@(outbound ? "outbound" : "inbound")"
+            data-health="@(edge is null ? "none" : ReplicationHealth.QueryValue(edge.Health))">
+            <span class="lt-replication-map__line" aria-hidden="true"></span>
+            <span class="lt-replication-map__direction">
+                <span class="lt-replication-map__arrow" aria-hidden="true">@(outbound ? "\u2192" : "\u2190")</span>
+                @(outbound ? "To " + peer : "From " + peer)
+            </span>
+            @if (edge is null)
+            {
+                <span class="lt-replication-map__idle">No links</span>
+            }
+            else
+            {
+                <LtStatusPill State="@ReplicationHealth.Role(edge.Health)" Text="@ReplicationHealth.Label(edge.Health)" />
+                <span class="lt-replication-map__backlog">@ReplicationFormat.Backlog(edge.EntriesBehind, edge.BytesBehind)</span>
+                <span class="lt-replication-map__count">@ReplicationFormat.Count(edge.Trees, "tree", "trees")</span>
+                @if (edge.Stalled > 0 && edge.Links > 1)
+                {
+                    <span class="lt-replication-map__alert">@ReplicationFormat.Count(edge.Stalled, "link", "links") stalled</span>
+                }
+                else if (edge.Lagging > 0 && edge.Links > 1)
+                {
+                    <span class="lt-replication-map__alert">@ReplicationFormat.Count(edge.Lagging, "link", "links") lagging</span>
+                }
+            }
+        </li>
+    };
+}
