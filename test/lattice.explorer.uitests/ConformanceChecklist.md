@@ -3,8 +3,8 @@
 This is the standard the Orleans.Lattice Explorer is held to, and the one the browser lane
 in this directory enforces. It was first written for epic #1845 and was carried over to the
 rewritten Explorer (epic #3807) by issue #3832, which rebuilt the suite against the new
-chrome: the directory spine, the address line and command palette, the three materials and
-densities, and the app frame. The published conformance statement is
+chrome: the directory spine, the address line and command palette, the two materials
+(Paper and Board), the contrast and density choices, and the app frame. The published conformance statement is
 `docs/lattice.explorer/accessibility-conformance.md`, which summarises this checklist and
 points back to it as the enforcing reference.
 
