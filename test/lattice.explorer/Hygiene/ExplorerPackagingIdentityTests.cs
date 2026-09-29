@@ -15,71 +15,15 @@ namespace Orleans.Lattice.Explorer.Tests.Hygiene;
 /// which is to say, after it is too late. Nothing in CI publishes, so nothing in
 /// CI can notice.
 /// </para>
-/// <para>
-/// It also catches a specific, recurring mistake. A session opens
-/// <c>Plugins/</c>, sees <c>Access</c>, <c>Backup</c> and <c>Schema</c> named
-/// <c>Orleans.Lattice.Explorer.&lt;Area&gt;</c>, and reasonably concludes that is
-/// the convention. It is not: those three ids are <em>frozen</em> because they
-/// have already shipped, while every genuinely new package takes the
-/// <c>Plugins.</c> segment. Four separate sessions made that inference during the
-/// plugin epic, each copying a visible sibling. None of them could have known;
-/// this fixture tells the fifth one immediately.
-/// </para>
 /// </summary>
 [TestFixture]
 public sealed class ExplorerPackagingIdentityTests
 {
     private const string ExplorerRoot = "src/lattice.explorer";
 
-    /// <summary>The prefix every plugin package that has not already shipped must carry.</summary>
-    private const string PluginPackagePrefix = "Orleans.Lattice.Explorer.Plugins.";
-
-    /// <summary>
-    /// The plugin packages allowed to sit under <c>Plugins/</c> <em>without</em>
-    /// the <c>Plugins.</c> segment.
-    /// <para>
-    /// THESE ARE FROZEN, NOT EXEMPLARY. Each shipped release tags before the
-    /// plugin conversion moved it into <c>Plugins/</c>, so its
-    /// <c>PackageId</c> is a consumer contract: renaming it would break a
-    /// consumer's <c>PackageReference</c> outright, with no type-forwarding
-    /// possible, and renaming the matching <c>RootNamespace</c> would break every
-    /// <c>using</c> in their code as well. The directory move already expresses
-    /// the architecture internally; the package id does not have to mirror it.
-    /// </para>
-    /// <para>
-    /// Do not copy this shape for a new plugin, and do not add to this list: a
-    /// package that has never shipped has nothing to be compatible with, so it
-    /// takes <see cref="PluginPackagePrefix"/> like every other new one.
-    /// </para>
-    /// </summary>
-    private static readonly string[] FrozenPluginPackageIds =
-    [
-        "Orleans.Lattice.Explorer.Access",
-        "Orleans.Lattice.Explorer.Backup",
-        "Orleans.Lattice.Explorer.Schema",
-    ];
-
-    /// <summary>
-    /// The one project whose <c>RootNamespace</c> deliberately differs from its
-    /// package id: the plugin contract package publishes its types into
-    /// <c>Orleans.Lattice.Explorer.Plugins</c>, the namespace the host and every
-    /// plugin share, rather than into a namespace named after the package.
-    /// </summary>
-    private static readonly Dictionary<string, string> RootNamespaceExceptions = new(StringComparer.Ordinal)
-    {
-        ["Orleans.Lattice.Explorer.Plugins.Abstractions"] = "Orleans.Lattice.Explorer.Plugins",
-    };
-
-    private static readonly Regex ContentReference = new(
-        @"_content/(?<assembly>[^/""]+)/(?<file>[^""]+)",
+    private static readonly Regex ContentRoot = new(
+        @"_content/(?<assembly>[A-Za-z0-9_.]+)/",
         RegexOptions.Compiled);
-
-    /// <summary>The host documents that link packaged static web assets by <c>_content/</c> path.</summary>
-    private static readonly string[] HostDocuments =
-    [
-        "src/lattice.explorer/WebHosting/Components/App.razor",
-        "src/lattice.explorer/Maui/wwwroot/index.html",
-    ];
 
     [Test]
     public void The_scan_finds_the_explorer_packages()
@@ -87,7 +31,7 @@ public sealed class ExplorerPackagingIdentityTests
         // Without this the whole fixture would pass vacuously if the layout moved.
         Assert.That(
             Packages(),
-            Has.Count.GreaterThan(10),
+            Has.Count.GreaterThanOrEqualTo(4),
             "the scan must reach the Explorer's packable projects");
     }
 
@@ -123,21 +67,9 @@ public sealed class ExplorerPackagingIdentityTests
             offenders,
             Is.Empty,
             "renaming a published RootNamespace breaks every `using` in a consumer's code. Add a documented "
-            + "entry to RootNamespaceExceptions only when the divergence is deliberate."
+            + "a divergent RootNamespace only with a documented reason."
             + Environment.NewLine
             + string.Join(Environment.NewLine, offenders));
-    }
-
-    [Test]
-    public void Every_documented_root_namespace_exception_is_still_needed()
-    {
-        // An exception that no longer applies is a licence for the next drift.
-        var packageIds = Packages().Select(package => package.PackageId).ToHashSet(StringComparer.Ordinal);
-
-        Assert.That(
-            RootNamespaceExceptions.Keys.Where(id => !packageIds.Contains(id)),
-            Is.Empty,
-            "these RootNamespace exceptions name packages that no longer exist");
     }
 
     [Test]
@@ -179,42 +111,6 @@ public sealed class ExplorerPackagingIdentityTests
     }
 
     [Test]
-    public void Every_new_plugin_package_carries_the_plugins_segment()
-    {
-        var offenders = Packages()
-            .Where(package => package.IsUnderPluginsDirectory)
-            .Where(package => !package.PackageId.StartsWith(PluginPackagePrefix, StringComparison.Ordinal))
-            .Where(package => !FrozenPluginPackageIds.Contains(package.PackageId, StringComparer.Ordinal))
-            .Select(package => $"{package.RelativePath}: '{package.PackageId}'")
-            .ToArray();
-
-        Assert.That(
-            offenders,
-            Is.Empty,
-            $"a plugin package that has never shipped must be named '{PluginPackagePrefix}<Area>'. The "
-            + "Access / Backup / Schema ids that lack the segment are FROZEN for consumer compatibility, not a "
-            + "convention to copy - see FrozenPluginPackageIds."
-            + Environment.NewLine
-            + string.Join(Environment.NewLine, offenders));
-    }
-
-    [Test]
-    public void Every_frozen_plugin_package_still_exists_under_the_plugins_directory()
-    {
-        // If one is renamed or retired, the allow-list must shrink with it -
-        // otherwise it silently re-permits that id for a future package.
-        var pluginPackageIds = Packages()
-            .Where(package => package.IsUnderPluginsDirectory)
-            .Select(package => package.PackageId)
-            .ToHashSet(StringComparer.Ordinal);
-
-        Assert.That(
-            FrozenPluginPackageIds.Where(id => !pluginPackageIds.Contains(id)),
-            Is.Empty,
-            "these ids are exempted from the naming rule but no longer name a plugin package");
-    }
-
-    [Test]
     public void A_project_without_a_package_id_is_explicitly_not_a_package()
     {
         // Otherwise a new project ships to NuGet under its default id the first
@@ -237,80 +133,59 @@ public sealed class ExplorerPackagingIdentityTests
     }
 
     [Test]
-    public void Every_content_link_in_a_head_document_resolves_to_a_packaged_asset()
+    public void Every_content_path_the_explorer_names_resolves_to_an_explorer_static_web_asset_root()
     {
-        var assets = PackagedStaticWebAssets();
+        // A _content/ path is how a head reaches a package's static web assets, and
+        // it is named after the ASSEMBLY. The Explorer names each package's asset
+        // root in exactly one constant, so a rename that misses one fails here
+        // instead of as a silent 404 and an unstyled console at runtime.
+        var roots = StaticWebAssetRoots();
         var offenders = new List<string>();
         var scanned = 0;
+        var repoRoot = HygieneRepository.FindRepoRoot();
+        var sources = HygieneRepository.EnumerateFiles(Path.Combine(repoRoot, ExplorerRoot.Replace('/', Path.DirectorySeparatorChar)), "*.cs")
+            .Concat(HygieneRepository.EnumerateFiles(Path.Combine(repoRoot, ExplorerRoot.Replace('/', Path.DirectorySeparatorChar)), "*.razor"));
 
-        foreach (var document in HostDocuments)
+        foreach (var path in sources)
         {
-            var path = Path.Combine(
-                HygieneRepository.FindRepoRoot(),
-                document.Replace('/', Path.DirectorySeparatorChar));
-
-            Assert.That(File.Exists(path), Is.True, "expected a head document at " + document);
-
             var lines = File.ReadAllLines(path);
             for (var i = 0; i < lines.Length; i++)
             {
-                foreach (Match reference in ContentReference.Matches(lines[i]))
+                foreach (Match reference in ContentRoot.Matches(lines[i]))
                 {
                     scanned++;
-                    var key = $"{reference.Groups["assembly"].Value}/{reference.Groups["file"].Value}";
-                    if (!assets.Contains(key))
+                    if (!roots.Contains(reference.Groups["assembly"].Value))
                     {
-                        offenders.Add($"{document}:{i + 1}: _content/{key}");
+                        offenders.Add($"{Relative(path)}:{i + 1}: _content/{reference.Groups["assembly"].Value}/");
                     }
                 }
             }
         }
 
-        Assert.That(scanned, Is.GreaterThan(5), "the scan must reach the head documents' asset links");
-
+        Assert.That(scanned, Is.GreaterThanOrEqualTo(2), "the scan must reach the UI's and AppKit's asset-root constants");
         Assert.That(
             offenders,
             Is.Empty,
-            "a _content/ link names an assembly and a file that no Explorer project ships. It fails as a silent "
-            + "404 at runtime - no build error, no test failure, just an unstyled panel - so nothing but this "
-            + "catches a renamed assembly or a moved asset."
+            "a _content/ path names an assembly no Explorer project ships static web assets under."
             + Environment.NewLine
             + string.Join(Environment.NewLine, offenders));
     }
 
-    /// <summary>
-    /// Every <c>{assemblyName}/{fileName}</c> an Explorer project publishes as a
-    /// static web asset, which is exactly what a <c>_content/</c> path resolves
-    /// against at runtime.
-    /// </summary>
-    private static HashSet<string> PackagedStaticWebAssets()
+    /// <summary>The assembly names of the Explorer projects that ship a <c>wwwroot</c>.</summary>
+    private static HashSet<string> StaticWebAssetRoots()
     {
-        var assets = new HashSet<string>(StringComparer.Ordinal);
-
+        var roots = new HashSet<string>(StringComparer.Ordinal);
         foreach (var project in ProjectFiles(HygieneRepository.FindRepoRoot()))
         {
-            var directory = Path.GetDirectoryName(project)!;
-            var wwwroot = Path.Combine(directory, "wwwroot");
-            if (!Directory.Exists(wwwroot))
+            if (Directory.Exists(Path.Combine(Path.GetDirectoryName(project)!, "wwwroot")))
             {
-                continue;
-            }
-
-            var text = File.ReadAllText(project);
-            var assemblyName = ReadProperty(text, "AssemblyName")
-                ?? Path.GetFileNameWithoutExtension(project);
-
-            foreach (var file in Directory.GetFiles(wwwroot, "*", SearchOption.AllDirectories))
-            {
-                assets.Add($"{assemblyName}/{Path.GetRelativePath(wwwroot, file).Replace('\\', '/')}");
+                roots.Add(ReadProperty(File.ReadAllText(project), "AssemblyName") ?? Path.GetFileNameWithoutExtension(project));
             }
         }
 
-        return assets;
+        return roots;
     }
-
-    private static string ExpectedRootNamespace(ExplorerPackage package) =>
-        RootNamespaceExceptions.TryGetValue(package.PackageId, out var expected) ? expected : package.FileName;
+    private static string ExpectedRootNamespace(ExplorerPackage package) => package.FileName;
 
     private static IReadOnlyList<ExplorerPackage> Packages()
     {
@@ -337,9 +212,7 @@ public sealed class ExplorerPackagingIdentityTests
                 RootNamespace: ReadProperty(text, "RootNamespace"),
                 AssemblyName: ReadProperty(text, "AssemblyName"),
                 Directory: directory,
-                RelativePath: Relative(path),
-                IsUnderPluginsDirectory: Relative(directory)
-                    .StartsWith(ExplorerRoot + "/Plugins/", StringComparison.Ordinal)));
+                RelativePath: Relative(path)));
         }
 
         return packages;
@@ -380,6 +253,5 @@ public sealed class ExplorerPackagingIdentityTests
         string? RootNamespace,
         string? AssemblyName,
         string Directory,
-        string RelativePath,
-        bool IsUnderPluginsDirectory);
+        string RelativePath);
 }

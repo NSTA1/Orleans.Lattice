@@ -68,9 +68,6 @@ public static class ExplorerDocsLinks
     /// <summary>What the Explorer is and how its areas are organised.</summary>
     public const string Explorer = "docs/lattice.explorer/README.md";
 
-    /// <summary>Writing an Explorer plugin, which is what registers a surface.</summary>
-    public const string WritingAPlugin = "docs/lattice.explorer/writing-a-plugin.md";
-
     /// <summary>Running the Explorer, including which features a cluster enables.</summary>
     public const string RunningTheExplorer = "docs/lattice.explorer/running-the-explorer.md";
 

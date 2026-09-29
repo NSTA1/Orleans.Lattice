@@ -3,8 +3,9 @@
 A one-command, self-contained demo of the opt-in `Orleans.Lattice.Explorer.Web`
 hosting library. It co-hosts, in a single process:
 
-1. a single-silo Orleans cluster with the state-API, auth-admin, and schema-admin
-   gRPC surfaces, and
+1. a single-silo Orleans cluster with the state-API, auth-admin, schema-admin
+   and apps gRPC surfaces (app control, the source catalogue, the per-user
+   workspace and the app frame bridge), carrying the task-board sample app, and
 2. the embeddable **Explorer web console**, pointed at that gRPC endpoint,
 
 so you can open the console in a browser and browse a live tree end to end.
@@ -12,14 +13,13 @@ so you can open the console in a browser and browse a live tree end to end.
 The console is registered and mounted with the exact two calls a consumer makes
 to embed it in their own ASP.NET app:
 
-- `AddLatticeExplorerWeb()` registers the Razor components, the shared explorer
-  UI, the state-API connection seam, and the Backups, Access, Tenant
-  administration, My tenant, and Telemetry areas. The Schema
-  area ships hidden and stays hidden here too; set the
-  `LATTICE_EXPLORER_ENABLE_SCHEMA=true` environment variable before running to
-  surface it (the sample maps that to an `AddExplorerSchemaPlugin()` call).
+- `AddLatticeExplorerWeb()` registers the Razor components, the Explorer UI with
+  every native area compiled in (Data, Apps, Access, Schema, Tenancy,
+  Replication, Backups, Telemetry and Cluster), the state-API connection seam,
+  and the sign-in plumbing. Each area probes its own facade and hides itself
+  when the cluster does not serve it; there is nothing to register per area.
 - `MapLatticeExplorer()` maps the interactive-server components, static assets,
-  and sign-in / sign-out endpoints.
+  the app frame bootstrap route, and sign-in / sign-out endpoints.
 
 This is the same code path as the standalone web head, so the standalone head and
 any co-hosted console cannot drift.
@@ -55,14 +55,13 @@ disabling authorization.
 The console's top-level areas live in a stable vertical rail down the left of
 the shell, and each is capability-gated and fails closed. This sample co-hosts
 the auth and schema gRPC admin APIs and auto-signs-in as a bootstrap
-administrator (`explorer-admin`), so the **Explore** and **Access** areas are
-live out of the box. The **Schema** area ships hidden and stays hidden here; set
-`LATTICE_EXPLORER_ENABLE_SCHEMA=true` before running to surface it. The
+administrator (`explorer-admin`), so the **Data**, **Access**, **Schema** and
+**Apps** areas are live out of the box. The
 **Backups** area resolves as unavailable, because this sample maps the state,
-auth and schema gRPC services but not the backup one, so the probe reports the
-capability as absent from the cluster. The **Tenant administration**, **My
-tenant**, and **Telemetry** areas are unavailable for the same reason: the sample
-runs no tenancy add-on and serves no telemetry facade.
+auth, schema and apps gRPC services but not the backup one, so the probe reports the
+capability as absent from the cluster. The **Tenancy**, **Replication** and
+**Telemetry** areas are unavailable for the same reason: the sample
+runs no tenancy or replication add-on and serves no telemetry facade.
 
 An unavailable area renders no entry at all, and the rail's "why can I not see
 everything?" affordance names it, so the absence is disclosed once rather than
@@ -80,6 +79,18 @@ straight back in, so the page that loads after **Sign out** is signed in again.
 The gating is advisory throughout: the server is the sole enforcement point, so
 showing a denied entry costs nothing and hiding it would buy nothing. See
 [Navigation visibility policy](../../docs/lattice.explorer/navigation-visibility-policy.md).
+
+## The task-board app
+
+The apps plane carries one sample Lattice App, `task-board`, whose UI runs in a
+sandboxed frame. The sample registers it with the in-image app source and seeds
+the three groups its walkthrough uses: `task-editors` (`alice`),
+`task-viewers` (`bob`) and `visitors` (`carol`). Nothing is installed until you
+do it in the console. Follow
+[the task-board walkthrough](Apps/TaskBoard/README.md#walkthrough) to find it in
+the catalogue, review its consent, bind its roles to those groups, install,
+enable and open it, then sign in as each of the three users to compare
+[what they see](Apps/TaskBoard/README.md#the-same-app-three-groups).
 
 ## Things worth trying in this sample
 
@@ -246,7 +257,7 @@ see [Identity directory providers](../../docs/lattice.membership/identity-direct
 
 ## What to look at
 
-- `Program.cs` - the silo host wiring (state + auth + schema gRPC surfaces and
+- `Program.cs` - the silo host wiring (state + auth + schema + apps gRPC surfaces and
   the bootstrap-administrator authorization setup), the identity-directory mode
   selection (static roster by default, Entra Graph when configured), the console
   registration (`AddLatticeExplorerWeb` / `MapLatticeExplorer`), and the bootstrap

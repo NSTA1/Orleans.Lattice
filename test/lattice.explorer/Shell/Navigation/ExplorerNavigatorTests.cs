@@ -236,6 +236,94 @@ public sealed class ExplorerNavigatorTests
         return view;
     }
 
+    [Test]
+    public async Task A_default_tenant_non_operator_sees_no_tenancy_chrome()
+    {
+        var tenancy = Tenancy("default", out var switcher);
+        switcher.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(false));
+
+        await tenancy.RefreshAsync();
+        var navigator = Navigator(tenancy);
+        var resolution = await navigator.ResolveAsync(ExplorerAddress.Parse("/t/default/data"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tenancy.IsActive, Is.False);
+            Assert.That(tenancy.ActiveTenant, Is.Null);
+            Assert.That(navigator.Canonicalize(ExplorerAddress.Parse("/t/default/data")).Format(), Is.EqualTo("/data"));
+            Assert.That(navigator.Canonicalize(ExplorerAddress.Home).Format(), Is.EqualTo("/"));
+            Assert.That(resolution.RedirectTo!.Format(), Is.EqualTo("/data"));
+        });
+    }
+
+    [Test]
+    public async Task A_default_tenant_operator_keeps_the_tenant_root()
+    {
+        var tenancy = Tenancy("default", out var switcher);
+        switcher.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(true));
+
+        await tenancy.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tenancy.IsActive, Is.True);
+            Assert.That(Navigator(tenancy).Canonicalize(ExplorerAddress.Parse("/data")).Format(), Is.EqualTo("/t/default/data"));
+        });
+    }
+
+    [Test]
+    public void A_default_tenant_caller_is_treated_as_a_non_operator_until_the_verdict_is_read()
+    {
+        var tenancy = Tenancy("default", out var switcher);
+        switcher.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(true));
+
+        Assert.That(tenancy.IsActive, Is.False);
+    }
+
+    [Test]
+    public async Task A_faulted_operator_verdict_fails_closed_to_no_tenancy_chrome()
+    {
+        var tenancy = Tenancy("default", out var switcher);
+        switcher.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns<ValueTask<bool>>(_ => throw new InvalidOperationException("probe failed"));
+
+        await tenancy.RefreshAsync();
+
+        Assert.That(tenancy.IsActive, Is.False);
+    }
+
+    [Test]
+    public async Task The_operator_verdict_is_asked_only_for_the_default_tenant()
+    {
+        var tenancy = Tenancy("acme", out var switcher);
+
+        await tenancy.RefreshAsync();
+
+        Assert.That(tenancy.IsActive, Is.True);
+        await switcher.DidNotReceive().IsOperatorAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task An_operator_verdict_for_the_default_tenant_does_not_outlive_a_scope_change()
+    {
+        var view = ViewOf("default");
+        var switcher = Substitute.For<IExplorerTenantSwitcher>();
+        switcher.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(true), new ValueTask<bool>(false));
+        var tenancy = new ExplorerTenancy(view, switcher);
+
+        await tenancy.RefreshAsync();
+        var asOperator = tenancy.IsActive;
+        view.ActiveTenant.Returns(new ExplorerTenantId("acme"));
+        await tenancy.RefreshAsync();
+        view.ActiveTenant.Returns(new ExplorerTenantId("default"));
+        await tenancy.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(asOperator, Is.True);
+            Assert.That(tenancy.IsActive, Is.False, "the verdict is read again for the default tenant, and now denies");
+        });
+    }
+
     private static ExplorerTenancy Tenancy(string active, out IExplorerTenantSwitcher switcher, bool allowSwitch = false)
     {
         var view = ViewOf(active);

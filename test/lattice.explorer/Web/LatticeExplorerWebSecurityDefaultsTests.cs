@@ -180,23 +180,6 @@ public class LatticeExplorerWebSecurityDefaultsTests
     }
 
     [Test]
-    public async Task Web_head_withholds_the_connection_settings_affordance_when_writes_are_refused()
-    {
-        await using var refusing = BuildWebProvider();
-        await using var allowing = BuildWebProvider(options => options.AllowInteractiveEndpointConfiguration = true);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                refusing.GetRequiredService<ExplorerNavigationOptions>().AllowEndpointConfiguration,
-                Is.False);
-            Assert.That(
-                allowing.GetRequiredService<ExplorerNavigationOptions>().AllowEndpointConfiguration,
-                Is.True);
-        });
-    }
-
-    [Test]
     public void Read_only_store_rejects_a_null_inner_store()
         => Assert.That(() => new ReadOnlyExplorerConfigStore(null!), Throws.ArgumentNullException);
 

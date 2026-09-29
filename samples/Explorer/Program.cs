@@ -3,19 +3,22 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice;
+using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Api.Apps.Grpc;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Apps;
 using Orleans.Lattice.Auth;
-using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Membership.Entra;
 using Orleans.Lattice.Membership.Entra.Graph;
 using Orleans.Lattice.Samples.Explorer;
+using Orleans.Lattice.Samples.Explorer.TaskBoard;
 using Orleans.Lattice.Schema;
 
 // Orleans.Lattice.Explorer sample: co-hosts a single-silo cluster, the state /
@@ -28,13 +31,17 @@ using Orleans.Lattice.Schema;
 // embed the Explorer in their own ASP.NET app. Here it is pointed at the local
 // gRPC endpoint through the launcher-friendly bootstrap environment variables.
 //
-// Three control planes are co-hosted on the one gRPC endpoint - state (Explore),
-// auth (Access), and schema (Schema) - so those three console areas are live. The
-// console auto-signs-in as a bootstrap administrator (see below), which is what
-// makes the Access and Schema areas, gated on an administrator probe, light up
-// without a manual login. (The Backups area does not appear at all: this sample
-// does not co-host the backup gRPC API, and the console renders no entry for a
-// capability the cluster does not serve.)
+// Four control planes are co-hosted on the one gRPC endpoint - state (Data), auth
+// (Access), schema (Schema) and apps (Apps, with its catalogue, per-user workspace
+// and the frame bridge) - so those console areas are live. The console
+// auto-signs-in as a bootstrap administrator (see below), which is what makes the
+// administrator-gated areas light up without a manual login. Areas whose facade
+// this sample does not serve, such as Backups, decide for themselves that they are
+// hidden: every area probes its own capability and fails closed.
+//
+// The apps plane carries the task-board pilot app (Apps/TaskBoard), registered
+// with the in-image app source. Its README walks the install, consent and
+// role-binding flow, and the demo groups it assumes are seeded below.
 
 const string DemoTree = "factory-floor";
 const int GrpcPort = 5199;   // h2c gRPC endpoint the console connects to
@@ -133,8 +140,8 @@ if (File.Exists(sampleConfigPath))
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 
-// Serve the Explorer UI's packaged static web assets (its stylesheet, favicon,
-// and interop script, shipped as an RCL under _content/Orleans.Lattice.Explorer.UI/)
+// Serve the Explorer UI's packaged static web assets (its stylesheets, fonts,
+// favicon, scripts and the app frame kit, shipped as RCLs under _content/)
 // no matter which environment the sample runs in. WebApplication only auto-maps
 // these in Development, so calling it explicitly keeps `dotnet run` styled even
 // under the default Production environment.
@@ -154,12 +161,12 @@ builder.Host.UseOrleans(silo =>
     silo.UseInMemoryReminderService();
     silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
 
-    // The read-only state API that backs the console's Explore area.
+    // The read-only state API that backs the console's Data area.
     silo.AddLatticeStateApi();
 
     // Membership + authorization give the Access admin area a real control plane
     // to manage and let the fail-closed capability probe succeed. The data plane
-    // is deny-by-default (see AddLatticeAuth below): the Explore area works
+    // is deny-by-default (see AddLatticeAuth below): the Data area works
     // because the console signs in as the bootstrap administrator, which bypasses
     // the decision engine. The reserved control plane (membership + policy) is
     // always governed and only the bootstrap administrator below may manage it.
@@ -205,7 +212,10 @@ builder.Host.UseOrleans(silo =>
             .AddUser("alice", "Alice Ng")
             .AddUser("bob", "Bob Ito")
             .AddUser("carol", "Carol Diaz")
-            .AddGroup("operators", "Floor Operators"));
+            .AddGroup("operators", "Floor Operators")
+            .AddGroup("task-editors", "Task board editors")
+            .AddGroup("task-viewers", "Task board viewers")
+            .AddGroup("visitors", "Visitors"));
     }
     silo.AddLatticeAuth(options =>
     {
@@ -248,6 +258,16 @@ builder.Host.UseOrleans(silo =>
 
     silo.AddLatticeSchemaApi();
 
+    // Lattice Apps: the registry, the in-image source carrying the task-board
+    // sample app, and the app-control, catalogue, workspace and bridge facades
+    // the Explorer's Apps area and app frame call. Registering the app only makes
+    // it available; an administrator installs, consents, binds and enables it in
+    // the console.
+    silo.AddLatticeApps();
+    silo.AddLatticeApp(TaskBoardApp.Slug, TaskBoardApp.Assembly, TaskBoardApp.ManifestResourceName);
+    silo.AddLatticeAppsApi();
+    silo.AddLatticeAppBridgeApi();
+
     // Trusts the console's auto-applied Basic sign-in: the auth / schema gRPC
     // bridges hand this authenticator the base64(username:password) token and it
     // resolves the caller subject to "explorer-admin", the bootstrap administrator.
@@ -285,6 +305,21 @@ builder.Services.AddLatticeSchemaApiGrpc(o =>
     o.CredentialScheme = DemoBasicAuthenticator.Scheme;
 });
 
+// The apps gRPC bindings: app control, the source catalogue, the per-user
+// workspace and the frame bridge share one set of options. As above, transport
+// authorization is off for the sample only; the cluster still authorizes every
+// call against the resolved caller, and the bridge against the app's own
+// consented grants intersected with the caller's rights.
+Action<LatticeAppsApiGrpcOptions> appsGrpc = o =>
+{
+    o.RequireAuthorization = false;
+    o.CredentialScheme = DemoBasicAuthenticator.Scheme;
+};
+builder.Services.AddLatticeAppsApiGrpc(appsGrpc);
+builder.Services.AddLatticeAppCatalogApiGrpc(appsGrpc);
+builder.Services.AddLatticeAppWorkspaceApiGrpc(appsGrpc);
+builder.Services.AddLatticeAppBridgeApiGrpc(appsGrpc);
+
 // The embeddable Explorer web console - the one call a consumer makes to host it.
 // The sample pins the console's persisted config to its own isolated file so it
 // always connects to the co-hosted endpoint seeded above.
@@ -300,21 +335,6 @@ builder.Services.AddLatticeExplorerWeb(o =>
     o.AllowEnvironmentCredentialSeed = true;
 });
 
-// The Schema area is withheld from the Explorer's default UI - the web head
-// wires its services but does not register its plugin, because its versioning
-// UI cannot yet express what differs between schema versions - so this sample
-// hides it too, matching the shipped experience.
-// Withholding it is simply not registering its plugin; there is no per-area
-// option flag. A developer working on the area can bring it back for a run by
-// setting LATTICE_EXPLORER_ENABLE_SCHEMA=true, with no code change.
-if (string.Equals(
-        Environment.GetEnvironmentVariable("LATTICE_EXPLORER_ENABLE_SCHEMA"),
-        "true",
-        StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddExplorerSchemaPlugin();
-}
-
 var app = builder.Build();
 
 app.UseAntiforgery();
@@ -322,6 +342,10 @@ app.UseAntiforgery();
 app.MapLatticeStateApiGrpc();
 app.MapLatticeAuthApiGrpc();
 app.MapLatticeSchemaApiGrpc();
+app.MapLatticeAppsApiGrpc();
+app.MapLatticeAppCatalogApiGrpc();
+app.MapLatticeAppWorkspaceApiGrpc();
+app.MapLatticeAppBridgeApiGrpc();
 app.MapLatticeExplorer();
 
 await app.StartAsync();
@@ -352,6 +376,12 @@ using (LatticeSystemOrigin.Enter())
         var membership = app.Services.GetRequiredService<ILatticeMembershipDirectory>();
         await membership.AddMemberAsync("operators", "alice");
 
+        // The task-board walkthrough's groups (Apps/TaskBoard/README.md): alice
+        // edits, bob views, and carol is bound to no role at all.
+        await membership.AddMemberAsync("task-editors", "alice");
+        await membership.AddMemberAsync("task-viewers", "bob");
+        await membership.AddMemberAsync("visitors", "carol");
+
         var policyStore = app.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
         await policyStore.PutRuleAsync(new LatticeAuthorizationRule(
             ruleId: "operators-read-factory-floor",
@@ -365,9 +395,10 @@ using (LatticeSystemOrigin.Enter())
         Console.WriteLine("  In Access > Explain: 'alice' Read -> Allowed (matched rule); 'bob' Read -> Denied (default).");
     }
 }
-Console.WriteLine($"Silo + state/auth/schema gRPC surface started on http://localhost:{GrpcPort}");
+Console.WriteLine($"Silo + state/auth/schema/apps gRPC surface started on http://localhost:{GrpcPort}");
 Console.WriteLine($"Explorer console: open http://localhost:{WebPort}/ in a browser.");
-Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - the Explore, Access, and Schema areas are all enabled.");
+Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - the Data, Apps, Access and Schema areas are all enabled.");
+Console.WriteLine($"The '{TaskBoardApp.Slug}' app is available in Apps > Catalogue; see samples/Explorer/Apps/TaskBoard/README.md.");
 Console.WriteLine(useEntraDirectory
     ? "Identity directory: Microsoft Entra (Graph) - the Access subject picker and validated create run against your real tenant."
     : "Identity directory: static in-memory roster - the Access create form fails closed on any id not in the roster (try 'alice', 'operators', or an unknown id).");

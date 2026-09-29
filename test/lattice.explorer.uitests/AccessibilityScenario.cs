@@ -1,5 +1,3 @@
-using Orleans.Lattice.Explorer.DesignSystem.Tokens;
-using Orleans.Lattice.Explorer.UI.Appearance;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 

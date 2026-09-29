@@ -45,9 +45,11 @@
     <ProjectReference Include="..\..\src\lattice.api.schema\Orleans.Lattice.Api.Schema.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
-    <!-- The Schema area ships as its own plugin package; the sample registers it
-         only when LATTICE_EXPLORER_ENABLE_SCHEMA=true (see Program.cs). -->
-    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.apps\Orleans.Lattice.Apps.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.apps\Orleans.Lattice.Api.Apps.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.apps.grpc\Orleans.Lattice.Api.Apps.Grpc.csproj" />
+    <!-- The task-board pilot app (P1): a manifest and UI bundle embedded in its own class library. -->
+    <ProjectReference Include="Apps\TaskBoard\src\TaskBoard.csproj" />
   </ItemGroup>
 
 </Project>

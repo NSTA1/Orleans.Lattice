@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 using Orleans.Lattice.Explorer.Shell.Navigation;
 using Orleans.Lattice.Explorer.Tests.Shell.Navigation;
@@ -168,6 +169,32 @@ public sealed class ShellLayoutTests : ShellLayoutTestContext
         RenderLayout();
 
         Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "data/orders"));
+    }
+
+    [Test]
+    public void A_default_tenant_non_operator_is_redirected_to_the_plain_address()
+    {
+        UseTenancy("default");
+        Switcher!.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(false));
+        AddArea(new FakeArea("data", "Data"));
+        Navigation.NavigateTo("t/default/data");
+
+        RenderLayout();
+
+        Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "data"));
+    }
+
+    [Test]
+    public void A_default_tenant_operator_keeps_the_tenant_root()
+    {
+        UseTenancy("default");
+        Switcher!.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(true));
+        AddArea(new FakeArea("data", "Data"));
+        Navigation.NavigateTo("data");
+
+        RenderLayout();
+
+        Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "t/default/data"));
     }
 
     [Test]
