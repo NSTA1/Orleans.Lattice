@@ -15,14 +15,15 @@ public sealed class SignInJourneyTests : UiTestBase
     public async Task A_user_signs_in_is_shown_their_estate_and_signs_out()
     {
         var world = await UiHosts.WorldAsync();
-        var page = await OpenAsync(world.Head, "/");
+        var page = await OpenAsync(world.Head, "/access");
 
-        // Signed out: nothing of the cluster is shown.
-        await Expect(Shell.Stop(page, "access")).ToHaveCountAsync(0);
+        // Signed out: the cluster's access policy is not shown.
+        await ExpectAccessWithheldAsync(page);
 
         await Shell.SignInAsync(page, WorldIdentities.Admin);
         await Expect(Shell.Stop(page, "access")).ToBeVisibleAsync();
-        await Expect(Shell.Stop(page, "cluster")).ToBeVisibleAsync();
+        await Shell.Stop(page, "access").ClickAsync();
+        await Expect(Shell.Content(page)).ToContainTextAsync("operators-read-factory-floor");
 
         // Sign out from the session menu.
         await Shell.Banner(page).GetByRole(AriaRole.Button, new() { Name = $"Your session: {WorldIdentities.Admin}" }).ClickAsync();
@@ -31,7 +32,14 @@ public sealed class SignInJourneyTests : UiTestBase
         await Shell.SubmitAndWaitForNextDocumentAsync(page, session.GetByRole(AriaRole.Button, new() { Name = "Sign out" }));
 
         await Expect(Shell.Banner(page).GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First).ToBeVisibleAsync();
-        await Expect(Shell.Stop(page, "access")).ToHaveCountAsync(0);
+        await Shell.GotoAsync(page, world.Head, "/access");
+        await ExpectAccessWithheldAsync(page);
+    }
+
+    private static async Task ExpectAccessWithheldAsync(IPage page)
+    {
+        await Expect(Shell.Content(page)).ToContainTextAsync(new System.Text.RegularExpressions.Regex($"Not available|{ExplorerAreas.NotFoundHeading}"));
+        await Expect(Shell.Content(page)).Not.ToContainTextAsync("operators-read-factory-floor");
     }
 
     [Test]
