@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
-using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 

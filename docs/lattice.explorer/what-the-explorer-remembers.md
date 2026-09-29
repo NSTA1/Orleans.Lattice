@@ -14,24 +14,11 @@ contract: what is remembered, at what scope, for how long, and how to clear it.
 | `shell.surface` | The active selection surface |
 | `shell.tenant` | The active tenant scope |
 | `shell.all-tenants` | Whether the all-tenant view is requested |
-| `shell.hide-inaccessible` | Whether areas you cannot open are hidden rather than shown demoted (defaults to showing them) |
 | `appearance.theme` | The chosen theme |
 | `appearance.contrast` | The chosen contrast level |
 | `appearance.density` | The chosen density |
-| `tenants.surface` | The active sub-surface of the Tenant administration area |
-| `mytenant.surface` | The active sub-surface of the My tenant area |
-| `access.surface` | The active sub-surface of the Access area |
-| `backups.surface` | The active sub-surface of the Backups area |
-| `schema.surface` | The active sub-surface of the Schema area |
-| `telemetry.query` | The selected query in the Telemetry area |
 
-The area rows, from `tenants.surface` to `telemetry.query`, are contributed by
-plugins rather than declared by the shell: an area registers its own keys on the same catalog when its panel mounts, so a
-deployment gains them by rendering the area and the reset affordance discloses
-and clears them with no further wiring. The set is therefore extensible without
-editing the shell. Each is namespaced to its own area rather than sharing a bare
-`surface` key, because a route keeps its parameters across an area change and two
-areas sharing a key would overwrite one another. Every key is declared once and
+Every key is declared once and
 registered, rather than written through ad hoc calls scattered across
 components. A key that is not registered cannot be read or written through the
 preference contract at all, which is what keeps this list honest.
@@ -48,14 +35,13 @@ them.
 
 ## Scope
 
-The shell's route-shaped keys, `shell.area` through `shell.all-tenants`, and
-the area keys are scoped **per user and per cluster**. Switching account or
+The shell's route-shaped keys, `shell.area` through `shell.all-tenants`, are
+scoped **per user and per cluster**. Switching account or
 switching cluster does not resurrect someone else's view, and does not carry one
 cluster's selection into another where it may not exist. The unregistered working
 state described above is the exception, because it is not scoped at all.
 
-The appearance keys and `shell.hide-inaccessible` are scoped **per user**,
-because a theme - like how much of the product you want the rail to show - is a
+The appearance keys are scoped **per user**, because a theme is a
 property of the person, not of the cluster they happen to be looking at.
 
 ## Storage and lifetime

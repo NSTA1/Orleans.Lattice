@@ -175,8 +175,8 @@ change's surface area. Most packages in the family have shipped a release tag, b
 all: `lattice.api.mcp.repocontext` and `lattice.api.mcp.repocontext.replication` are
 still unreleased, as are the installable-app packages (`lattice.apps`,
 `lattice.api.apps`, `lattice.api.apps.grpc`, and `lattice.api.mcp.apps`) and the
-`Orleans.Lattice.Explorer.DesignSystem` and
-`Orleans.Lattice.Explorer.Plugins.*` packages built from `src/lattice.explorer/` (see
+`Orleans.Lattice.Explorer.AppKit` package built from
+`src/lattice.explorer/` (see
 `PACKAGES.md`), and `lattice.membership.oidc`, `lattice.api.telemetry`, and
 `lattice.api.telemetry.grpc` first shipped at 9.5.0. So verify a package's shipped
 versions with

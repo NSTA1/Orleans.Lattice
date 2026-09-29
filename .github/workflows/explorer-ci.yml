@@ -1,17 +1,18 @@
 name: Explorer CI
 
-# Advisory (non-required) lane that builds the .NET MAUI Windows desktop head of
-# Orleans.Lattice.Explorer. The core `build-and-test` job runs on ubuntu, which
-# has no MAUI workload and therefore cannot compile the Windows head - that head
-# is deliberately kept out of `Orleans.Lattice.slnx`. This job covers it on a
-# Windows runner. It only runs when explorer files change, so it never burdens
-# unrelated PRs, and it is not a required status check.
+# Advisory (non-required) lane that runs the whole Explorer test suite when
+# Explorer files change. It used to exist to build the .NET MAUI Windows desktop
+# head, which the ubuntu core matrix could not compile; that head is retired
+# (epic #3807, E12), so the lane now runs on ubuntu like everything else and
+# gives an Explorer change one self-contained signal. It only runs when explorer
+# files change, so it never burdens unrelated PRs, and it is not a required
+# status check.
 on:
   pull_request:
     # Branch list mirrors ci.yml; the rationale for the '*/epic/**' pattern is
     # documented there and in .github/copilot-instructions.md, and is not
     # restated here. Without it an epic sub-PR that touches the Explorer would
-    # get no Windows-head signal at all. The paths filter below is unchanged,
+    # get no Explorer-lane signal at all. The paths filter below is unchanged,
     # so unrelated sub-PRs still skip this lane entirely, and epic branches
     # carry no required checks, so a lane that does not report cannot leave a
     # sub-PR pending.
@@ -39,10 +40,9 @@ on:
   # carrying an Explorer change from an earlier member will not re-run it when
   # a later unrelated member lands. That is weaker than ci.yml's push lane,
   # which bypasses diff-scoping entirely. It is accepted rather than worked
-  # around: the alternative is running a Windows MAUI build on every bucket
-  # merge, and this lane's value on the integration branch is the Windows head
-  # that ubuntu cannot compile, which is worth having on the merges that
-  # actually touch it.
+  # around: the core push lane already evaluates the whole bucket, and this
+  # lane's own value is the Explorer-focused signal on the merges that actually
+  # touch it.
   push:
     branches: ['*/epic/**']
     paths:
@@ -58,8 +58,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-windows-head:
-    runs-on: windows-latest
+  explorer-tests:
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
@@ -69,9 +69,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Install MAUI Windows workload
-        run: dotnet workload install maui-windows
-
       - name: Cache NuGet packages
         uses: actions/cache@v5
         with:
@@ -79,17 +76,11 @@ jobs:
           key: nuget-explorer-${{ runner.os }}-${{ hashFiles('src/lattice.explorer/**/*.csproj', 'test/lattice.explorer/**/*.csproj') }}
           restore-keys: nuget-explorer-${{ runner.os }}-
 
-      # Build the Windows desktop head explicitly (the ubuntu lane already builds
-      # Core/UI/Web). This is the only target that requires the MAUI workload.
-      - name: Build MAUI Windows head
-        run: dotnet build src/lattice.explorer/Maui/Orleans.Lattice.Explorer.csproj --configuration Release -f net10.0-windows10.0.19041.0
-
       # tla-toolchain: not-required - this lane runs only
-      # test/lattice.explorer, which contains no `Tlc`-category fixture, and it
-      # runs on windows-latest where the ubuntu provisioning steps would not
-      # apply. See spec/README.md and CiTlaToolchainProvisioningTests.
+      # test/lattice.explorer, which contains no `Tlc`-category fixture. See
+      # spec/README.md and CiTlaToolchainProvisioningTests.
       - name: Test explorer
-        run: dotnet test test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=explorer-windows.trx"
+        run: dotnet test test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=explorer.trx"
 
       - name: Upload test results
         if: always()

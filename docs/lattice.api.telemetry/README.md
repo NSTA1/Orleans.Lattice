@@ -246,4 +246,3 @@ the caller already supplied.
 ## See also
 
 - [`Orleans.Lattice.Api.Telemetry.Grpc`](../lattice.api.telemetry.grpc/README.md) - the gRPC binding that exposes this facade to a remote head.
-- [Writing an Explorer plugin](../lattice.explorer/writing-a-plugin.md) - the Explorer's telemetry panels consume this through a client seam.

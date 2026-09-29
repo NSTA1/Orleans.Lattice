@@ -255,13 +255,6 @@ a signed-in one succeeds.
 ./run-explorer.ps1 -Username alice -Password 'Sup3rSecret'
 ```
 
-### Windows desktop explorer
-
-```powershell
-./run-explorer.ps1 -Client windows
-./run-explorer.ps1 -Client windows -Username alice -Password 'Sup3rSecret'
-```
-
 `./run.ps1 -Down` deletes the generated `.env`; every run that brings the stack
 up (`-Clean` included, which deletes it first) rewrites it from the switches
 passed to that run, so a credential from an earlier run never lingers.

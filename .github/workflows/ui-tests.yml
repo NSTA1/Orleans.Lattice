@@ -42,6 +42,14 @@ on:
     paths:
       - 'src/lattice.explorer/**'
       - '!src/lattice.explorer/**/*.md'
+      # The Explorer UI links the documentation site's tokens, fonts and favicon
+      # at build time (epic #3807, E10), and the browser suite drives the
+      # task-board sample app, so a change to either changes what it renders.
+      - 'docs-site/template/public/tokens.css'
+      - 'docs-site/template/public/favicon.svg'
+      - 'docs-site/template/public/fonts/**'
+      - 'samples/Explorer/Apps/TaskBoard/**'
+      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
       - 'test/lattice.explorer.uitests/**'
       - '!test/lattice.explorer.uitests/**/*.md'
       - '.github/workflows/ui-tests.yml'
@@ -70,6 +78,14 @@ on:
     paths:
       - 'src/lattice.explorer/**'
       - '!src/lattice.explorer/**/*.md'
+      # The Explorer UI links the documentation site's tokens, fonts and favicon
+      # at build time (epic #3807, E10), and the browser suite drives the
+      # task-board sample app, so a change to either changes what it renders.
+      - 'docs-site/template/public/tokens.css'
+      - 'docs-site/template/public/favicon.svg'
+      - 'docs-site/template/public/fonts/**'
+      - 'samples/Explorer/Apps/TaskBoard/**'
+      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
       - 'test/lattice.explorer.uitests/**'
       - '!test/lattice.explorer.uitests/**/*.md'
       - '.github/workflows/ui-tests.yml'

@@ -53,31 +53,35 @@ The package family ships from this repository:
 | `Orleans.Lattice.Tenancy` | `src/lattice.tenancy/Orleans.Lattice.Tenancy.csproj` |
 | `Orleans.Lattice.Explorer.Core` | `src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj` |
 | `Orleans.Lattice.Explorer.UI` | `src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj` |
-| `Orleans.Lattice.Explorer.Backup` | `src/lattice.explorer/Plugins/Backups/Orleans.Lattice.Explorer.Backup.csproj` |
-| `Orleans.Lattice.Explorer.Access` | `src/lattice.explorer/Plugins/Access/Orleans.Lattice.Explorer.Access.csproj` |
-| `Orleans.Lattice.Explorer.Schema` | `src/lattice.explorer/Plugins/Schema/Orleans.Lattice.Explorer.Schema.csproj` |
 | `Orleans.Lattice.Explorer.Web` | `src/lattice.explorer/WebHosting/Orleans.Lattice.Explorer.Web.csproj` |
 | `Orleans.Lattice.Explorer.Entra` | `src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj` |
 | `Orleans.Lattice.Explorer.Entra.Web` | `src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj` |
-| `Orleans.Lattice.Explorer.DesignSystem` | `src/lattice.explorer/DesignSystem/Orleans.Lattice.Explorer.DesignSystem.csproj` |
-| `Orleans.Lattice.Explorer.Shell` | `src/lattice.explorer/Shell/Orleans.Lattice.Explorer.Shell.csproj` |
 | `Orleans.Lattice.Explorer.AppKit` | `src/lattice.explorer/AppKit/Orleans.Lattice.Explorer.AppKit.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Abstractions` | `src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Selection` | `src/lattice.explorer/Plugins/Selection/Orleans.Lattice.Explorer.Plugins.Selection.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Data` | `src/lattice.explorer/Plugins/Data/Orleans.Lattice.Explorer.Plugins.Data.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.History` | `src/lattice.explorer/Plugins/History/Orleans.Lattice.Explorer.Plugins.History.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Metrics` | `src/lattice.explorer/Plugins/Metrics/Orleans.Lattice.Explorer.Plugins.Metrics.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Topology` | `src/lattice.explorer/Plugins/Topology/Orleans.Lattice.Explorer.Plugins.Topology.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.TagIndex` | `src/lattice.explorer/Plugins/TagIndex/Orleans.Lattice.Explorer.Plugins.TagIndex.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.DeadLetter` | `src/lattice.explorer/Plugins/DeadLetter/Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Telemetry` | `src/lattice.explorer/Plugins/Telemetry/Orleans.Lattice.Explorer.Plugins.Telemetry.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Tenancy` | `src/lattice.explorer/Plugins/Tenancy/Orleans.Lattice.Explorer.Plugins.Tenancy.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.Tenants` | `src/lattice.explorer/Plugins/Tenants/Orleans.Lattice.Explorer.Plugins.Tenants.csproj` |
-| `Orleans.Lattice.Explorer.Plugins.MyTenant` | `src/lattice.explorer/Plugins/MyTenant/Orleans.Lattice.Explorer.Plugins.MyTenant.csproj` |
 | `Orleans.Lattice.Caching.AzureBlob` | `src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj` |
 | `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` |
 | `Orleans.Lattice.GrainIndex` | `src/lattice.grainindex/Orleans.Lattice.GrainIndex.csproj` |
 | `Orleans.Lattice.Vector` | `src/lattice.vector/Orleans.Lattice.Vector.csproj` |
+
+## Retired packages
+
+These package ids were published from this repository and are no longer built.
+The Explorer rewrite (epic [#3807](https://github.com/NSTA1/Orleans.Lattice/issues/3807))
+removed the Explorer plugin model with no successor extension point, retired the
+MAUI desktop head, and folded the design system into `Orleans.Lattice.Explorer.UI`,
+which now ships the rewritten Explorer under its existing id. The retired ids
+have no publish tag glob and no row in the tables above; their last released
+versions stay on nuget.org and should be marked deprecated there, pointing at
+`Orleans.Lattice.Explorer.Web` (the hosting entry point) as the alternative.
+
+- `Orleans.Lattice.Explorer.DesignSystem`, last tagged `lattice.explorer.designsystem-v<X.Y.Z>`. Its successor is `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Access`, last tagged `lattice.explorer.access-v<X.Y.Z>`. Its successor is the Access area, compiled into `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Backup`, last tagged `lattice.explorer.backup-v<X.Y.Z>`. Its successor is the Backups area, compiled into `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Schema`, last tagged `lattice.explorer.schema-v<X.Y.Z>`. Its successor is the Schema area, compiled into `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Plugins.*` (Abstractions, Selection, Data, History, Metrics, Topology, TagIndex, DeadLetter, Telemetry, Tenancy, Tenants, MyTenant), last tagged `lattice.explorer.plugins.<name>-v<X.Y.Z>`. There is no successor: the Explorer has no plugin model, its native areas are compiled in, and the only third-party UI surface is a Lattice App UI.
+- `Orleans.Lattice.Explorer`, the MAUI desktop head, never tagged. Its successor is `Orleans.Lattice.Explorer.Web`, the Blazor Server head.
+
+A patch to one of these ids can still be cut from an older `release/<X.Y>` line
+that carries its sources and its tag glob, exactly like any held-back package.
 
 ## Tag shape
 
@@ -130,27 +134,10 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Tenancy` | `lattice.tenancy-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Core` | `lattice.explorer.core-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.UI` | `lattice.explorer.ui-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Backup` | `lattice.explorer.backup-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Access` | `lattice.explorer.access-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Schema` | `lattice.explorer.schema-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Web` | `lattice.explorer.web-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Entra` | `lattice.explorer.entra-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Entra.Web` | `lattice.explorer.entra.web-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.DesignSystem` | `lattice.explorer.designsystem-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Shell` | `lattice.explorer.shell-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.AppKit` | `lattice.explorer.appkit-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Abstractions` | `lattice.explorer.plugins.abstractions-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Selection` | `lattice.explorer.plugins.selection-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Data` | `lattice.explorer.plugins.data-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.History` | `lattice.explorer.plugins.history-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Metrics` | `lattice.explorer.plugins.metrics-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Topology` | `lattice.explorer.plugins.topology-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.TagIndex` | `lattice.explorer.plugins.tagindex-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.DeadLetter` | `lattice.explorer.plugins.deadletter-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Telemetry` | `lattice.explorer.plugins.telemetry-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Tenancy` | `lattice.explorer.plugins.tenancy-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.Tenants` | `lattice.explorer.plugins.tenants-v<X.Y.Z>` |
-| `Orleans.Lattice.Explorer.Plugins.MyTenant` | `lattice.explorer.plugins.mytenant-v<X.Y.Z>` |
 | `Orleans.Lattice.Caching.AzureBlob` | `lattice.caching.azureblob-v<X.Y.Z>` |
 | `Orleans.Lattice.Scaling` | `lattice.scaling-v<X.Y.Z>` |
 | `Orleans.Lattice.GrainIndex` | `lattice.grainindex-v<X.Y.Z>` |

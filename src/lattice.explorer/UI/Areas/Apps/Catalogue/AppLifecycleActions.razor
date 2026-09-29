@@ -1,0 +1,184 @@
+@implements IDisposable
+
+@*
+    Lifecycle of the installed app: enable, disable and uninstall, each behind a
+    confirmation that states its consequences. Uninstall soft-deletes the trees the
+    app owns on their retention and leaves adopted trees in place, and asks for the
+    slug to be typed. A palette command for this app opens the same confirmation.
+*@
+@if (Installed is { } installed)
+{
+    var (role, text) = AppsPresentation.LifecycleState(_state ?? installed.State, installed.Version);
+    var name = AppsPresentation.DisplayName(installed.Presentation ?? Flow!.Descriptor?.Presentation, installed.Slug);
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-lifecycle">
+        <h2 id="lt-apps-lifecycle" class="lt-apps-section__title">Lifecycle in this tenant</h2>
+        <p><LtStatusPill State="role" Text="@text" /></p>
+        @if (_error is not null)
+        {
+            <p class="lt-apps-error" role="alert">@_error</p>
+        }
+        <div class="lt-apps-actions">
+            @if (CanEnable)
+            {
+                <LtButton OnClick="() => Ask(AppLifecycleVerb.Enable)" Disabled="_busy">Enable</LtButton>
+            }
+            @if (CanDisable)
+            {
+                <LtButton OnClick="() => Ask(AppLifecycleVerb.Disable)" Disabled="_busy" data-lt-command="@AppsArea.DisableCommandId(installed.Slug)">Disable</LtButton>
+            }
+            @if (Access.Current?.Control.CanUninstall == true)
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => Ask(AppLifecycleVerb.Uninstall)" Disabled="_busy">Uninstall</LtButton>
+            }
+        </div>
+    </section>
+
+    <LtDialog Open="@(_asking is AppLifecycleVerb.Enable or AppLifecycleVerb.Disable)"
+              OpenChanged="open => { if (!open) { _asking = null; } }"
+              Title="@(_asking == AppLifecycleVerb.Enable ? $"Enable {name}?" : $"Disable {name}?")">
+        <ChildContent>
+            @if (_asking == AppLifecycleVerb.Enable)
+            {
+                <p>Its manifest is validated and every role is intersected with the consented ceiling before its access rules are written. If the consent no longer covers what it asks for, activation fails and nothing is granted.</p>
+            }
+            else
+            {
+                <p>Its access rules are withdrawn at once, so its UI, bridge and MCP tools stop answering for everyone in this tenant. Its trees and data are kept unchanged, and you can enable it again at any time.</p>
+            }
+        </ChildContent>
+        <Actions>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _asking = null">Cancel</LtButton>
+            <LtButton OnClick="ConfirmAsync">@(_asking == AppLifecycleVerb.Enable ? "Enable" : "Disable")</LtButton>
+        </Actions>
+    </LtDialog>
+
+    <LtConfirmDestructive Open="@(_asking == AppLifecycleVerb.Uninstall)"
+                          OpenChanged="open => { if (!open) { _asking = null; } }"
+                          Title="@($"Uninstall {name}?")"
+                          ObjectKind="app"
+                          ObjectName="@installed.Slug"
+                          ConfirmText="Uninstall"
+                          OnConfirm="ConfirmAsync">
+        <p>Its access rules are removed and the trees it owns are soft-deleted on their retention, then purged unless recovered first:</p>
+        <ul class="lt-apps-list">
+            @foreach (var tree in installed.Trees.Where(tree => tree.AdoptedTreeId is null))
+            {
+                <li><span class="lt-shell-mono">@AppsPresentation.TreePath(installed.Slug, tree.Name)</span>, @(tree.SoftDeleteDuration is { } retention ? $"recoverable for {AppReviewDetails.Retention(retention)}" : "recoverable for the cluster's soft-delete window")</li>
+            }
+        </ul>
+        @if (installed.Trees.Any(tree => tree.AdoptedTreeId is not null))
+        {
+            <p>Adopted trees survive: @string.Join(", ", installed.Trees.Where(tree => tree.AdoptedTreeId is not null).Select(tree => tree.AdoptedTreeId)).</p>
+        }
+    </LtConfirmDestructive>
+}
+
+@code {
+    private AppLifecycleVerb? _asking;
+    private AppLifecycleState? _state;
+    private string? _error;
+    private bool _busy;
+
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+
+    /// <summary>Raised after a lifecycle change succeeded, so the page can reload what it shows.</summary>
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    [Inject]
+    internal AppsAccess Access { get; set; } = default!;
+
+    [Inject]
+    internal Orleans.Lattice.Explorer.UI.Navigation.ExplorerAreaDirectory Directory { get; set; } = default!;
+
+    [Inject]
+    internal AppsFacades Facades { get; set; } = default!;
+
+    [Inject]
+    internal AppsLifecycleIntents Intents { get; set; } = default!;
+
+    [Inject]
+    internal LtToastService Toasts { get; set; } = default!;
+
+    private AppDescriptor? Installed => Flow?.Installed is { State: not (AppLifecycleState.NotInstalled or AppLifecycleState.Uninstalled) } installed ? installed : null;
+
+    private AppLifecycleState CurrentState => _state ?? Installed!.State;
+
+    private bool CanEnable => Access.Current?.Control.CanEnable == true && CurrentState is AppLifecycleState.Installed or AppLifecycleState.Disabled or AppLifecycleState.Failed;
+
+    private bool CanDisable => Access.Current?.Control.CanDisable == true && CurrentState == AppLifecycleState.Enabled;
+
+    /// <summary>Stops listening for palette commands.</summary>
+    public void Dispose() => Intents.Posted -= OnPosted;
+
+    /// <inheritdoc />
+    protected override void OnInitialized() => Intents.Posted += OnPosted;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() => TakeIntent();
+
+    private void OnPosted() => _ = InvokeAsync(() =>
+    {
+        TakeIntent();
+        StateHasChanged();
+    });
+
+    private void TakeIntent()
+    {
+        if (Installed is not { } installed)
+        {
+            return;
+        }
+
+        foreach (var verb in new[] { AppLifecycleVerb.Disable, AppLifecycleVerb.Enable, AppLifecycleVerb.Uninstall })
+        {
+            if (Intents.TryTake(installed.Slug, verb))
+            {
+                Ask(verb);
+            }
+        }
+    }
+
+    private void Ask(AppLifecycleVerb verb)
+    {
+        _error = null;
+        _asking = verb;
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if (_asking is not { } verb || Installed is not { } installed || Facades.Control is not { } control)
+        {
+            return;
+        }
+
+        _asking = null;
+        _busy = true;
+        var name = AppsPresentation.DisplayName(installed.Presentation ?? Flow!.Descriptor?.Presentation, installed.Slug);
+        try
+        {
+            var result = verb switch
+            {
+                AppLifecycleVerb.Enable => await control.EnableAsync(installed.Slug),
+                AppLifecycleVerb.Disable => await control.DisableAsync(installed.Slug),
+                _ => await control.UninstallAsync(installed.Slug),
+            };
+
+            _state = result.State;
+            Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
+            Access.Invalidate(installed.Slug);
+            Directory.Invalidate();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception error)
+        {
+            _error = AppsFailureMessages.Describe(error, verb.ToString().ToLowerInvariant(), name);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

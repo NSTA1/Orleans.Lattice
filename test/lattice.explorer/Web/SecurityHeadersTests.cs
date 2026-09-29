@@ -135,6 +135,41 @@ public class SecurityHeadersTests
         });
     }
 
+    [TestCase(null, "/")]
+    [TestCase(null, "/data")]
+    [TestCase(null, "/apps/catalogue")]
+    [TestCase(null, "/not-found")]
+    [TestCase(null, "/reset")]
+    [TestCase(null, "/_framework/blazor.web.js")]
+    [TestCase(null, "/_apps/frame/v1/")]
+    [TestCase(null, "/_apps/frame/v2/frame.html")]
+    [TestCase(null, "/_apps/frame.html")]
+    [TestCase("/explorer", "/explorer/")]
+    [TestCase("/explorer", "/explorer/data")]
+    [TestCase("/explorer", "/explorer/_framework/blazor.web.js")]
+    public async Task Every_explorer_route_except_the_frame_bootstrap_route_denies_framing(string? basePath, string path)
+    {
+        await using var app = await CreateHostAsync(basePath);
+        using var client = app.GetTestServer().CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.That(Values(response, "X-Frame-Options"), Is.EqualTo(new[] { ExplorerSecurityHeaders.FrameOptionsValue }), path);
+    }
+
+    [TestCase(null, "/_apps/frame/v1/frame.html")]
+    [TestCase(null, "/_apps/frame/v1/boot.js")]
+    [TestCase("/explorer", "/explorer/_apps/frame/v1/frame.html")]
+    public async Task The_frame_bootstrap_route_alone_omits_x_frame_options(string? basePath, string path)
+    {
+        await using var app = await CreateHostAsync(basePath);
+        using var client = app.GetTestServer().CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.That(HasHeader(response, "X-Frame-Options"), Is.False, path);
+    }
+
     [Test]
     public void Invoke_null_context_throws()
     {

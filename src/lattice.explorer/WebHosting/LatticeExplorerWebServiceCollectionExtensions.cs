@@ -1,49 +1,31 @@
-using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Orleans.Lattice.Explorer.Access;
-using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
-using Orleans.Lattice.Explorer.Core.Data;
-using Orleans.Lattice.Explorer.Core.DeadLetter;
-using Orleans.Lattice.Explorer.Core.History;
-using Orleans.Lattice.Explorer.Core.Metrics;
-using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Tenancy;
-using Orleans.Lattice.Explorer.Core.Topology;
-using Orleans.Lattice.Explorer.DesignSystem;
-using Orleans.Lattice.Explorer.Plugins.MyTenant;
-using Orleans.Lattice.Explorer.Plugins.Telemetry;
-using Orleans.Lattice.Explorer.Schema;
-using Orleans.Lattice.Explorer.Plugins.Tenants;
-using Orleans.Lattice.Explorer.UI.Appearance;
-using Orleans.Lattice.Explorer.UI.Authentication;
-using Orleans.Lattice.Explorer.UI.Plugins;
-
+using Orleans.Lattice.Explorer.UI;
+using Orleans.Lattice.Explorer.UI.Session;
 namespace Orleans.Lattice.Explorer.Web;
 
 /// <summary>
 /// Registration entry point for the embeddable Orleans.Lattice Explorer web head.
 /// A single <see cref="AddLatticeExplorerWeb(IServiceCollection, Action{LatticeExplorerWebOptions})"/>
 /// call wires up everything the standalone head registers, so a consumer can
-/// co-host the Explorer inside their own ASP.NET application. Data browsing is
-/// read-only; capability-gated areas such as Backups, Access, Tenants, and Schema
-/// can perform administration when the corresponding plugin/facade is available.
+/// co-host the Explorer inside their own ASP.NET application. Every area is
+/// compiled in and decides its own visibility from its facade's capability probe,
+/// failing closed; there is no plugin or area registration API.
 /// </summary>
 public static class LatticeExplorerWebServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Orleans.Lattice Explorer web head: Razor components with
-    /// interactive server components, the shared explorer UI, the state-API
-    /// connection seam, the configuration backing store plus environment
-    /// bootstrap, the catalog / metrics / topology / data / dead-letter / history
-    /// / session services, the browser-backed UI preference store, the Backups,
-    /// Access, Tenant administration, My tenant, and Telemetry areas, and the
-    /// cookie / data-protection auth plumbing. Map the endpoints with
+    /// interactive server components, the state-API connection seam, the
+    /// configuration backing store plus environment bootstrap, the browser-backed
+    /// UI preference store, the cookie / data-protection auth plumbing, the tenant
+    /// view, and the Explorer UI itself - its navigation and session chrome, its
+    /// credential-aware transport, the Lattice App frame host, and every native area. Map the endpoints with
     /// <see cref="LatticeExplorerWebEndpointRouteBuilderExtensions.MapLatticeExplorer"/>.
     /// </summary>
     /// <remarks>
@@ -72,33 +54,15 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         configure?.Invoke(options);
         services.TryAddSingleton(options);
 
-        // The plugin host and the two adapters that publish the Explorer's own
-        // selection, connection, tenant and preference state onto the plugin
-        // contract. Which areas the shell surfaces is decided further down, by
-        // which area plugins this head registers.
-        services.AddExplorerPluginAdapters();
-
-        // The per-selection tier: the metrics, topology, data and dead-letter
-        // surfaces a tree or view resolves to, and the tag-index browser a
-        // tag-index selection resolves to. Registered as ordinary plugins, so
-        // the detail panel enumerates and gates them exactly as the shell does
-        // the area tier.
-        services.AddExplorerSelectionPlugins();
-
-        // Do not advertise a connection-settings affordance the store refuses.
-        // Presentation only; the enforcing check is on the store below. There is
-        // no per-area flag here any more - an area is surfaced by registering its
-        // plugin, so the only navigation option left is this one.
-        services.TryAddSingleton(new ExplorerNavigationOptions
-        {
-            AllowEndpointConfiguration = options.AllowInteractiveEndpointConfiguration,
-        });
-
         // The web head is Blazor Server: the server process holds the gRPC channel
-        // to the cluster's state API and the browser renders over the SignalR
-        // circuit. Interactive server components host the shared UI class library.
+        // to the cluster and the browser renders over the SignalR circuit. The app
+        // frame host relays each frame request (up to 128 KiB of UTF-8) to .NET as
+        // one JS interop message, which the SignalR default of 32 KiB would refuse.
         services.AddRazorComponents()
-            .AddInteractiveServerComponents();
+            .AddInteractiveServerComponents()
+            .AddHubOptions(hub => hub.MaximumReceiveMessageSize = Math.Max(
+                hub.MaximumReceiveMessageSize ?? 0,
+                MinimumCircuitMessageBytes));
 
         // The config backing store, shared connection, and session live in DI. The
         // JSON store path is taken from the options, else the LATTICE_EXPLORER_CONFIG
@@ -148,96 +112,47 @@ public static class LatticeExplorerWebServiceCollectionExtensions
             services.AddExplorerEnvironmentBootstrap();
         }
 
-        services.AddExplorerCatalog();
-        services.AddExplorerMetrics();
-        services.AddExplorerTopology();
-        services.AddExplorerData();
-        services.AddExplorerDeadLetter();
-        services.AddExplorerHistory();
+        // The per-user preference contract the chrome's appearance reads, persisted
+        // to the browser's localStorage (Data Protection-encrypted) rather than the
+        // in-memory fallback backing store.
         services.AddExplorerSession();
-
-        // The adaptive shell's viewport seam: one breakpoint per circuit, driven
-        // by LatticeAdaptiveRoot and read by every design-system primitive.
-        services.AddLatticeExplorerDesignSystem();
-
-        // Theme, contrast and density, remembered per user through the preference
-        // contract registered just above. No IExplorerHostTheme is registered:
-        // the browser answers prefers-color-scheme in the document itself, so
-        // "follow the system" is resolved there by the first-paint bootstrap
-        // rather than guessed at on the server.
-        services.AddExplorerAppearance();
-
-        // The web head persists UI preferences to the browser's localStorage (Data
-        // Protection-encrypted), overriding the in-memory fallback backing store.
         services.AddScoped<IUiPreferenceBackingStore, ProtectedLocalStoragePreferenceBackingStore>();
 
         // Authentication. The credential rests in an HttpOnly + Secure cookie
-        // encrypted with Data Protection (no browser storage); the login dialog
+        // encrypted with Data Protection (no browser storage); the sign-in dialog
         // posts to the server endpoints so the password never crosses the circuit.
+        // The session chrome's own default paths are base-relative; the head
+        // registers them rooted at its base href, ahead of the Shell's TryAdd.
         ConfigureDataProtection(services, options);
         services.AddHttpContextAccessor();
         services.TryAddSingleton<ICredentialStore, CookieCredentialStore>();
-        services.TryAddSingleton(new ExplorerAuthUiOptions
+        services.TryAddSingleton(new SessionSignInOptions
         {
             UseServerFormPost = true,
-            LoginPath = options.BaseHref + "auth/login",
-            LogoutPath = options.BaseHref + "auth/logout",
+            LoginPath = options.BaseHref + SessionSignInOptions.DefaultLoginPath,
+            LogoutPath = options.BaseHref + SessionSignInOptions.DefaultLogoutPath,
         });
         services.AddExplorerAuth();
 
-        // The Backups management area: the backup control-API client, its catalog
-        // reader, and the access gate that gates the area and its per-scope
-        // actions, plus the plugin registration that surfaces it in the shell.
-        services.AddExplorerBackup();
-        services.AddExplorerBackupsPlugin();
+        // The Explorer itself: chrome, session, credential-aware transport, the
+        // app frame host and every native area. Nothing here is an extension
+        // point: the areas are compiled in (epic #3807, E1 and E2).
+        services.AddLatticeExplorerShell();
 
-        // The Access (membership & access-control) management area: the auth-admin
-        // control-API client, its membership and policy services, and the access
-        // gate that gates the area, plus the plugin registration that surfaces it.
-        services.AddExplorerAccess();
-        services.AddExplorerAccessPlugin();
-
-        // The Tenants (platform-operator tenant management) area. Registered
-        // after AddExplorerAccess(), which supplies the platform-operator gate
-        // this area is reserved to; the plugin's own registration turns on the
-        // tenant-view seam and the shared tenancy client, and refuses to compose
-        // at all if the gate it needs is the fail-closed default.
-        services.AddExplorerTenantsPlugin();
-        // The My Tenant self-service area, for a tenant administrator. Its
-        // registration must follow AddExplorerAccess(): AddExplorerTenantView()
-        // registers a fail-closed placeholder platform-operator gate with
-        // TryAdd, and Access registers the real one, so calling them the other
-        // way round keeps the placeholder and every tenant switch quietly does
-        // nothing. On a cluster without the tenancy add-on the plugin's gate
-        // reports the surface unavailable and no My Tenant tab is rendered.
+        // Tenancy. Registered AFTER the Shell, because Core adds its fallbacks with
+        // TryAdd: the Shell's accessible-tenant list and platform-operator gate
+        // must win over Core's active-tenant-only list and fail-closed gate.
         services.AddExplorerTenantView();
-        services.AddExplorerMyTenant();
-        services.AddExplorerMyTenantPlugin();
-
-        // The Telemetry area: time-series panels built from the server-authored
-        // catalogue. Registered after My Tenant so the metrics section has a
-        // surface to fill; the section and the area are independent opt-ins, and
-        // this head takes both. On a cluster serving no telemetry facade - or
-        // offering this caller no queries - the plugin's gate reports the
-        // surface unavailable and no Telemetry tab is rendered.
-        services.AddExplorerTelemetry();
-        services.AddExplorerTelemetryPlugin();
-        services.AddExplorerTelemetryMyTenantSection();
-
-        // The Schema management area: the schema control-API client, its policy,
-        // versioning, and compliance services, and the access gate that gates the
-        // area. Its services are wired here, but its plugin deliberately is not
-        // registered, so this head renders no Schema tab. A head opts the area in
-        // with one call - services.AddExplorerSchemaPlugin() from
-        // Orleans.Lattice.Explorer.Schema - which is the whole of the
-        // opt-in now that the per-area flag is retired. The area stays withheld by
-        // default because its versioning UI cannot yet express what differs
-        // between schema versions.
-        services.AddExplorerSchema();
 
         return services;
     }
 
+    /// <summary>
+    /// The smallest SignalR receive limit the circuit may run with: a frame
+    /// request is at most 128 KiB of UTF-8, relayed as one interop message, plus
+    /// the envelope around it.
+    /// </summary>
+    internal const long MinimumCircuitMessageBytes = 160 * 1024;
     /// <summary>
     /// Registers ASP.NET Data Protection. Without configuration this is exactly the
     /// framework default (a per-instance, ephemeral key ring). When a host supplies

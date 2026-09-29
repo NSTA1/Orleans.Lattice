@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Favicon: the Orleans.Lattice mark (see lattice-mark.svg) on an ink tile, so it reads on light and dark tab strips. -->
+  <rect width="32" height="32" rx="7" fill="#15191f"/>
+  <g fill="none" stroke="#e4e9e5" stroke-width="2.2" stroke-linecap="round">
+    <path d="M16 26.2 L7 16.4 M16 26.2 L25 16.4 M7 16.4 L16 6.6 M25 16.4 L16 6.6"/>
+  </g>
+  <circle cx="7" cy="16.4" r="3" fill="#e4e9e5"/>
+  <circle cx="25" cy="16.4" r="3" fill="#e4e9e5"/>
+  <circle cx="16" cy="26.2" r="2.6" fill="#15191f" stroke="#e4e9e5" stroke-width="1.8"/>
+  <circle cx="16" cy="6.6" r="3.6" fill="#ffd23f"/>
+</svg>
