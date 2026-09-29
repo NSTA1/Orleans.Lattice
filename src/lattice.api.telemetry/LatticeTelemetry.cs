@@ -224,7 +224,7 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
         TimeSpan deploymentMaxRange)
     {
         var span = bounds.MaxPoints > 1 && step > TimeSpan.Zero
-            ? step * (bounds.MaxPoints - 1)
+            ? SaturatingMultiply(step, bounds.MaxPoints - 1)
             : DefaultUnboundedSpan;
 
         if (bounds.MaxRange > TimeSpan.Zero && span > bounds.MaxRange)
@@ -236,6 +236,20 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
             ? deploymentMaxRange
             : span;
     }
+
+    /// <summary>
+    /// <paramref name="step"/> times <paramref name="factor"/>, saturating at
+    /// <see cref="TimeSpan.MaxValue"/> rather than throwing. An entry that declares
+    /// no step ceiling passes the caller's step through unclamped, so the product
+    /// can exceed the representable range; the caps applied after it bring a
+    /// saturated span back inside the bounds, and an unrepresentable step is then
+    /// rejected by the deployment step guardrail instead of escaping as an
+    /// <see cref="OverflowException"/>.
+    /// </summary>
+    private static TimeSpan SaturatingMultiply(TimeSpan step, int factor) =>
+        step.Ticks > long.MaxValue / factor
+            ? TimeSpan.MaxValue
+            : TimeSpan.FromTicks(step.Ticks * factor);
 
     /// <summary>
     /// Builds the label-matcher fragment: the tenant the facade pinned, plus the

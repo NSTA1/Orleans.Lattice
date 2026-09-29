@@ -5,13 +5,23 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// <summary>
 /// Validates <see cref="LatticeTelemetryOptions"/> when options are first resolved: requires
 /// an absolute backend address, a defined auth mode with the credential material
-/// its mode needs, strictly positive request-timeout and range guardrails, a
+/// its mode needs, a strictly positive request timeout no longer than the backend
+/// <see cref="HttpClient"/> accepts, strictly positive range guardrails, a
 /// defined metric-access mode, and - in deny-all mode - a non-empty allow-list
 /// with no null-or-empty entries.
 /// </summary>
 public sealed class LatticeTelemetryOptionsValidator
     : IValidateOptions<LatticeTelemetryOptions>
 {
+    /// <summary>
+    /// The longest finite timeout <see cref="HttpClient.Timeout"/> accepts
+    /// (<see cref="int.MaxValue"/> milliseconds). The backend client is configured
+    /// with <see cref="LatticeTelemetryOptions.RequestTimeout"/> whenever it is
+    /// resolved, so a longer value would pass validation and then fail every
+    /// resolution of that client.
+    /// </summary>
+    private static readonly TimeSpan MaxRequestTimeout = TimeSpan.FromMilliseconds(int.MaxValue);
+
     /// <inheritdoc />
     public ValidateOptionsResult Validate(string? name, LatticeTelemetryOptions options)
     {
@@ -39,6 +49,12 @@ public sealed class LatticeTelemetryOptionsValidator
         if (options.RequestTimeout <= TimeSpan.Zero)
         {
             failures.Add($"{nameof(LatticeTelemetryOptions.RequestTimeout)} must be strictly positive.");
+        }
+        else if (options.RequestTimeout > MaxRequestTimeout)
+        {
+            failures.Add(
+                $"{nameof(LatticeTelemetryOptions.RequestTimeout)} must be at most {MaxRequestTimeout} "
+                + "(int.MaxValue milliseconds), the longest finite timeout the backend HttpClient accepts.");
         }
 
         if (options.MaxRange <= TimeSpan.Zero)
