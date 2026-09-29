@@ -43,6 +43,17 @@ internal interface IExplorerArea
     bool IsTenantScoped => true;
 
     /// <summary>
+    /// Whether <paramref name="address"/>, an address in this area, follows the
+    /// active tenant. Defaults to <see cref="IsTenantScoped"/>; an area whose
+    /// pages are rooted differently - a cluster-wide directory beside a
+    /// tenant-rooted workspace - answers per address. The navigator asks this,
+    /// not <see cref="IsTenantScoped"/>, when it canonicalizes, resolves or
+    /// re-roots an address.
+    /// </summary>
+    /// <param name="address">An address whose area is this one.</param>
+    bool IsTenantScopedAt(Address.ExplorerAddress address) => IsTenantScoped;
+
+    /// <summary>
     /// The area's completion source for the address line, or <see langword="null"/>
     /// for none. Only a <see cref="AreaAvailabilityKind.Visible"/> area is asked.
     /// </summary>

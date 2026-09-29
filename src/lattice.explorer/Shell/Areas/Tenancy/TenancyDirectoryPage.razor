@@ -1,0 +1,97 @@
+@page "/tenancy"
+@inherits ExplorerPage
+
+@*
+    The tenant directory, for a platform operator: every tenant the caller can
+    reach, its state, quota use, regions and installed apps, and a validated
+    create form. Anyone else is taken to their own tenant.
+*@
+
+<PageTitle>Tenancy - Orleans.Lattice Explorer</PageTitle>
+
+<link rel="stylesheet" href="@TenancyAssets.Stylesheet" />
+<h1 class="lt-shell-page-title">Tenancy</h1>
+<p class="lt-shell-page-lede">Every tenant on this cluster: its state, use against quota, and where it is resident.</p>
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Tenants could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions>
+            @if (failure.IsRetryable)
+            {
+                <LtButton OnClick="LoadAsync">Try again</LtButton>
+            }
+        </Actions>
+    </LtEmptyState>
+}
+else if (_rows is null)
+{
+    <LtSkeleton Lines="6" Label="Loading tenants" />
+}
+else
+{
+    <div class="lt-toolbar">
+        <LtSearchInput Label="Search tenants" Placeholder="Tenant id" Value="@_search" ValueChanged="@(value => _search = value)" />
+        <LtButton OnClick="OpenCreate" data-lt-command="@TenancyArea.CreateTenantCommandId">New tenant</LtButton>
+        <span class="lt-tenancy-count" role="status">@CountText</span>
+    </div>
+
+    <LtTable TItem="TenancyDirectoryRow" Items="Visible" Caption="Tenants" CaptionHidden="true" RowKey="@(row => row.TenantId)" IsCurrent="IsActive" DetailTitle="@(row => row.TenantId)">
+        <ChildContent>
+            <LtColumn TItem="TenancyDirectoryRow" Title="Tenant" RowHeader="true" Mono="true" SortBy="@(row => row.TenantId)">
+                <a href="@Href(TenancyRoutes.Tenant(context.TenantId))">@context.TenantId</a>
+                @if (context.Tenant.IsDefault)
+                {
+                    <span class="lt-tenancy-quiet"> (default)</span>
+                }
+            </LtColumn>
+            <LtColumn TItem="TenancyDirectoryRow" Title="State" SortBy="@(row => (int)row.Tenant.Status)">
+                <LtStatusPill State="@TenancyFormat.TenantStateRole(context.Tenant.Status)" Text="@TenancyFormat.TenantStateLabel(context.Tenant.Status)" />
+            </LtColumn>
+            <LtColumn TItem="TenancyDirectoryRow" Title="Quota use" Value="@(row => Pending(row, row.Quota))" />
+            <LtColumn TItem="TenancyDirectoryRow" Title="Resident in" Mono="true" Value="@(row => row.Regions is { } regions ? TenancyFormat.RegionList(regions) : Pending(row, null))" />
+            <LtColumn TItem="TenancyDirectoryRow" Title="Apps">
+                <a href="@Href(TenancyRoutes.Apps(context.TenantId))" aria-label="@AppsLabel(context)">@AppsText(context)</a>
+            </LtColumn>
+            <LtColumn TItem="TenancyDirectoryRow" Title="Workspace" Align="LtColumnAlign.End">
+                <a href="@Href(TenancyRoutes.MyTenant(context.TenantId))">@(IsActive(context) ? "Open workspace" : "Scope to tenant")</a>
+            </LtColumn>
+        </ChildContent>
+        <EmptyContent>
+            <span>@(_rows.Count == 0 ? "No tenant is visible to you yet. A tenant created with no admin subjects is not listed." : "No tenant matches.")</span>
+        </EmptyContent>
+        <CompactRow>
+            <LtCompactRow Mono="true">
+                <Primary>@context.TenantId</Primary>
+                <Secondary>@Pending(context, context.Quota)</Secondary>
+                <State><LtStatusPill State="@TenancyFormat.TenantStateRole(context.Tenant.Status)" Text="@TenancyFormat.TenantStateLabel(context.Tenant.Status)" /></State>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions>
+            <a class="lt-btn" href="@Href(TenancyRoutes.Tenant(context.TenantId))">Administer</a>
+            <a class="lt-btn" href="@Href(TenancyRoutes.MyTenant(context.TenantId))">@(IsActive(context) ? "Open workspace" : "Scope to tenant")</a>
+            <a class="lt-btn" href="@Href(TenancyRoutes.Apps(context.TenantId))">@AppsText(context)</a>
+        </DetailActions>
+    </LtTable>
+}
+
+<LtDialog Open="_createOpen" OpenChanged="@(open => _createOpen = open)" Title="New tenant" Placement="DialogPlacement">
+    @if (_createOpen)
+    {
+        <form class="lt-tenancy-form" @onsubmit="CreateAsync" novalidate>
+            <LtTextInput Label="Tenant id" Mono="true" Value="@_newId" ValueChanged="@(value => _newId = value)" Error="@_idError"
+                         Hint="Lower-case letters, digits and hyphens. It names the tenant's trees, so it cannot change later." />
+            <LtTextInput Label="Admin subjects (optional)" Mono="true" Value="@_newAdmins" ValueChanged="@(value => _newAdmins = value)" Error="@_adminsError"
+                         Hint="Separate subject ids with commas. Left blank, you become its first admin subject; listing any replaces that." />
+            @if (_formError is not null)
+            {
+                <p class="lt-tenancy-form__error" role="alert">@_formError</p>
+            }
+            <div class="lt-tenancy-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="_saving">Create tenant</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _createOpen = false)" Disabled="_saving">Cancel</LtButton>
+            </div>
+        </form>
+    }
+</LtDialog>

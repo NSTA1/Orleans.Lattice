@@ -1,0 +1,100 @@
+@*
+    One tenant's use against its quota: a row per dimension that never draws a
+    bar the reading does not support, and, for an operator, the quota editor.
+*@
+<section class="lt-tenancy-section" aria-labelledby="@HeadingId">
+    <div class="lt-tenancy-section__head">
+        <h2 class="lt-tenancy-section__title" id="@HeadingId">Quota</h2>
+        @if (CanEdit && _report is { IsDefault: false })
+        {
+            <LtButton OnClick="OpenEditor">Edit quotas</LtButton>
+        }
+    </div>
+
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Quota could not be read")" HeadingLevel="3">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions>
+                @if (failure.IsRetryable)
+                {
+                    <LtButton OnClick="LoadAsync">Try again</LtButton>
+                }
+            </Actions>
+        </LtEmptyState>
+    }
+    else if (_report is not { } report)
+    {
+        <LtSkeleton Lines="5" Label="Loading the quota" />
+    }
+    else
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="Enforced">@TenancyFormat.EnforcementLabel(report.EnforcementScope)</LtDefinition>
+            <LtDefinition Term="Burst allowance">@(report.BurstPercent > 0 ? $"{report.BurstPercent}% above each ceiling" : "None")</LtDefinition>
+        </LtDefinitionList>
+        @if (report.IsDefault)
+        {
+            <p class="lt-tenancy-note">The reserved default tenant is always unbounded, and cannot be given quotas.</p>
+        }
+        else if (!report.HasUsage)
+        {
+            <p class="lt-tenancy-note">No usage has been measured for this tenant yet.</p>
+        }
+        <LtTable TItem="TenancyQuotaGauge" Items="_gauges" Caption="@($"Quota use of tenant {TenantId}")" CaptionHidden="true" RowKey="@(gauge => gauge.Dimension)" DetailTitle="@(gauge => TenancyFormat.DimensionLabel(gauge.Dimension))">
+            <ChildContent>
+                <LtColumn TItem="TenancyQuotaGauge" Title="Dimension" RowHeader="true" Value="@(gauge => TenancyFormat.DimensionLabel(gauge.Dimension))" />
+                <LtColumn TItem="TenancyQuotaGauge" Title="Used" Align="LtColumnAlign.End" Value="@(gauge => gauge.UsageText)" />
+                <LtColumn TItem="TenancyQuotaGauge" Title="Ceiling" Align="LtColumnAlign.End" Value="@(gauge => gauge.LimitText)" />
+                <LtColumn TItem="TenancyQuotaGauge" Title="Burst ceiling" Align="LtColumnAlign.End" Value="@(gauge => gauge.BurstText)" />
+                <LtColumn TItem="TenancyQuotaGauge" Title="Use">
+                    @if (context.BarPercent is { } fill)
+                    {
+                        <span class="@(context.IsOverLimit ? "lt-tenancy-meter lt-tenancy-meter--over" : "lt-tenancy-meter")" aria-hidden="true"><span class="lt-tenancy-meter__fill" style="@($"inline-size: {fill}%")"></span></span>
+                    }
+                    <span class="lt-tenancy-meter__text">@context.UseText</span>
+                </LtColumn>
+            </ChildContent>
+            <CompactRow>
+                <LtCompactRow>
+                    <Primary>@TenancyFormat.DimensionLabel(context.Dimension)</Primary>
+                    <Secondary>@($"{context.UsageText} of {context.LimitText}")</Secondary>
+                    <State>
+                        @if (context.IsOverLimit)
+                        {
+                            <LtStatusPill State="LtStateRole.Failed" Text="Over limit" />
+                        }
+                    </State>
+                </LtCompactRow>
+            </CompactRow>
+        </LtTable>
+    }
+</section>
+
+<LtDialog Open="_editing" OpenChanged="@(open => _editing = open)" Title="@($"Quotas of tenant {TenantId}")" Placement="DialogPlacement"
+          Description="Blank means no ceiling. Zero is a real ceiling that permits nothing.">
+    @if (_editing && _draft is { } draft)
+    {
+        <form class="lt-tenancy-form" @onsubmit="SaveAsync" novalidate>
+            @foreach (var dimension in TenancyFormat.Dimensions)
+            {
+                var field = dimension;
+                <LtTextInput Label="@TenancyFormat.DimensionLabel(field)"
+                             Mono="true"
+                             Value="@draft[field]"
+                             ValueChanged="@(value => draft[field] = value)"
+                             Error="@ErrorFor(field)"
+                             Hint="@HintFor(field)" />
+            }
+            <LtTextInput Label="Burst allowance (percent)" Mono="true" Value="@draft.BurstPercent" ValueChanged="@(value => draft.BurstPercent = value)" Error="@draft.BurstError" />
+            @if (_formError is not null)
+            {
+                <p class="lt-tenancy-form__error" role="alert">@_formError</p>
+            }
+            <div class="lt-tenancy-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="_saving">Save quotas</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _editing = false)" Disabled="_saving">Cancel</LtButton>
+            </div>
+        </form>
+    }
+</LtDialog>

@@ -1,0 +1,15 @@
+@*
+    The navigation between one tenant's pages, drawn as the tab row with the
+    marker under the current one: the administration pages under /tenancy/{t},
+    or the my-tenant sections under /t/{t}/tenancy. It also links the area's
+    stylesheet, so every Tenancy page carries it without a head change.
+*@
+<link rel="stylesheet" href="@TenancyAssets.Stylesheet" />
+<nav class="lt-tenancy-nav" aria-label="@Label">
+    <ul class="lt-tenancy-nav__list">
+        @foreach (var item in Items)
+        {
+            <li><a class="lt-tenancy-nav__link" href="@Href(item.Address)" aria-current="@CurrentFor(item.Section)">@item.Text</a></li>
+        }
+    </ul>
+</nav>

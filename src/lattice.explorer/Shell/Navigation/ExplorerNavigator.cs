@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Explorer.Shell.Navigation;
 /// </para>
 /// <para>
 /// <b>Tenancy on:</b> the active tenant is the root node of Home and of every
-/// tenant-scoped area (<see cref="IExplorerArea.IsTenantScoped"/>), and
+/// tenant-scoped area (<see cref="IExplorerArea.IsTenantScopedAt"/>), and
 /// cluster-wide areas never carry one. Arriving at another tenant's address is a
 /// request to switch tenant: it goes through the operator-gated switcher, and a
 /// refusal redirects back to the active tenant's equivalent address with a
@@ -158,5 +158,5 @@ internal sealed class ExplorerNavigator
         ExplorerAddress.Create(address.Tenant, address.Area, address.Path);
 
     private bool IsTenantScoped(ExplorerAddress address) =>
-        address.Area is not { } key || _directory.Find(key) is not { } area || area.IsTenantScoped;
+        address.Area is not { } key || _directory.Find(key) is not { } area || area.IsTenantScopedAt(address);
 }
