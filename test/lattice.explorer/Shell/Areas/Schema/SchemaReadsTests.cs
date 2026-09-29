@@ -279,8 +279,16 @@ public sealed class SchemaReadsTests : SchemaTestContext
         Operations.Dismiss("orders");
         Assert.That(Operations.Find("orders"), Is.Not.Null, "a running operation is kept");
 
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.Changed += tree =>
+        {
+            if (Operations.Find(tree) is { IsActive: false })
+            {
+                ended.TrySetResult();
+            }
+        };
         gate.SetResult(LatticeSchemaRemediationReport.Completed(12, "shadow", "op-7"));
-        await Task.Yield();
+        await ended.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var finished = Operations.Find("orders")!;
         Assert.Multiple(() =>
