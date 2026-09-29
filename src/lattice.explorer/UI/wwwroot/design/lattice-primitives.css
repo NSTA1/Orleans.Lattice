@@ -23,6 +23,21 @@
    1. Utilities and focus
    ========================================================================== */
 
+/*
+ * Links in running content - a key in a table, an address on the not-found page -
+ * take the documentation site's link ink on both materials. Zero specificity, so
+ * every primitive that styles a link (a button, a chain node, a spine stop) still
+ * wins; without it an unclassed link fell back to the browser's #0000ee, which
+ * measures 1.9:1 on Board.
+ */
+:where(.lt-viewport) a {
+  color: var(--lt-link);
+}
+
+:where(.lt-viewport a:hover) {
+  color: var(--lt-link-hover);
+}
+
 .lt-visually-hidden {
   position: absolute !important;
   width: 1px !important;

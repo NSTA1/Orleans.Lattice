@@ -253,6 +253,24 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
     }
 
     [Test]
+    public async Task The_address_path_is_posted_again_once_the_frame_has_loaded_its_scripts()
+    {
+        var cut = RenderFrame(parameters => parameters.Add(p => p.Path, "tasks/7"));
+        await ReadyAsync(cut);
+
+        // The first post happens at delivery, before any app script could listen; the
+        // frame's first "loaded" repeats it, and a second "loaded" repeats nothing.
+        await cut.InvokeAsync(() => cut.Instance.HandleFrameLoadedAsync());
+        await cut.InvokeAsync(() => cut.Instance.HandleFrameLoadedAsync());
+
+        var paths = _module.Invocations["post"]
+            .Select(invocation => JsonDocument.Parse((string)invocation.Arguments[1]!).RootElement)
+            .Where(message => message.GetProperty("type").GetString() == "nav.changed")
+            .Select(message => message.GetProperty("data").GetProperty("path").GetString());
+        Assert.That(paths, Is.EqualTo(new[] { "/tasks/7", "/tasks/7" }));
+    }
+
+    [Test]
     public async Task NotifyContextChangedAsync_posts_the_appearance_to_a_running_frame_only()
     {
         var cut = RenderFrame();
