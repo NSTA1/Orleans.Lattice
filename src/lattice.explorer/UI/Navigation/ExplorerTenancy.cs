@@ -97,6 +97,14 @@ internal sealed class ExplorerTenancy
     /// <summary>The active tenant's id, or <see langword="null"/> when tenancy is off or none is established.</summary>
     public string? ActiveTenant => IsActive ? _view!.ActiveTenant?.Value : null;
 
+    /// <summary>
+    /// Whether tenancy is on but no tenant is established for this circuit, for
+    /// example because resolving the caller's tenant failed. A call made now would
+    /// assert no tenant and be served as the reserved default tenant, so nothing
+    /// tenant-scoped may be shown until a tenant is established.
+    /// </summary>
+    public bool IsTenantUnresolved => _view is { IsActive: true, ActiveTenant: null };
+
     /// <summary>The tenants the caller may scope to, best first; empty when tenancy is off or none is known.</summary>
     /// <param name="cancellationToken">Cancels the lookup.</param>
     public async ValueTask<IReadOnlyList<string>> GetAccessibleTenantsAsync(CancellationToken cancellationToken = default)

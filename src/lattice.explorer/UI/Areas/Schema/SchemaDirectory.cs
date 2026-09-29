@@ -13,7 +13,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// The facade answers per tree, so a listing asks each tree. It asks a bounded
 /// number of trees (<see cref="MaximumInspected"/>) at a bounded concurrency
 /// (<see cref="Concurrency"/>) and says so when a cluster holds more; any tree is
-/// still reachable by its address.
+/// still reachable by its address. Everything remembered is keyed on the tenant
+/// the circuit asserts, so a tenant switch reads again rather than listing one
+/// tenant's trees under another.
 /// </remarks>
 internal sealed class SchemaDirectory
 {
@@ -30,7 +32,9 @@ internal sealed class SchemaDirectory
     private readonly SchemaTreeCatalog _catalog;
     private readonly TimeProvider _time;
     private SchemaDirectoryRead? _read;
+    private string? _readTenant;
     private IReadOnlyDictionary<string, SchemaAppDeclaration>? _declarations;
+    private string? _declarationsTenant;
 
     /// <summary>Creates the directory over the circuit's facades and tree catalogue.</summary>
     /// <param name="facades">The area's facades.</param>
@@ -46,8 +50,12 @@ internal sealed class SchemaDirectory
         _time = time;
     }
 
-    /// <summary>The last listing read, or <see langword="null"/> before the first.</summary>
-    public SchemaDirectoryRead? Last => _read;
+    /// <summary>
+    /// The last listing read under the tenant the circuit asserts now, or
+    /// <see langword="null"/> before the first; a listing read under another tenant
+    /// is never returned.
+    /// </summary>
+    public SchemaDirectoryRead? Last => SameTenant(_readTenant, _facades.AssertedTenant) ? _read : null;
 
     /// <summary>Lists the trees and their schema state.</summary>
     /// <param name="refresh">Read again even when the remembered listing is fresh.</param>
@@ -57,7 +65,11 @@ internal sealed class SchemaDirectory
     /// <exception cref="NotSupportedException">The head serves no schema administration.</exception>
     public async Task<SchemaDirectoryRead> GetAsync(bool refresh, CancellationToken cancellationToken)
     {
-        if (!refresh && _read is { } remembered && _time.GetUtcNow() - remembered.ReadAt < Freshness)
+        var tenant = _facades.AssertedTenant;
+        if (!refresh
+            && _read is { } remembered
+            && SameTenant(_readTenant, tenant)
+            && _time.GetUtcNow() - remembered.ReadAt < Freshness)
         {
             return remembered;
         }
@@ -79,7 +91,12 @@ internal sealed class SchemaDirectory
             trees.Count,
             inspected.Count < trees.Count || _catalog.Truncated,
             _time.GetUtcNow());
-        _read = read;
+        if (SameTenant(_facades.AssertedTenant, tenant))
+        {
+            _read = read;
+            _readTenant = tenant;
+        }
+
         return read;
     }
 
@@ -94,7 +111,7 @@ internal sealed class SchemaDirectory
         var schema = _facades.RequireSchema();
         var declarations = await GetDeclarationsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         var row = await ReadRowAsync(schema, treeId, declarations, cancellationToken).ConfigureAwait(false);
-        if (_read is { } read)
+        if (_read is { } read && SameTenant(_readTenant, _facades.AssertedTenant))
         {
             _read = read.Replace(row);
         }
@@ -190,7 +207,8 @@ internal sealed class SchemaDirectory
 
     private async Task<IReadOnlyDictionary<string, SchemaAppDeclaration>> GetDeclarationsAsync(bool refresh, CancellationToken cancellationToken)
     {
-        if (!refresh && _declarations is { } remembered)
+        var tenant = _facades.AssertedTenant;
+        if (!refresh && _declarations is { } remembered && SameTenant(_declarationsTenant, tenant))
         {
             return remembered;
         }
@@ -238,7 +256,14 @@ internal sealed class SchemaDirectory
             }
         }
 
-        _declarations = declarations;
+        if (SameTenant(_facades.AssertedTenant, tenant))
+        {
+            _declarations = declarations;
+            _declarationsTenant = tenant;
+        }
+
         return declarations;
     }
+
+    private static bool SameTenant(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
 }

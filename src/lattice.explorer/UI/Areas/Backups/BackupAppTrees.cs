@@ -13,20 +13,25 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// tree id already carries.
 /// </summary>
 /// <remarks>
-/// A found app is remembered for the circuit; a miss is not, so a grant that
-/// arrives later is seen on the next page.
+/// A found app is remembered for the circuit, under the tenant the circuit
+/// asserted when it was read, so another tenant's app of the same slug is never
+/// described from it; a miss is not remembered, so a grant that arrives later is
+/// seen on the next page.
 /// </remarks>
 internal sealed class BackupAppTrees
 {
     private readonly IServiceProvider _services;
-    private readonly ConcurrentDictionary<string, BackupAppInfo> _found = new(StringComparer.Ordinal);
+    private readonly ShellAssertedTenant _tenant;
+    private readonly ConcurrentDictionary<(string? Tenant, string Slug), BackupAppInfo> _found = new();
 
     /// <summary>Creates the lookup.</summary>
     /// <param name="services">The circuit's services, from which the apps facades are resolved when present.</param>
-    public BackupAppTrees(IServiceProvider services)
+    /// <param name="tenant">The circuit's asserted tenant, which keys what is remembered.</param>
+    public BackupAppTrees(IServiceProvider services, ShellAssertedTenant? tenant = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         _services = services;
+        _tenant = tenant ?? ShellAssertedTenant.None;
     }
 
     /// <summary>The app that owns <paramref name="tree"/>, or <see langword="null"/> when no app does or none can be read.</summary>
@@ -40,16 +45,17 @@ internal sealed class BackupAppTrees
             return null;
         }
 
-        if (_found.TryGetValue(slug, out var known))
+        var tenant = _tenant.AssertedTenant;
+        if (_found.TryGetValue((tenant, slug), out var known))
         {
             return known;
         }
 
         var info = await FromControlAsync(slug, cancellationToken).ConfigureAwait(false)
             ?? await FromWorkspaceAsync(slug, cancellationToken).ConfigureAwait(false);
-        if (info is not null)
+        if (info is not null && ShellAssertedTenant.Same(_tenant.AssertedTenant, tenant))
         {
-            _found[slug] = info;
+            _found[(tenant, slug)] = info;
         }
 
         return info;

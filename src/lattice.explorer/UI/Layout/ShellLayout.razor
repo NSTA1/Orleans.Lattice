@@ -83,6 +83,17 @@
                         @* No page asks the cluster anything until the circuit's configuration and sign-in are loaded, so nothing is read, or remembered, as the wrong caller. *@
                         <LtSkeleton Lines="6" Label="Loading" />
                     }
+                    else if (TenantResolving)
+                    {
+                        @* The browser is at another tenant's address than the one resolved: nothing renders until the layout has scoped the circuit to it. *@
+                        <LtSkeleton Lines="6" Label="Loading" />
+                    }
+                    else if (TenantUnresolved)
+                    {
+                        @* Fail closed: with no tenant established a call would be served as the reserved default tenant, so no tenant-scoped page asks the cluster anything. *@
+                        <h1 class="lt-shell-page-title">Tenant not established</h1>
+                        <LtEmptyState Title="Nothing is shown" HeadingLevel="2">@TenantUnresolvedReason</LtEmptyState>
+                    }
                     else if (GatedArea is { } area)
                     {
                         @if (!_location.EntriesLoaded)
@@ -100,12 +111,12 @@
                         }
                         else
                         {
-                            @Body
+                            @TenantBody
                         }
                     }
                     else
                     {
-                        @Body
+                        @TenantBody
                     }
                 </main>
             </div>

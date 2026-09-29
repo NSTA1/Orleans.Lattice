@@ -9,6 +9,7 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Telemetry;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Explorer.Core.Connection;
 
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
@@ -78,6 +79,7 @@ internal static class ShellTransportServiceCollectionExtensions
 
         services.TryAddSingleton<IShellGrpcChannelFactory, ShellGrpcChannelFactory>();
         services.TryAddSingleton<ShellTransportSerializer>();
+        services.TryAddScoped(provider => new ShellAssertedTenant(provider.GetService<ILatticeActiveTenantProvider>()));
         services.TryAddScoped<ShellTransportChannel>();
 
         services.TryAddKeyedScoped<ILatticeAuthAdmin, ShellAuthAdminTransport>(ShellFacades.Key);

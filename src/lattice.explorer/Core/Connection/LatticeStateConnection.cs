@@ -19,6 +19,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
     private readonly Func<LatticeConnectionSettings, ILatticeStateClient> _clientFactory;
     private readonly TimeProvider _timeProvider;
     private readonly IServiceProvider? _ownedSerializerProvider;
+    private readonly ILatticeActiveTenantProvider? _activeTenantProvider;
     private readonly object _gate = new();
 
     private ILatticeStateClient? _client;
@@ -33,13 +34,27 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
     /// its own Orleans serializer provider.
     /// </summary>
     public LatticeStateConnection()
-        : this(timeProvider: TimeProvider.System)
+        : this(timeProvider: TimeProvider.System, activeTenantProvider: null)
     {
     }
 
-    private LatticeStateConnection(TimeProvider timeProvider)
+    /// <summary>
+    /// Creates a connection that talks to the real state API over gRPC and
+    /// asserts the circuit's active tenant on every call, reading it from
+    /// <paramref name="activeTenantProvider"/> as each call starts. This is the
+    /// constructor dependency injection selects when the head registers tenancy.
+    /// </summary>
+    /// <param name="activeTenantProvider">The circuit's live tenant source.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="activeTenantProvider"/> is <see langword="null"/>.</exception>
+    public LatticeStateConnection(ILatticeActiveTenantProvider activeTenantProvider)
+        : this(TimeProvider.System, activeTenantProvider ?? throw new ArgumentNullException(nameof(activeTenantProvider)))
+    {
+    }
+
+    private LatticeStateConnection(TimeProvider timeProvider, ILatticeActiveTenantProvider? activeTenantProvider)
     {
         _timeProvider = timeProvider;
+        _activeTenantProvider = activeTenantProvider;
         var serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
         _ownedSerializerProvider = serializerProvider;
         _clientFactory = settings => GrpcLatticeStateClient.Create(settings, serializerProvider);
@@ -48,14 +63,17 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
     /// <summary>
     /// Test/advanced constructor: supplies the client factory (so a fake client
     /// can stand in for a live server) and the time source (so the degrade window
-    /// can be driven deterministically).
+    /// can be driven deterministically), and optionally the live tenant source the
+    /// settings handed to the factory carry.
     /// </summary>
     internal LatticeStateConnection(
         Func<LatticeConnectionSettings, ILatticeStateClient> clientFactory,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILatticeActiveTenantProvider? activeTenantProvider = null)
     {
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _activeTenantProvider = activeTenantProvider;
         _ownedSerializerProvider = null;
     }
 
@@ -64,6 +82,9 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
     {
         get { lock (_gate) { return _status; } }
     }
+
+    /// <summary>The live tenant source every client this connection builds asserts from, or <see langword="null"/>.</summary>
+    internal ILatticeActiveTenantProvider? ActiveTenantProvider => _activeTenantProvider;
 
     /// <inheritdoc />
     public event Action<LatticeConnectionStatus>? StatusChanged;
@@ -417,6 +438,17 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         }
     }
 
+    /// <summary>
+    /// The settings this connection builds its client from: the caller's, carrying
+    /// this connection's live tenant source unless the caller supplied one of its
+    /// own. Every configure and reconnect goes through here, so whichever path
+    /// rebuilt the channel, its calls assert the circuit's tenant.
+    /// </summary>
+    private LatticeConnectionSettings WithActiveTenant(LatticeConnectionSettings settings) =>
+        _activeTenantProvider is null || settings.ActiveTenantProvider is not null
+            ? settings
+            : settings with { ActiveTenantProvider = _activeTenantProvider };
+
     private bool Rebuild(LatticeConnectionSettings settings)
     {
         LatticeConnectionStatus? raise = null;
@@ -434,6 +466,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
             _client = null;
             _monitor = null;
             _disruptedSince = null;
+            settings = WithActiveTenant(settings);
             _settings = settings;
 
             try

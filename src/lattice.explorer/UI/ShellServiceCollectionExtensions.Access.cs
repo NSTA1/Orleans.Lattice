@@ -21,7 +21,9 @@ internal static partial class ShellServiceCollectionExtensions
         // which a head without the transport does not register. The area hides
         // itself then, so no page resolves the catalogue, and a container built
         // with ValidateOnBuild stays valid.
-        services.TryAddScoped(provider => new AccessCatalog(provider.GetRequiredShellFacade<ILatticeAuthAdmin>()));
+        services.TryAddScoped(provider => new AccessCatalog(
+            provider.GetRequiredShellFacade<ILatticeAuthAdmin>(),
+            provider.GetService<ShellAssertedTenant>()));
         services.AddExplorerArea<AccessArea>();
     }
 }

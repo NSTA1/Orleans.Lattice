@@ -22,7 +22,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// </para>
 /// <para>
 /// Only a definite answer is remembered for the circuit. A fault, a timeout or a
-/// cancellation is not, so the next navigation asks again.
+/// cancellation is not, so the next navigation asks again. What is remembered
+/// belongs to the tenant the circuit asserted when it was read: a tenant switch
+/// forgets it, and an answer that lands after a switch is not remembered.
 /// </para>
 /// </remarks>
 internal sealed class BackupsAccess
@@ -39,17 +41,21 @@ internal sealed class BackupsAccess
     private static readonly BackupScopeSelector ProbeScope = BackupScopeSelector.WholeTree(ProbeTreeId);
 
     private readonly ILatticeBackupControl _control;
+    private readonly ShellAssertedTenant _tenant;
     private readonly object _gate = new();
+    private string? _memoTenant;
     private AreaAvailability? _availability;
     private bool? _healthMonitoring;
     private bool? _extensionsServed;
 
     /// <summary>Creates the probes over the circuit's backup facade.</summary>
     /// <param name="control">The backup facade.</param>
-    public BackupsAccess([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control)
+    /// <param name="tenant">The circuit's asserted tenant, which keys what is remembered.</param>
+    public BackupsAccess([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control, ShellAssertedTenant? tenant = null)
     {
         ArgumentNullException.ThrowIfNull(control);
         _control = control;
+        _tenant = tenant ?? ShellAssertedTenant.None;
     }
 
     /// <summary>
@@ -62,6 +68,7 @@ internal sealed class BackupsAccess
         {
             lock (_gate)
             {
+                ForgetIfTenantChanged();
                 return _extensionsServed;
             }
         }
@@ -75,8 +82,10 @@ internal sealed class BackupsAccess
     /// <param name="cancellationToken">Cancelled when the directory stops waiting.</param>
     public async Task<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
+        string? tenant;
         lock (_gate)
         {
+            tenant = ForgetIfTenantChanged();
             if (_availability is { } known)
             {
                 return known;
@@ -107,7 +116,10 @@ internal sealed class BackupsAccess
 
         lock (_gate)
         {
-            _availability = answer;
+            if (StillFor(tenant))
+            {
+                _availability = answer;
+            }
         }
 
         return answer;
@@ -137,8 +149,10 @@ internal sealed class BackupsAccess
     /// <param name="cancellationToken">Cancels the probe.</param>
     public async Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken)
     {
+        string? tenant;
         lock (_gate)
         {
+            tenant = ForgetIfTenantChanged();
             if (_healthMonitoring is { } known)
             {
                 return known;
@@ -157,7 +171,10 @@ internal sealed class BackupsAccess
 
         lock (_gate)
         {
-            _healthMonitoring = available;
+            if (StillFor(tenant))
+            {
+                _healthMonitoring = available;
+            }
         }
 
         return available;
@@ -219,7 +236,26 @@ internal sealed class BackupsAccess
     {
         lock (_gate)
         {
+            ForgetIfTenantChanged();
             _extensionsServed = served;
         }
     }
+
+    /// <summary>Forgets every answer read under another tenant, and returns the tenant asserted now. Call under the gate.</summary>
+    private string? ForgetIfTenantChanged()
+    {
+        var tenant = _tenant.AssertedTenant;
+        if (!ShellAssertedTenant.Same(_memoTenant, tenant))
+        {
+            _memoTenant = tenant;
+            _availability = null;
+            _healthMonitoring = null;
+            _extensionsServed = null;
+        }
+
+        return tenant;
+    }
+
+    /// <summary>Whether the circuit still asserts <paramref name="tenant"/>, the tenant an answer was read under. Call under the gate.</summary>
+    private bool StillFor(string? tenant) => ShellAssertedTenant.Same(ForgetIfTenantChanged(), tenant);
 }

@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -19,8 +18,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </para>
 /// <para>
 /// A definite answer (visible, or refused) is remembered until the sign-in or the
-/// connection changes. A fault is not remembered, so the next navigation asks
-/// again.
+/// connection changes, and only for the tenant the circuit asserted when it was
+/// read, so a tenant switch asks again. A fault is not remembered, so the next
+/// navigation asks again.
 /// </para>
 /// </remarks>
 internal sealed class SchemaAccess : IDisposable
@@ -36,8 +36,8 @@ internal sealed class SchemaAccess : IDisposable
 
     private readonly SchemaFacades _facades;
     private readonly TimeProvider _time;
-    private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt)> _trees = new(StringComparer.Ordinal);
-    private StrongBox<AreaAvailability>? _availability;
+    private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, string? Tenant)> _trees = new(StringComparer.Ordinal);
+    private Tuple<AreaAvailability, string?>? _availability;
 
     /// <summary>Creates the access answer over the circuit's facades.</summary>
     /// <param name="facades">The area's facades.</param>
@@ -64,9 +64,10 @@ internal sealed class SchemaAccess : IDisposable
     /// <returns>The area's availability.</returns>
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _availability) is { } remembered)
+        var tenant = _facades.AssertedTenant;
+        if (Volatile.Read(ref _availability) is { } remembered && SameTenant(remembered.Item2, tenant))
         {
-            return remembered.Value;
+            return remembered.Item1;
         }
 
         if (_facades.Schema is not { } schema)
@@ -98,7 +99,13 @@ internal sealed class SchemaAccess : IDisposable
             : _facades.Auth is { IsAuthenticated: false }
                 ? AreaAvailability.Unavailable(SignInReason)
                 : AreaAvailability.Hidden;
-        Volatile.Write(ref _availability, new StrongBox<AreaAvailability>(answer));
+        // Remembered only for the tenant it was read under, and only while the
+        // circuit still asserts it.
+        if (SameTenant(_facades.AssertedTenant, tenant))
+        {
+            Volatile.Write(ref _availability, Tuple.Create(answer, tenant));
+        }
+
         return answer;
     }
 
@@ -110,7 +117,11 @@ internal sealed class SchemaAccess : IDisposable
     public async Task<SchemaGrants> GetGrantsAsync(string treeId, bool refresh, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        if (!refresh && _trees.TryGetValue(treeId, out var remembered) && _time.GetUtcNow() - remembered.ReadAt < GrantFreshness)
+        var tenant = _facades.AssertedTenant;
+        if (!refresh
+            && _trees.TryGetValue(treeId, out var remembered)
+            && SameTenant(remembered.Tenant, tenant)
+            && _time.GetUtcNow() - remembered.ReadAt < GrantFreshness)
         {
             return remembered.Grants;
         }
@@ -134,7 +145,11 @@ internal sealed class SchemaAccess : IDisposable
             return SchemaGrants.None;
         }
 
-        _trees[treeId] = (grants, _time.GetUtcNow());
+        if (SameTenant(_facades.AssertedTenant, tenant))
+        {
+            _trees[treeId] = (grants, _time.GetUtcNow(), tenant);
+        }
+
         return grants;
     }
 
@@ -144,6 +159,8 @@ internal sealed class SchemaAccess : IDisposable
         Volatile.Write(ref _availability, null);
         _trees.Clear();
     }
+
+    private static bool SameTenant(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
 
     /// <inheritdoc />
     public void Dispose()

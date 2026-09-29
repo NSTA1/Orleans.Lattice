@@ -171,7 +171,14 @@ internal sealed class TenancyCatalog
     /// <summary>Forgets the proven standing, so the next read proves it again.</summary>
     public void InvalidateStanding() => _standing = null;
 
-    private async Task<bool> IsOperatorAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Whether the caller has platform-operator standing, through the
+    /// operator-gated tenant switcher. Every fault, and a head without tenancy,
+    /// reads as "not an operator".
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the check.</param>
+    /// <returns><see langword="true"/> only for a proven operator.</returns>
+    internal async Task<bool> IsOperatorAsync(CancellationToken cancellationToken)
     {
         if (_services.GetService<IExplorerTenantSwitcher>() is not { } switcher)
         {

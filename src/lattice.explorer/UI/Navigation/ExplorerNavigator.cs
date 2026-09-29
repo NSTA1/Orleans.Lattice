@@ -90,6 +90,12 @@ internal sealed class ExplorerNavigator
         {
             if (await _tenancy.TrySwitchAsync(requested, cancellationToken).ConfigureAwait(false))
             {
+                // The operator verdict that decides whether the reserved default
+                // tenant is shown was read for the tenant just left, so it is read
+                // again before canonicalising: an operator who switches to the
+                // default tenant lands on its address rather than being bounced off
+                // it by a verdict that belonged to another tenant.
+                await _tenancy.RefreshAsync(cancellationToken).ConfigureAwait(false);
                 notice = $"Scoped to tenant {requested}.";
             }
             else
@@ -157,6 +163,14 @@ internal sealed class ExplorerNavigator
     private static ExplorerAddress StripQuery(ExplorerAddress address) =>
         ExplorerAddress.Create(address.Tenant, address.Area, address.Path);
 
-    private bool IsTenantScoped(ExplorerAddress address) =>
-        address.Area is not { } key || _directory.Find(key) is not { } area || area.IsTenantScopedAt(address);
+    /// <summary>
+    /// Whether <paramref name="address"/> follows the active tenant: Home and every
+    /// address in a tenant-scoped area do, a cluster-wide area's do not.
+    /// </summary>
+    /// <param name="address">The address.</param>
+    public bool IsTenantScoped(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return address.Area is not { } key || _directory.Find(key) is not { } area || area.IsTenantScopedAt(address);
+    }
 }

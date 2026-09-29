@@ -17,6 +17,14 @@ internal sealed class ClusterFacades(IServiceProvider services)
     private readonly Lazy<ILatticeTreeAdmin?> _treeAdmin = new(services.GetShellFacade<ILatticeTreeAdmin>);
     private readonly Lazy<ILatticeReplicationStatus?> _replicationStatus = new(services.GetShellFacade<ILatticeReplicationStatus>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
+    private readonly Lazy<ShellAssertedTenant> _tenant = new(() => services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None);
+
+    /// <summary>
+    /// The tenant the circuit's calls assert right now, or <see langword="null"/>
+    /// when they assert none. Everything the area remembers is keyed on it, so an
+    /// answer read under one tenant is never served under another.
+    /// </summary>
+    public string? AssertedTenant => _tenant.Value.AssertedTenant;
 
     /// <summary>Tree administration (T1's adapter), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeTreeAdmin? TreeAdmin => _treeAdmin.Value;
