@@ -66,13 +66,19 @@ Failed Every_area_primary_page_has_no_serious_violations_in_any_appearance("data
 ```
 
 The same finding failed Access, Tenancy and Telemetry. The fix gives every such link the
-documentation site's link ink on both materials, at zero specificity
-(`src/lattice.explorer/UI/wwwroot/design/lattice-primitives.css`, section 1), and the sweep
-has been green since. Removing that rule turns the four cases red again.
+documentation site's link ink on both materials, and its hover ink under the pointer
+(`src/lattice.explorer/UI/wwwroot/design/lattice-primitives.css`, section 1). Both rules
+are wrapped whole in `:where(...)`, so both have zero specificity and the later hover rule
+wins. The first version wrote the base rule as `:where(.lt-viewport) a`, which has the
+specificity of one element and silently beat the hover rule; with that form restored,
+`AccessibilityStructureTests.A_link_in_running_content_takes_the_link_ink_and_the_hover_ink`
+fails on both materials ("The hovered link does not take the hover ink."). Removing the
+link rule altogether turns the four sweep cases red again.
 
 ## How to reproduce
 
-1. Apply the mutation to `LtButton.razor`, or delete the `:where(.lt-viewport) a` rule.
+1. Apply the mutation to `LtButton.razor`, delete the `:where(.lt-viewport a)` rule, or
+   rewrite it as `:where(.lt-viewport) a`.
 2. `dotnet build test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release`
-3. `dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release --no-build --filter "FullyQualifiedName~Every_control_reports_a_valid_enumerated_aria_state|FullyQualifiedName~AccessibilitySweepTests"`
+3. `dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release --no-build --filter "FullyQualifiedName~Every_control_reports_a_valid_enumerated_aria_state|FullyQualifiedName~AccessibilitySweepTests|FullyQualifiedName~hover_ink"`
 4. Restore the source and confirm `git diff src/` is clean.

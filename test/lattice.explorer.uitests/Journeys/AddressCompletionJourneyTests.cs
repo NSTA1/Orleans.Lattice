@@ -39,6 +39,33 @@ public sealed class AddressCompletionJourneyTests : UiTestBase
     }
 
     [Test]
+    public async Task Fast_typing_into_the_address_line_loses_no_keystrokes()
+    {
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, "/", WorldIdentities.Admin);
+        await Expect(Shell.Stop(page, "schema")).ToBeVisibleAsync();
+
+        // Typed as fast as the browser delivers keys, with no delay between them: every
+        // keystroke raises a round trip to the circuit, and the replies must never write
+        // an older value back over what the user has typed since.
+        foreach (var text in new[] { ">Go to Schema", $"/data/{ExplorerWorld.DemoTree}" })
+        {
+            await Shell.OpenAddressLineAsync(page);
+            await Shell.AddressInput(page).PressAsync("Control+a");
+            await Shell.AddressInput(page).PressSequentiallyAsync(text);
+            await Expect(Shell.AddressInput(page)).ToHaveValueAsync(text);
+            await page.Keyboard.PressAsync("Escape");
+        }
+
+        await Shell.OpenAddressLineAsync(page);
+        await page.Keyboard.TypeAsync(">Go to Schema");
+        await Expect(Shell.AddressInput(page)).ToHaveValueAsync(">Go to Schema");
+        await Expect(Shell.Suggestions(page).Filter(new() { HasText = "Go to Schema" })).ToHaveCountAsync(1);
+        await page.Keyboard.PressAsync("Enter");
+        await Expect(Shell.Heading(page)).ToHaveTextAsync("Schema");
+    }
+
+    [Test]
     public async Task Commands_run_by_name_from_the_palette()
     {
         var world = await UiHosts.WorldAsync();

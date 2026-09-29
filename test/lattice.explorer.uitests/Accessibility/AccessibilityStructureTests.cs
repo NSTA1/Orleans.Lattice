@@ -137,6 +137,34 @@ public sealed class AccessibilityStructureTests : UiTestBase
         Assert.That(longest, Is.LessThanOrEqualTo(0.001), "Something still moves for longer than a moment under a reduced-motion preference.");
     }
 
+    /// <summary>
+    /// A link in running content - a rule id in the Access table - takes the link ink, and
+    /// the hover ink under the pointer, on both materials. Both rules have zero specificity,
+    /// so the later hover rule must win; this proves it does in a real browser.
+    /// </summary>
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_link_in_running_content_takes_the_link_ink_and_the_hover_ink(bool board)
+    {
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, "/access", WorldIdentities.Admin);
+        await Shell.SetAppearanceAsync(page, ShellAppearanceChoice.Default with { Board = board });
+        var link = Shell.Content(page).GetByRole(AriaRole.Link, new() { Name = "operators-read-factory-floor" });
+        await Expect(link).ToBeVisibleAsync();
+
+        var ink = await ResolveColourAsync(page, "--lt-link");
+        var hoverInk = await ResolveColourAsync(page, "--lt-link-hover");
+        Assert.That(hoverInk, Is.Not.EqualTo(ink), "The premise failed: the link and hover inks resolve to the same colour.");
+
+        await page.Mouse.MoveAsync(0, 0);
+        await Shell.WaitForMotionToSettleAsync(page);
+        Assert.That(await link.EvaluateAsync<string>("a => getComputedStyle(a).color"), Is.EqualTo(ink), "The link does not take the link ink.");
+
+        await link.HoverAsync();
+        await Shell.WaitForMotionToSettleAsync(page);
+        Assert.That(await link.EvaluateAsync<string>("a => getComputedStyle(a).color"), Is.EqualTo(hoverInk), "The hovered link does not take the hover ink.");
+    }
+
     [Test]
     public async Task Forced_colours_keep_the_current_stop_and_the_focus_ring_visible()
     {
@@ -157,4 +185,20 @@ public sealed class AccessibilityStructureTests : UiTestBase
         var ring = await page.EvaluateAsync<string>("() => { const s = getComputedStyle(document.activeElement); return s.outlineStyle + ' ' + s.outlineWidth; }");
         Assert.That(ring, Does.Not.StartWith("none").And.Not.EndWith(" 0px"), $"The focused control paints no outline under forced colours ({ring}).");
     }
+
+    // The colour a custom property resolves to, as getComputedStyle reports colours, read
+    // from a probe inside the Shell so the current material's tokens apply.
+    private static Task<string> ResolveColourAsync(IPage page, string property) =>
+        page.Locator(".lt-viewport").EvaluateAsync<string>(
+            """
+            (root, property) => {
+              const probe = document.createElement('span');
+              probe.style.color = 'var(' + property + ')';
+              root.appendChild(probe);
+              const colour = getComputedStyle(probe).color;
+              probe.remove();
+              return colour;
+            }
+            """,
+            property);
 }

@@ -101,7 +101,7 @@ public sealed class KeyboardAccessibilityTests : UiTestBase
         await Expect(Shell.Stop(page, "schema")).ToBeVisibleAsync();
 
         await Shell.OpenAddressLineAsync(page);
-        await Shell.AddressInput(page).FillAsync(">Go to Schema");
+        await page.Keyboard.TypeAsync(">Go to Schema");
         var option = Shell.Suggestions(page).Filter(new() { HasText = "Go to Schema" });
         await Expect(option).ToHaveCountAsync(1);
 
