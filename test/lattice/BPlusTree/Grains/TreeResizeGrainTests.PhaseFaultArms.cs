@@ -114,8 +114,10 @@ public partial class TreeResizeGrainTests
     public void WaitForSnapshot_reverts_the_phase_when_WriteStateAsync_throws()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
+        var completedSnapshot = Substitute.For<ITreeSnapshotGrain>();
+        completedSnapshot.RunSnapshotSliceAsync().Returns(true);
         grainFactory.GetGrain<ITreeSnapshotGrain>(Arg.Any<string>())
-            .Returns(Substitute.For<ITreeSnapshotGrain>());
+            .Returns(completedSnapshot);
 
         state.State.InProgress = true;
         state.State.Phase = ResizePhase.Snapshot;
@@ -227,7 +229,7 @@ public partial class TreeResizeGrainTests
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         var snapshot = Substitute.For<ITreeSnapshotGrain>();
-        snapshot.RunSnapshotPassAsync().ThrowsAsync(new InvalidOperationException("snapshot pass failed"));
+        snapshot.RunSnapshotSliceAsync().ThrowsAsync(new InvalidOperationException("snapshot pass failed"));
         grainFactory.GetGrain<ITreeSnapshotGrain>(Arg.Any<string>()).Returns(snapshot);
 
         state.State.InProgress = true;

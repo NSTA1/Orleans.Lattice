@@ -18,19 +18,20 @@ public partial class TreeResizeGrainTests
         deletion.BeginAliasChangeAsync(Arg.Any<string>())
             .ThrowsAsync(new IOException("reservation unavailable"));
         var snapshot = factory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        snapshot.RunSnapshotSliceAsync().Returns(true);
 
         await grain.ProcessNextPhaseAsync();
 
         var reservationId = state.State.AliasReservationId;
         Assert.That(reservationId, Is.Not.Null);
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Snapshot));
-        await snapshot.DidNotReceive().RunSnapshotPassAsync();
+        await snapshot.DidNotReceive().RunSnapshotSliceAsync();
         deletion.BeginAliasChangeAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
 
         await grain.ProcessNextPhaseAsync();
 
         await deletion.Received(2).BeginAliasChangeAsync(reservationId!);
-        await snapshot.Received(1).RunSnapshotPassAsync();
+        await snapshot.Received(1).RunSnapshotSliceAsync();
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
     }
 
