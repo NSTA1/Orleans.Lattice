@@ -479,15 +479,18 @@ which is registered as the single `IAppSource`. Register further sources with
 - Activation re-resolves an install through the source key recorded in its
   provenance, so a second source offering the same slug cannot disturb an installed
   app.
-- Duplicate source keys, and a source that vouches for another source's key, are
-  recorded at composition time. Every resolution then fails as
-  `SourceMisconfigured`, at activation, never at silo start.
+- Duplicate source keys (or a source with no descriptor) are recorded at
+  composition time, never thrown. Every resolution then fails as
+  `SourceMisconfigured`, so the problem surfaces at activation, never at silo
+  start. A resolved result whose provenance names a key other than the answering
+  source's is refused the same way, so a source cannot vouch for another.
 
 `InImageAppSource` is the only implementation in this version. Its key is
 `in-image`, its kind is `Static`, and it offers `Enumerate` only. It lists exactly
 the apps registered with `AddLatticeApp`, in slug order. It serves UI assets from
 embedded resources named `{manifestResourceNamespace}.ui.{path}`, or from an
-explicit prefix passed to the `AddLatticeApp` overload that takes one.
+explicit prefix passed to the `AddLatticeApp` overload that takes one, with every
+`/` in the path mapped to `.`.
 
 The seam is designed so that a runtime source (a NuGet feed, a blob container, a
 container registry) is a provider swap. The XML documentation on `IAppSource` and
@@ -517,7 +520,8 @@ code loads.
 
 Presentation text is untrusted. Consumers render it as text, never as HTML or
 markdown, and show the icon only through `<img>`. The validator rejects control
-characters and bidirectional overrides. The publisher display name is descriptive
+characters (a multi-line field may keep tabs and line breaks) and bidirectional
+overrides. The publisher display name is descriptive
 only, and never used for trust.
 
 `ui` describes an untrusted UI bundle, format v1:
@@ -560,8 +564,9 @@ The bundle rules:
 - `data.read`, `data.write` and `data.delete`;
 - `nav.sync` and `ui.notify`.
 
-The `data.*` operations may name specific declared trees; if they name none, they
-cover every declared tree.
+The `data.*` operations may name specific declared trees; one that omits `trees`
+covers every declared tree. Only data operations may name trees, and an empty
+list is rejected.
 
 The requested grants are part of what an install consents to. When a fresh install
 records its consent, it records `AppUiBridgeRequest.FromManifest`. An upgrade that

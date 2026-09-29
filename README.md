@@ -217,7 +217,8 @@ before reading the catalogues:
   byte-for-byte unchanged.
 - **Substitutable implementations.** A seam is a public contract, not an
   internal detail. Storage backends, identity providers, compression algorithms,
-  backup sinks, and Explorer plugins are all replaceable with your own.
+  and backup sinks are all replaceable with your own, and a Lattice App brings
+  its own UI into the Explorer.
 - **Uniform external surface.** Every external caller - gRPC client, operator
   console, AI agent - goes through the same transport-agnostic API facades and
   the same fail-closed authorization gate, so a permission means the same thing

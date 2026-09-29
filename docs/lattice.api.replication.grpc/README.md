@@ -42,6 +42,7 @@ default-deny interceptor, and `LatticeReplicationApiOperation.GetPeerStatus` nam
 for authorizers. `LatticeReplicationStatusGrpcClient` implements
 `ILatticeReplicationStatus` directly, so a remote caller uses the same contract as an
 in-process one.
+
 ## Quick start
 
 Register the binding on a silo that already has `AddLatticeReplicationApi`, then map its routes. The snippet is illustrative and not compiled; [samples/RuntimeReplicationConfig](../../samples/RuntimeReplicationConfig) is a runnable example of the in-process facade this binding adapts, and does not host the gRPC binding.

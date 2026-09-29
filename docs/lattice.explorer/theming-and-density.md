@@ -1,110 +1,72 @@
 # Theming and density
 
-The console ships two palettes and three densities, and both are the user's
-choice. Dark remains the default when no preference is expressed.
+The Explorer draws in the documentation site's visual world and adds an operator-console layer for density, focus, state roles, and app frames. Appearance is made of three choices: theme, contrast, and density.
 
 ## Theme
 
-The theme control offers:
+The theme choice is the material:
 
-| Choice | Behaviour |
-| --- | --- |
-| Match my system | Honours the browser or platform `prefers-color-scheme`. This is the default. |
-| Light | Always light. |
-| Dark | Always dark. |
+- System follows `prefers-color-scheme`.
+- Paper stores and applies `light`.
+- Board stores and applies `dark`.
 
-Light is a first-class palette, not a broken opt-in. It carries four distinct,
-ordered surface levels, so elevation survives: a raised menu, a plain panel and
-a sunken well are visually different rather than three shades of white
-separated by an invisible border.
+The active material is applied to the document element as `data-bs-theme="light"` or `data-bs-theme="dark"`. The system choice resolves to one of those values for rendering, and the chrome listens for operating-system colour-scheme changes while System is selected.
 
-## Contrast is a separate axis
+## Contrast
 
-High contrast is **not** a third theme. Contrast layers over whichever theme is
-active:
+The contrast axis has three choices:
 
-| Attribute | Values | Where it is set |
-| --- | --- | --- |
-| `data-theme` | `light`, `dark` | `<html>` |
-| `data-contrast` | `more`, `standard` | `<html>` |
-| `data-lx-density` | `comfortable`, `cosy`, `compact` | `<body>` |
+- System leaves `data-lt-contrast` unset and lets CSS follow `prefers-contrast: more`.
+- Standard writes `data-lt-contrast="standard"` and opts out of the system high-contrast overlay.
+- More writes `data-lt-contrast="more"` and applies the high-contrast overlay.
 
-Keeping contrast orthogonal avoids a combinatorial set of palettes that would
-have to be kept in step with each other. The contrast control offers **Match my
-system** (the default, which writes no attribute), **Standard**
-(`data-contrast="standard"`), and **High contrast** (`data-contrast="more"`).
-`data-contrast="more"` raises contrast over the active theme;
-`data-contrast="standard"` opts back out of the platform's own contrast hint.
-
-The token layer also honours `prefers-contrast: more` and `forced-colors`, so
-Windows High Contrast is respected without the user configuring anything.
-
-Density is set on `<body>` rather than `<html>` deliberately: the token layer
-declares each density preset at attribute specificity, and the breakpoint layer
-declares the compact band's own density on `:root` at that same specificity from
-a later stylesheet, so a choice stamped on `<html>` would be silently overridden
-on a narrow viewport. Nothing declares density on `<body>`, so an explicit choice
-made there wins at every width.
+The high-contrast overlay is not a label-only duplicate. Its tokens target 7:1 text contrast and 4.5:1 non-text contrast on Paper and Board.
 
 ## Density
 
-| Choice | Behaviour |
-| --- | --- |
-| Match the layout | Density follows the breakpoint, as before. This is the default. |
-| Comfortable / Cosy / Compact | An explicit choice, which overrides the breakpoint-derived value. |
+Density changes row and control heights without changing the address or the data being read.
 
-Choosing a density pins it. Leaving it unset preserves the adaptive behaviour,
-so nothing changes for a user who never opens the setting.
+- Comfortable is the default. Rows and controls are 44px, so ordinary actions are touch targets.
+- Compact sets `data-lt-density="compact"`. Rows and controls are 28px, still above the 24px WCAG 2.2 minimum target size.
 
-## Applying a theme without a flash
+When comfortable is selected the density attribute is removed, so the default CSS tokens apply.
 
-A light-theme user who sees the dark palette for a moment on every load does not,
-in practice, have a light theme. The chosen appearance is therefore on the
-document at **first paint**, not applied after the application starts.
+## First paint and document attributes
 
-Two things make that impossible to solve in the obvious places:
+A classic blocking script in the document head reads the small appearance record `orleans.lattice.explorer.appearance.v2` from local storage. It accepts only shipped names, resolves System against the operating system, and sets these attributes before the first paint:
 
-- **The server cannot answer it.** The preference lives in browser storage, and
-  the head is rendered before any circuit exists, so the markup the server
-  produces cannot know the answer.
-- **A component cannot answer it.** The attributes belong on `<html>` and
-  `<body>`, above every component's render tree, and a component only runs after
-  hydration, which is already too late.
+- `data-bs-theme`
+- `data-lt-contrast`
+- `data-lt-density`
 
-What does work is a classic blocking script in `<head>`: the parser stops on it,
-and it has not yet reached `<body>`, so nothing has been laid out or painted. It
-must stay a classic script, it must stay in `<head>`, and it must not gain
-`defer` or `async`. Any of those changes reintroduces the flash on every load.
+This avoids a flash of the wrong material. The script is only a paint helper; after startup, the app restores the declared preference keys and applies appearance through the chrome module.
 
-That script reads a small, plain record of the last applied appearance. The
-durable preference contract remains the only thing that *remembers* a
-preference, and on the web head it is encrypted with Data Protection so script
-cannot read it. The first-paint record is therefore a cache, refreshed whenever
-an appearance is applied. When the two disagree the contract wins, because the
-application rewrites the record from it as soon as it loads. The values are
-non-secret presentation names validated against a fixed allow-list on the way
-in, so a tampered record can only ever select an appearance the product already
-ships.
+## Appearance menu and commands
 
-## Both heads honour the choice
+The header appearance menu renders one toggle button per choice. Each button carries the same `data-lt-command` id as the command palette command that performs the action:
 
-The web head persists through browser storage; the desktop head persists through
-the platform preference store and behaves sensibly against its host platform's
-own theme. The choice is scoped per user.
+- `appearance.theme.system`
+- `appearance.theme.paper`
+- `appearance.theme.board`
+- `appearance.contrast.system`
+- `appearance.contrast.standard`
+- `appearance.contrast.more`
+- `appearance.density.comfortable`
+- `appearance.density.compact`
 
-## Where the control lives
+The menu state uses pressed buttons, so the visible control and the palette are two entries to the same action, not separate behaviours.
 
-Appearance settings sit in the console banner, in their own labelled region
-between the tenant scope control and the identity. They are deliberately not
-tucked inside the sign-out cluster, which is where the old tenant control lived
-and where nobody found it.
+## Reduced motion
 
-The console renders the control only when the appearance feature is registered.
-It is an opt-in service, so a head that composes without it gets a console with
-no appearance settings rather than a console that fails to start.
+The design layer respects `prefers-reduced-motion: reduce` by reducing transition and animation durations to `0.01ms` and limiting animation iteration to one. This is a global rule for the Explorer UI.
+
+Lattice App frames receive appearance through the app-frame protocol. The bundle and `context.read` include `{ theme, contrast, density, reducedMotion }`; a running frame can be notified with `context.changed` carrying the same closed set. The frame vocabulary is Paper or Board, standard or more contrast, comfortable or compact density, and a reduced-motion boolean. The fallback host context is Paper, standard contrast, comfortable density, and full motion unless a host supplies a richer context.
 
 ## See also
 
+- [Explorer overview](README.md)
 - [What the Explorer remembers](what-the-explorer-remembers.md)
+- [Navigation model](navigation-model.md)
+- [Areas](areas.md)
+- [Lattice Apps](lattice-apps.md)
 - [Accessibility conformance](accessibility-conformance.md)
-- [Running the Explorer](running-the-explorer.md)

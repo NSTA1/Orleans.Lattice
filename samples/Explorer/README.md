@@ -53,8 +53,8 @@ disabling authorization.
 
 ## The admin areas
 
-The console's top-level areas live in a stable vertical rail down the left of
-the shell, and each is capability-gated and fails closed. This sample co-hosts
+The console's areas are listed on the directory spine down the left of the page,
+and each one probes its own facade and fails closed. This sample co-hosts
 every control plane its one silo can serve and auto-signs-in as a bootstrap
 administrator (`explorer-admin`), so the **Data**, **Apps**, **Access**,
 **Schema**, **Replication**, **Backups** and **Cluster** areas are live out of
@@ -71,22 +71,16 @@ behind. Runtime enrolment is not served: it replicates its own configuration
 tree, and a replicated tree must be backed by a shared off-cluster backup sink,
 while this sample's backups go to the default in-cluster sink.
 
-An unavailable area renders no entry at all, and the rail's "why can I not see
-everything?" affordance names it, so the absence is disclosed once rather than
-being silently missing. That is deliberately different from a denial, which is
-the state for a capability the cluster does serve and this caller may not use. By
-default a denied area is not hidden and is not merely greyed: it stays visible,
-grouped below a divider at lower visual weight, and states the permission it needs
-and who to ask. Ticking the rail's **Hide areas I cannot open** preference
-withholds it instead. An anonymous caller sees Access as an invitation to sign in
-rather than a denial, because nobody who has not signed in is told a surface is
-unavailable for their account. In this sample signing out does not stick: the
-environment credential seed signs any circuit whose credential store is empty
-straight back in, so the page that loads after **Sign out** is signed in again.
+An area whose facade the cluster does not serve, such as Telemetry here, is
+hidden: it has no stop on the spine, and its address renders the not-found page.
+An area you could use after signing in is shown with a one-sentence reason
+instead. In this sample signing out does not stick: the environment credential
+seed signs any circuit whose credential store is empty straight back in, so the
+page that loads after **Sign out** is signed in again.
 
-The gating is advisory throughout: the server is the sole enforcement point, so
-showing a denied entry costs nothing and hiding it would buy nothing. See
-[Navigation visibility policy](../../docs/lattice.explorer/navigation-visibility-policy.md).
+Availability is advisory throughout: the cluster authorises every call, whatever
+the console chose to draw. See
+[Area availability](../../docs/lattice.explorer/area-availability.md).
 
 ## The task-board app
 
@@ -102,24 +96,28 @@ enable and open it, then sign in as each of the three users to compare
 
 ## Things worth trying in this sample
 
-- **Deep link and share.** Select a tree and a surface, then copy the URL. It
-  looks like `/explore/trees/<tree>/data`, all lower case. Open it in a fresh
-  tab and you land on that exact view; browser back and forward behave.
-- **Land where you left off.** Switch area, select a tree, then reload. The
-  console restores the area as well as the selection. `/reset-view` lists what
-  is remembered and clears it.
-- **Choose a theme.** The appearance control sits in the banner, in its own
-  region beside the identity. Theme follows your system by default; light is a
-  first-class palette, and high contrast is a separate axis that layers over
-  whichever theme is active. The choice is applied at first paint, so reloading
-  in light mode never flashes dark.
-- **Tenancy adapts.** This sample runs a single tenant, so no tenant picker
-  appears: the drop-down is offered only to a platform operator who can reach
-  more than one tenant. See
+- **The address is the navigation.** Open the Data area and select
+  `factory-floor`: the address is `/data/factory-floor`, all lower case, and the
+  address line above the page shows it as a chain of nodes. Choose a tab or a key
+  and the address follows, as in `/data/factory-floor?tab=history&key=...`. Open
+  it in a fresh tab and you land on that exact view; Back and Forward behave.
+- **Type an address or search.** Press `/` or `Ctrl+K` and type `fact` to find
+  the tree, or `>` to open the command palette and run a command such as
+  `data.refresh`. Every command is also a visible control on its page.
+- **Choose a theme.** The appearance menu sits in the header. Theme follows your
+  system by default; Paper and Board are the two materials, and high contrast is
+  a separate axis that layers over either. The choice is applied at first paint,
+  so a reload never flashes the wrong theme. `/reset` lists what the console
+  remembers and clears it.
+- **Narrow the window.** Below 768px the spine becomes a slide-in **Directory**
+  sheet, the header folds into one **Menu**, and tables become two-line rows that
+  open a detail sheet.
+- **Tenancy adapts.** This sample runs no tenancy add-on, so no address carries a
+  tenant root and the Tenancy area is hidden. See
   [tenant scope](../../docs/lattice.explorer/tenant-scope.md).
-- **Keyboard only.** Tab once from the top: the first stop is a skip link into
-  the main region. Arrow keys move within the rail and within every tab strip,
-  and every tab is bound to a real panel.
+- **Keyboard only.** Tab once from the top: the first stops are the skip links
+  **Skip to directory**, **Skip to address** and **Skip to content**. Arrow keys
+  move within every tab row, and every dialog returns focus when it closes.
 
 See [the navigation model](../../docs/lattice.explorer/navigation-model.md),
 [what the Explorer remembers](../../docs/lattice.explorer/what-the-explorer-remembers.md)
@@ -169,10 +167,10 @@ governed and only that administrator can manage it. See:
 Whether locally-defined group membership affects authorization depends on the
 cluster's group-merge mode. Set `LATTICE_MEMBERSHIP_MERGE_MODE` to `Union`
 (default), `TokenOnly`, or `DirectoryOnly` before running. Under `TokenOnly`,
-group membership is resolved solely from the identity-provider token, so the
-**Access > Groups** create and member add/remove controls render disabled with an
-explanatory banner while staying read-only viewable; **Policies** and **Explain**
-stay live. `Union` and `DirectoryOnly` leave membership editing enabled. For
+group membership is resolved solely from the identity-provider token, so a
+group's page in **Access > Groups** says so in a notice and turns off adding and
+removing members, while the members stay viewable; **Rules** and **Explain** stay
+live. `Union` and `DirectoryOnly` leave membership editing enabled. For
 example (PowerShell):
 
 ```powershell
@@ -185,8 +183,8 @@ dotnet run --project samples/Explorer/Explorer.csproj
 The Access area's **subject picker** (the type-ahead that finds users and groups)
 and its **validated create form** run against an identity directory. When a
 directory is configured, entering a principal id that the directory does not know
-**fails closed** - the create form blocks it with "No such principal in the
-directory." instead of creating an unvalidated free-text id.
+**fails closed** - the form refuses it ("No principal with the id ... exists in
+the identity directory.") instead of creating an unvalidated free-text id.
 
 This sample offers two config-gated directory modes and is **fail-closed by
 default**:

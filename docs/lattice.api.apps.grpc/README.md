@@ -87,10 +87,17 @@ All three sit behind the same default-deny interceptor as the control service.
 | `orleans.lattice.api.apps.workspace` | `AddLatticeAppWorkspaceApiGrpc` / `MapLatticeAppWorkspaceApiGrpc` | `LatticeAppWorkspaceApiGrpcClient` (`ILatticeAppWorkspace`) |
 | `orleans.lattice.api.apps.bridge` | `AddLatticeAppBridgeApiGrpc` / `MapLatticeAppBridgeApiGrpc` | `LatticeAppBridgeApiGrpcClient` (`ILatticeAppBridge`) |
 
-The asset RPCs, for the icon and UI bundle assets, carry at most 2 MiB each. That
-bound is set per method with a bounded marshaller rather than by raising the channel's
-global message limit. A bridge failure crosses the wire as a status code mapped from
-its `AppBridgeFailure`, carrying only the fixed message.
+Message sizes are bounded per method with a bounded marshaller rather than by
+raising the channel's global message limit. The asset RPCs, for the icon and UI
+bundle assets, accept a message of at most 2 MiB (the largest asset) plus 4 KiB of
+envelope. Every bridge RPC is bounded too: a request at 64 KiB plus 8 KiB, and a
+response at 1 MiB plus 64 KiB. A bridge failure crosses the wire as a status code
+mapped one to one from its `AppBridgeFailure` (`Denied` to `PermissionDenied`,
+`NotFound` to `NotFound`, `Invalid` to `InvalidArgument`, `TooLarge` to
+`ResourceExhausted`, `Conflict` to `Aborted`, `Unavailable` to `Unavailable`),
+carrying only the fixed message, and `LatticeAppBridgeApiGrpcClient` rethrows it as
+an `AppBridgeException` with the same failure.
+
 ## Hosting the service
 
 Register Orleans serialization, the facade, and the binding, then map the endpoint:

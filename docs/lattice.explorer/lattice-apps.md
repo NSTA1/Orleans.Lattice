@@ -10,15 +10,17 @@ app UI.
 
 `/apps` opens on **Your apps**: the enabled installs in the active tenant where the
 signed-in user holds at least one app role. A caller who holds `AppInstall` also sees
-the **Catalogue** tab.
+the **Catalogue** view, an **Install app...** control (palette command `apps.install`),
+and a call-out for any installed app whose activation failed, with a link to review
+and re-consent it.
 
 | Address | Page |
 |---|---|
 | `/apps` | Your apps, plus the Catalogue tab for `AppInstall` holders. |
 | `/apps/catalogue?source={key\|all}&filter={all\|installed\|available\|updates}&q=` | The catalogue. The query string is the state, so every view can be linked. |
-| `/apps/catalogue/{source}/{slug}` | Review before install, or manage an install: consent, lifecycle, upgrade and re-consent. |
+| `/apps/catalogue/{source}/{slug}[@{version}]` | Review before install, or manage an install: consent, lifecycle, upgrade and re-consent. Without a version, the source's newest is reviewed. |
 | `/apps/{slug}/{tab}` | The app's own pages, built from its manifest: `overview`, `trees`, `roles`, `tools`, `subscriptions`, `replication`, and `consent` (`AppInstall` only). |
-| `/apps/{slug}/open[/{path}]` | The app's UI, when it ships one and the caller holds a role. |
+| `/apps/{slug}/open[/{path}]` | The app's UI, when it ships one and the caller holds a role. Up to four in-app path segments follow `open`; a deeper in-app path travels as `?path=`, and its query as `?query=`. |
 
 With tenancy on, each address is rooted at `/t/{tenant}`.
 
@@ -27,8 +29,9 @@ With tenancy on, each address is rooted at `/t/{tenant}`.
 The catalogue lists what every configured [app source](../lattice.apps/README.md#app-sources)
 offers. The **source selector** has one entry per source plus "All sources". Each
 entry shows the source's kind (`Static` or `Dynamic`) and what it can do. Text search
-is enabled only for a source that advertises `Search`. A slug offered by two sources
-appears as one row per source, and an install always records the source it came from.
+is enabled for a selected source only when it advertises `Search`, and for \"All sources\"
+when any source does. A slug offered by two sources appears as one row per source, and
+an install always records the source it came from.
 
 The in-image source (`in-image`) lists the apps the silo registered at start-up. A
 dynamic source, such as a NuGet feed, a blob container or a container registry, plugs
@@ -49,7 +52,9 @@ namespace as an exception:
 - the bridge operations its UI requests.
 
 Installing binds each role to a membership group and confirms the ceiling. Enabling,
-disabling, upgrading and uninstalling are native actions with explicit confirmation.
+disabling, upgrading and uninstalling are native actions with explicit confirmation;
+the palette offers `apps.upgrade.{slug}` for an app with an update and
+`apps.disable.{slug}` for an enabled one.
 An upgrade shows what changed between the two versions. An install whose ceiling or
 bridge grants no longer cover its manifest is shown as needing re-consent.
 
@@ -78,8 +83,9 @@ An app's UI never runs in the Explorer's own page.
   only what the app's own roles grant this user, inside the consented bridge
   operations and the app's own trees. The Explorer broker only validates, rate-limits
   and relays.
-- **Credentials.** No credential ever enters the frame. A second load of the frame
-  closes its port. An upgrade, disable or uninstall revokes the session.
+- **Credentials.** No credential ever enters the frame. If the frame loads a new
+  page, the Explorer closes it. An upgrade, disable or uninstall revokes the session,
+  and the Explorer replaces the frame with a message asking you to open the app again.
 
 **Residual risk.** A sandbox cannot guarantee zero egress. For example, WebRTC is not
 blocked where the browser does not support the `webrtc` directive. Data handed to a
@@ -97,10 +103,12 @@ a plain HTML fragment, stylesheets and self-contained scripts. The bootstrap def
 
 | Member | Purpose |
 |---|---|
-| `lattice.ready` | A promise that resolves once the bridge is connected. |
-| `lattice.request(op, args)` | Sends one bridge request, and resolves with its result or rejects with a `LatticeError` whose `code` is one of `denied`, `not_found`, `invalid`, `too_large`, `rate_limited`, `unavailable`, `conflict`. |
+| `lattice.protocol` | The protocol version, `1`. |
+| `lattice.ready` | A promise that resolves with the current appearance once the bridge is connected and your entry fragment and stylesheets are in place, before your first script runs. It rejects if the frame fails to load. |
+| `lattice.request(op, args, options)` | Sends one bridge request, and resolves with its result or rejects with a `LatticeError` whose `code` is one of `denied`, `not_found`, `invalid`, `too_large`, `rate_limited`, `unavailable`, `conflict`. `options.timeoutMs` defaults to 30 seconds, at most 300 seconds; a timeout rejects with `unavailable`. |
 | `lattice.on(event, handler)` | Subscribes to `context.changed`, `nav.changed` or `lattice.revoked`. |
 | `lattice.assetUrl(path)` | The `blob:` URL of one of your bundle's assets. |
+| `lattice.LatticeError` | The error class every rejection uses. |
 
 The operations match the manifest's bridge vocabulary:
 
@@ -130,9 +138,12 @@ Guidance:
   can only hide a control, never grant one.
 - **No forms.** The sandbox has no `allow-forms`, so a `<form>` never submits. Use
   buttons and key handlers instead.
-- **Styling.** Link `lattice-app.css` through the kit. It gives your UI the Explorer's
-  Paper and Board materials, and it follows `context.changed`. Keep layouts fluid:
-  the frame fills the content area at every width, down to a phone.
+- **Styling.** The bootstrap document already loads the kit stylesheet,
+  `lattice-app.css`, so your UI starts with the Explorer's Paper and Board materials,
+  type and controls without linking anything. The kit sets the theme, contrast,
+  density and reduced-motion attributes on `<html>` and updates them on
+  `context.changed`. Keep layouts fluid: the frame fills the content area at every
+  width, down to a phone.
 - **Digests.** Pin every asset's digest and the bundle digest in the manifest. The
   [task-board sample](../../samples/Explorer/Apps/TaskBoard/README.md) computes them
   in a test that fails with the correct values whenever a file changes.

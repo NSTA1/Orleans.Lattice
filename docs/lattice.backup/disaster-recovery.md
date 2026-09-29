@@ -154,8 +154,8 @@ tree.
 
 Key properties:
 
-- **Gated on a durable sink.** The monitor is inert, and the Explorer health column
-  hidden, when the registered sink is not durable (`ILatticeBackupSink.IsDurable`
+- **Gated on a durable sink.** The monitor is inert, and the Explorer's health
+  views hidden, when the registered sink is not durable (`ILatticeBackupSink.IsDurable`
   is `false`). Verifying payload that shares the fate of the cluster it protects -
   the ephemeral in-cluster sink - proves nothing about disaster recovery, so there
   is no point running it there.
@@ -206,16 +206,14 @@ modes and the probe timeout.
 
 ### Health in the Explorer
 
-The [`Orleans.Lattice.Explorer`](../lattice.explorer/managing-backups.md) **Existing backups**
-sub-tab of the Backups area renders a per-row health indicator (a not-yet-verified
-marker until the first check, an OK marker when healthy, and a warning marker
-when a backup is unresolvable, has a missing blob, has a hash mismatch, or - for a
-replicated tree - sits in a sink a peer cluster cannot read). Clicking
-the warning opens a diagnostics dialog that names exactly which artifact is missing,
-which hash mismatched, or which peer cluster could not see the sink, and when the
-backup was last checked. The per-backup schedule dialog exposes the per-backup
-health schedule. When no durable sink
-is configured the health column and its controls are hidden.
+In the [Explorer](../lattice.explorer/managing-backups.md)'s Backups area, each row
+of the backup catalogue shows the latest stored health report as a health pill, and
+the **Health** page (`/backups/health`) lists backups with their latest reports. A
+focused address, `/backups/health?backup={id}`, shows one backup's report - its
+status, when it was checked, the missing or uncommitted artifacts, the hash
+mismatches and, for a replicated tree, which peer clusters can see the sink -
+with **Check now** and the backup's periodic health schedule. When no durable sink
+is configured, the Health page and the health pills are not shown.
 
 ## Sink durability posture
 

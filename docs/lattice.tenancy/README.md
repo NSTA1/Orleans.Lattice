@@ -720,14 +720,15 @@ host registers (below); once registered, it keys its behaviour off whether tenan
 actually present rather than off a separate opt-in flag, so a deployment without
 tenancy keeps a byte-for-byte-unchanged UI and tool surface.
 
-- **Explorer.** When the Explorer's tenant view is enabled (`AddExplorerTenantView()`,
-  which the bundled web and MAUI Explorer heads register themselves), the signed-in
-  header shows
-  the caller's current tenant and, for a platform operator, a selector to switch the
-  active tenant or request an all-tenant view. The controls render nothing for an
-  anonymous caller or a non-tenancy deployment, and every switch is authorized
-  fail-closed through the operator gate. See
-  [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md).
+- **Explorer.** When the host enables the Explorer's tenant view
+  (`AddExplorerTenantView()`), the active tenant becomes the root node of every
+  tenant-scoped address (`/t/{tenant}/...`), typing `t/` in the address line
+  re-roots the current address at another tenant the caller may reach, and the
+  Tenancy area serves the operator's tenant directory and each tenant's own pages.
+  An address for another tenant is a switch request, authorized fail-closed through
+  the operator gate; a refusal redirects to the active tenant with a warning. A
+  deployment without tenancy shows no tenant root anywhere. See
+  [Tenant scope](../lattice.explorer/tenant-scope.md).
 - **MCP.** When tenancy is wired and the self-awareness module is registered
   (`AddTenantSelfAwarenessTools()`, which the split-head remote registration calls
   itself whenever a tenant-admin endpoint is configured; the module then self-gates on

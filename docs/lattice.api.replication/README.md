@@ -70,10 +70,11 @@ count, and a derived `ReplicationLinkHealth`: `Healthy`, `Lagging`, `Stalled` or
 - **Configurable health.** `LatticeReplicationStatusOptions` sets the thresholds. By
   default a link is lagging at 1,000 entries behind, 5 consecutive errors or 30
   seconds without contact, and stalled at 10,000 entries, 50 errors or 5 minutes.
-  Inbound links can have their own no-contact thresholds.
+  Inbound links can have their own no-contact thresholds, which are off by default.
 
 The [Explorer](../lattice.explorer/README.md)'s Replication area draws its estate
 diagram from this report.
+
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.

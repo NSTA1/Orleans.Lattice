@@ -179,18 +179,21 @@ A target is `AppBridgeTarget(AppSlug, InstallRevision, LogicalTree)`. No overloa
 accepts a physical tree id. Each call runs these steps in order, and each fails
 closed:
 
-1. **The install.** It must be enabled in the caller's active tenant, and
-   `InstallRevision` must match. A frame launched before an upgrade, a disable or
-   an uninstall therefore stops working.
-2. **Bridge consent.** The operation must be in the install's **consented** bridge
-   grants (see [presentation and UI](../lattice.apps/README.md#presentation-and-ui)),
-   and the logical tree must be covered by those grants.
+1. **The install.** It must be enabled in the caller's active tenant with its
+   ceiling pinned to its version, and `InstallRevision` must match. A frame
+   launched before an upgrade, a disable or an uninstall therefore stops working,
+   and the call is denied exactly as for an app that does not exist.
+2. **Bridge consent.** The operation must be covered for the logical tree both by
+   the install's **consented** bridge grants (see
+   [presentation and UI](../lattice.apps/README.md#presentation-and-ui)) and by the
+   installed manifest's own request.
 3. **Tree resolution.** This happens on the server. A declared tree composes to
    `a/{slug}/{tree}`, and then per tenant. An adopted tree uses its adopted id. An
    undeclared name is not found.
 4. **App-owned grants only.** The caller must match an app-owned compiled rule for
-   this slug (`app:{slug}:` ids) that allows the concrete operation on the concrete
-   key or prefix. The caller's other rules are deliberately not consulted. This is
+   this slug (`app:{slug}:` ids) that allows the concrete operation (`Read`,
+   `RangeRead`, `Write` or `Delete`) on the concrete key or prefix, with the ceiling
+   re-checked. The caller's other rules are deliberately not consulted. This is
    what stops a user's broad operator rights from flowing into an app's UI. A reader
    who is also a cluster operator still cannot write through a viewer role. A scan
    needs `RangeRead`, because that is what the data path enforces. A role whose UI
@@ -198,11 +201,13 @@ closed:
 5. **Execution.** The call runs under the caller's own identity and tenant, so
    ordinary data-plane authorization also applies.
 
-Values are bounded (64 KiB each, 1 MiB for a scan page of at most 200 entries), and
-each caller and slug pair is rate limited (`LatticeAppBridgeOptions`: 100 permits per
-second by default). Failures are the closed `AppBridgeFailure` set: `Denied`,
+Before these steps, the request is validated and the caller is resolved and rate
+limited. Values are bounded (64 KiB each, and a scan page of at most 200 entries
+whose encoded response is at most 1 MiB), and each caller and slug pair is rate
+limited (`LatticeAppBridgeOptions`: 100 permits per second by default). Failures are the closed `AppBridgeFailure` set: `Denied`,
 `NotFound`, `Invalid`, `TooLarge`, `Conflict` and `Unavailable`. They are carried by
 `AppBridgeException` with a fixed, sanitised message.
+
 ## See also
 
 - [Installable apps](../lattice.apps/README.md)

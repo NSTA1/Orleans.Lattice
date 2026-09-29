@@ -1,94 +1,139 @@
 # Orleans.Lattice.Explorer.Entra.Web API reference
 
-The public surface is the options (covered in [configuration](configuration.md)), two registration/endpoint extensions, the token-acquirer seam and its result type, the auth method, and a typed re-auth exception. The Microsoft.Identity.Web-backed acquirer and the auto-sign-in circuit handler are internal.
+The public surface is the options type and cache enum, one service-registration
+extension, two endpoint-mapping extensions, the token-acquirer seam and token
+result, the auth method, and the re-authentication exception. The
+Microsoft.Identity.Web-backed acquirer and the auto-sign-in circuit handler are
+internal.
 
 ## `ExplorerEntraWebServiceCollectionExtensions`
 
-```csharp
-public static IServiceCollection AddLatticeExplorerEntraWebAuth(
+```text
+IServiceCollection AddLatticeExplorerEntraWebAuth(
     this IServiceCollection services,
     Action<ExplorerEntraWebOptions> configure)
 ```
 
-Registers the Microsoft.Identity.Web OpenID Connect app (auth-code + PKCE, cookie session), the scoped `EntraWebExplorerAuthMethod` for the `entra` scheme, the scoped `IExplorerWebTokenAcquirer`, the selected token cache, and (by default) a fallback authorization policy plus the auto-sign-in circuit handler.
+Registers the Microsoft.Identity.Web OpenID Connect app, the scoped
+`EntraWebExplorerAuthMethod`, the scoped `IExplorerWebTokenAcquirer`, the
+selected token cache, and, by default, a fallback authorization policy plus the
+auto-sign-in circuit handler.
 
-- **Throws** `ArgumentNullException` when `services` or `configure` is null, and `InvalidOperationException` when a required option is missing (validation runs during this call).
-- The auth method and token acquirer are registered **scoped** for per-circuit credential isolation.
-- The fallback authorization policy is installed only when `RequireAuthenticatedUser` is true; the circuit handler only when `AutoSignIn` is true.
-- The call also registers the cascading authentication state (`AddCascadingAuthenticationState()`), so a Blazor Server circuit sees the OpenID Connect user rather than an anonymous principal.
-- **Re-authentication side effect.** When `ReauthChallengePath` is set, the call registers an `ExplorerReauthOptions` whose `ChallengePath` is that path, after the core default, so the core Explorer's re-authentication interstitial navigates to it. The endpoint itself is mapped separately with `MapLatticeExplorerEntraWebReauth`.
-- **CSP side effect.** When `SignOutPath` is set, the call also publishes it as the core `ExplorerSignOutOptions.FederatedSignOutPath` and, when `Instance` parses as an absolute http(s) authority, adds that Entra authority origin to the Explorer web head's Content-Security-Policy `form-action` sources (via `ExplorerContentSecurityPolicyOptions.AdditionalFormActionSources`) so the federated sign-out form's redirect to Entra's end-session URL is not blocked by the default `form-action 'self'`. A malformed `Instance` contributes nothing (fail closed).
+- Throws `ArgumentNullException` when `services` or `configure` is null.
+- Throws `InvalidOperationException` when a required option is missing.
+- Registers the auth method and token acquirer as scoped for per-circuit
+  credential isolation.
+- Calls `AddCascadingAuthenticationState()` so the Blazor Server circuit sees the
+  OpenID Connect user.
+- Installs a fallback authenticated-user policy only when
+  `RequireAuthenticatedUser` is `true`.
+- Registers the auto-sign-in circuit handler only when `AutoSignIn` is `true`.
+- When `ReauthChallengePath` is set, publishes `ExplorerReauthOptions` so the
+  session chrome navigates to that path for re-authentication.
+- When `SignOutPath` is set, publishes `ExplorerSignOutOptions` so the identity
+  menu posts to that path for federated sign-out.
+- When `SignOutPath` is set and `Instance` is an absolute HTTP or HTTPS URI,
+  contributes its origin to `ExplorerContentSecurityPolicyOptions` as an extra
+  `form-action` source.
 
 ## `ExplorerEntraWebEndpointRouteBuilderExtensions`
 
-```csharp
-public const string DefaultSignOutPattern = "/explorer-entra/signout";
+```text
+const string DefaultSignOutPattern = "/explorer-entra/signout";
 
-public static IEndpointConventionBuilder MapLatticeExplorerEntraWebSignOut(
+IEndpointConventionBuilder MapLatticeExplorerEntraWebSignOut(
     this IEndpointRouteBuilder endpoints,
     string pattern = DefaultSignOutPattern,
     string redirectUri = "/")
 ```
 
-Maps a federated sign-out **`POST`** endpoint that drops the local State API credential (via `IExplorerAuthSession.LogoutAsync`, when the session is registered), clears the OpenID Connect cookie, and signs the user out of Entra, redirecting to `redirectUri` afterwards. Because signing out mutates session state it is a `POST` guarded by antiforgery validation - a cross-site `GET` (a logout-CSRF) cannot trigger it - so the Explorer's "Sign out" button renders an HTML form carrying a `RequestVerificationToken`. `AddLatticeExplorerEntraWebAuth` publishes `SignOutPath` as the core `ExplorerSignOutOptions.FederatedSignOutPath` so the button posts here automatically. This is distinct from the Explorer's own in-process State API sign-out, which only drops the API credential and leaves the browser session in place (letting the fallback authorization policy silently re-authenticate the circuit). Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern` is blank.
+Maps a federated sign-out `POST` endpoint. The endpoint validates antiforgery,
+clears the local State API credential when an `IExplorerAuthSession` is available,
+clears the OpenID Connect cookie, and signs the user out of Entra. It redirects
+back to `redirectUri` after sign-out. Throws `ArgumentNullException` for a null
+endpoint builder and `ArgumentException` for a blank pattern.
 
-```csharp
-public const string DefaultReauthPattern = "/explorer-entra/reauth";
-public const string DefaultReauthPrompt = "login";
-public const string DefaultReturnUrlParameter = "returnUrl";
+```text
+const string DefaultReauthPattern = "/explorer-entra/reauth";
+const string DefaultReauthPrompt = "login";
+const string DefaultReturnUrlParameter = "returnUrl";
 
-public static IEndpointConventionBuilder MapLatticeExplorerEntraWebReauth(
+IEndpointConventionBuilder MapLatticeExplorerEntraWebReauth(
     this IEndpointRouteBuilder endpoints,
     string pattern = DefaultReauthPattern,
     string prompt = DefaultReauthPrompt,
     string returnUrlParameter = DefaultReturnUrlParameter)
 ```
 
-Maps a forced-interactive re-authentication **`GET`** endpoint that issues an OpenID Connect challenge with `prompt=login` (or the supplied `prompt`), so a **new** authorization code is redeemed even when a valid session cookie already exists - repopulating a failover replica's token cache. The core Explorer's re-authentication interstitial navigates here when the credential latches into its revoked state. The endpoint honours the `returnUrlParameter` query value only when it is a **local** path (an absolute or protocol-relative URL is rejected and the browser returns to `/`), so it cannot be abused as an open redirect. Pass `select_account` for `prompt` to let the operator pick a different account. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern`, `prompt`, or `returnUrlParameter` is blank.
+Maps a forced-interactive re-authentication `GET` endpoint. It issues an OpenID
+Connect challenge with the supplied `prompt` value, defaulting to `login`, so a
+new authorization code is redeemed even when the browser already has a valid
+cookie. The return URL query value is honoured only when it is a local path; an
+absolute or protocol-relative URL returns the browser to `/`. Throws
+`ArgumentNullException` for a null endpoint builder and `ArgumentException` for a
+blank pattern, prompt or return-url parameter.
 
 ## `IExplorerWebTokenAcquirer`
 
-```csharp
-public interface IExplorerWebTokenAcquirer
-{
-    Task<ExplorerWebToken> AcquireTokenAsync(
-        IReadOnlyList<string> scopes,
-        CancellationToken cancellationToken = default);
-}
+```text
+Task<ExplorerWebToken> AcquireTokenAsync(
+    IReadOnlyList<string> scopes,
+    CancellationToken cancellationToken = default)
 ```
 
-Acquires a downstream State API token for the signed-in browser user. The default implementation passes the circuit's `ClaimsPrincipal` to Microsoft.Identity.Web explicitly (a remote Blazor Server circuit has no ambient `HttpContext`). It throws `ExplorerWebReauthRequiredException` when the browser session is not authenticated or when Microsoft.Identity.Web signals that interactive sign-in is required.
+Acquires a downstream State API token for the signed-in browser user. The default
+implementation passes the circuit's `ClaimsPrincipal` to Microsoft.Identity.Web
+explicitly. It throws `ExplorerWebReauthRequiredException` when the browser
+session is not authenticated or Microsoft.Identity.Web requires interaction.
 
 ## `ExplorerWebToken`
 
-A `readonly record struct` holding the acquired access token, its `ExpiresOn` instant, and the resolved `Username`.
+`ExplorerWebToken` is a `readonly record struct` with these properties:
+
+| Property | Type | Meaning |
+|---|---|---|
+| `AccessToken` | `string` | Required raw access token. |
+| `ExpiresOn` | `DateTimeOffset` | Required absolute expiry instant. |
+| `Username` | `string?` | Resolved account name when known. |
 
 ## `EntraWebExplorerAuthMethod`
 
-The public sealed `IExplorerAuthMethod` for the `entra` scheme. Registered scoped by `AddLatticeExplorerEntraWebAuth`; resolves the State API scope from `Scopes` or, when empty, from the advertised audience (appending `/.default` to a bare resource id), and wires token renewal so a re-auth-required signal latches the credential as revoked.
+`EntraWebExplorerAuthMethod` is the public sealed `IExplorerAuthMethod` for the
+`entra` scheme. It is registered scoped by `AddLatticeExplorerEntraWebAuth`.
 
-```csharp
-public EntraWebExplorerAuthMethod(
+```text
+EntraWebExplorerAuthMethod(
     IExplorerWebTokenAcquirer acquirer,
     IOptionsMonitor<ExplorerEntraWebOptions> options)
 
-public string SchemeId { get; }
-public bool CanHandle(string advertisedScheme)
-public Task<ExplorerAuthSignIn> ChallengeAsync(
+string SchemeId { get; }
+bool CanHandle(string advertisedScheme)
+Task<ExplorerAuthSignIn> ChallengeAsync(
     ExplorerAuthChallengeContext context,
     CancellationToken cancellationToken = default)
 ```
 
-`SchemeId` returns the `entra` scheme id; `CanHandle` matches that scheme case-insensitively; `ChallengeAsync` acquires the initial downstream token and returns a bearer sign-in whose renewal delegate latches the credential as revoked on a re-auth-required signal.
+`SchemeId` returns `entra`. `CanHandle` matches that scheme case-insensitively.
+`ChallengeAsync` resolves scopes from `ExplorerEntraWebOptions.Scopes` or the
+advertised audience, acquires the initial downstream token, and returns a bearer
+sign-in. Silent renewal latches the credential as revoked when token acquisition
+throws `ExplorerWebReauthRequiredException`.
 
 ## `ExplorerWebReauthRequiredException`
 
-Thrown when the browser must complete (or repeat) the interactive OIDC sign-in before a State API token can be acquired.
+Thrown when the browser must complete or repeat the interactive OIDC sign-in
+before a State API token can be acquired.
 
-```csharp
-public ExplorerWebReauthRequiredException()
-public ExplorerWebReauthRequiredException(string message)
-public ExplorerWebReauthRequiredException(string message, Exception innerException)
+```text
+ExplorerWebReauthRequiredException()
+ExplorerWebReauthRequiredException(string message)
+ExplorerWebReauthRequiredException(string message, Exception innerException)
 ```
 
-A `sealed` exception deriving directly from `System.Exception` with the three standard constructors (default message, custom message, and message-plus-inner-exception).
+The exception is sealed and derives directly from `System.Exception`.
+
+## See also
+
+- [Configuration](configuration.md)
+- [Architecture](architecture.md)
+- [Hosted-web Entra overview](README.md)

@@ -1,204 +1,141 @@
-# Managing access control from the Explorer
+# Managing access from the Explorer
 
-The Orleans.Lattice Explorer's top-level areas sit in a vertical rail down the
-left of the shell. **Access** is the membership and authorization admin area. It lets
-an operator inspect and edit the identity directory and the authorization rules
-that gate a cluster whose State API has authorization enabled, and it explains
-why a given subject is allowed or denied an operation - all over the existing
-auth gRPC binding, with no new server surface.
+The **Access** area is the Explorer surface for the cluster's authorization rule store, local membership groups, and access explanations. It drives the auth administration facade; the Explorer presents and submits the data, but the cluster remains the enforcement point for every read and mutation.
 
-## Where it sits
+Access is cluster-wide. Tenant-rooted route forms exist so typed addresses can be normalised, but the navigator strips the tenant from Access addresses. App links from Access re-enter the current tenant where the Apps area is tenant-scoped.
 
-Access is one of the rail's areas, alongside **Explore** (the tree browser),
-**Backups**, **Tenant administration**, **My tenant**, and **Telemetry** (and
-**Schema** when a head registers it). Selecting it swaps the whole working
-surface to the access admin tabs. Like every area, it is a plugin that carries
-its own advisory access gate, which decides whether it is available to the
-connected user.
+## Availability
 
-The area drives the authorization admin surface of the auth API
-([`Orleans.Lattice.Api.Auth.Grpc`](../lattice.api.auth.grpc/README.md)); it holds
-no policy logic of its own. It never re-implements a verdict: the Explain view
-renders the server's `Allowed` flag verbatim, and any precedence ranking it shows
-is a presentation-only aid to reading the rule set, not a second opinion.
+Access is visible only after a fail-closed probe can read the first page of the group catalogue. A successful probe makes the area visible in the directory spine. The probe is remembered for the signed-in identity on the current circuit and is asked again when the identity changes.
 
-## The three tabs
+The area is hidden when the auth administration facade is absent, the cluster cannot be reached, the cluster does not serve access administration, or a signed-in identity is refused by the probe.
 
-- **Groups** - browse groups, create, edit and delete them, and add and remove
-  members (including nested groups) in the selected group's direct-member list.
-  The tab lists direct members only; a subject's transitive group closure, as the
-  server resolved it, is shown in the Explain verdict and the effective-permissions
-  result instead.
-- **Policies** - author the authorization rules. A rule targets a scope chosen
-  with the scope picker (whole tree, a key prefix, or a single key), one or more
-  `LatticeOperation` values chosen from a multi-select, and an **Allow** or
-  **Deny** effect. The form also offers the two opt-in rule shapes the posture
-  badges below describe - an all-trees grant and an access-administration
-  delegation rule - each of which supplies its own scope. Existing rules are listed
-  in precedence order, and each can be opened in the form to edit or delete it.
-- **Explain** - drive the facade's introspection: ask whether a subject may
-  perform an operation on a scope (**Explain**) and see the effective permission
-  set for a subject over a scope (**EffectivePermissions**). Both render the
-  server's answer directly.
+The only unavailable state is an anonymous or unsigned circuit that is refused by the probe. The exact sentence shown is:
 
-## Picking a subject: searchable typeahead
+> Sign in to administer access on this cluster.
 
-Everywhere the area needs a subject - adding a group member, targeting a policy
-rule, or naming the subject to explain - it offers the same **searchable subject
-picker** instead of a raw id box. A **User** / **Group** toggle chooses which kind
-of principal to look for, and changing it clears the current selection and searches
-again. As the operator types, the picker searches the configured
-[identity-directory provider](../lattice.membership/identity-directory-providers.md)
-for that kind, coalescing keystrokes so a burst of typing issues a single search,
-and pages further matches with a *Load more* control. Each result shows the
-principal's friendly display name as its label, and carries the underlying id (for
-example the object id) as visually hidden text for assistive technology rather than
-as a hover tooltip. Selecting a result fills in both the id and its kind, and the
-"Selected" line likewise leads with the friendly name, with the id again exposed
-only to assistive technology.
+Inside the area, denials become **Not permitted** empty states or inline errors. The standard denial text for access administration is:
 
-The whole area follows the same convention: everywhere it renders a principal -
-the group list, a group's direct members, the member add and remove
-status messages, and the subject and group-closure lines in an Explain verdict or
-an Effective-permissions result - it leads with the friendly display name resolved
-from the directory and keeps the raw id available to assistive technology as
-visually hidden text; the add and remove status messages name the principal by its
-label alone. Names are resolved on
-load and cached, and every one falls back to the raw id when no directory is
-configured or an id does not resolve, so the display never blocks on the directory
-and never regresses to a broken label.
+> You are not permitted to administer access on this cluster. Ask a cluster administrator for the Admin grant on access administration.
 
-When the configured provider is the no-op default (no directory), the picker
-reports the directory as **unavailable** and degrades to a plain free-text box:
-the entered id is used as-is and is **not** validated. It never enumerates the
-tenant in that state - it simply takes what is typed.
+Other faults are presented as plain sentences, for example that the cluster does not serve access administration, could not be reached, or did not answer.
 
-## Fail-closed create
+## Addresses
 
-The Groups tab creates a group through the same picker, and creation
-is **validated and fail-closed**. When a directory is available, the entered id is
-resolved against it before the group is saved:
+The Access area is cluster-wide. These route forms exist in the shipped pages:
 
-- resolved, and it is a group, the create proceeds;
-- resolved as the wrong kind (a user id typed into the group-create form), it is
-  blocked with an inline kind-mismatch message;
-- not resolved at all, it is blocked with a "no such principal in the directory"
-  message - an unknown id can never be created.
+| Page | Plain address | Tenant-rooted form | Notes |
+| --- | --- | --- | --- |
+| Rules | `/access`, `/access/rules` | `/t/{tenant}/access`, `/t/{tenant}/access/rules` | Lists authorization rules and opens the new-rule dialog with `?new=true`. |
+| Rule details | `/access/rules/{ruleId}` | `/t/{tenant}/access/rules/{ruleId}` | Shows one rule. Use `?tree={treeId}` when the rule id is reused under more than one governed tree. |
+| Groups | `/access/groups` | `/t/{tenant}/access/groups` | Lists groups and opens the new-group dialog with `?new=true`. |
+| Group details | `/access/groups/{groupId}` | `/t/{tenant}/access/groups/{groupId}` | Shows one group, its direct members, parent groups, and matching rules. |
+| Explain | `/access/explain` | `/t/{tenant}/access/explain` | Explains one operation or lists effective permissions. |
 
-Only when the directory is unavailable does the form fall back to accepting the id
-unvalidated, and it says so. Each provider supplies a one-line **Explanation** of
-what a valid id looks like (for example an object id, or a UPN), which the form
-shows beneath the input so the operator knows what to type. When a directory
-result is selected in the create form, its friendly display name also auto-fills the
-new group's display-name field, which the operator can still edit before
-saving.
+Access uses these query keys:
 
-## Access-state banner
+- `new=true` opens the create dialog on the Rules or Groups page.
+- `tree` qualifies a rule id on a rule detail page, and names the tree for an explanation.
+- `subject` and `kind=user|group` prefill the Explain page subject.
+- `operation` preselects the operation for an explanation.
+- `view=permissions` opens the effective-permissions view on the Explain page.
+- `key` and `prefix` travel in Explain addresses when the scope is a single key or key prefix.
 
-The area shows a banner describing the cluster's real authentication and
-enforcement posture, read from the server, so an operator is never guessing:
+## Pages and actions
 
-- the **authentication mode** the silo can authoritatively see from its
-  registered authenticators (anonymous, claims-based, Basic username/password, or
-  unknown); and
-- a **"recorded but not enforced"** notice when the server confirms authorization
-  rules are being stored but the connected State API is not actually enforcing
-  them - so an operator does not mistake an advisory rule set for a live gate. A
-  failed or denied read is never rendered as "unenforced".
+### Rules
 
-### Authorization-tier posture badges
+The Rules page lists every rule the caller may administer, 200 at a time. It has a rule search box, an ownership filter with **All rules**, **Authored**, and **App-owned**, and a **New rule** button.
 
-Beside the authentication mode, the banner renders two live **posture badges**
-read from the server's access model, so the two opt-in authorization tiers are
-discoverable at a glance rather than only by inspecting silo configuration:
+A rule draft includes:
 
-- **All-trees grants: on / off** - whether `LatticeAuthOptions.AllTreesGrantsEnabled`
-  is set, so a `Tree:*` data-plane rule is enforced across every ordinary tree.
-  While off, such a rule is inert and the server rejects authoring a new one. A
-  `Tree:*` rule that carries no data-plane operation is accepted either way: a
-  Telemetry or App install grant is honoured whether or not the tier is on,
-  because each is a scopeless cluster-wide capability checked against the `*`
-  scope itself, while a Replication or Tree lifecycle grant stays inert until the
-  tier is enabled.
-- **Access-admin delegation: on / off** - whether
-  `LatticeAuthOptions.AccessAdministrationDelegationEnabled` is set, so a whole-tree
-  `Admin` rule on the policy tree may be authored to delegate access administration.
-  While off, that rule is unauthorable.
+- a stable rule id, unique within the governed tree;
+- an **Allow** or **Deny** effect;
+- a subject, chosen as a user or group;
+- a scope: whole tree, key prefix in a tree, single key in a tree, all trees, or access administration when delegation is enabled;
+- one or more operations, grouped as data operations, administration, and cluster-wide capabilities;
+- an optional condition.
 
-Both tiers are off by default. The badges only render once the access model has
-been read successfully; a failed read leaves the posture unknown and hides them.
+The editor refuses an empty rule id, an app-owned id prefix, an empty subject, a missing tree or key where the scope needs one, reserved system trees, no operations, or cluster-wide capabilities on a narrower scope. When all-trees grants are off, the scope hint says that data operations in a cluster-wide rule are refused while cluster-wide App install and Telemetry capabilities can still be granted.
 
-## Merge-mode-aware membership editing
+Saving a rule submits it directly to the cluster. Directory validation failures are shown beside the subject, app-owned-rule failures beside the rule id, and other denials or faults as a form error.
 
-Whether locally-defined group membership actually affects authorization depends
-on the cluster's global group-merge policy
-([`LatticeMembershipOptions.GroupMergeMode`](../lattice.membership/README.md)).
-Under `Union` (the default) and `DirectoryOnly`, the local membership directory
-contributes to a subject's effective groups, so creating groups and editing
-members is meaningful. Under `TokenOnly`, group membership is resolved solely
-from the identity-provider token, so locally-defined groups and members are inert
-at authorization time.
+The Rule details page shows effect, subject, scope, operations, condition, and owner. Authored rules can be edited. Deleting a rule opens a destructive confirmation named **Delete this rule**; the confirmation text states that the rule stops applying at once and cannot be undone. App-owned rules are read-only, are attributed to their app, and link to `/apps/{slug}/roles` so role bindings can be changed in the Apps area. The page also links to Explain for the rule's subject.
 
-The Access-state banner reports this, read from the server. When the cluster is
-in `TokenOnly` mode the area shows a notice that locally-defined membership has no
-effect on access, and the group-create and member add/remove controls are
-**disabled but still read-only viewable** - existing groups and their members
-stay visible (legacy edges, or to preview what a mode change would do). The
-**Policies** and **Explain** tabs remain fully live in every mode, because a rule
-that grants a group id still matches a token-asserted group. As with the
-capability demotion, this is advisory: the server remains the enforcement point.
+### Groups
 
-## Capability-aware, demote not hide
+The Groups page lists groups 200 at a time and searches by group id or display name. **New group** opens a create dialog.
 
-The whole area is gated by a single coarse check, made by the plugin's own
-access gate. It is discovered with a fail-closed probe: the Explorer asks the
-server for the smallest possible page of the admin surface (a one-row group
-listing), and only if that succeeds is the area treated as available. If the
-probe is denied, the endpoint is unreachable, or the cluster does not serve the
-auth control facade at all, a signed-in caller's area entry stays **visible
-but demoted** - it is never removed as unavailable - grouped below a
-divider and stating the permission it needs and who to ask, so the user can see
-the capability exists and ask for the grant.
+The group id field uses the same subject picker used elsewhere in Access. When an identity directory is available, the group id must resolve as a group before the create is sent. Selecting a directory result can fill the display name. When no directory is available, the page says so and accepts the typed id as-is.
 
-Inside the area every mutating action - creating or removing a rule, adding or
-removing a member - is likewise shown disabled, not hidden, whenever the
-capability is absent or an action is already in flight. Nothing is silently
-dropped from the UI.
+The Group details page shows the display name, direct members, parent groups, and rules that apply to the group. Operators can rename the group, add a user or nested group as a direct member, remove a direct member, explain access for the group, or delete the group.
 
-### Distinguishing "not signed in" from "not permitted"
+Removing a member opens a destructive confirmation named **Remove this member**. Deleting a group opens a destructive confirmation named **Delete this group**; the confirmation says the group record is removed, rules that name it stop matching anyone through it, and the action cannot be undone.
 
-A refused area has two very different causes, and the Explorer tells them
-apart. The probe classifies its own failure:
+When the cluster's membership merge mode means local membership has no effect, group and member data remain visible, but creating groups and adding or removing members are turned off. Rules that name a group still matter when a token asserts that group.
 
-- If the server rejects the probe as **unauthenticated** (no valid token
-  attached), or the probe is denied while the Explorer is **not signed in** to
-  the cluster, the area resolves `AuthenticationRequired`: the entry stays
-  prominent and clickable, opens the sign-in dialog, and describes itself with
-  the sign-in copy ("This cluster serves Access only to a signed-in identity")
-  rather than the denial copy. An anonymous caller is never told a surface is
-  unavailable for their account.
-- If the probe is denied while the Explorer **is** signed in, that is a genuine
-  authorization denial and the area resolves `Denied`, demoted with a remedy.
+### Explain
 
-This distinction exists so the anonymous-circuit failure mode - where the
-browser is authenticated at the HTTP layer but the Blazor Server circuit carries
-no cluster token - surfaces as an actionable "sign in" prompt instead of masquerading
-as a permission problem or an empty cluster.
+The Explain page asks the cluster why a user or group is allowed or denied an operation on a scope. It can also list the rules that form a subject's effective permissions. The verdict is the cluster's verdict: the page renders the returned `Allowed` flag, default effect, reason, group closure, filtered range-read note, and matched rules in precedence order.
 
-## Advisory, not a security boundary
+The form supports cluster-wide, tree, key-prefix, and single-key scopes. Groups in a result link back to their group pages. The group closure shown by the access facade is resolved from the membership directory for the named subject; a live caller's token may assert additional groups.
 
-The demotion is a usability affordance only. The **server remains the
-fail-closed enforcement point**: every real read or mutation is authorized on
-the server when it runs, regardless of what the cached capability said. If the
-capability was over-optimistic - for example the grant changed after it was
-probed - the action still fails closed on the server, and the Explorer surfaces a
-clean "not permitted" message rather than an unhandled error. The probe itself
-has no side effects; it never creates, changes, or removes anything.
+## Subject picking and directory validation
+
+Every user or group field uses a searchable picker when an identity directory is available. It searches users or groups in pages of 20 results, uses the display name as the visible label, keeps the raw id available to assistive technology, and exposes a load-more control. Changing between user and group clears the selection.
+
+The same directory seam validates group creation and member additions when validation is required. Unknown ids and wrong-kind ids fail before the membership write. With no configured directory, the picker falls back to a plain text id field and validation is not attempted.
+
+## Access posture banner
+
+Rules and Groups show the cluster's access posture when it can be read:
+
+- authentication mode: anonymous, claims, Basic, or unknown;
+- whether rules are **Enforced** or **Recorded, not enforced**;
+- whether all-trees grants are on;
+- whether access-admin delegation is on;
+- whether an identity directory is configured.
+
+If rules are recorded but not enforced, the page warns that the rule set is advisory until enforcement is turned on. If local group membership is inert, the page warns that groups and members defined in the Explorer have no effect on access.
+
+## Palette and address completions
+
+Access contributes these commands:
+
+| Command id | Label | Target |
+| --- | --- | --- |
+| `access.explain` | `Explain access...` | `/access/explain` |
+| `access.create-rule` | `Create an access rule` | `/access/rules?new=true` |
+| `access.create-group` | `Create a group` | `/access/groups?new=true` |
+
+The visible controls carry the same command ids: the Explain navigation link, **New rule**, and **New group**.
+
+The address line completes `group:{id}` and `rule:{id}` from the first page of the group and rule catalogues. Typing `/access/groups/` or `/access/rules/` completes the same targets. A successful write invalidates the completion cache.
+
+## Limits and caching
+
+- The availability probe reads one group row.
+- Rule and group lists load 200 rows at a time.
+- Subject-picker searches load 20 directory results at a time.
+- Address completions read at most the facade's maximum auth page size for groups and rules.
+- The access model and completion catalogues are scoped to the circuit. Writes clear the group and rule completion cache.
+- The area availability answer is cached per signed-in identity on the circuit.
+
+## Server authority
+
+The access facade authorizes every administration call as access administration on the policy tree before reading or mutating membership or policy state. Policy explanations are computed through the same access gate used by the data plane. The Explorer is therefore an administrative client, not a second policy engine.
 
 ## See also
 
-- [Identity-directory providers](../lattice.membership/identity-directory-providers.md) - the provider seam that backs the subject picker and the validated create form.
+- [Explorer overview](README.md)
+- [Navigation model](navigation-model.md)
+- [Area availability](area-availability.md)
+- [Areas reference](areas.md#access)
+- [Lattice Apps](lattice-apps.md)
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)
 - [Adding a custom auth method](adding-a-custom-auth-method.md)
-- [`Orleans.Lattice.Api.Auth.Grpc`](../lattice.api.auth.grpc/README.md) - the auth
-  gRPC binding and typed admin client the area drives.
+- [Auth API](../lattice.api.auth/README.md)
+- [Auth engine](../lattice.auth/README.md)
+- [Auth gRPC binding](../lattice.api.auth.grpc/README.md)
+- [Membership](../lattice.membership/README.md)
+- [Identity-directory providers](../lattice.membership/identity-directory-providers.md)
