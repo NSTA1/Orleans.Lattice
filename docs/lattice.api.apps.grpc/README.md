@@ -72,7 +72,38 @@ The gRPC service name is `orleans.lattice.api.apps`, so each method's full path 
 | `GetConsent` | `GetConsentAsync` |
 | `UpdateConsent` | `UpdateConsentAsync` |
 | `GetCapabilities` | `GetCapabilitiesAsync` |
+| `UpdateRoleBindings` | `ILatticeAppRoleBindings.UpdateRoleBindingsAsync` |
 | `GetAuthScheme` | Auth-scheme advertisement (unauthenticated). |
+
+`UpdateRoleBindings` is served by the host's registered `ILatticeAppRoleBindings`,
+or by an `ILatticeAppsControl` that also implements it; a host that serves neither
+answers `Unimplemented`. Authorizers see it as
+`LatticeAppsApiOperation.UpdateRoleBindings`. `LatticeAppsApiGrpcClient` implements
+both `ILatticeAppsControl` and `ILatticeAppRoleBindings`.
+
+### Catalogue, workspace and bridge services
+
+The [catalogue, workspace and bridge](../lattice.api.apps/README.md#catalogue-workspace-and-bridge)
+contracts are bound as three further code-first services. Each has its own name, its
+own `Add*`/`Map*` pair, and a public client that implements the contract directly.
+All three sit behind the same default-deny interceptor as the control service.
+
+| Service | Registration | Client |
+|---|---|---|
+| `orleans.lattice.api.apps.catalog` | `AddLatticeAppCatalogApiGrpc` / `MapLatticeAppCatalogApiGrpc` | `LatticeAppCatalogApiGrpcClient` (`ILatticeAppCatalog`) |
+| `orleans.lattice.api.apps.workspace` | `AddLatticeAppWorkspaceApiGrpc` / `MapLatticeAppWorkspaceApiGrpc` | `LatticeAppWorkspaceApiGrpcClient` (`ILatticeAppWorkspace`) |
+| `orleans.lattice.api.apps.bridge` | `AddLatticeAppBridgeApiGrpc` / `MapLatticeAppBridgeApiGrpc` | `LatticeAppBridgeApiGrpcClient` (`ILatticeAppBridge`) |
+
+Message sizes are bounded per method with a bounded marshaller rather than by
+raising the channel's global message limit. The asset RPCs, for the icon and UI
+bundle assets, accept a message of at most 2 MiB (the largest asset) plus 4 KiB of
+envelope. Every bridge RPC is bounded too: a request at 64 KiB plus 8 KiB, and a
+response at 1 MiB plus 64 KiB. A bridge failure crosses the wire as a status code
+mapped one to one from its `AppBridgeFailure` (`Denied` to `PermissionDenied`,
+`NotFound` to `NotFound`, `Invalid` to `InvalidArgument`, `TooLarge` to
+`ResourceExhausted`, `Conflict` to `Aborted`, `Unavailable` to `Unavailable`),
+carrying only the fixed message, and `LatticeAppBridgeApiGrpcClient` rethrows it as
+an `AppBridgeException` with the same failure.
 
 ## Hosting the service
 
