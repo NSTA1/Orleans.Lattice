@@ -73,7 +73,7 @@ public sealed class LatticeCapabilitiesUnchangedTests
         registered.Source.Add(AppMcpTestData.ReaderManifest(Notes, AppMcpTestData.V1, "search"));
         registered.Provide(Notes, AppMcpTestData.Tool("search"));
         registered.Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1));
-        registered.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        registered.Member("alice", "g-readers");
 
         var present = await SnapshotAsync(registered);
 
