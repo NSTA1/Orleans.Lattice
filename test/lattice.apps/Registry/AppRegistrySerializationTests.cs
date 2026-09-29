@@ -87,7 +87,7 @@ public sealed class AppRegistrySerializationTests
     {
         var serializer = CreateSerializer(out var services);
         using var _ = services;
-        var request = AppRegistryTestData.Request(tenant: TenantId.Parse("acme")) with { ExpectedVersion = AppRegistryTestData.V1 };
+        var request = AppRegistryTestData.Request(tenant: TenantId.Parse("acme")) with { ExpectedVersion = AppRegistryTestData.V1, ExpectedRevision = 7 };
         var result = AppRegistryTransitionResult.Rejected(
             AppRegistryTestData.Record(AppRegistryLifecycleState.Installed), AppRegistryTransitionError.InvalidTransition, "nope");
 
@@ -96,6 +96,7 @@ public sealed class AppRegistrySerializationTests
 
         Assert.That(requestCopy.Tenant, Is.EqualTo(request.Tenant));
         Assert.That(requestCopy.ExpectedVersion, Is.EqualTo(AppRegistryTestData.V1));
+        Assert.That(requestCopy.ExpectedRevision, Is.EqualTo(7));
         Assert.That(requestCopy.Identity, Is.EqualTo(request.Identity));
         Assert.That(requestCopy.RoleBindings, Is.EqualTo(request.RoleBindings));
         Assert.That(requestCopy.Ceiling.AllowedOperations, Is.EqualTo(request.Ceiling.AllowedOperations));

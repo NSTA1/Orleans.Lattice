@@ -87,6 +87,17 @@
             <AppUpgradeDiffView />
             <AppReviewDetails />
 
+            @if (CanRebind)
+            {
+                <section class="lt-apps-section" aria-labelledby="lt-apps-rebind">
+                    <h2 id="lt-apps-rebind" class="lt-apps-section__title">Role bindings</h2>
+                    <p>Which membership group holds each role of @_flow.DisplayName. Changing them keeps its consent, its ceiling and whether it is enabled.</p>
+                    <div class="lt-apps-actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="_flow.BeginRebind">Change role bindings...</LtButton>
+                    </div>
+                </section>
+            }
+
             <div class="lt-apps-actions">
                 @if (CanInstall && !_flow.IsBlocked)
                 {
@@ -124,8 +135,22 @@
             <AppCeilingStep />
             break;
 
+        case AppInstallStage.ConfirmBindings:
+            <AppRoleBindingConfirmStep />
+            break;
+
+        case AppInstallStage.Rebound:
+            <div class="lt-apps-status" role="status">
+                <p>The role bindings of @_flow.DisplayName v@(_flow.Installed?.Version) are changed@(_flow.Installed?.State == AppLifecycleState.Enabled ? " and its access rules replaced" : string.Empty).</p>
+                <div class="lt-apps-actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="_flow.Back">Back to the review</LtButton>
+                    <a class="lt-apps-link" href="@Href(AppsRoutes.App(Address.Tenant, _flow.Key.Slug))">Go to the app</a>
+                </div>
+            </div>
+            break;
+
         case AppInstallStage.Installing:
-            <p class="lt-apps-status" role="status">@(_flow.Mode switch { AppInstallMode.Upgrade => "Upgrading", AppInstallMode.Reconsent => "Recording the consent of", _ => "Installing" }) @_flow.DisplayName. You can leave this page; it will still be here when you come back.</p>
+            <p class="lt-apps-status" role="status">@(_flow.IsRebinding ? "Changing the role bindings of" : _flow.Mode switch { AppInstallMode.Upgrade => "Upgrading", AppInstallMode.Reconsent => "Recording the consent of", _ => "Installing" }) @_flow.DisplayName. You can leave this page; it will still be here when you come back.</p>
             break;
 
         case AppInstallStage.Enabling:

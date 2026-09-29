@@ -113,6 +113,7 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
             (LatticeAppsGrpcMethods.ServicePrefix + "GetConsent", AppsSlugRequest r) => (LatticeAppsApiOperation.GetConsent, r.Slug),
             (LatticeAppsGrpcMethods.ServicePrefix + "UpdateConsent", AppConsentUpdate r) => (LatticeAppsApiOperation.UpdateConsent, r.Slug),
             (LatticeAppsGrpcMethods.ServicePrefix + "GetCapabilities", AppsEmptyRequest) => (LatticeAppsApiOperation.GetCapabilities, null),
+            (LatticeAppsGrpcMethods.ServicePrefix + "UpdateRoleBindings", AppRoleBindingsUpdate r) => (LatticeAppsApiOperation.UpdateRoleBindings, r.Slug),
             (LatticeAppCatalogGrpcMethods.ServicePrefix + "ListSources", AppsEmptyRequest) => (LatticeAppsApiOperation.ListSources, null),
             (LatticeAppCatalogGrpcMethods.ServicePrefix + "ListAvailable", AvailableAppQuery) => (LatticeAppsApiOperation.ListAvailable, null),
             (LatticeAppCatalogGrpcMethods.ServicePrefix + "DescribeFromSource", AppsSourceAppRequest r) => (LatticeAppsApiOperation.DescribeFromSource, r.Slug),

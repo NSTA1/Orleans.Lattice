@@ -141,6 +141,15 @@ internal sealed class AppRegistry : IAppRegistry
                     $"The installed version is no longer '{expected}'; re-read the app and retry the transition.");
             }
 
+            if (request?.ExpectedRevision is { } expectedRevision
+                && (current is null || current.Revision != expectedRevision))
+            {
+                return AppRegistryTransitionResult.Rejected(
+                    current,
+                    AppRegistryTransitionError.ConcurrencyConflict,
+                    "The app's install record changed after it was read; re-read the app and retry the transition.");
+            }
+
             var decision = AppLifecycle.Evaluate(current, action);
             switch (decision.Kind)
             {

@@ -154,11 +154,21 @@ internal sealed partial class AppInstallFlow
         Changed?.Invoke();
     }
 
-    /// <summary>Moves from role binding to the ceiling once every role is bound.</summary>
-    /// <exception cref="InvalidOperationException">A role is unbound.</exception>
+    /// <summary>
+    /// Moves from role binding to the ceiling once every role is bound or, while
+    /// re-binding the installed version, to the comparison of recorded and proposed
+    /// bindings, where a role may be left unbound.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">A role is unbound outside a re-binding.</exception>
     public void ConfirmBindings()
     {
         Require(AppInstallStage.BindRoles);
+        if (IsRebinding)
+        {
+            Move(AppInstallStage.ConfirmBindings);
+            return;
+        }
+
         if (UnboundRoles.Count > 0)
         {
             throw new InvalidOperationException("Every role must be bound to a group first.");
@@ -167,12 +177,23 @@ internal sealed partial class AppInstallFlow
         Move(AppInstallStage.ConfirmCeiling);
     }
 
-    /// <summary>Steps back one stage, or out of a failure to the stage it failed from.</summary>
+    /// <summary>Steps back one stage, out of a failure to the stage it failed from, or from a completed re-binding to the review.</summary>
     public void Back()
     {
         switch (Stage)
         {
             case AppInstallStage.BindRoles:
+                if (IsRebinding)
+                {
+                    EndRebinding();
+                }
+
+                Move(AppInstallStage.Review);
+                break;
+            case AppInstallStage.ConfirmBindings:
+                Move(AppInstallStage.BindRoles);
+                break;
+            case AppInstallStage.Rebound:
                 Move(AppInstallStage.Review);
                 break;
             case AppInstallStage.ConfirmCeiling:

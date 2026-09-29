@@ -18,5 +18,6 @@ internal sealed class LatticeAppsGrpcServiceMethodProvider(LatticeAppsGrpcMethod
         context.AddUnaryMethod(methods.UpdateConsent, [], static (s, r, c) => s.UpdateConsent(r, c));
         context.AddUnaryMethod(methods.GetCapabilities, [], static (s, r, c) => s.GetCapabilities(r, c));
         context.AddUnaryMethod(methods.GetAuthScheme, [], static (s, r, c) => s.GetAuthScheme(r, c));
+        context.AddUnaryMethod(methods.UpdateRoleBindings, [], static (s, r, c) => s.UpdateRoleBindings(r, c));
     }
 }

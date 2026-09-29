@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
 /// <summary>
 /// The pre-install review of one app version from a named source, and the staged
-/// install, upgrade or re-consent it starts. Shown only to an <c>AppInstall</c>
+/// install, upgrade, re-consent or change of role bindings it starts. Shown only to an <c>AppInstall</c>
 /// holder; anyone else gets not-found.
 /// </summary>
 public partial class AppReviewPage : IDisposable
@@ -37,6 +37,8 @@ public partial class AppReviewPage : IDisposable
     private NavigationManager Navigation { get; set; } = default!;
 
     private bool CanInstall => Access.Current?.CanInstall == true;
+
+    private bool CanRebind => CanInstall && _flow?.CanRebind == true && Facades.RoleBindings is not null;
 
     private string SourceName => _flow?.Source?.DisplayName ?? _flow?.Key.SourceKey ?? string.Empty;
 
@@ -118,7 +120,7 @@ public partial class AppReviewPage : IDisposable
     private void Attach(AppInstallFlow flow)
     {
         _flow = flow;
-        _announcedStage = flow.Stage is AppInstallStage.Installed or AppInstallStage.Enabled ? flow.Stage : null;
+        _announcedStage = flow.Stage is AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Rebound ? flow.Stage : null;
         flow.Changed += OnFlowChanged;
         _ = flow.LoadAsync();
         TakeUpgradeIntent();
@@ -147,15 +149,15 @@ public partial class AppReviewPage : IDisposable
 
     private void OnFlowChanged() => _ = InvokeAsync(() =>
     {
-        // Installing and enabling are separate lifecycle changes, and each changes what
-        // the rest of the circuit may read about the app, so each is announced once.
-        if (_flow is { Stage: AppInstallStage.Installed or AppInstallStage.Enabled } flow && _announcedStage != flow.Stage)
+        // Installing, enabling and re-binding roles are separate changes, and each changes
+        // what the rest of the circuit may read about the app, so each is announced once.
+        if (_flow is { Stage: AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Rebound } flow && _announcedStage != flow.Stage)
         {
             _announcedStage = flow.Stage;
             Access.Invalidate(flow.Key.Slug);
             Directory.Invalidate();
         }
-        else if (_flow is { Stage: not (AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Enabling) })
+        else if (_flow is { Stage: not (AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Enabling or AppInstallStage.Rebound) })
         {
             _announcedStage = null;
         }

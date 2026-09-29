@@ -31,6 +31,7 @@ public abstract class AppsTestContext : ShellChromeTestContext
 
         Services.AddKeyedSingleton<ILatticeAppCatalog>(ShellFacades.Key, Catalog);
         Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Control);
+        Services.AddKeyedSingleton<ILatticeAppRoleBindings>(ShellFacades.Key, Control);
         Services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, Workspace);
         Services.AddKeyedSingleton(ShellFacades.Key, Auth);
 
@@ -43,7 +44,7 @@ public abstract class AppsTestContext : ShellChromeTestContext
     /// <summary>The scripted catalogue.</summary>
     internal FakeAppCatalog Catalog { get; }
 
-    /// <summary>The scripted lifecycle facade.</summary>
+    /// <summary>The scripted lifecycle facade, which is also the scripted role re-binding facade.</summary>
     internal FakeAppsControl Control { get; }
 
     /// <summary>The scripted workspace.</summary>
