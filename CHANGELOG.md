@@ -36,11 +36,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Docs - Operator guides.** The persistent-503 narrowing ladder gains the discriminators it lacked, the tracked Dockerfile build and stamped-commit verification are documented, and two false-green test shapes are named. ([#2366](https://github.com/NSTA1/Orleans.Lattice/issues/2366), [#2707](https://github.com/NSTA1/Orleans.Lattice/issues/2707), [#2716](https://github.com/NSTA1/Orleans.Lattice/issues/2716), [#2738](https://github.com/NSTA1/Orleans.Lattice/pull/2738)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **WAL - GC reclaimable distance and terminal breach.** Each GC shard scan publishes its floor-to-head distance in offsets, and a tree over its byte ceiling with an available floor that reclaims nothing for 10 consecutive passes advances a primed terminal-breach counter. ([#3149](https://github.com/NSTA1/Orleans.Lattice/issues/3149)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
-
 - **Retrieval - Per-repository readiness verdict.** `repocontext_health` accepts an optional `repoId` and returns that repository's passive serving verdict, naming its blocker with vector-coverage, ANN, breaker and content-tree evidence; with no argument its host output is unchanged. ([#2485](https://github.com/NSTA1/Orleans.Lattice/issues/2485)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
-
-- **WAL - Drain-lag holders named while lag persists.** A tree above the materialiser lag threshold repeats its structured warning naming the lowest-cursor consumers, at most every `LatticeOptions.WalDrainLagHolderLogInterval` (default 10 minutes; null keeps edge-only logging). ([#2505](https://github.com/NSTA1/Orleans.Lattice/issues/2505)) (`Orleans.Lattice`)
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Dashboards`)
 
@@ -52,62 +48,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Compacted OR-set decode.** Decoding a compacted OR-set overflowed its presized buffer and let list doubling widen it. It now widens once to the provable ceiling, cutting 29% of the decode's allocation and 31% of its time. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
 
-- **Performance - Aggregation row transcode.** A row now encodes a short string once instead of sizing it and then encoding it again, gated on a compile-time UTF-8 bound rather than a virtual `Encoding.GetMaxByteCount` call paid per string. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
-
-- **Performance - Leaf snapshot frame reads.** The frame codec re-validated its 24-byte header on every read helper, inside per-row and per-probe loops. It is now read once and threaded through: a lower-bound seek is 76% faster, hydration admission 22%, and the aggregate walk 64%. ([#3881](https://github.com/NSTA1/Orleans.Lattice/pull/3881)) (`Orleans.Lattice`)
-
-- **Performance - Leaf key comparison and row accounting.** The UTF-8 comparator behind every seek now decides from the first differing byte, decoding only when that byte is non-ASCII; ASCII keys compare 16x faster. A hydrated row reuses the key length the frame states instead of re-scanning it. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`Orleans.Lattice`)
-
-- **Performance - Durable pin fan-out.** Tree purge and consumer unregister now clear the WAL materialiser pin keys in one concurrent round instead of walking them, replacing 2 * shards + 1 sequential grain round trips - seventeen at the default shard count - with one. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`Orleans.Lattice`)
-
-- **Docs - Grain await convention.** The grain instructions now state when an await in a grain carries an explicit ConfigureAwait and when it does not, and three semaphore waits are brought in line with it. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`repository-wide`, `Orleans.Lattice`)
-
-- **Performance - CRDT delta fold enumeration.** Eight delta-fold and shape-registry sites walk a span over the concrete backing array or list instead of the read-only list interface, which boxed an enumerator per call. The coalescing fold is 18% faster and allocates up to 896 fewer bytes. ([#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
-
-- **Performance - CRDT provenance decode.** The or-map state decoder orders distinct keys and emits their events contiguously, from a pooled scratch, instead of sorting every event by key surrogate; the multi-value register sorts its projected result, not a copy; a flag read returns a UTF-8 literal. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833), [#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
-
-- **Performance - CRDT provenance dot scans and UTF-8 transcodes.** The OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice`, `Orleans.Lattice.Caching.AzureBlob`)
-
-- **Performance - Leaf range reads, CRDT dot scans and index fingerprint.** A range read sorts only when a pending write appended out of order, drops bound re-tests the scan window already enforces, dot scans walk spans not the list indexer, and the fingerprint transcodes each name once. ([#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772)) (`Orleans.Lattice`, `Orleans.Lattice.GrainIndex`)
-
-- **Performance - Leaf scan and projection digest.** A bounded range scan retires its lower bound once met instead of retesting every row; the digest transcodes each string field once rather than twice; and a single-replica vector clock is fed straight through instead of rented and sorted per row. ([#3760](https://github.com/NSTA1/Orleans.Lattice/pull/3760)) (`Orleans.Lattice`)
-
-- **Performance - GetMany strict-pass retry capture.** The single-shard `GetManyAsync` strict-pass retry closure no longer allocates a nested parent capture, removing 24 bytes from every call. ([#3678](https://github.com/NSTA1/Orleans.Lattice/issues/3678)) (`Orleans.Lattice`)
-
-- **Docs - Unresolved-prepare ledger risk.** The ledger's metric description, runtime warning and docs now say Azure Table's row cap bounds its growth while SQLite's larger limit can exhaust activation reads, and recommend the beyond-cap alert on every profile. ([#2830](https://github.com/NSTA1/Orleans.Lattice/issues/2830)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
-
-- **Performance - Predicate scan read path.** Predicate row filtering now validates an admitted row's JSON only after it evaluates true, instead of scanning every candidate twice, and the fast-path eligibility decision is hoisted out of the per-row loop in the leaf, cache and snapshot scans. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice`)
-
-- **Performance - Entry-history member decoding.** An entry-history page now reuses one single-element provenance delta buffer across the revisions it decodes, instead of allocating a fresh array per revision. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
-
-- **Performance - CRDT read-path projections.** The grow-only and remove-wins whole-set reads and the sequence provenance projection no longer materialise through a hidden-count iterator or a discarded tuple array; each now fills one exactly-sized destination from a single scan. ([#3647](https://github.com/NSTA1/Orleans.Lattice/pull/3647)) (`Orleans.Lattice`)
-
-- **Performance - Data-plane CRDT collection reads.** The data API's OR-Set, RW-Set and OR-Map whole-collection reads now resolve survivors in one scan into an exactly-sized destination, instead of walking the add-map twice and materialising through hidden-count iterators. ([#3654](https://github.com/NSTA1/Orleans.Lattice/pull/3654)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Data`)
-
-- **Performance - CRDT provenance decoding.** Multi-value register decodes no longer build a live-replica hash set per delta or copy and sort a single-valued projection, and the OR-map state and key emitters size their sink from the map's free counts instead of growing from empty. ([#3675](https://github.com/NSTA1/Orleans.Lattice/pull/3675)) (`Orleans.Lattice`)
-
-- **Performance - View-projection filter eligibility.** The predicate, aggregation and fold view projections and the atomic-write guard loop now settle fast-path eligibility once, instead of re-walking the filter tree for every row they test. ([#3701](https://github.com/NSTA1/Orleans.Lattice/pull/3701)) (`Orleans.Lattice`)
-
-- **Performance - CRDT dot-coverage liveness reads.** A churned observed-remove slot whose cancelling dots all carry one replica now collapses that list to its highest counter instead of rescanning it per dot, across the shared liveness primitives and the OR-Set and RW-Set live-member projections. ([#3726](https://github.com/NSTA1/Orleans.Lattice/pull/3726)) (`Orleans.Lattice`)
-
-- **Performance - CRDT dot scans.** The observed-remove dot primitives now walk their dot lists as spans rather than through the list indexer, and every live-dot read stops at the first survivor instead of counting all of them, across OR-Set, RW-Set and RW-Flag. ([#3748](https://github.com/NSTA1/Orleans.Lattice/pull/3748)) (`Orleans.Lattice`)
-
-- **Performance - CRDT merge-time compaction.** `Compact` no longer pairs each add list with a hashed tombstone-map probe per element, nor compacts a tombstone list twice; the OR-Set and RW-Set maps are now swept independently, one pass each. ([#3748](https://github.com/NSTA1/Orleans.Lattice/pull/3748)) (`Orleans.Lattice`)
-- **Performance - OR-map provenance decoding.** An OR-map delta now encodes a key's surrogate once per dot group rather than per dot, and a churned key's live-dot test uses a sorted counter index instead of scanning its whole tombstone list. ([#3701](https://github.com/NSTA1/Orleans.Lattice/pull/3701)) (`Orleans.Lattice`)
-
 - **Docs - Multi-silo guide scope.** The multi-silo scaling guide now states that its figures come from one tree on one storage account and links multi-account fan-out, the Operate track lists it, and the internal `benchmark/` notes are no longer published on the docs site. ([#3617](https://github.com/NSTA1/Orleans.Lattice/pull/3617)) (`repository-wide`)
 
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **Deletion - Single reminder teardown path.** An unreachable PurgeComplete arm is removed from the tree-deletion reminder handler, leaving the early guard as the one teardown path, now pinned by reminder-dispatch tests. ([#2347](https://github.com/NSTA1/Orleans.Lattice/issues/2347)) (`Orleans.Lattice`)
-
-- **Core - Dead members removed.** `BPlusLeafGrain.MinUnresolvedPrepareOffset`, the cursor unpin's unreachable `rethrow` arm and the uncalled `ShardRootGrain.TryForwardShadowWriteAsync` are removed, their stale docs corrected, and the live paths pinned by tests. ([#2405](https://github.com/NSTA1/Orleans.Lattice/issues/2405), [#2469](https://github.com/NSTA1/Orleans.Lattice/issues/2469), [#2488](https://github.com/NSTA1/Orleans.Lattice/issues/2488)) (`Orleans.Lattice`)
-
 - **Backlog - Outcome-comment fields are named as such.** The backlog protocol now says at first use that `result=released` is a field of the outcome comment on the mirrored issue, not a `repocontext_release_claim` argument, and names the outcome comment consistently. ([#2463](https://github.com/NSTA1/Orleans.Lattice/issues/2463)) (`repository-wide`)
-
-- **Observability - Snapshot load failures no longer claim a cause.** The leaf snapshot load-failure counter's residual reason is `unclassified` instead of `faulted`, since a wrapped activation failure can hide an OOM; reason-filtered alerts should match both values during rollout. ([#2404](https://github.com/NSTA1/Orleans.Lattice/issues/2404)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
-
-- **Container - Cgroup readers.** The silo and the ONNX embedder compile one dependency-free set of cgroup CPU and memory readers, a gate confines cgroup reads to it, and three unreachable `cpu.max` parser clauses are removed with every parse outcome pinned. ([#2817](https://github.com/NSTA1/Orleans.Lattice/issues/2817), [#2819](https://github.com/NSTA1/Orleans.Lattice/issues/2819), [#2828](https://github.com/NSTA1/Orleans.Lattice/issues/2828)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Docs - Naming registry covers RepoContext.** The naming-conventions registry gains its missing `Orleans.Lattice.Api.Mcp.RepoContext` section, and a gate fails when that section drifts from the package's public types. ([#2494](https://github.com/NSTA1/Orleans.Lattice/issues/2494)) (`repository-wide`)
 
@@ -121,13 +66,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Host - A host built but never started leaked its metrics listener.** The RepoContext host's eagerly-built metrics collector, meters and activation census were released only at `ApplicationStopped`, so a host disposed without being started, or whose build threw, left a live process-wide `MeterListener` allocating on every Lattice measurement. They are now owned by the host and released when it is disposed. ([#3792](https://github.com/NSTA1/Orleans.Lattice/issues/3792)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **Scan - Settled page reuse could serve a stale transactional outcome.** A reused scan page was guarded against writes and TTL expiry but not against a transaction decision changing by the clock alone. Reuse is now refused when the leaf read resolved pending transactional writes. ([#2823](https://github.com/NSTA1/Orleans.Lattice/issues/2823)) (`Orleans.Lattice`)
-
-- **Leaf - A range delete hydrated the whole leaf.** A foreground range delete enumerated every cached row and detached the leaf's snapshot frame. It now enumerates only the requested range, keeps the frame, and hydrates only the blocks that overlap it. ([#2841](https://github.com/NSTA1/Orleans.Lattice/issues/2841)) (`Orleans.Lattice`)
-
 - **Vector - The index tree split leaves by key count.** The vector-index tree used the core 128-key leaf bound, so leaves of 64 KiB chunks split at about 8 MiB and its 64 MiB byte bound never fired. A new tree now derives its key bound from the byte bound, 1024 at defaults. ([#2829](https://github.com/NSTA1/Orleans.Lattice/issues/2829)) (`Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext`)
-
-- **Observability - set_many stage timers mixed two write paths.** The shard-root `set_many` stage timers carry an `operation` tag separating conditional from unconditional batches, and the conditional path gains its own `orleans.lattice.set_many_where_predicate.duration` envelope. ([#2687](https://github.com/NSTA1/Orleans.Lattice/issues/2687)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Vector - An ingest checkpoint after a replacement rewrote the whole index.** Once a vector was replaced or removed mid-build, every checkpoint wrote a complete image of the untrained cell, and one that timed out retried it from scratch. It now writes only the chunks that changed. ([#3669](https://github.com/NSTA1/Orleans.Lattice/issues/3669)) (`Orleans.Lattice.Vector`)
 
@@ -165,8 +104,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Indexing - Gitignore escapes matched a literal backslash.** A `\` escape in a `.gitignore` pattern was read as a backslash, so `\#*\#` and `.\#*` from GitHub's Emacs template never matched and `\*` or an escaped trailing space misfired. The escaped character is now matched literally. ([#3466](https://github.com/NSTA1/Orleans.Lattice/issues/3466)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **WAL - A write-idle leaf froze the GC floor at a stale pin.** A checkpoint persist published its pin before its own snapshot capture, and only a replay-permit drive republished it. The pin now publishes after the capture, and the coverage-lag check and GC sweep bank it without a permit. ([#3599](https://github.com/NSTA1/Orleans.Lattice/issues/3599)) (`Orleans.Lattice`)
-
 - **Indexing - Saturation and degradation signals.** The ingestor inferred WAL saturation from three consecutive failures and misread a Throttled tree as Saturated; it now defers only when the saturation signal reports Saturated. The hydration-drift `index_degraded` outcome now logs at Warning. ([#2683](https://github.com/NSTA1/Orleans.Lattice/issues/2683), [#2688](https://github.com/NSTA1/Orleans.Lattice/issues/2688)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Retrieval - Keyword search starved memory and file content.** The keyword fallback shared one 5,000-record candidate bound across its three trees, so a large structural tree exhausted it and memory entries and file bodies went unsearchable. Each tree now scans under its own bound. ([#3525](https://github.com/NSTA1/Orleans.Lattice/pull/3525)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -175,65 +112,19 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Vector - Trained-index persist restarted from scratch.** Every failed keep-alive tick rewrote the whole trained index, producing multi-gigabyte WAL bursts and orphaning superseded generations. The persist now resumes where it stopped. ([#3547](https://github.com/NSTA1/Orleans.Lattice/issues/3547)) (`Orleans.Lattice.Vector`)
 
-- **WAL - GC floor repair stalled behind pinned holders.** A write-idle leaf never persisted a residual checkpoint advance, a pass that trimmed while still retaining discarded the holder sample and its block ages, and concurrent touches could spend the one free replay slot above the floor. ([#3608](https://github.com/NSTA1/Orleans.Lattice/issues/3608), [#3609](https://github.com/NSTA1/Orleans.Lattice/issues/3609), [#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610)) (`Orleans.Lattice`)
-
-- **Replay - Permit share and disjoint range deletes.** The GC replay share is sized from permits still in circulation, not the configured ceiling, and a DeleteRange disjoint from the replaying leaf no longer takes a ledger slot or clamps the checkpoint. Exempt-arrival admission is now pinned. ([#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610), [#3601](https://github.com/NSTA1/Orleans.Lattice/issues/3601), [#3299](https://github.com/NSTA1/Orleans.Lattice/issues/3299)) (`Orleans.Lattice`)
-
 - **Indexing - Pacer latched at its ceiling.** A vector-tree throttle indexing cannot move held the pacer at its maximum delay for the life of the process, and backed-off batches ratcheted its baseline down. A throttle outlasting 60 s at the ceiling is now advisory. ([#3456](https://github.com/NSTA1/Orleans.Lattice/issues/3456)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Indexing - Gap-scan diagnostics misreported.** A skip after an unmeasurable scan claimed coverage was observed complete, a pass offered no unchanged file was logged as convergence, and a gap-scan cadence collapsed to every pass without warning. Each now says what held. ([#3483](https://github.com/NSTA1/Orleans.Lattice/issues/3483), [#3350](https://github.com/NSTA1/Orleans.Lattice/issues/3350)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **Replication - Deferred and dead-lettered entries could be lost.** A custom applier's batch default dropped a receive-fence deferral, a causal-buffer eviction kept its dedupe reservation so its replay was discarded as a duplicate, and a replay the fence deferred removed its parked entry. ([#3629](https://github.com/NSTA1/Orleans.Lattice/issues/3629), [#3630](https://github.com/NSTA1/Orleans.Lattice/issues/3630), [#3757](https://github.com/NSTA1/Orleans.Lattice/issues/3757)) (`Orleans.Lattice.Replication`)
-
-- **Scan - An uncapped point-in-time cursor pin expired after 60 seconds.** Setting `MaxCursorSnapshotPinTtl` to `Timeout.InfiniteTimeSpan` floored the pin to `TxDecisionRetention`, or expired it at once with retention off; it now disables the cap as documented. ([#3631](https://github.com/NSTA1/Orleans.Lattice/issues/3631)) (`Orleans.Lattice`)
-
-- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s and counted a shard it failed to sample as empty. It now drops the cached reports, samples the shards afresh, and refuses to begin while any shard is unsampled. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650), [#3680](https://github.com/NSTA1/Orleans.Lattice/issues/3680)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Abstractions`)
-
 - **Memory - Tool arguments honour their documented contract.** `repocontext_remember` rejects `kind: Unspecified` like any other unrecognised kind, and `repocontext_neighbors` applies its documented default of 50 to a non-positive `maxNodes` instead of the 100 ceiling. ([#3651](https://github.com/NSTA1/Orleans.Lattice/issues/3651), [#3652](https://github.com/NSTA1/Orleans.Lattice/issues/3652)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
-
-- **Replication - A resumed bootstrap dropped rows above its cursor.** A crash-resume or transient retry re-opened the snapshot export bounded at the highest HLC applied so far, dropping unapplied rows stamped above it. Every attempt now exports the whole snapshot; the overlap applies as LWW no-ops. ([#3656](https://github.com/NSTA1/Orleans.Lattice/issues/3656)) (`Orleans.Lattice.Replication`)
 
 - **Shard - Resize and snapshot dropped split-added shards and resurrected stale values.** They copied, shadow-forwarded, locked and rejected only shards `0..ShardCount-1` of the pinned count into an identity-routed destination, so a resize or snapshot of a tree an adaptive split had grown silently lost every key on the split shard and served the donor's sealed, pre-split copy of each moved key. The destination now inherits the source's routing map and split allocation mark, every shard the map routes to is copied, forwarded, rejected and released, and a copied entry is kept only on the shard the map routes it to. ([#3880](https://github.com/NSTA1/Orleans.Lattice/issues/3880)) (`Orleans.Lattice`)
 
-- **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice`)
-
 - **Shard - Reshard ignored a declared virtual slot count.** On an app tree with fewer than 4096 slots, a target above that count passed validation and stayed in progress forever, and an empty-tree reshard rebuilt the map over 4096 slots. Both now honour the tree's slot count. ([#3888](https://github.com/NSTA1/Orleans.Lattice/issues/3888)) (`Orleans.Lattice`, `Orleans.Lattice.Apps`)
-
-- **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
-
-- **Core - A resized tree lost its registration, configuration and snapshots.** Purging a first resize's retired copy unregistered the live tree, the alias swap reset its PublishEvents, history and retention-ceiling overrides, and a snapshot copied the retired shards. Each now acts on the live copy. ([#3741](https://github.com/NSTA1/Orleans.Lattice/issues/3741), [#3742](https://github.com/NSTA1/Orleans.Lattice/issues/3742), [#3743](https://github.com/NSTA1/Orleans.Lattice/issues/3743)) (`Orleans.Lattice`)
-
-- **Atomic - Reads fail closed when the transaction registry is unreachable.** A read meeting a prepare whose outcome the registry cannot supply throws the retryable `LatticeTransactionOutcomeUnavailableException`, and a multi-key or streaming read no longer accepts an unverifiable probe as stable. ([#2215](https://github.com/NSTA1/Orleans.Lattice/issues/2215), [#3641](https://github.com/NSTA1/Orleans.Lattice/issues/3641)) (`Orleans.Lattice`)
-
-- **Leaf - A faulted cache refresh hid keys the leaf holds.** A registry fault mid-refresh left a cleared or unmerged leaf-cache mirror still marked fresh, so same-silo reads answered absent for held keys until the leaf wrote again. A faulted refresh no longer marks it fresh. ([#2412](https://github.com/NSTA1/Orleans.Lattice/issues/2412)) (`Orleans.Lattice`)
-
-- **WAL - A short bank lift was graded as a healed floor.** GC arm 2 credited any bank lift as releasing the floor, even a few entries to a stale checkpoint far behind the head. A lift is now graded against the partition head, and one that falls short escalates to a checkpoint drive in the same pass. ([#3649](https://github.com/NSTA1/Orleans.Lattice/issues/3649)) (`Orleans.Lattice`)
-
-- **Dashboards - 22 panels queried series the exporter never emits.** Their tokens used the container's unit spelling where `AddPrometheusExporter` names the series differently, so the panels rendered blank. The tokens now use its names, and the naming gate resolves only the family it emits. ([#3260](https://github.com/NSTA1/Orleans.Lattice/issues/3260)) (`Orleans.Lattice.Dashboards`)
 
 - **Container - `-AcceptMultipleDeltas` could never be acknowledged.** `Assert-DeployManifest.ps1` assigned a `$reason` local, which PowerShell resolves to the `-Reason` parameter, so an acknowledged step was refused or logged the wrong reason. The local is renamed; a lint rejects the shadowing. ([#3598](https://github.com/NSTA1/Orleans.Lattice/issues/3598)) (`repository-wide`)
 
-- **Core - Queue ids could be reissued after a crash.** A queue that drained, or lost its newest entry, before its coalesced head-cursor flush cold-started below ids it had already issued. The next id is now made durable before the newest entry's row is deleted. ([#3681](https://github.com/NSTA1/Orleans.Lattice/issues/3681)) (`Orleans.Lattice`)
-
-- **Config - Reference autoscaler rules could never scale out.** The shipped KEDA and ACA rules set `targetValue` 1, which asks for at most the current replica count, and the reference architecture queried a series nothing exports. The rules now use 0.5 and the exported series. ([#3679](https://github.com/NSTA1/Orleans.Lattice/issues/3679)) (`Orleans.Lattice.Scaling`)
-
-- **Atomic - Multi-key reads surfaced an indeterminate prepare.** `GetManyAsync`, key and entry scans, counts and stats now resolve every pending override through the same visibility gate as a point read, so a prepare a point read hides is hidden on every multi-key path too. ([#3665](https://github.com/NSTA1/Orleans.Lattice/issues/3665)) (`Orleans.Lattice`)
-
-- **Shard - Healing and hot-shard sampling stalled on a cold silo.** The healing orchestrator and hot-shard monitor latched themselves running before registering their keepalive, so a still-initializing reminder service left them with no timer. Each now arms its timer first and retries the keepalive. ([#3682](https://github.com/NSTA1/Orleans.Lattice/issues/3682), [#3713](https://github.com/NSTA1/Orleans.Lattice/issues/3713)) (`Orleans.Lattice`)
-
-- **WAL - A GC pass that resolved no provider read as idle.** `orleans.lattice.wal.gc.passes` gains a zero-primed `no_partitions` arm for a pass whose silo resolved no pinned WAL provider, so a misplaced tree no longer reports an arm that asserts health. ([#2465](https://github.com/NSTA1/Orleans.Lattice/issues/2465)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
-
 - **Gates - Refinement note left checked properties unmapped.** `CommitIntegrity` is now mapped and `TypeOK` declared as a reasoned exclusion in `spec/Refinement.md`, and a gate fails when any property TLC checks is neither mapped nor excluded. ([#2558](https://github.com/NSTA1/Orleans.Lattice/issues/2558)) (`repository-wide`)
-
-- **Replication - The restore write fence and VC seeder missed live shards.** Both addressed `{tree}/0..ShardCount-1`, skipping an adaptive split's target and, behind an alias, naming the retired copy. They now follow the tree's live routing, and the fence lifts exactly the shards it engaged. ([#3750](https://github.com/NSTA1/Orleans.Lattice/issues/3750), [#3751](https://github.com/NSTA1/Orleans.Lattice/issues/3751)) (`Orleans.Lattice.Replication`)
-
-- **Query - Tree structure omitted split-added shards.** `GetTreeStructureAsync` listed shard roots `0..ShardCount-1` of the pinned count, so an adaptive split's target and every key routed to it were missing. It now lists every shard the routing map reaches. ([#3752](https://github.com/NSTA1/Orleans.Lattice/issues/3752)) (`Orleans.Lattice.Api.State`)
-
-- **Atomic - A cross-tree write repeating a key never resolved.** A tree slice naming one key twice, including a `Set` and a `Delete`, was admitted, then refused by that tree's sub-saga on every keepalive, parking the other trees' writes. It now throws `ArgumentException` before anything is staged. ([#3756](https://github.com/NSTA1/Orleans.Lattice/issues/3756)) (`Orleans.Lattice`)
-
-- **Backup - A full backup's cut recorded HLC 0.** The consistency cut read an anchor the core always stamps as zero; it now records the highest HLC the capture read, so the first increment on a full base pins the WAL at that frontier while it drains. ([#3758](https://github.com/NSTA1/Orleans.Lattice/issues/3758)) (`Orleans.Lattice.Backup`)
-
-- **Backup - Capturing a tree with a folded shard failed.** The topology step digested shards `0..count-1`, so once shard healing had folded a shard away it named a missing index and every backup threw. It now follows the routing map, which also gives the true virtual slot count. ([#3887](https://github.com/NSTA1/Orleans.Lattice/issues/3887)) (`Orleans.Lattice.Backup`, `Orleans.Lattice`)
 
 - **WAL - GC reactivation respects the sweep share.** The reactivation pass fans leaf touches out within the sweep starvation share and retries a refused touch in the same pass, a refusal no longer spends a reactivation attempt, and the orphan-pin sweep sum is documented as a population bound. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761), [#2878](https://github.com/NSTA1/Orleans.Lattice/issues/2878)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
@@ -249,53 +140,17 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Tests - Replay banking resumes from the banked prefix.** The replay-apply-failure fixture now asserts that the next attempt resumes from the banked checkpoint, not only that the checkpoint was banked. ([#3092](https://github.com/NSTA1/Orleans.Lattice/issues/3092)) (`repository-wide`)
 
-- **Replication - Bootstrap dropped the TTL of committed rows.** The default snapshot export left every committed row's expiry at 0, so whole-tree bootstrap and the anti-entropy fallback installed TTL keys on the peer as durable. Committed rows now carry the source entry's absolute expiry. ([#3802](https://github.com/NSTA1/Orleans.Lattice/issues/3802)) (`Orleans.Lattice.Replication`)
-
-- **Core - Batch writes skipped the write bounds.** `SetManyWherePredicateAsync`, single-tree atomic batches and the cross-tree `SetManyAtomicAsync` extension now enforce `MaxKeyLength`, `MaxValueSizeBytes`, `MaxLiveKeys` and `MaxEstimatedBytes` like `SetManyAsync`, atomic ones before a saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852), [#3889](https://github.com/NSTA1/Orleans.Lattice/issues/3889)) (`Orleans.Lattice`)
-
 - **Performance - `performance-report.ps1` threw at startup.** Its `-NamePrefix` parameter is declared again, so Layer 1, Layer 2 and self-provisioning Layer 3 sweeps no longer fail under StrictMode, and a gate checks that every documented script parameter is declared. ([#3804](https://github.com/NSTA1/Orleans.Lattice/issues/3804)) (`repository-wide`)
-
-- **Replication - Inbound peer contact went unrecorded for single-entry pushes.** The dead-letter decorator's single-entry and per-entry retry paths bypassed the applier's only recording site, so inbound gauges and the inbound-silence health signal missed low-rate peers. Both paths now record contact. ([#3848](https://github.com/NSTA1/Orleans.Lattice/issues/3848)) (`Orleans.Lattice.Replication`)
-
-- **Observability - Replication wire-version gauges had no tenant tag.** `wire_version.negotiated` and `wire_version.downgrade_active` now carry the derived `tenant` tag like every other replication instrument, so tenant-scoped telemetry sees a tree's mixed-version peers. ([#3853](https://github.com/NSTA1/Orleans.Lattice/issues/3853)) (`Orleans.Lattice.Replication`)
 
 - **Performance - The azure-throughput rig ignored a documented `0`.** The silo now honours `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=0` (coalescing off) and the TCP producer `BENCH_DURATION_SEC=0` (run forever) instead of running the default, and a gate checks every documented `0`. ([#3854](https://github.com/NSTA1/Orleans.Lattice/issues/3854)) (`repository-wide`)
 
-- **Core - History continuation pages misreported the trim point.** On the WAL-window history fallback, a truncated continuation page named its own first revision, or zero when it returned none, as `EarliestAvailable`. Every truncated page now names the oldest still-readable revision. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice`)
-
-- **Replication - Leaf re-replay missed a trimmed partition.** Once an earlier partition spent the shared read budget, later ones went unexamined, so a trimmed one read as untrimmed and re-replay ran past a WAL gap instead of reporting `wal_trimmed`. Their trim point is now probed. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice.Replication`)
-
-- **Config - NaN ratios passed range checks.** A NaN `LatticeViewOptions.ThrottledBatchRatio` was accepted, draining one entry per throttled pass, and a NaN `RetainedBytesAdvisoryRatio` zeroed every storage-pressure threshold. The validator now rejects NaN and the collector falls back to `0.8`. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice`, `Orleans.Lattice.Scaling`)
-
 ### Security
-
-- **Security - A saga peer authorized itself from the request body.** With the origin header absent, the saga service read the coordinator cluster id from the body, so any mesh-secret holder could name an authorized peer and drive `Prepare`/`Commit`/`Abort`. Unstamped calls are now refused. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication.Grpc`)
-
-- **Security - Omitting a header bypassed the replication origin gate.** `Push`, `ExchangeContentManifest`, and `GetPeerHighWaterMark` allowed a call carrying no stamped origin, so a peer could poison or read a third cluster's cursor by not stamping itself. Absent is now refused. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication.Grpc`)
-
-- **Security - Replication credentials were not bound to a cluster.** The accepted-secret set carries no peer attribution, so origin checks compared caller-chosen values. New opt-in `BindCredentialToOriginCluster` requires the presented secret to be the one configured for the claimed origin. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`)
 
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - A single-key allow certified a whole prefix.** An app role scoped to a key prefix probed its key filter with the prefix string, which resolves on the exact-key tier, so a policy allowing only the key equal to that prefix held the role prefix-wide. Filtered decisions now fail closed. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp.Apps`)
 
-- **Security - Read-only callers were advertised every mutating data tool.** The data group never overrode its per-tool minimum, so the session filter fell back to the coarse group mask and became a no-op; a bare read grant listed all nineteen destructive tools. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
-
 - **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
-
-- **Security - Replication peers could act under another cluster's origin.** `Push` and `GetPeerHighWaterMark` trusted the body-declared origin, so any mesh-secret holder could advance or read a third cluster's high-water mark. Both now bind it to the stamped caller, as the manifest exchange did. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Replication.Grpc`)
-
-- **Security - A view row decoder trusted a peer-supplied count.** Under `ShipView` a view tree is replication-enrolled, so its aggregation rows reach the decoder from a peer. It pre-sized a map from a wire `Int32` and read past a truncated row; counts and reads are now bounded. ([#3784](https://github.com/NSTA1/Orleans.Lattice/pull/3784)) (`Orleans.Lattice`)
-
-- **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. ([#3747](https://github.com/NSTA1/Orleans.Lattice/pull/3747)) (`Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)
-
-- **Security - A comment hid a metric from the allow-list.** The PromQL grouping-list scanner counted parentheses blind to comments and quoted strings, so an unmatched `(` in either swallowed the rest of the query and hid the aggregand's selector from the deny-all metric gate. ([#3686](https://github.com/NSTA1/Orleans.Lattice/pull/3686)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)
-
-- **Security - Telemetry tools were ungated.** The MCP telemetry tools ran caller-supplied PromQL against the metrics backend without consulting the telemetry capability, so any caller able to reach the group could read every series. Each tool now authorizes before any backend work. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp.Telemetry`)
-
-- **Security - An asserted tenant was never validated.** The MCP region catalog scoped its answer to the caller-supplied active-tenant assertion without validating it, so any caller could enumerate another tenant's routable regions. The assertion is now validated and a refusal fails closed. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp`)
-
-- **Auth - A tree-scoped rule granted a cluster-wide capability.** MCP discovery read the telemetry bit off an Allow rule at any scope, so a grant on a single tree conferred the scopeless telemetry capability. Cluster-wide-only operations are now carried only from a cluster-wide rule. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -304,6 +159,162 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Container - Provenance and tooling.** The image git revision reaches the assembly instead of publishing an unknown build, the provenance guard adjudicates the real deployment rather than a default service name, metrics are served rather than answering 404, and tuning no longer drops a path. ([#2363](https://github.com/NSTA1/Orleans.Lattice/issues/2363), [#2686](https://github.com/NSTA1/Orleans.Lattice/issues/2686), [#2886](https://github.com/NSTA1/Orleans.Lattice/issues/2886), [#2929](https://github.com/NSTA1/Orleans.Lattice/issues/2929), [#3086](https://github.com/NSTA1/Orleans.Lattice/issues/3086), [#3169](https://github.com/NSTA1/Orleans.Lattice/issues/3169)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ## Released
+
+## [2026-09-29]
+
+Patch release: `Orleans.Lattice`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Data`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry.Azure`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Caching.AzureBlob`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.GrainIndex`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc` and `Orleans.Lattice.Scaling` advance to `9.8.1` from the `release/9.8` line. Every other package stays at `9.8.0`. Packages that depend on a patched package still require its `9.8.0`, so reference a patched package directly to pick up its fixes.
+
+**Upgrading from 9.8.0.** A rolling upgrade is supported. While versions are mixed, WAL GC on a 9.8.1 silo that asks a 9.8.0 leaf to bank its pin falls back to a starvation drive, as 9.8.0 does; finish the upgrade before starting a resize. The leaf snapshot load-failure counter's residual reason is now `unclassified` (was `faulted`), so reason-filtered alerts should match both. Replication gRPC now refuses a call carrying no stamped origin header, which every 9.8 sender stamps. The resize and snapshot fix for a tree an adaptive split has grown ([#3880](https://github.com/NSTA1/Orleans.Lattice/issues/3880)) is not in this patch: it depends on tree-lifecycle work queued for the next minor.
+
+### Added
+
+- **WAL - GC reclaimable distance and terminal breach.** Each GC shard scan publishes its floor-to-head distance in offsets, and a tree over its byte ceiling with an available floor that reclaims nothing for 10 consecutive passes advances a primed terminal-breach counter. ([#3149](https://github.com/NSTA1/Orleans.Lattice/issues/3149)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Dashboards` 9.8.1)
+
+- **WAL - Drain-lag holders named while lag persists.** A tree above the materialiser lag threshold repeats its structured warning naming the lowest-cursor consumers, at most every `LatticeOptions.WalDrainLagHolderLogInterval` (default 10 minutes; null keeps edge-only logging). ([#2505](https://github.com/NSTA1/Orleans.Lattice/issues/2505)) (`Orleans.Lattice` 9.8.1)
+
+### Changed
+
+- **Performance - OR-map provenance decoding.** A delta encodes a key's surrogate once per dot group, a churned key's live-dot test uses a sorted counter index, the state decoder emits each key's events contiguously instead of sorting every event, and the emitters presize their sink. ([#3675](https://github.com/NSTA1/Orleans.Lattice/pull/3675), [#3701](https://github.com/NSTA1/Orleans.Lattice/pull/3701), [#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833), [#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Register and flag provenance decoding.** A multi-value register decode no longer builds a live-replica hash set per delta, nor copies and sorts its projection before returning it, and a flag read returns a UTF-8 literal. ([#3675](https://github.com/NSTA1/Orleans.Lattice/pull/3675), [#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833), [#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - CRDT dot scans.** The observed-remove dot primitives and the OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans rather than through the list indexer, and every live-dot read stops at the first survivor instead of counting all of them. ([#3748](https://github.com/NSTA1/Orleans.Lattice/pull/3748), [#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772), [#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - UTF-8 transcodes.** An aggregation row encodes a short string once, gated on a compile-time bound rather than a per-string virtual call, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793), [#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Caching.AzureBlob` 9.8.1)
+
+- **Performance - Leaf range scans.** A range read sorts only when a pending write appended out of order and drops bound re-tests the scan window already enforces, and a bounded scan retires its lower bound once met instead of retesting every row. ([#3760](https://github.com/NSTA1/Orleans.Lattice/pull/3760), [#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Projection digest and index fingerprint.** The projection digest and the grain-index fingerprint transcode each string once rather than twice, and a single-replica vector clock is fed straight through instead of rented and sorted per row. ([#3760](https://github.com/NSTA1/Orleans.Lattice/pull/3760), [#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.GrainIndex` 9.8.1)
+
+- **Performance - Predicate filter evaluation.** Predicate filtering validates an admitted row's JSON only after it evaluates true, rather than scanning every candidate twice, and the leaf scans, view projections and atomic-write guard settle fast-path eligibility once, not per row. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692), [#3701](https://github.com/NSTA1/Orleans.Lattice/pull/3701)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Leaf snapshot frame reads.** The frame codec re-validated its 24-byte header on every read helper, inside per-row and per-probe loops. It is now read once and threaded through: a lower-bound seek is 76% faster, hydration admission 22%, and the aggregate walk 64%. ([#3881](https://github.com/NSTA1/Orleans.Lattice/pull/3881)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Leaf key comparison and row accounting.** The UTF-8 comparator behind every seek now decides from the first differing byte, decoding only when that byte is non-ASCII; ASCII keys compare 16x faster. A hydrated row reuses the key length the frame states instead of re-scanning it. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Durable pin fan-out.** Tree purge and consumer unregister now clear the WAL materialiser pin keys in one concurrent round instead of walking them, replacing 2 * shards + 1 sequential grain round trips - seventeen at the default shard count - with one. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - CRDT delta fold enumeration.** Eight delta-fold and shape-registry sites walk a span over the concrete backing array or list instead of the read-only list interface, which boxed an enumerator per call. The coalescing fold is 18% faster and allocates up to 896 fewer bytes. ([#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - GetMany strict-pass retry capture.** The single-shard `GetManyAsync` strict-pass retry closure no longer allocates a nested parent capture, removing 24 bytes from every call. ([#3678](https://github.com/NSTA1/Orleans.Lattice/issues/3678)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Entry-history member decoding.** An entry-history page now reuses one single-element provenance delta buffer across the revisions it decodes, instead of allocating a fresh array per revision. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Api.State` 9.8.1)
+
+- **Performance - CRDT read-path projections.** The grow-only and remove-wins whole-set reads and the sequence provenance projection no longer materialise through a hidden-count iterator or a discarded tuple array; each now fills one exactly-sized destination from a single scan. ([#3647](https://github.com/NSTA1/Orleans.Lattice/pull/3647)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - Data-plane CRDT collection reads.** The data API's OR-Set, RW-Set and OR-Map whole-collection reads now resolve survivors in one scan into an exactly-sized destination, instead of walking the add-map twice and materialising through hidden-count iterators. ([#3654](https://github.com/NSTA1/Orleans.Lattice/pull/3654)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Api.Data` 9.8.1)
+
+- **Performance - CRDT dot-coverage liveness reads.** A churned observed-remove slot whose cancelling dots all carry one replica now collapses that list to its highest counter instead of rescanning it per dot, across the shared liveness primitives and the OR-Set and RW-Set live-member projections. ([#3726](https://github.com/NSTA1/Orleans.Lattice/pull/3726)) (`Orleans.Lattice` 9.8.1)
+
+- **Performance - CRDT merge-time compaction.** `Compact` no longer pairs each add list with a hashed tombstone-map probe per element, nor compacts a tombstone list twice; the OR-Set and RW-Set maps are now swept independently, one pass each. ([#3748](https://github.com/NSTA1/Orleans.Lattice/pull/3748)) (`Orleans.Lattice` 9.8.1)
+
+- **Docs - Unresolved-prepare ledger risk.** The ledger's metric description, runtime warning and docs now say Azure Table's row cap bounds its growth while SQLite's larger limit can exhaust activation reads, and recommend the beyond-cap alert on every profile. ([#2830](https://github.com/NSTA1/Orleans.Lattice/issues/2830)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Dashboards` 9.8.1)
+
+- **Core - Single reminder teardown path.** An unreachable PurgeComplete arm is removed from the tree-deletion reminder handler, leaving the early guard as the one teardown path, now pinned by reminder-dispatch tests. ([#2347](https://github.com/NSTA1/Orleans.Lattice/issues/2347)) (`Orleans.Lattice` 9.8.1)
+
+- **Core - Dead members removed.** `BPlusLeafGrain.MinUnresolvedPrepareOffset`, the cursor unpin's unreachable `rethrow` arm and the uncalled `ShardRootGrain.TryForwardShadowWriteAsync` are removed, their stale docs corrected, and the live paths pinned by tests. ([#2405](https://github.com/NSTA1/Orleans.Lattice/issues/2405), [#2469](https://github.com/NSTA1/Orleans.Lattice/issues/2469), [#2488](https://github.com/NSTA1/Orleans.Lattice/issues/2488)) (`Orleans.Lattice` 9.8.1)
+
+- **Observability - Snapshot load failures no longer claim a cause.** The leaf snapshot load-failure counter's residual reason is `unclassified` instead of `faulted`, since a wrapped activation failure can hide an OOM; reason-filtered alerts should match both values during rollout. ([#2404](https://github.com/NSTA1/Orleans.Lattice/issues/2404)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Dashboards` 9.8.1)
+
+- **Container - Cgroup readers.** The silo and the ONNX embedder compile one dependency-free set of cgroup CPU and memory readers, a gate confines cgroup reads to it, and three unreachable `cpu.max` parser clauses are removed with every parse outcome pinned. ([#2817](https://github.com/NSTA1/Orleans.Lattice/issues/2817), [#2819](https://github.com/NSTA1/Orleans.Lattice/issues/2819), [#2828](https://github.com/NSTA1/Orleans.Lattice/issues/2828)) (`Orleans.Lattice` 9.8.1)
+
+- **Docs - Grain await convention.** The grain instructions now state when an await in a grain carries an explicit ConfigureAwait and when it does not, and three semaphore waits are brought in line with it. ([#3891](https://github.com/NSTA1/Orleans.Lattice/pull/3891)) (`repository-wide`, `Orleans.Lattice` 9.8.1)
+
+### Fixed
+
+- **Scan - Settled page reuse could serve a stale transactional outcome.** A reused scan page was guarded against writes and TTL expiry but not against a transaction decision changing by the clock alone. Reuse is now refused when the leaf read resolved pending transactional writes. ([#2823](https://github.com/NSTA1/Orleans.Lattice/issues/2823)) (`Orleans.Lattice` 9.8.1)
+
+- **Leaf - A range delete hydrated the whole leaf.** A foreground range delete enumerated every cached row and detached the leaf's snapshot frame. It now enumerates only the requested range, keeps the frame, and hydrates only the blocks that overlap it. ([#2841](https://github.com/NSTA1/Orleans.Lattice/issues/2841)) (`Orleans.Lattice` 9.8.1)
+
+- **Observability - set_many stage timers mixed two write paths.** The shard-root `set_many` stage timers carry an `operation` tag separating conditional from unconditional batches, and the conditional path gains its own `orleans.lattice.set_many_where_predicate.duration` envelope. ([#2687](https://github.com/NSTA1/Orleans.Lattice/issues/2687)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Dashboards` 9.8.1)
+
+- **WAL - A write-idle leaf froze the GC floor at a stale pin.** A checkpoint persist published its pin before its own snapshot capture, and only a replay-permit drive republished it. The pin now publishes after the capture, and the coverage-lag check and GC sweep bank it without a permit. ([#3599](https://github.com/NSTA1/Orleans.Lattice/issues/3599)) (`Orleans.Lattice` 9.8.1)
+
+- **WAL - GC floor repair stalled behind pinned holders.** A write-idle leaf never persisted a residual checkpoint advance, a pass that trimmed while still retaining discarded the holder sample and its block ages, and concurrent touches could spend the one free replay slot above the floor. ([#3608](https://github.com/NSTA1/Orleans.Lattice/issues/3608), [#3609](https://github.com/NSTA1/Orleans.Lattice/issues/3609), [#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610)) (`Orleans.Lattice` 9.8.1)
+
+- **Replay - Permit share and disjoint range deletes.** The GC replay share is sized from permits still in circulation, not the configured ceiling, and a DeleteRange disjoint from the replaying leaf no longer takes a ledger slot or clamps the checkpoint. Exempt-arrival admission is now pinned. ([#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610), [#3601](https://github.com/NSTA1/Orleans.Lattice/issues/3601), [#3299](https://github.com/NSTA1/Orleans.Lattice/issues/3299)) (`Orleans.Lattice` 9.8.1)
+
+- **Replication - Deferred and dead-lettered entries could be lost.** A custom applier's batch default dropped a receive-fence deferral, a causal-buffer eviction kept its dedupe reservation so its replay was discarded as a duplicate, and a replay the fence deferred removed its parked entry. ([#3629](https://github.com/NSTA1/Orleans.Lattice/issues/3629), [#3630](https://github.com/NSTA1/Orleans.Lattice/issues/3630), [#3757](https://github.com/NSTA1/Orleans.Lattice/issues/3757)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Scan - An uncapped point-in-time cursor pin expired after 60 seconds.** Setting `MaxCursorSnapshotPinTtl` to `Timeout.InfiniteTimeSpan` floored the pin to `TxDecisionRetention`, or expired it at once with retention off; it now disables the cap as documented. ([#3631](https://github.com/NSTA1/Orleans.Lattice/issues/3631)) (`Orleans.Lattice` 9.8.1)
+
+- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s and counted a shard it failed to sample as empty. It now drops the cached reports, samples the shards afresh, and refuses to begin while any shard is unsampled. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650), [#3680](https://github.com/NSTA1/Orleans.Lattice/issues/3680)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Api.TreeAdmin` 9.8.1)
+
+- **Replication - A resumed bootstrap dropped rows above its cursor.** A crash-resume or transient retry re-opened the snapshot export bounded at the highest HLC applied so far, dropping unapplied rows stamped above it. Every attempt now exports the whole snapshot; the overlap applies as LWW no-ops. ([#3656](https://github.com/NSTA1/Orleans.Lattice/issues/3656)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice` 9.8.1)
+
+- **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice` 9.8.1)
+
+- **Core - A resized tree lost its registration, configuration and snapshots.** Purging a first resize's retired copy unregistered the live tree, the alias swap reset its PublishEvents, history and retention-ceiling overrides, and a snapshot copied the retired shards. Each now acts on the live copy. ([#3741](https://github.com/NSTA1/Orleans.Lattice/issues/3741), [#3742](https://github.com/NSTA1/Orleans.Lattice/issues/3742), [#3743](https://github.com/NSTA1/Orleans.Lattice/issues/3743)) (`Orleans.Lattice` 9.8.1)
+
+- **Atomic - Reads fail closed when the transaction registry is unreachable.** A read meeting a prepare whose outcome the registry cannot supply throws the retryable `LatticeTransactionOutcomeUnavailableException`, and a multi-key or streaming read no longer accepts an unverifiable probe as stable. ([#2215](https://github.com/NSTA1/Orleans.Lattice/issues/2215), [#3641](https://github.com/NSTA1/Orleans.Lattice/issues/3641)) (`Orleans.Lattice` 9.8.1)
+
+- **Leaf - A faulted cache refresh hid keys the leaf holds.** A registry fault mid-refresh left a cleared or unmerged leaf-cache mirror still marked fresh, so same-silo reads answered absent for held keys until the leaf wrote again. A faulted refresh no longer marks it fresh. ([#2412](https://github.com/NSTA1/Orleans.Lattice/issues/2412)) (`Orleans.Lattice` 9.8.1)
+
+- **WAL - A short bank lift was graded as a healed floor.** GC arm 2 credited any bank lift as releasing the floor, even a few entries to a stale checkpoint far behind the head. A lift is now graded against the partition head, and one that falls short escalates to a checkpoint drive in the same pass. ([#3649](https://github.com/NSTA1/Orleans.Lattice/issues/3649)) (`Orleans.Lattice` 9.8.1)
+
+- **Dashboards - 22 panels queried series the exporter never emits.** Their tokens used the container's unit spelling where `AddPrometheusExporter` names the series differently, so the panels rendered blank. The tokens now use its names, and the naming gate resolves only the family it emits. ([#3260](https://github.com/NSTA1/Orleans.Lattice/issues/3260)) (`Orleans.Lattice.Dashboards` 9.8.1)
+
+- **Core - Queue ids could be reissued after a crash.** A queue that drained, or lost its newest entry, before its coalesced head-cursor flush cold-started below ids it had already issued. The next id is now made durable before the newest entry's row is deleted. ([#3681](https://github.com/NSTA1/Orleans.Lattice/issues/3681)) (`Orleans.Lattice` 9.8.1)
+
+- **Config - Reference autoscaler rules could never scale out.** The shipped KEDA and ACA rules set `targetValue` 1, which asks for at most the current replica count, and the reference architecture queried a series nothing exports. The rules now use 0.5 and the exported series. ([#3679](https://github.com/NSTA1/Orleans.Lattice/issues/3679)) (`Orleans.Lattice.Scaling` 9.8.1)
+
+- **Atomic - Multi-key reads surfaced an indeterminate prepare.** `GetManyAsync`, key and entry scans, counts and stats now resolve every pending override through the same visibility gate as a point read, so a prepare a point read hides is hidden on every multi-key path too. ([#3665](https://github.com/NSTA1/Orleans.Lattice/issues/3665)) (`Orleans.Lattice` 9.8.1)
+
+- **Shard - Healing and hot-shard sampling stalled on a cold silo.** The healing orchestrator and hot-shard monitor latched themselves running before registering their keepalive, so a still-initializing reminder service left them with no timer. Each now arms its timer first and retries the keepalive. ([#3682](https://github.com/NSTA1/Orleans.Lattice/issues/3682), [#3713](https://github.com/NSTA1/Orleans.Lattice/issues/3713)) (`Orleans.Lattice` 9.8.1)
+
+- **WAL - A GC pass that resolved no provider read as idle.** `orleans.lattice.wal.gc.passes` gains a zero-primed `no_partitions` arm for a pass whose silo resolved no pinned WAL provider, so a misplaced tree no longer reports an arm that asserts health. ([#2465](https://github.com/NSTA1/Orleans.Lattice/issues/2465)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Dashboards` 9.8.1)
+
+- **Replication - The restore write fence and VC seeder missed live shards.** Both addressed `{tree}/0..ShardCount-1`, skipping an adaptive split's target and, behind an alias, naming the retired copy. They now follow the tree's live routing, and the fence lifts exactly the shards it engaged. ([#3750](https://github.com/NSTA1/Orleans.Lattice/issues/3750), [#3751](https://github.com/NSTA1/Orleans.Lattice/issues/3751)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Query - Tree structure omitted split-added shards.** `GetTreeStructureAsync` listed shard roots `0..ShardCount-1` of the pinned count, so an adaptive split's target and every key routed to it were missing. It now lists every shard the routing map reaches. ([#3752](https://github.com/NSTA1/Orleans.Lattice/issues/3752)) (`Orleans.Lattice.Api.State` 9.8.1)
+
+- **Atomic - A cross-tree write repeating a key never resolved.** A tree slice naming one key twice, including a `Set` and a `Delete`, was admitted, then refused by that tree's sub-saga on every keepalive, parking the other trees' writes. It now throws `ArgumentException` before anything is staged. ([#3756](https://github.com/NSTA1/Orleans.Lattice/issues/3756)) (`Orleans.Lattice` 9.8.1)
+
+- **Backup - A full backup's cut recorded HLC 0.** The consistency cut read an anchor the core always stamps as zero; it now records the highest HLC the capture read, so the first increment on a full base pins the WAL at that frontier while it drains. ([#3758](https://github.com/NSTA1/Orleans.Lattice/issues/3758)) (`Orleans.Lattice.Backup` 9.8.1)
+
+- **Backup - Capturing a tree with a folded shard failed.** The topology step digested shards `0..count-1`, so once shard healing had folded a shard away it named a missing index and every backup threw. It now follows the routing map, which also gives the true virtual slot count. ([#3887](https://github.com/NSTA1/Orleans.Lattice/issues/3887)) (`Orleans.Lattice.Backup` 9.8.1, `Orleans.Lattice` 9.8.1)
+
+- **Replication - Bootstrap dropped the TTL of committed rows.** The default snapshot export left every committed row's expiry at 0, so whole-tree bootstrap and the anti-entropy fallback installed TTL keys on the peer as durable. Committed rows now carry the source entry's absolute expiry. ([#3802](https://github.com/NSTA1/Orleans.Lattice/issues/3802)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Core - Batch writes skipped the write bounds.** `SetManyWherePredicateAsync`, single-tree atomic batches and the cross-tree `SetManyAtomicAsync` extension now enforce `MaxKeyLength`, `MaxValueSizeBytes`, `MaxLiveKeys` and `MaxEstimatedBytes` like `SetManyAsync`, atomic ones before a saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852), [#3889](https://github.com/NSTA1/Orleans.Lattice/issues/3889)) (`Orleans.Lattice` 9.8.1)
+
+- **Replication - Inbound peer contact went unrecorded for single-entry pushes.** The dead-letter decorator's single-entry and per-entry retry paths bypassed the applier's only recording site, so inbound gauges and the inbound-silence health signal missed low-rate peers. Both paths now record contact. ([#3848](https://github.com/NSTA1/Orleans.Lattice/issues/3848)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Observability - Replication wire-version gauges had no tenant tag.** `wire_version.negotiated` and `wire_version.downgrade_active` now carry the derived `tenant` tag like every other replication instrument, so tenant-scoped telemetry sees a tree's mixed-version peers. ([#3853](https://github.com/NSTA1/Orleans.Lattice/issues/3853)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Core - History continuation pages misreported the trim point.** On the WAL-window history fallback, a truncated continuation page named its own first revision, or zero when it returned none, as `EarliestAvailable`. Every truncated page now names the oldest still-readable revision. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice` 9.8.1)
+
+- **Replication - Leaf re-replay missed a trimmed partition.** Once an earlier partition spent the shared read budget, later ones went unexamined, so a trimmed one read as untrimmed and re-replay ran past a WAL gap instead of reporting `wal_trimmed`. Their trim point is now probed. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice.Replication` 9.8.1)
+
+- **Config - NaN ratios passed range checks.** A NaN `LatticeViewOptions.ThrottledBatchRatio` was accepted, draining one entry per throttled pass, and a NaN `RetainedBytesAdvisoryRatio` zeroed every storage-pressure threshold. The validator now rejects NaN and the collector falls back to `0.8`. ([#3877](https://github.com/NSTA1/Orleans.Lattice/pull/3877)) (`Orleans.Lattice` 9.8.1, `Orleans.Lattice.Scaling` 9.8.1)
+
+### Security
+
+- **Security - Read-only callers were advertised every mutating data tool.** The data group never overrode its per-tool minimum, so the session filter fell back to the coarse group mask and became a no-op; a bare read grant listed all nineteen destructive tools. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp` 9.8.1)
+
+- **Security - Replication peers could act under another cluster's origin.** `Push` and `GetPeerHighWaterMark` trusted the body-declared origin, so any mesh-secret holder could advance or read a third cluster's high-water mark. Both now bind it to the stamped caller, as the manifest exchange did. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Replication.Grpc` 9.8.1)
+
+- **Security - A saga peer authorized itself from the request body.** With the origin header absent, the saga service read the coordinator cluster id from the body, so any mesh-secret holder could name an authorized peer and drive `Prepare`/`Commit`/`Abort`. Unstamped calls are now refused. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication.Grpc` 9.8.1)
+
+- **Security - Omitting a header bypassed the replication origin gate.** `Push`, `ExchangeContentManifest`, and `GetPeerHighWaterMark` allowed a call carrying no stamped origin, so a peer could poison or read a third cluster's cursor by not stamping itself. Absent is now refused. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication.Grpc` 9.8.1)
+
+- **Security - Replication credentials were not bound to a cluster.** The accepted-secret set carries no peer attribution, so origin checks compared caller-chosen values. New opt-in `BindCredentialToOriginCluster` requires the presented secret to be the one configured for the claimed origin. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication` 9.8.1, `Orleans.Lattice.Replication.Grpc` 9.8.1)
+
+- **Security - A view row decoder trusted a peer-supplied count.** Under `ShipView` a view tree is replication-enrolled, so its aggregation rows reach the decoder from a peer. It pre-sized a map from a wire `Int32` and read past a truncated row; counts and reads are now bounded. ([#3784](https://github.com/NSTA1/Orleans.Lattice/pull/3784)) (`Orleans.Lattice` 9.8.1)
+
+- **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. ([#3747](https://github.com/NSTA1/Orleans.Lattice/pull/3747)) (`Orleans.Lattice.Api.Backup` 9.8.1, `Orleans.Lattice.Backup` 9.8.1, `Orleans.Lattice.Replication` 9.8.1)
+
+- **Security - A comment hid a metric from the allow-list.** The PromQL grouping-list scanner counted parentheses blind to comments and quoted strings, so an unmatched `(` in either swallowed the rest of the query and hid the aggregand's selector from the deny-all metric gate. ([#3686](https://github.com/NSTA1/Orleans.Lattice/pull/3686)) (`Orleans.Lattice.Api.Telemetry` 9.8.1, `Orleans.Lattice.Api.Mcp.Telemetry` 9.8.1)
+
+- **Security - Telemetry tools were ungated.** The MCP telemetry tools ran caller-supplied PromQL against the metrics backend without consulting the telemetry capability, so any caller able to reach the group could read every series. Each tool now authorizes before any backend work. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp.Telemetry` 9.8.1)
+
+- **Security - An asserted tenant was never validated.** The MCP region catalog scoped its answer to the caller-supplied active-tenant assertion without validating it, so any caller could enumerate another tenant's routable regions. The assertion is now validated and a refusal fails closed. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp` 9.8.1)
+
+- **Auth - A tree-scoped rule granted a cluster-wide capability.** MCP discovery read the telemetry bit off an Allow rule at any scope, so a grant on a single tree conferred the scopeless telemetry capability. Cluster-wide-only operations are now carried only from a cluster-wide rule. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp` 9.8.1)
+
+- **Security - MCP telemetry on Azure resolved the unpatched facade.** `Orleans.Lattice.Api.Mcp.Telemetry.Azure` is republished with no code change, so it requires the patched `Orleans.Lattice.Api.Telemetry` 9.8.1 instead of resolving 9.8.0. ([#3686](https://github.com/NSTA1/Orleans.Lattice/pull/3686)) (`Orleans.Lattice.Api.Mcp.Telemetry.Azure` 9.8.1)
 
 ## [2026-09-26]
 
