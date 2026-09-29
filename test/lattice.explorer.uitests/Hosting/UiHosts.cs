@@ -19,9 +19,13 @@ public sealed class UiHosts
     private static readonly Lazy<Task<HostileAppHead>> LazyHostile = new(async () => await HostileAppHead.StartAsync(await LazyWorld.Value), LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly RenewableSignIn Renewable = new();
     private static readonly Lazy<Task<ExplorerHead>> LazyReauth = new(async () => await Renewable.StartHeadAsync(await LazyWorld.Value), LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly Lazy<Task<ExplorerWorld>> LazyTenantWorld = new(ExplorerWorld.StartWithTenancyAsync, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>The test world: a cluster, its gRPC surface and its own Explorer head.</summary>
     internal static Task<ExplorerWorld> WorldAsync() => LazyWorld.Value;
+
+    /// <summary>A second world that also serves tenancy, with several tenants its operator can switch between.</summary>
+    internal static Task<ExplorerWorld> TenantWorldAsync() => LazyTenantWorld.Value;
 
     /// <summary>The head that offers the hostile app bundles.</summary>
     internal static Task<HostileAppHead> HostileAsync() => LazyHostile.Value;
@@ -52,6 +56,11 @@ public sealed class UiHosts
         if (LazyWorld.IsValueCreated && LazyWorld.Value.IsCompletedSuccessfully)
         {
             await LazyWorld.Value.Result.DisposeAsync();
+        }
+
+        if (LazyTenantWorld.IsValueCreated && LazyTenantWorld.Value.IsCompletedSuccessfully)
+        {
+            await LazyTenantWorld.Value.Result.DisposeAsync();
         }
 
         // Last: every head serves from the one published content root.

@@ -23,7 +23,7 @@ internal sealed class TenancyCatalog
 {
     private readonly IServiceProvider _services;
     private (bool Authenticated, string? User, string? Active, TenancyStanding Standing)? _standing;
-    private IReadOnlyList<TenantDescriptor>? _tenants;
+    private (bool Authenticated, string? User, string? Active, IReadOnlyList<TenantDescriptor> Tenants)? _tenants;
     private (string Tenant, int? Count)? _apps;
 
     /// <summary>Creates the catalogue over the circuit's services.</summary>
@@ -109,20 +109,29 @@ internal sealed class TenancyCatalog
 
     /// <summary>
     /// The tenants the caller can reach, ascending by id, remembered until
-    /// <see cref="Invalidate"/>. A fault propagates, and nothing is remembered.
+    /// <see cref="Invalidate"/> or until the identity or the active tenant changes,
+    /// so a sign-in, a sign-out or a new identity never reads the previous
+    /// caller's list. A fault propagates, and nothing is remembered.
     /// </summary>
     /// <param name="cancellationToken">Cancels the read.</param>
     public async Task<IReadOnlyList<TenantDescriptor>> GetTenantsAsync(CancellationToken cancellationToken)
     {
-        if (_tenants is { } memo)
+        var authenticated = Session?.IsAuthenticated == true;
+        var user = Session?.Username;
+        var active = ActiveTenant;
+        if (_tenants is { } memo
+            && memo.Authenticated == authenticated
+            && string.Equals(memo.User, user, StringComparison.Ordinal)
+            && string.Equals(memo.Active, active, StringComparison.Ordinal))
         {
-            return memo;
+            return memo.Tenants;
         }
 
         var selfService = SelfService ?? throw new NotSupportedException(TenancyFailure.NotServedMessage);
         var tenants = await selfService.ListAccessibleTenantsAsync(cancellationToken).ConfigureAwait(true) ?? [];
-        _tenants = [.. tenants.Where(tenant => tenant is not null).OrderBy(tenant => tenant.TenantId, StringComparer.Ordinal)];
-        return _tenants;
+        IReadOnlyList<TenantDescriptor> sorted = [.. tenants.Where(tenant => tenant is not null).OrderBy(tenant => tenant.TenantId, StringComparer.Ordinal)];
+        _tenants = (authenticated, user, active, sorted);
+        return sorted;
     }
 
     /// <summary>

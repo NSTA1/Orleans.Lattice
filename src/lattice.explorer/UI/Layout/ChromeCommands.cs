@@ -18,6 +18,9 @@ internal static class ChromeCommands
     /// <summary>The command that opens the appearance menu, and the menu's button.</summary>
     public const string AppearanceMenuId = "appearance.menu";
 
+    /// <summary>The command that opens the top bar's tenant switcher, and the switcher's control.</summary>
+    public const string TenantSwitchId = "tenant.switch";
+
     /// <summary>The command, and the spine stop, that go to the area with <paramref name="key"/>.</summary>
     /// <param name="key">The area key.</param>
     public static string GoToAreaId(string key) => "go." + key;
@@ -46,12 +49,14 @@ internal static class ChromeCommands
         density == LtDensity.Compact ? "appearance.density.compact" : "appearance.density.comfortable";
 
     /// <summary>
-    /// The chrome's commands for the current stops: Home, each visible area, and
-    /// every appearance choice.
+    /// The chrome's commands for the current stops: Home, each visible area,
+    /// every appearance choice, and - only while the tenant switcher is offered -
+    /// Switch tenant.
     /// </summary>
     /// <param name="location">Where the user is, and the shown stops.</param>
     /// <param name="appearance">The appearance state the appearance commands set.</param>
-    public static IReadOnlyList<ExplorerCommand> Build(ExplorerLocation location, ShellAppearance appearance)
+    /// <param name="tenantSwitch">The circuit's tenant switch, or <see langword="null"/> to offer no tenant command.</param>
+    public static IReadOnlyList<ExplorerCommand> Build(ExplorerLocation location, ShellAppearance appearance, ExplorerTenantSwitch? tenantSwitch = null)
     {
         ArgumentNullException.ThrowIfNull(location);
         ArgumentNullException.ThrowIfNull(appearance);
@@ -81,6 +86,21 @@ internal static class ChromeCommands
         commands.Add(Contrast(appearance, ShellContrast.More, "Use high contrast"));
         commands.Add(Density(appearance, LtDensity.Comfortable, "Use the comfortable density"));
         commands.Add(Density(appearance, LtDensity.Compact, "Use the compact density"));
+
+        if (tenantSwitch?.Current is { Offered: true } choices)
+        {
+            commands.Add(new ExplorerCommand(TenantSwitchId, "Switch tenant")
+            {
+                Detail = "Active tenant: " + choices.Active,
+                InvokeAsync = async cancellationToken =>
+                {
+                    // The palette closes first and hands focus back to where the edit
+                    // began; the switcher opens after that, so it keeps the focus.
+                    await Task.Yield();
+                    tenantSwitch.RequestOpen();
+                },
+            });
+        }
 
         return commands;
     }

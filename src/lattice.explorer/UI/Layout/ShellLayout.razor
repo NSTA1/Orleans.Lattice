@@ -59,6 +59,9 @@
             {
                 @Slot(ShellSlotNames.HeaderConnection)
                 <AppearanceMenu />
+                <CascadingValue Value="_location">
+                    <TenantSwitcher />
+                </CascadingValue>
                 @Slot(ShellSlotNames.HeaderIdentity)
             }
         </div>
@@ -128,6 +131,7 @@
                           Title="Directory"
                           Placement="LtDialogPlacement.Start"
                           ReturnFocus="_directoryToggle">
+                    <TenantSwitcher Stacked="true" />
                     <DirectorySpine OnNavigate="CloseDirectory" />
                 </LtDialog>
                 <LtDialog Open="_menuOpen"

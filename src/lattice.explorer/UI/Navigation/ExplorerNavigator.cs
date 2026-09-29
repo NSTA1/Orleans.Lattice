@@ -96,20 +96,32 @@ internal sealed class ExplorerNavigator
                 // default tenant lands on its address rather than being bounced off
                 // it by a verdict that belonged to another tenant.
                 await _tenancy.RefreshAsync(cancellationToken).ConfigureAwait(false);
-                notice = $"Scoped to tenant {requested}.";
+                notice = SwitchedNotice(requested);
             }
             else
             {
                 target = address.WithTenant(_tenancy.ActiveTenant);
-                notice = _tenancy.ActiveTenant is { } active
-                    ? $"You can't scope to tenant {requested}, so this shows tenant {active} instead."
-                    : $"You can't scope to tenant {requested}.";
+                notice = RefusedNotice(requested, _tenancy.ActiveTenant);
             }
         }
 
         var canonical = Canonicalize(target);
         return new ExplorerAddressResolution(canonical, canonical.Equals(address) ? null : canonical, notice);
     }
+
+    /// <summary>The notice a switch to <paramref name="tenant"/> that took effect is announced with.</summary>
+    /// <param name="tenant">The tenant now active.</param>
+    public static string SwitchedNotice(string tenant) => $"Scoped to tenant {tenant}.";
+
+    /// <summary>
+    /// The notice a refused switch to <paramref name="requested"/> is announced
+    /// with, naming the tenant the caller stays in when there is one.
+    /// </summary>
+    /// <param name="requested">The tenant asked for.</param>
+    /// <param name="active">The tenant still active, or <see langword="null"/>.</param>
+    public static string RefusedNotice(string requested, string? active) => active is not null
+        ? $"You can't scope to tenant {requested}, so this shows tenant {active} instead."
+        : $"You can't scope to tenant {requested}.";
 
     /// <summary>Navigates to the canonical form of <paramref name="address"/>.</summary>
     /// <param name="address">Where to go.</param>
