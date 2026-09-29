@@ -53,6 +53,8 @@ status codes, so a client can branch on the code rather than parse a message:
 | Request cancelled | `Cancelled` | On the two server-streaming RPCs a cancelled call simply ends the stream instead. |
 | Any other fault | `Internal` | The detail is deliberately opaque (a correlation id at most); the real exception is logged server-side, not returned. |
 
+That last row also catches two refusals of a shadow-cutover restore or a revert that this binding does not map specifically: the `InvalidOperationException` raised while the target tree is deleted, a delete of it is pending, or another alias change holds its alias reservation, and the `LatticeTreeOwnershipDeniedException` raised when the registered tree ownership guard refuses the alias swap. Both reach the client as `Internal` with an opaque message, and their reason is only in the server log.
+
 The `FailedPrecondition` shape is the one an operator most often needs to act
 on: a coordinated (replicated-tree) restore fails this way when the backup store
 is not actually shared across every cluster, because a peer that never captured

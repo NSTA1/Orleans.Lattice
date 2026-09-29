@@ -716,8 +716,10 @@ public static class LatticeServiceCollectionExtensions
     /// does not require host registration because its descriptor is
     /// unambiguous; the <see cref="CrdtShapeRegistry"/> pre-populates those
     /// per-mode global defaults on construction. Registering a different
-    /// <c>(TKey, TValue)</c> pair for the same tree is a configuration
-    /// error and throws at registration time.
+    /// shape for the same tree - a different <c>(TKey, TValue)</c> pair, or
+    /// even the same pair registered twice - is a configuration error that the
+    /// hosted startup service throws while installing descriptors, so host
+    /// startup fails.
     /// </summary>
     public static ISiloBuilder AddOrMapShape<TKey, TValue>(
         this ISiloBuilder builder,

@@ -44,8 +44,9 @@ namespace Orleans.Lattice.Replication;
 /// configuration rather than membership. The one residual coupling
 /// is per-shipper-grain lifetime: a shipper grain bound at activation
 /// time to <c>(tree, peer)</c> stays bound for its lifetime; runtime
-/// peer removals intentionally do not tear down an existing shipper
-/// so it can drain its remaining backlog.
+/// peer removals intentionally do not tear down an existing shipper;
+/// it keeps shipping backlog and later local writes until some other
+/// mechanism pauses or removes it.
 /// </para>
 /// <para>
 /// The seam is deliberately <em>not</em> modelled as

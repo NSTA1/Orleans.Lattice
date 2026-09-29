@@ -1023,7 +1023,7 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "The tree is not enrolled for replication on this cluster or no enrollment source is wired."
+          "condition": "The tree is not enrolled for replication on this cluster, no enrollment source is wired, or OriginClusterId does not match the origin stamped on the call."
         },
         {
           "error_id": "invalid-operation",
@@ -1048,7 +1048,8 @@
         "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
         "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
         "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
-        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
       ]
     },
     {
@@ -1267,6 +1268,10 @@
           "condition": "TreeName or OriginClusterId is empty."
         },
         {
+          "error_id": "permission-denied",
+          "condition": "OriginClusterId does not match the origin stamped on the call; a peer may only act on its own origin."
+        },
+        {
           "error_id": "internal",
           "condition": "Receiver-side apply failed; details are logged server-side."
         },
@@ -1297,7 +1302,8 @@
         "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
         "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
         "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
-        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
       ]
     },
     {

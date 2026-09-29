@@ -231,16 +231,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "orphan's shard, key range and key count, and a disposition saying whether the repair would "
                 + "unsplice it or refuse. Run this before the repair verb, which reaches its verdict with "
                 + "the same code. ONE CALL IS ONE BOUNDED BATCH: it returns when its work budget is spent and "
-                + "reports complete=false with a resume_from token. Pass that token back unaltered to continue, and "
-                + "drive the pass until complete=true. TWO FLAGS GOVERN HOW TO READ THE FINDING LIST. complete says "
-                + "how far the batch got; verdict_complete says whether it could judge what it reached. The pass also "
+                + "reports isComplete=false with a resumeFrom token. Pass that token back unaltered to continue, and "
+                + "drive the pass until isComplete=true. TWO FLAGS GOVERN HOW TO READ THE FINDING LIST. isComplete says "
+                + "how far the batch got; verdictComplete says whether it could judge what it reached. The pass also "
                 + "reports every region it could NOT establish a verdict over - a shard that declined because it was "
                 + "mid-split or already draining, a sibling chain severed part-way across the keyspace, a leaf whose "
                 + "declared bounds make reachability undecidable - and a region that was not judged contributes zero "
                 + "findings by construction. An empty finding list is a clean bill of health that rules this defect "
-                + "out as the cause of an unbounded WAL ONLY when complete=true AND verdict_complete=true. On a "
+                + "out as the cause of an unbounded WAL ONLY when isComplete=true AND verdictComplete=true. On a "
                 + "partial batch it says merely that the part of the tree this batch reached was clean; when "
-                + "verdict_complete=false the answer is 'this could not be established', not 'there is nothing "
+                + "verdictComplete=false the answer is 'this could not be established', not 'there is nothing "
                 + "here'. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.PlanWalMoveAsync, "lattice_treeadmin_wal_move_plan",
                 "Preview a WAL partition move",
@@ -283,8 +283,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Read a tree's durable-history retention policy",
                 "Reads a tree's effective durable-history retention policy: the resolved mode applied to LWW "
                 + "(last-writer-wins) value bytes (MetadataOnly stores a revision's content hash and byte length only; "
-                + "FullValue stores the value bytes; Hybrid stores bytes for recent revisions and metadata for older "
-                + "ones) and the age-bound window in which a revision row is retained (zero means revisions do not "
+                + "FullValue stores the value bytes; Hybrid stores bytes for rows recent when written and metadata "
+                + "for rows already older than the hybrid window) and the age-bound window in which a revision row is retained (zero means revisions do not "
                 + "expire by age). Reflects the persisted per-tree override, falling back to the defaults "
                 + "(MetadataOnly, no age bound) when none is set. A pure read with no side effects. Requires "
                 + "whole-tree read authority. Read-only."),
@@ -349,8 +349,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "reported as a refusal. THE SAFE LOOP IS: audit, then repair driven to completion, then RE-AUDIT. "
                 + "Run lattice_treeadmin_orphaned_leaves_audit first - it reaches its verdict "
                 + "with the same code, so it reports in advance what this verb would do. ONE CALL IS ONE BOUNDED "
-                + "BATCH: it returns when its work budget is spent and reports complete=false with a resume_from "
-                + "token; pass that token back unaltered until complete=true, then re-audit to confirm the tree is "
+                + "BATCH: it returns when its work budget is spent and reports isComplete=false with a resumeFrom "
+                + "token; pass that token back unaltered until isComplete=true, then re-audit to confirm the tree is "
                 + "clean. IF YOU SEE A TIMEOUT OR ANY TRANSPORT ERROR, THE RETURN VALUE IS NOT AUTHORITATIVE AND ITS "
                 + "ABSENCE IS NOT EVIDENCE THAT NOTHING HAPPENED - the reply may have been lost after the repair "
                 + "landed. Do not guess: run the audit, which mutates nothing, and let it establish the true state. "

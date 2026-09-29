@@ -352,10 +352,14 @@ The cross-tenant grant surface. A grant is a two-step agreement: an offer create
 Each step is authorized for the platform operator or a live admin subject of one
 specific tenant: the **granting** tenant offers, the **grantee** tenant approves or
 rejects, **either** party may revoke, and a listing is the listed tenant's own.
-`scope` names the granting tenant's data the grant covers (a tree name or tree-name
-prefix), `operations` must not be `TenantGrantAccess.None`, and the two tenants must
-differ: a blank scope, an empty operation set, or the same tenant on both sides fails
-with an `ArgumentException`. An offer never
+`scope` names the granting tenant's data the grant covers. It is stored as supplied
+and matched against the full id of the tree a request names, so write it in the
+granting tenant's composed form - a tree id such as `t/acme/orders`, or a prefix of
+one that ends on a `/` segment boundary, such as `t/acme/` - because an unqualified
+name such as `orders` covers no tree. `operations` must not be
+`TenantGrantAccess.None`, and the two tenants must differ: a blank scope, an empty
+operation set, or the same tenant on both sides fails with an `ArgumentException`.
+An offer never
 requires the grantee to exist and may not name the reserved `default` tenant on
 either side. A grant that was never offered - or whose granting tenant is not
 registered - is reported identically as `TenantGrantNotFoundException`; asking for
@@ -364,6 +368,10 @@ lifecycle forbids (for example approving a rejected or revoked grant) raises
 `TenantGrantTransitionException` before any write. A step that races the other
 party's concurrent transition and loses the merge is refused with the same exception,
 carrying the state that won.
+
+The access gate honours an active grant's `Write` operation, but the data plane
+refuses a user-origin write that names another tenant's `t/` tree before the gate is
+consulted, so through the data surface only a grant's read operations take effect.
 
 ### `ILatticeTenantQuotaUsage`
 

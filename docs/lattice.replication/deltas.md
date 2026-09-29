@@ -34,7 +34,7 @@ Every record is a `readonly record struct` marked `[GenerateSerializer]`, with a
 | `RwSetDelta` | `ol.rsd` | Remove-wins observed-remove set: the add dots, the remove dots, and the remove dots an observed add has cancelled (tombstones), each an `OrSetDeltaDot` attached to its element. |
 | `BoundedRegisterDelta` | `ol.mxd` | Monotonic bounded register, shared by `MaxRegister` and `MinRegister`: the candidate value bytes and their total-order key; the direction comes from the receiver's register, not the delta. |
 
-The typed CRDT delta records each expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
+The typed CRDT delta records each expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections (for `BoundedRegisterDelta`, a delta with no candidate value) - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
 
 ## Apply rules
 

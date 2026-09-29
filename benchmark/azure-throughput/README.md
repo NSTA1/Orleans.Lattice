@@ -122,9 +122,12 @@ The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becom
 ```
 
 `update.ps1` flags:
-- `-NoBuild` -- just bounce the silo (no source sync, no publish).
+- `-NoBuild` -- skip the source sync and publish and just bounce the silo; the systemd
+  units are still re-rendered unless `-SkipUnitSync` is also passed.
 - `-NoRestart` -- sync + publish, leave the service alone (inspect first).
-- `-Clean` -- wipe `/opt/lattice/publish*` before publishing (force full rebuild).
+- `-Clean` -- wipe `/opt/lattice/publish` and `/opt/lattice/publish-producer` before
+  publishing. The build output under `/opt/lattice/src` is kept, so this forces a fresh
+  publish, not a clean rebuild; it has no effect with `-NoBuild`.
 - `-SkipUnitSync` -- skip re-rendering the systemd units when only source changed.
 - `-NamePrefix <name>`, `-ParametersFile <path>` -- as for `run-cohort.ps1` below.
 
@@ -390,8 +393,8 @@ az group delete --name rg-lat --yes --no-wait
 
 `performance-report.ps1 -Layer 3` (or `-Layer3`) measures the same engine and all nine
 workloads against N silos. It provisions a rig with `scripts/deploy-aca.ps1` (or reuses
-one with `-ReuseAca <prefix>`), runs `-N` cohorts (default 3) of every workload at each
-count in `-SiloCounts` (default `1, 2, 4, 6, 8`) through `scripts/run-cohort-aca.ps1`,
+one with `-ReuseAca <prefix>`), runs at least `-N` cohorts (default 3) of every workload
+at each count in `-SiloCounts` (default `1, 2, 4, 6, 8`) through `scripts/run-cohort-aca.ps1`,
 and deletes the resource group afterwards unless `-KeepAca` is set or the rig was
 reused. `-Resume` continues an interrupted sweep from its saved state. Both scripts can
 also be run by hand.
@@ -399,7 +402,10 @@ also be run by hand.
 A provisioning run names its rig from `-NamePrefix <prefix>` when given, otherwise from
 a fresh prefix. To sweep a rig you provisioned yourself, run
 `scripts/deploy-aca.ps1 -NamePrefix <prefix>` first, pass `-ReuseAca <prefix>`, and
-delete the rig yourself afterwards (a reused rig is kept).
+delete the rig yourself afterwards (a reused rig is kept). `performance-report.ps1`
+lower-cases the prefix it is given, strips its hyphens and refuses one still longer
+than nine characters, and `-ReuseAca` looks the rig's run context up under that cleaned
+name, so deploy a rig you mean to reuse under a prefix already in that form.
 
 Layer 3 publishes completed-work throughput, not offered load. A cell whose first
 cohort completes at least `-SaturationRatio` (default 0.9) of the load it offered is
@@ -458,7 +464,7 @@ completing work stays `HEALTHY`, with its failures carried as data.
 | `-WalReplayQueueDepth` | `64` | `BENCH_WAL_REPLAY_QUEUE_DEPTH` for the silos. |
 | `-SetManyFanOutBudgetSec`, `-WalAdmissionCallBudgetSec` | `30`, `15` | The two saturation budgets from [Saturation knobs](#saturation-knobs); `0` means infinite, the library default. |
 | `-TxRegistryShards` | `8` | Saga decision registry shards per tree, passed as `BENCH_TX_REGISTRY_SHARDS`. Pass `1` for the unsharded library default. |
-| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default (see below); any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. The silo honours only a positive coalescing threshold, so `0` for that arm falls back to the default. |
+| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default (see below); any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. For the coalescing threshold `0` turns coalescing off, the control arm of a sweep. |
 | `-WalMaterialiserPinBuckets` | `-1` | Floor on the durable pin buckets per pin shard (#3576). `-1` sets nothing, so the silo keeps the library default; any value from `1` up is passed as `BENCH_WAL_MATERIALISER_PIN_BUCKETS`. |
 | `-ResetStorage` | `$true` | Empty the rig's storage before the cohort (above). |
 | `-WalTable`, `-GrainStateTable` | `OrleansLatticeWal`, `OrleansLatticeGrainState` | Table names. Under `-ResetStorage` they are replaced by fresh `Wal<stamp>` / `Gs<stamp>` names unless passed explicitly. |
@@ -474,9 +480,8 @@ earlier cohort set that this cohort does not name (#3514). Secret-backed variabl
 `deploy-aca.ps1` baseline are kept. A `-1` arm therefore runs the silo's own default, and
 the removal rides the same update, so each cohort still mints exactly one revision.
 
-Neither script deletes the rig. `performance-report.ps1` tears down the rigs it
-provisions, but as committed it can provision none (see
-[Layer 3](#layer-3-multi-silo-azure-container-apps) above) and it keeps a rig it
-reused, so every rig is currently deployed by hand: delete `rg-<prefix>` yourself, or
-dot-source `scripts/aca-common.ps1` and run `Invoke-AcaTeardown -NamePrefix <prefix>`,
-which checks the ownership tag before deleting.
+Neither script deletes the rig. `performance-report.ps1` tears down a rig it provisioned
+itself unless `-KeepAca` is set, and keeps a rig it reused. For a rig you deployed by
+hand, or kept, delete `rg-<prefix>` yourself, or dot-source `scripts/aca-common.ps1` and
+run `Invoke-AcaTeardown -NamePrefix <prefix>`, which checks the ownership tag before
+deleting.

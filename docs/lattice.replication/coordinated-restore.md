@@ -69,6 +69,12 @@ phases:
    including a shard an adaptive split added, on the physical copy an earlier
    resize or restore put behind the alias - and every release lifts exactly
    that set.
+   The alias swap is bounded by tree ownership like every alias change: a
+   registered `ITreeOwnershipGuard` (the `Orleans.Lattice.Apps` package registers
+   one) is consulted before the alias is written, and a denial throws
+   `LatticeTreeOwnershipDeniedException` without swapping. The restored shadow
+   records the target tree as its origin, so the guard admits a restore into the
+   tree it was built for.
    Local writes resume as soon as the cutover completes, but cross-cluster
    shipping and receiving stay paused until the saga completes globally, so an
    early-flipping cluster cannot re-advance the restored cut. The write fence is
@@ -195,7 +201,10 @@ The optional `name` argument passed to `AddLatticeSagaParticipant` is used for
 diagnostics and logging only; it never affects the saga wire contract. A
 participant that hosts nothing for a given saga prepares vacuously (votes to
 commit) rather than blocking the saga. Registration is idempotent per participant
-type.
+type and form: repeated unnamed calls, or repeated named calls (the first name is
+kept), enlist it once, but mixing an unnamed and a named call for the same type
+enlists it twice, so every saga drives it through each phase twice - use one form
+per participant type.
 
 **Guardrails.** Every method must be idempotent, and a participant that cannot
 guarantee total compensation must vote to abort from `PrepareAsync` rather than

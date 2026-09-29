@@ -100,7 +100,10 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         // T20 per-tenant region residency. The two-tier fail-closed authorizer
         // (operator authorizes the allowed set; tenant-admin sets residency within
         // it), the region-residency control facade every transport binding adapts
-        // over, and the system-driven backfill/drain promotion driver. All are
+        // over, and the explicit lifecycle promotion helper trusted co-hosted
+        // infrastructure may call as milestones complete. No background service
+        // invokes that helper automatically today; residency changes stop at the
+        // status written by the facade until such a caller advances them. All are
         // append-only siblings of the tenant-lifecycle facade above.
         builder.Services.TryAddSingleton(sp => new TenantRegionResidencyAuthorizer(
             sp.GetRequiredService<ILatticeAccessGate>(),

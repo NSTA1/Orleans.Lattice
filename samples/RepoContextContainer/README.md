@@ -167,8 +167,12 @@ claims, and why you must not enable it in the middle of a measurement.
   `orleans.lattice.wal.replay.permit_adaptations` with
   `outcome=withheld, trigger=occupancy` for the proactive replay-concurrency
   backpressure, and `orleans.lattice.leaf.snapshot.hydration_admissions` with
-  `outcome=queued`. All are zero-primed, so a flat zero is a measured zero and an
-  absent series means the running image predates the instrument.
+  `outcome=queued`. All publish before they fire - the heap gauges from process
+  start, the replay counter once the replay gate is first sized, and the
+  hydration counter per tree at that tree's first leaf hydration, each arm primed
+  at zero - so a flat zero is a measured zero, and an absent series means either
+  that nothing has replayed or hydrated yet in this process or that the running
+  image predates the instrument.
 - Build context differs per image: the host image's is the REPOSITORY ROOT (it
   ProjectReferences the just-built `src/` bits), so its service sets
   `context: ../..`; the embedder builds from its own `apps/embedding-onnx`
@@ -242,6 +246,13 @@ and they produce **numerically identical vectors** (same pinned model revision,
 fp32, same tokenizer and pooling), so switching does not invalidate an existing
 `/data` volume. The ONNX image is roughly an order of magnitude smaller
 (about 1.3 GB against 13 GB).
+
+Those commands are for the untuned walkthrough stack. On the tuned deployment
+keep `-f docker-compose.tuning.yml` in both commands, before the Onyx file, or
+the switch silently drops the image pin, the grants and the tuned cadence; see
+[Rolling back the embedder](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#rolling-back-the-embedder)
+for the three-file form and the `-ExpectedConfigFileCount 3` the provenance
+check then needs.
 
 ### Running the embedder on an NVIDIA GPU
 
@@ -478,9 +489,9 @@ pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 7 refuses a doo
 | Variable | Default | Meaning |
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | `/memory-archive` in this sample; unset (feature off) otherwise | Container path the archive is written to. Unset disables the whole mechanism. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. Values below 30 are raised to 30. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores into an empty store, or into one whose restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. A positive value below 30 is raised to 30; a zero, negative or unparseable value falls back to 300. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores into an empty store, or into one whose restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores; an unrecognised value falls back to `auto`. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop. A positive value is clamped to 1-60; a zero, negative or unparseable value falls back to 20. |
 | `REPOCONTEXT_MEMORY_ARCHIVE_PATH` | none - **required** | HOST path bound at `/memory-archive`. Deliberately has no default: a relative one resolves against the compose invocation directory (issue #2627). Must be absolute and outside every checkout and worktree. |
 
 Restore this way by hand at any time - stop the box, put the archive files in
@@ -490,8 +501,14 @@ place, start it against an empty store:
 docker compose down -v
 ls "$REPOCONTEXT_MEMORY_ARCHIVE_PATH"/   # repo-context-memory.snapshot (+ .previous.snapshot)
 docker compose up -d
-docker compose logs repocontext | grep -i 'memory durability'
+docker compose logs repocontext | grep -i -E 'memory durability|durable memory'
 ```
+
+The `memory durability` lines are the startup statement of where memory lives and
+what protects it; they do not say whether anything was restored. The restore
+outcome is logged separately, a few seconds after start, on a line naming
+`Durable memory` - `Durable memory was restored from the archive at ...` when
+records were merged back - and that is the line that confirms the import.
 
 ### What this does not do
 
@@ -550,7 +567,9 @@ no shell-exec healthcheck:
   healthy and `503` while the silo is still starting or once it is unhealthy,
   with the three-way verdict in the body. It is what the container's Docker
   healthcheck targets, through the exec-form `--healthcheck` self-probe the
-  shell-less image needs, and it feeds neither of the two probes above.
+  shell-less image needs, and it feeds neither of the two probes above. Docker
+  only records that verdict: under this sample's `restart: unless-stopped` a
+  container is restarted when its process exits, never because it is unhealthy.
 - `GET /health/backup` - whether the durable agent-memory tree is actually being
   captured to the `azurite-backup-sink` service. It is tagged as neither liveness
   nor readiness, so a failing backup never restarts the container or pulls it
@@ -608,7 +627,9 @@ each one ruling out a cause the previous step left open:
 
 **Issuing a query yourself does not clear it, and the host is already trying.** A
 warmup service issues the same semantic query from application start, retrying with
-backoff (2s, doubling to a 30s cap) until the plane answers or shutdown begins. So a
+backoff (waits of 2, 4, 8, 16 and 32 seconds, then every 30 seconds) until the plane
+answers or shutdown begins, and once it has answered it re-checks readiness every
+30 seconds and re-drives the query whenever readiness has been revoked. So a
 persistent 503 is never "nobody has queried it yet" - it is that warmup failing
 repeatedly. In particular, a box that has a repository **registered** but holds no
 vectors for it stays not-ready by design: the search reports
@@ -1028,7 +1049,8 @@ Its own refusal paths are regression-tested rather than proven once:
 pwsh -File ./scripts/Test-AnnQueryProbe.ps1
 ```
 
-Twelve scenarios against a real in-process HTTP listener, covering both refusals,
+Twelve scenarios against a real HTTP listener that the suite runs as a background
+job, invoking the probe as a separate `pwsh` process, covering both refusals,
 the absent-arm case, the contaminated delta, the suppressed-fallback state, and
 all three readiness shapes (ready, not-ready-with-a-diagnosis, and a readiness
 endpoint that cannot be read at all).
@@ -1036,3 +1058,35 @@ The suite asserts its own scenario count is non-zero before reporting, for the
 same reason the probe asserts its issued count: a harness that ran nothing
 reports success in a way that is indistinguishable from a harness that ran
 everything and found nothing wrong.
+
+## Measuring an approximate-index build
+
+`scripts/Invoke-AnnBuildProbe.ps1` measures how long the approximate index takes
+to converge for one repository on a running container - the wall-clock figure an
+A/B of the build path is scored on. It registers the repository itself with
+`repocontext_add_repo` (a write, and for a repository that is already registered a
+fresh indexing pass), then polls `repocontext_health` for that repository every
+`-PollSeconds` (default 10) and reports the time to converge, the vectors indexed,
+and the sample series (written as JSON with `-JsonOutputPath`).
+
+```bash
+pwsh -File ./scripts/Invoke-AnnBuildProbe.ps1 -RepoPath /workspace/my-repo
+```
+
+`-RepoPath` is the in-container path under the mounted workspace, `-RepoId`
+defaults to its final segment, as `repocontext_add_repo` itself derives it, and
+`-BaseUri` defaults to `http://localhost:8080`.
+
+**Convergence is not the approximate plane reporting `Ready` on its own.** A build
+over a corpus that has not been embedded yet reaches `Ready` at once with nothing
+in it, so the probe waits for `Ready` with the indexed vector count caught up to a
+non-zero embedded coverage. It exits `0` when that happens and `2` when
+`-MaxWaitMinutes` (default 60) elapses first - an arm that does not converge is a
+result to record, not a harness fault - and it fails outright if the registration
+still fails after its retries.
+
+It deliberately does not read `/health/ready`, which answers a different question
+(see above), and it scores on time to converge rather than on the
+`repocontext.ann.build.stage.duration` histogram, because only the former is
+reported by every build an A/B might compare. Read the stage split afterwards to
+explain a difference, not to score one.

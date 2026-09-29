@@ -29,7 +29,8 @@ connected endpoint's capability probe reports list access; if the probe answers
 without it, or the endpoint faults, the grant is withheld and the area resolves
 `Denied` and is demoted, so the user can see the capability exists and ask for
 the grant. A caller who has not signed in gets `AuthenticationRequired` and an
-invitation to sign in, never a denial. The one case that hides the area instead
+invitation to sign in, never a denial, and so does a caller whose credential the
+server rejects as `Unauthenticated`. The one case that hides the area instead
 is a cluster that does not serve backup control at all: that answers
 `Unimplemented`, resolves `Unavailable`, and renders no entry, with the absence
 named in the rail's capabilities affordance. This area-entry check is the one

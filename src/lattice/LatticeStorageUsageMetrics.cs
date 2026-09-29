@@ -156,11 +156,12 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     }
 
     /// <summary>
-    /// Unions the per-tree byte measurements of every live sink instance. A
-    /// tree's aggregator is a single cluster-wide activation, so within one
-    /// process a given tree is published through at most one instance and the
-    /// union never double-counts it; co-hosted silos each contribute the trees
-    /// they host.
+    /// Unions the per-addressed-tree-id byte measurements of every live sink
+    /// instance. A tree's aggregator is a single cluster-wide activation for one
+    /// addressed id, so within one process a given id is published through at
+    /// most one instance; co-hosted silos each contribute the ids they host.
+    /// An aliased tree can still appear under both the logical id and the
+    /// physical copy id because pollers and roll-ups walk every registered id.
     /// </summary>
     /// <param name="selector">Selects the byte surface to observe from a report.</param>
     /// <param name="requireDeep">
@@ -253,14 +254,15 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     }
 
     /// <summary>
-    /// Publishes the latest storage-usage report for a tree so the byte
-    /// gauges reflect it on the next scrape. Called by the per-tree aggregator
-    /// after it assembles (or serves from cache) a report. Stamps the publish
-    /// time so a series the poller stops refreshing (because the aggregator
-    /// migrated to another silo) expires from this silo's sink after
-    /// <see cref="StalenessHorizon"/>. This is the deep-refresh path; the
-    /// cluster-wide background poller no longer drives it (see
-    /// <see cref="PublishWal"/> for the cheap WAL-only refresh path).
+    /// Publishes the latest storage-usage report for the addressed tree id so
+    /// the byte gauges reflect it on the next scrape. Called by the per-tree
+    /// aggregator after it assembles (or serves from cache) a report. Stamps the
+    /// publish time so a series the poller stops refreshing (because the
+    /// aggregator migrated to another silo) expires from this silo's sink after
+    /// <see cref="StalenessHorizon"/>. This is the deep-refresh path: on-demand
+    /// tree reads, the cluster roll-up, the optional deep poll, the admission
+    /// write guard's refresh, and tenancy metering can all drive it; see
+    /// <see cref="PublishWal"/> for the cheap WAL-only refresh path.
     /// </summary>
     public void Publish(TreeStorageUsageReport report)
     {
@@ -285,11 +287,11 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     /// makes this method return early on
     /// <see cref="TreeWalUsageReport.Partial"/> - do not publish a byte count
     /// that was not taken - applied to a count that was never taken at all
-    /// (issue #2693). Those three surfaces begin publishing once an explicit
-    /// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/> or
-    /// <see cref="ILattice.GetStorageUsageAsync"/> caller drives a deep report
-    /// through <see cref="Publish"/>, after which this path carries the deep
-    /// values forward as before.
+    /// (issue #2693). Those three surfaces begin publishing once a deep report
+    /// is driven through <see cref="Publish"/> by an on-demand tree read, an
+    /// operator refresh, the cluster roll-up, the optional deep poll, the
+    /// admission write guard's refresh, or tenancy metering; after that this
+    /// path carries the deep values forward as before.
     /// </para>
     /// </summary>
     public void PublishWal(TreeWalUsageReport report)

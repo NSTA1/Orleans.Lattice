@@ -37,8 +37,9 @@ shadow-forward primitive mirrors the source's live mutations to the destination
 shard with the same index; a last-writer-wins merge on the destination
 reconciles a mirrored write with the drain's copy of the same key. Typed CRDT
 deltas (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync` and the typed accessors
-built on them) are not mirrored, so a delta applied to a source shard after that
-shard has been drained does not reach the destination.
+built on them) and bulk appends (`BulkAppendChunkAsync` and the streaming
+`BulkLoadAsync` extension) are not mirrored, so one that reaches a source shard
+after the copy has read past the key it writes does not reach the destination.
 
 When the snapshot completes, it releases the shadow-forward on every source
 shard before it reports itself complete, so writes to the source after that
@@ -71,16 +72,18 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 - **Same shard count (automatic)**: the snapshot registers the destination
   tree itself, pinned to the source tree's shard count, so the two always
   match - there is no destination shard count to configure or mismatch.
-  The copy covers source shard indices `0` to `ShardCount - 1`, each into the
-  destination shard with the same index, and the destination routes keys by
-  the default shard map. A shard that an adaptive split allocated above that
-  range is not copied (a split gives its target shard an index above every
-  index allocated so far and leaves the pinned shard count unchanged), so a
-  snapshot of a tree whose shard map routes keys to such a shard does not
-  include the keys that shard holds. The split also leaves the moved keys in
-  place on the shard that gave them up - hidden there from reads - and the copy
-  includes them, so in the destination a key that already existed when a split
-  moved it reads the value it held at that moment rather than its current one.
+  The destination is also registered with the source's shard map and split
+  allocation mark, so every virtual slot routes to the same physical shard
+  index on both trees. The copy covers source shard indices `0` to
+  `ShardCount - 1` and every index the shard map routes to - including a shard
+  an adaptive split allocated above the pinned count (a split gives its target
+  shard an index above every index allocated so far and leaves the pinned
+  shard count unchanged) - each into the destination shard with the same
+  index. An entry is copied only when the shard map routes its key to the
+  shard it was read from: a split leaves the keys it moved in place on the
+  shard that gave them up - hidden there from reads - and those stale copies
+  are left behind, so every key reaches the destination at its current value.
+  The shard map is captured when the snapshot starts.
 - **Destination must not exist**: the destination tree ID must not already be
   registered in the tree registry (`InvalidOperationException` otherwise).
   Choose a new tree ID for each snapshot.

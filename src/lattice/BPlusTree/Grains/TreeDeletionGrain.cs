@@ -85,10 +85,10 @@ internal sealed partial class TreeDeletionGrain(
         // Mark all shards stored under this id as deleted first - including
         // every shard an adaptive split allocated above the pinned ShardCount,
         // which the routing map can send keys to (see
-        // ResolveAllocatedShardCountAsync), unless the registry no longer
-        // records it: for a resize's retired first copy the alias swap has
-        // already dropped the shard map and split mark, so only shards up to
-        // the pinned count are marked. An alias is not resolved.
+        // ResolveAllocatedShardCountAsync). A resize's alias swap carries the
+        // routing map over to the logical entry, and its cleanup records it on
+        // a derived copy's own entry, so a retired copy's split shards are
+        // reached too. An alias is not resolved.
         var shardCount = await ResolveAllocatedShardCountAsync();
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)

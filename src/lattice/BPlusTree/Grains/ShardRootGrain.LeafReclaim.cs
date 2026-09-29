@@ -66,10 +66,10 @@ internal sealed partial class ShardRootGrain
     /// leaf activations inside one non-reentrant turn. Warm and co-located
     /// that is sub-second; cold against remote storage, where each activation
     /// pays a state read, it is seconds. That is affordable for background
-    /// tidy-up, and the writes most likely to be racing it -
-    /// <c>SetManyAsync</c> and its predicated variant - are
-    /// <c>[AlwaysInterleave]</c> and are not blocked by it. Plain
-    /// <c>SetAsync</c> and single-key reads are, for the length of the pass.
+    /// tidy-up. Point <c>SetAsync</c>, <c>SetManyAsync</c> and its predicated
+    /// variant, and optimistic point reads are <c>[AlwaysInterleave]</c> and
+    /// are not blocked by it. Serial single-key reads, deletes, and scan pages
+    /// are blocked for the length of the pass.
     /// </para>
     /// <para>
     /// <b>Coupling warning.</b> That bound is a multiple of an operator-tunable

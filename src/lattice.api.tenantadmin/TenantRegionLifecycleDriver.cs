@@ -5,7 +5,7 @@ using Orleans.Lattice.Tenancy;
 namespace Orleans.Lattice.Api.TenantAdmin;
 
 /// <summary>
-/// The internal, system-driven promotion driver that advances a tenant's region
+/// Internal helper for trusted infrastructure to advance a tenant's region
 /// through the residency lifecycle one legal step at a time: it applies the
 /// backfill-complete promotion (<see cref="TenantRegionStatus.Provisioning"/> -&gt;
 /// <see cref="TenantRegionStatus.Backfilling"/> -&gt;
@@ -16,13 +16,14 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is a system-driven mechanism, not a caller-facing operation, so it carries
-/// no caller authorization: it is invoked by trusted co-hosted infrastructure (the
-/// backfill and drain machinery) as a region reaches the next lifecycle milestone.
-/// It never mints a step the lifecycle does not allow - it consults the single
-/// lifecycle authority (<see cref="TenantRegionLifecycle.TryNextPromotion"/>) - and
-/// is an idempotent no-op at a terminal or non-transitional status, so a redriven
-/// or duplicated promotion signal cannot corrupt the record.
+/// This is not a caller-facing operation, so it carries no caller authorization.
+/// The helper is registered for trusted co-hosted infrastructure to call when
+/// backfill and drain machinery reaches the next lifecycle milestone; no
+/// background service invokes it automatically today. It never mints a step the
+/// lifecycle does not allow - it consults the single lifecycle authority
+/// (<see cref="TenantRegionLifecycle.TryNextPromotion"/>) - and is an
+/// idempotent no-op at a terminal or non-transitional status, so a redriven or
+/// duplicated promotion signal cannot corrupt the record.
 /// </para>
 /// <para>
 /// Each advance is stamped with a strictly increasing

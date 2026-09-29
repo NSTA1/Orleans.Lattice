@@ -168,7 +168,13 @@ crash-safe [shadow-build-and-cutover](schema-enforcement.md#bringing-existing-da
 mechanism: it is all-or-nothing (a value that cannot be upcast aborts the whole
 migration and leaves the tree untouched), idempotent (a value already at the target
 is passed through unchanged), and failover-resumable (the target is persisted before
-any side effect). Like enforcement remediation, the data migration copies at the
+any side effect). Like a remediation, it holds the tree's alias reservation while it
+is in flight, so the tree cannot be deleted mid-migration and a migration of a
+deleted tree, or of one with a delete pending, is refused, and its cutover's alias
+swap is put to the same ownership check. `AdvanceAndMigrateAsync` advances the
+target before it starts the migration, so if the migration is refused or aborts, the
+new target stays in place and read-time upcasting serves the existing values. Like
+enforcement remediation, the data migration copies at the
 logical level and does not shadow-forward concurrent writes, so it should run when the
 tree is write-quiescent; the lazy read path keeps concurrent readers correct until it
 cuts over. When the tree also has an enforcement policy, each re-stamped value is

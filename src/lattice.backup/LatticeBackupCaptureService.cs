@@ -1061,25 +1061,35 @@ internal sealed class LatticeBackupCaptureService(
     /// virtual shard space, and the per-shard structural digests at the cut. A
     /// shard whose projection digest is disabled contributes a stable placeholder
     /// digest so the manifest stays self-describing.
+    /// <para>
+    /// Both figures and the digested shards come from the tree's routing map, not
+    /// from a count of shards. Physical shard indices are not contiguous once shard
+    /// healing folds a shard away, so addressing shards <c>0..count-1</c> named a
+    /// shard the map no longer holds and failed the whole capture; and a tree whose
+    /// map was created over a declared slot count does not have the default 4096
+    /// virtual slots.
+    /// </para>
     /// </summary>
-    private async Task<BackupTopologySnapshot> BuildTopologyAsync(
+    internal static async Task<BackupTopologySnapshot> BuildTopologyAsync(
         ILattice lattice,
         string? startInclusive,
         string? endExclusive,
         CancellationToken cancellationToken)
     {
-        var perShard = await lattice.CountPerShardAsync(cancellationToken).ConfigureAwait(false);
-        var shardCount = perShard.Count;
-        var virtualShardCount = LatticeConstants.DefaultVirtualShardCount;
+        // Force a refresh: the tree grain is a stateless worker that caches its
+        // routing per activation, and a fold or split that landed after that cache
+        // was filled would otherwise name a shard the digest read then rejects.
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+        var physicalShards = routing.Map.GetPhysicalShardIndices();
 
-        var digests = new List<string>(shardCount);
-        for (var shardIndex = 0; shardIndex < shardCount; shardIndex++)
+        var digests = new List<string>(physicalShards.Count);
+        foreach (var shardIndex in physicalShards)
         {
             digests.Add(await ResolveShardDigestAsync(lattice, shardIndex, startInclusive, endExclusive, cancellationToken)
                 .ConfigureAwait(false));
         }
 
-        return new BackupTopologySnapshot(shardCount, virtualShardCount, digests);
+        return new BackupTopologySnapshot(physicalShards.Count, routing.Map.VirtualShardCount, digests);
     }
 
     private static async Task<string> ResolveShardDigestAsync(

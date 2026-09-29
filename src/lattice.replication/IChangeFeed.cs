@@ -89,9 +89,10 @@ public interface IChangeFeed
     /// </para>
     /// </summary>
     /// <param name="treeName">
-    /// Logical tree id whose change feed is being consumed. Only
-    /// entries with <see cref="WalRecord.TreeId"/> equal to this
-    /// value are yielded. Must not be <see langword="null"/>.
+    /// Logical tree id whose change feed is being consumed. The current
+    /// implementation reads that tree's WAL partitions and re-stamps decoded
+    /// records with this value; it does not apply a post-decode
+    /// <see cref="WalRecord.TreeId"/> filter. Must not be <see langword="null"/>.
     /// </param>
     /// <param name="cursor">
     /// Reserved HLC cursor parameter. The current implementation snapshots the
@@ -109,8 +110,8 @@ public interface IChangeFeed
     /// projections and background materialisers need to observe
     /// local-origin mutations. Note that this flag filters
     /// <i>within</i> the locally-authored feed; it does not surface
-    /// remote-apply installations (those never enter the WAL on this
-    /// cluster - see the type-level remarks).
+    /// remote-apply installations, which enter the WAL but are dropped
+    /// by the foreign-origin guard described in the type-level remarks.
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed between every page read and every yielded entry.</param>
     IAsyncEnumerable<WalRecord> Subscribe(
@@ -149,9 +150,10 @@ public interface IChangeFeed
     /// </para>
     /// </summary>
     /// <param name="treeName">
-    /// Logical tree id whose change feed is being consumed. Only
-    /// entries with <see cref="WalRecord.TreeId"/> equal to this
-    /// value are yielded. Must not be <see langword="null"/>.
+    /// Logical tree id whose change feed is being consumed. The current
+    /// implementation reads that tree's WAL partitions and re-stamps decoded
+    /// records with this value; it does not apply a post-decode
+    /// <see cref="WalRecord.TreeId"/> filter. Must not be <see langword="null"/>.
     /// </param>
     /// <param name="cursor">
     /// Per-partition exclusive-lower-bound offset snapshot (the offset

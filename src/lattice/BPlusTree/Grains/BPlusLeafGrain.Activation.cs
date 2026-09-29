@@ -1554,7 +1554,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 try
                 {
-                    await gate.WaitAsync(cancellationToken);
+                    await gate.WaitAsync(cancellationToken).ConfigureAwait(true);
                 }
                 catch (OperationCanceledException)
                 {

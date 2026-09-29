@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-`Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
+`Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters, and its `Overview` dashboard also charts the exact-KNN gather instruments of the repository-context `Orleans.Lattice.Api.Mcp.RepoContext` meter. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
 
 ## What is it?
 
@@ -8,7 +8,7 @@ The package is a thin, dependency-light delivery vehicle for operator dashboards
 
 - **Bundled, version-pinned dashboards.** Operator dashboards for the overview, commit path, replication, replication gRPC transport security, atomic writes, materialised views, identity/authorization, backup/restore, autoscaling-signal, per-tenant observability, and grain-index surfaces ship as embedded Grafana JSON, each retrieved by a typed kind. Each package version is built and drift-guarded against the library source it ships with, so a dashboard never references an instrument that library version does not emit.
 - **No replication dependency.** The package takes a runtime dependency only on `Orleans.Lattice` (the core library). The replication dashboard's queries reference instruments on the `orleans.lattice.replication` meter, but the package does not link against `Orleans.Lattice.Replication`; that meter is only emitted when the replication package is registered on the silo separately. Local-only deployments install the dashboards without pulling in replication and simply omit the replication dashboard.
-- **Drift-guarded coverage.** Every metric name a dashboard references resolves to an instrument declared in the library source, and every instrument the guard can discover is referenced by at least one panel, apart from a short allow-list left uncharted on purpose - both directions are enforced by CI tests so a rename or a new unpaneled instrument fails the build before it ships stale. The core guard's forward direction reaches only instruments published by, or named by instrument-name constants on, the two static metric classes; each add-on package, and the grain-index package that publishes on the core meter, enforces the forward direction for its own instruments from its own tests. See [Architecture](architecture.md#the-bidirectional-drift-guard) for the one gap this leaves and the instruments currently outside it.
+- **Drift-guarded coverage.** Every metric name a dashboard references resolves to an instrument declared in the library source, and every instrument the guard can discover is referenced by at least one panel, apart from a short allow-list left uncharted on purpose - both directions are enforced by CI tests so a rename or a new unpaneled instrument fails the build before it ships stale. The core guard's forward direction reaches only instruments published by, or named by instrument-name constants on, the two static metric classes; each add-on package whose meter has its own dashboard, and the grain-index package that publishes on the core meter, enforces the forward direction for its own instruments from its own tests. The repository-context meter is held to its metric-to-panel map rows instead - every instrument has a row, and each row's charted or not-charted claim must agree with the panels - and the `orleans.lattice.api.mcp` meter is deliberately left uncharted. See [Architecture](architecture.md#the-bidirectional-drift-guard) for the one gap this leaves and the instruments currently outside it.
 
 ## Core Properties
 
@@ -20,7 +20,7 @@ The package is a thin, dependency-light delivery vehicle for operator dashboards
 
 | Dashboard | Source meter | Focus |
 |---|---|---|
-| `Overview` | `orleans.lattice` | Throughput and active shards, leaf-write percentiles and leaf-scan p95, cache hit-rate, tombstone churn, splits, autonomic split admission, retroactive split-forward, shard consolidation and healing, compaction (duration, pass duration, leaves visited, shard retries / skips, dirty leaves, tombstone ratio), atomic-write outcomes, coordinator completions and phase-tick failures, tree-lifecycle, events, runtime config changes, and top-of-stack read-path latency envelopes and shard-root optimistic point-read outcomes, plus storage footprint and byte-pressure trim, WAL compression and dictionary training, the WAL saturation regime, snapshot replay and pins, write admission, the distributed-lock, atomic-action (saga / TCC) and grain-call contention rows, tree-registry fan-in, leaf-division and split-completion health, and the deployed build. Includes three side-by-side atomic-write panels (saga duration p50/p95/p99, batch size p50/p95/p99, and a saga-failure-rate panel with 1% / 5% threshold lines). |
+| `Overview` | `orleans.lattice`, plus `Orleans.Lattice.Api.Mcp.RepoContext` for its exact-KNN panels | Throughput and active shards, leaf-write percentiles and leaf-scan p95, cache hit-rate, tombstone churn, splits, autonomic split admission, retroactive split-forward, shard consolidation and healing, compaction (duration, pass duration, leaves visited, shard retries / skips, dirty leaves, tombstone ratio), atomic-write outcomes, coordinator completions and phase-tick failures, tree-lifecycle, events, runtime config changes, and top-of-stack read-path latency envelopes and shard-root optimistic point-read outcomes, plus storage footprint and byte-pressure trim, WAL compression and dictionary training, the WAL saturation regime, snapshot replay and pins, write admission, the distributed-lock, atomic-action (saga / TCC) and grain-call contention rows, tree-registry fan-in, leaf-division and split-completion health, the repository-context exact-KNN gather work, wall time and budget outcomes, and the deployed build. Includes three side-by-side atomic-write panels (saga duration p50/p95/p99, batch size p50/p95/p99, and a saga-failure-rate panel with 1% / 5% threshold lines). |
 | `CommitPath` | `orleans.lattice` | WAL-first commit path: per-step commit latency (`wal` / `apply` / `observer` / `digest`), leaf commit concurrency and per-observer inline latency, `SetAsync` / `SetManyAsync` envelope and stage breakdowns, the WAL append, writer-admission and shard-dispatch pipeline, storage-provider write latency, phase-2 commit, retries and timeouts, compaction latency and TTL tombstone churn, digest publish, reshard and warm-up activity, scan-page leaf-read coalescing and the shard-root wedge guards, and leaf lifecycle diagnostics - the materialiser pin path, activation and deactivation outcomes, snapshot capture and hydration, the WAL replay permit gate, deferred-terminal ledger refusals, the resident leaf working set, span fail-open commits, and the WAL GC blocked-consumer population. |
 | `Replication` | `orleans.lattice.replication`, plus `orleans.lattice` for its WAL, WAL-compaction and WAL GC panels | Ship / apply / lag percentiles, ship ack latency and adaptive batch size, apply parallelism, WAL ship vs trim throughput and the log-tailing producer's append vs ship rate, dead-letter queue churn, apply FIFO and causal violations, causal apply-buffer occupancy and the dependency-wait histogram, fell-off-log and suppressed fall-off events, per-peer entries / bytes behind, batches in flight, last contact, consecutive errors, negotiated wire version and down-stamps, anti-entropy digest probes, Merkle walks, leaf re-replay and drift remediation, bootstrap and bootstrap-fallback activity, shipping optimisations (coalescing, doorbell, content-hash elision, shared-dictionary compression), coordinated-restore saga panels, and the core meter's WAL GC, WAL compaction and WAL recovery-discard panels. |
 | `AtomicWrites` | `orleans.lattice` | Dedicated `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration p50/p95/p99 and p95 by outcome, batch size p50/p95/p99 and p95 by outcome, per-tree committed throughput, range-window non-committed saga count, a separate saga-failure-rate panel, saga phase-duration and broadcast sub-attribution breakdowns, per-key saga work and fan-out size, cross-tree atomic-write outcomes, failure rate, coordinator duration and participant fan-out, and the saga decision registry's write rate by outcome, group-commit coalescing factor and write duration. The right home for incident triage and SLO drill-down; the `Overview` row is the at-a-glance teaser. |
@@ -40,7 +40,7 @@ Install the package:
 <PackageReference Include="Orleans.Lattice.Dashboards" Version="<X.Y.Z>" />
 ```
 
-Wire up the meters the core dashboards read. `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard (`ReplicationGrpc`, `Authorization`, `Backup`, `Scaling`, `Tenancy`) also needs its own meter registered by name - see [Configuration](configuration.md#1-register-the-meters):
+Wire up the meters the core dashboards read. `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard (`ReplicationGrpc`, `Authorization`, `Backup`, `Scaling`, `Tenancy`) also needs its own meter registered by name, as do the `Overview` dashboard's exact-KNN panels (`Orleans.Lattice.Api.Mcp.RepoContext`) - see [Configuration](configuration.md#1-register-the-meters):
 
 ```csharp
 builder.Services.AddOpenTelemetry()
@@ -59,20 +59,27 @@ they are registered and what they cost.
 
 Retrieve the dashboard JSON by kind:
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Dashboards;
 
-var overview     = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview);
-var commitPath   = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.CommitPath);
-var replication  = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Replication);
-var atomicWrites = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.AtomicWrites);
-var views        = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.MaterialisedViews);
-var authz        = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Authorization);
-var backup       = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Backup);
-var scaling      = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Scaling);
-var replGrpc     = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.ReplicationGrpc);
-var tenancy      = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Tenancy);
-var grainIndex   = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.GrainIndex);
+public static class DashboardJsonLoader
+{
+    public static IReadOnlyDictionary<LatticeDashboardKind, string> LoadDashboards()
+        => new Dictionary<LatticeDashboardKind, string>
+        {
+            [LatticeDashboardKind.Overview] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview),
+            [LatticeDashboardKind.CommitPath] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.CommitPath),
+            [LatticeDashboardKind.Replication] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Replication),
+            [LatticeDashboardKind.AtomicWrites] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.AtomicWrites),
+            [LatticeDashboardKind.MaterialisedViews] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.MaterialisedViews),
+            [LatticeDashboardKind.Authorization] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Authorization),
+            [LatticeDashboardKind.Backup] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Backup),
+            [LatticeDashboardKind.Scaling] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Scaling),
+            [LatticeDashboardKind.ReplicationGrpc] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.ReplicationGrpc),
+            [LatticeDashboardKind.Tenancy] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Tenancy),
+            [LatticeDashboardKind.GrainIndex] = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.GrainIndex),
+        };
+}
 ```
 
 `LatticeDashboards.All` enumerates every kind in declaration order, so a provisioning loop stays complete as new dashboards are added.
@@ -118,7 +125,12 @@ would need to publish. Having no honest bounds to publish, it renders every
 appends no unit suffix at all. Against that endpoint every quantile panel here is
 **unavailable, not zero** - and a panel carrying the common `or vector(0)` repair
 displays a literal zero that is indistinguishable from a genuine sustained-zero
-fault. Chart those series as `rate(_sum) / rate(_count)` instead. The full account
+fault. Chart those series as `rate(_sum) / rate(_count)` instead. The missing unit
+word empties a unit-suffixed panel there even when it is not a quantile panel: the
+`Overview` dashboard's exact-KNN gather wall-time panel reads
+`repocontext_retrieval_exact_scan_duration_seconds_total`, which the container -
+the only host in this repository that publishes that instrument - exposes as
+`repocontext_retrieval_exact_scan_duration_total`. The full account
 is in [the container guide](../lattice.api.mcp.repocontext/container.md).
 
 **Two template variables read scrape-side labels, not instrument tags.** No

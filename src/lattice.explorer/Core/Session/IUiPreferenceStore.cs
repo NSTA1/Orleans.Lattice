@@ -12,8 +12,8 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// hydrated from the backing store once per session by
 /// <see cref="EnsureLoadedAsync"/>, which callers must await before their first
 /// read. Each entry may carry an <c>owner</c> discriminator (typically a catalog
-/// selection id) so <see cref="GarbageCollectAsync"/> can drop preferences whose
-/// owner no longer exists. Stored entries also expire after a retention window
+/// selection id) for callers that explicitly run <see cref="GarbageCollectAsync"/>
+/// with the live-owner set. Stored entries also expire after a retention window
 /// so the backing store never grows without bound.
 /// </para>
 /// </summary>
@@ -53,7 +53,7 @@ public interface IUiPreferenceStore
     /// <summary>
     /// Stores <paramref name="value"/> under <paramref name="key"/> and persists
     /// it, tagging the entry with the optional <paramref name="owner"/>
-    /// discriminator used by <see cref="GarbageCollectAsync"/>.
+    /// discriminator consulted when <see cref="GarbageCollectAsync"/> is invoked.
     /// </summary>
     Task SetAsync<T>(string key, T value, string? owner = null, CancellationToken cancellationToken = default);
 

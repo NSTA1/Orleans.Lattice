@@ -48,8 +48,9 @@ parameters file. The folder also holds two dot-sourced helper modules (`_run-coh
 `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 
 **`performance-report.ps1` run prefix.** `-NamePrefix <prefix>` forces the prefix every resource
-name derives from; without it a Layer 1 or Layer 2 run takes `-ReuseVm`'s prefix or mints a fresh
-one, and a Layer 3 run takes `-ReuseAca`'s rig or provisions one under a fresh prefix. The report
+name derives from, except that on Layer 3 a `-ReuseAca` rig takes precedence over it; without it a
+Layer 1 or Layer 2 run takes `-ReuseVm`'s prefix or mints a fresh one, and a Layer 3 run takes
+`-ReuseAca`'s rig or provisions one under a fresh prefix. The report
 lower-cases the prefix it is given, strips its hyphens and refuses more than nine characters, so use
 three to nine lowercase letters and digits (`deploy-aca.ps1` also refuses fewer than three
 alphanumerics). Two further shapes:
@@ -210,7 +211,7 @@ offers the same load per silo.
 | `-ResetStorage <bool>` | `$true` | Start every cohort against empty storage: delete every table except the clustering table and use freshly-named WAL and grain-state tables (#3458). |
 | `-SetManyFanOutBudgetSec <N>` / `-WalAdmissionCallBudgetSec <N>` | `30` / `15` | Set the two #3348 budgets explicitly; `0` = infinite (the library default). |
 | `-TxRegistryShards <N>` | `8` | Saga decision registry shards per tree (`BENCH_TX_REGISTRY_SHARDS`); `1` = the unsharded library default. |
-| `-WalAppendCoalescingInFlightThreshold <N>` | `-1` | `-1` sets nothing (see the note below the table); any value from `0` up is passed to the silos, but the silo ignores `0` and runs the default 4, so the #3396 control arm is not reachable on the rig. |
+| `-WalAppendCoalescingInFlightThreshold <N>` | `-1` | `-1` sets nothing (see the note below the table); any value from `0` up sets `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` on the silos, and `0` is the #3396 control arm (coalescing off). |
 | `-WalBatchedSingleEntryAppends <N>` | `-1` | `-1` sets nothing (see below); `0` / `1` pin the #3408 control / fix arms. |
 | `-WalMaterialiserPinBuckets <N>` | `-1` | `-1` sets nothing (see below); any value from `1` up sets `BENCH_WAL_MATERIALISER_PIN_BUCKETS` (ACA only). |
 | `-WalSaturationRecoveryReleaseBatch <N>` | `-1` | `-1` sets nothing (see below); `0` is the #3402 release-everything control arm. |

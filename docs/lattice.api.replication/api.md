@@ -15,7 +15,7 @@ Every `treeId` these operations accept is a **tenant-local name**: the facade re
 
 | Operation | Signature | Notes |
 |---|---|---|
-| Enable replication | `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then enables it under the fixed `mode`. Rejects an in-place mode change on an already-enabled tree. When `bootstrapSourceClusterId` is supplied and the tree already holds data, requests a snapshot bootstrap. |
+| Enable replication | `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then enables it under the fixed `mode`. Rejects an in-place mode change on an already-enabled tree. When `bootstrapSourceClusterId` is supplied and the tree already holds data, requests a snapshot bootstrap; an enable that finds the tree already enabled under the same mode returns `AlreadyEnabled = true` and requests none. |
 | Disable replication | `Task<ReplicationDisableResult> DisableReplicationAsync(string treeId, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then disables its runtime enrollment without purging peer data. Idempotent. |
 | Get replication config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` | Returns a permission-scoped report; trees the caller may not manage are omitted rather than throwing. |
 
@@ -70,7 +70,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `LatticeAuthorizationDeniedException` | The caller is not authorized for the `LatticeOperation.Replication` capability on the target tree. |
 | `ArgumentException` | `treeId` is null or empty. |
 | `LatticeTenantAccessDeniedException` | The tenancy add-on is registered and the request asserts an active tenant the caller may not act as (an anonymous caller never can), or, under an asserted tenant, names a `sys-` tree or a malformed `t/` id, so the tenant-local `treeId` cannot be resolved. (Defined in `Orleans.Lattice`.) |
-| `LatticeReplicationModeChangeRejectedException` | An enable would change the merge mode of an already-enabled tree, or targets an enabled tree whose mode is currently ambiguous. Carries `CurrentMode`, `RequestedMode`, and `CurrentModeAmbiguous`. (Defined in `Orleans.Lattice.Replication`.) |
+| `LatticeReplicationModeChangeRejectedException` | An enable would change the merge mode of an already-enabled tree, or targets an enabled tree whose mode is currently ambiguous. Carries `TreeId`, `CurrentMode`, `RequestedMode`, and `CurrentModeAmbiguous`. (Defined in `Orleans.Lattice.Replication`.) |
 | `LatticeReplicationPreconditionFailedException` | A runtime precondition for authoring the change was not met: no local replica id is configured - the config entry's flag dots are stamped with it, so both an enable and the disable of an enabled tree need one - or a flag-based merge mode is requested without one. (Defined in `Orleans.Lattice.Replication`.) |
 | `InvalidOperationException` | An enable that requests a snapshot bootstrap finds a bootstrap for the same tree already in progress from a different source cluster. The enable itself has already been written to the config tree by the time this is raised. |
 

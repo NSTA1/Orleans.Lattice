@@ -18,8 +18,8 @@ all-or-nothing across every participating tree under concurrent shard
 splits; and that the per-merge-mode CRDT dispatch paths converge across
 partitioned sites. The single-cluster suite also exercises the
 recovery protocols (resumable splits, two-phase root promotion,
-shadow-write atomicity, shadow-forwarding, registry version stamping,
-idempotent bulk graft) under random storage-write faults. The
+shadow-write atomicity, shadow-forwarding, and registry version stamping)
+under random storage-write faults. The
 replication suite extends those guarantees to the production shipper,
 WAL trim, per-peer liveness, tombstone-reap filtering, and the gRPC
 transport; the Azure Table WAL suite pins append-batch atomicity and
@@ -292,8 +292,9 @@ passes complete exception-free**, bounded by a 15 s timeout. This loop:
   write, clearing itself).
 * Gives resumable splits and pending root promotions time to reach
   their `RunSplitPassAsync` keepalive tick and replay.
-* Exercises idempotent apply of `BulkGraft` and shadow `MergeManyAsync`
-  - a healing retry that re-writes the same value is a no-op under LWW.
+* Rewrites every universe key with a fresh value on each pass
+  (`v-{i}-heal-{pass}`), so after three clean passes every key holds a
+  value a fault-free pass wrote, and that value matches its envelope.
 
 ### Pass criteria (post-quiescence)
 
@@ -815,7 +816,7 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 | Two-phase root promotion (`PendingPromotion`) replay | - | ✅ | - | - |
 | Shadow `MergeManyAsync` atomicity under failed source write | - | ✅ | - | - |
 | Registry `ShardMap.Version` stamping under retry | - | ✅ | - | ✅ |
-| Idempotent `BulkGraft` and drain chunks | - | ✅ | ✅ | ✅ |
+| Idempotent drain chunks | - | ✅ | ✅ | ✅ |
 | `TreeResizeGrain` phase machine under live traffic | - | - | ✅ | - |
 | Per-source-shard shadow-forwarding under live traffic | - | - | ✅ | - |
 | `TreeReshardGrain` migration loop + dispatch-budget clamping | - | - | - | ✅ |

@@ -4,7 +4,7 @@
 	Deploy the lattice-bench VM (Bicep). Idempotent.
 
 .DESCRIPTION
-	Reads parameters from vm.parameters.local.ps1 (preferred) or vm.parameters.ps1.
+	Reads parameters from parameters.local.ps1 (preferred) or parameters.ps1.
 	Creates the resource group if missing, deploys main.bicep, prints the SSH command.
 
 .PARAMETER ParametersFile
@@ -19,9 +19,9 @@
 	editing the parameters file.
 
 .EXAMPLE
-	./deploy-vm.ps1
+	./deploy.ps1
 .EXAMPLE
-	./deploy-vm.ps1 -NamePrefix lattice-bench-spike
+	./deploy.ps1 -NamePrefix lattice-bench-spike
 #>
 [CmdletBinding()]
 param(
@@ -287,13 +287,13 @@ if (-not $dotnetVer) {
 Write-Host "  dotnet $dotnetVer" -ForegroundColor Green
 
 Write-Host ''
-Write-Host '=== Infra deploy complete; running update-vm to publish silo + producer ===' -ForegroundColor Cyan
+Write-Host '=== Infra deploy complete; running update.ps1 to publish silo + producer ===' -ForegroundColor Cyan
 $updateScript = Join-Path $here 'update.ps1'
 $updateArgs = @{}
 if ($NamePrefix)    { $updateArgs.NamePrefix    = $p.NamePrefix }
 if ($ParametersFile) { $updateArgs.ParametersFile = $ParametersFile }
 & $updateScript @updateArgs
-if ($LASTEXITCODE -ne 0) { throw "update-vm.ps1 failed (exit $LASTEXITCODE)." }
+if ($LASTEXITCODE -ne 0) { throw "update.ps1 failed (exit $LASTEXITCODE)." }
 
 Write-Host ''
 Write-Host '=== End-to-end deploy complete ===' -ForegroundColor Green

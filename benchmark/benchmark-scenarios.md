@@ -88,7 +88,7 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `SetAsync(key, value, ttl)` overload, which the sink calls key by key (there is
   no batched TTL write). Stresses the TTL write path on an append-only, key-ordered
   keyspace. As shipped the scenario enables no reader, so ordered scans
-  (`ScanKeysAsync` / `EntriesAsync`) and the read-path expiry filter go
+  (`ScanKeysAsync` / `ScanEntriesAsync`) and the read-path expiry filter go
   unexercised, and its 1 hour TTL outlasts the run, so no entry expires and
   TTL-driven tombstone compaction has nothing to reap. Run independently of
   throughput experiments - compaction
@@ -142,8 +142,10 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   Mirror of `current-state-no-replication` with `Lattice:Wal:Provider=azuretable`
   routing every WAL append through `Orleans.Lattice.Storage.AzureTable` against
   the same Azurite instance the silo uses for clustering / reminders. Quantifies
-  the per-commit cost of one `TableClient.SubmitTransactionAsync` versus the
-  in-memory baseline. Compare commit p99 / commits-per-second against
+  what the durable append costs against the in-memory baseline: with both
+  optimisation toggles off (below), every WAL batch pays a phase-0 candidate-row
+  upsert, a phase-1 entry-row transaction and a phase-2 manifest commit that the
+  append waits for. Compare commit p99 / commits-per-second against
   `current-state-no-replication` to read the durability tax in isolation.
   Both Azure Table WAL optimisation toggles (`BENCH_WAL_ELIMINATE_CANDIDATE_ROW`,
   `BENCH_WAL_PIPELINE_PHASE_TWO`) stay off here, although the provider defaults
@@ -209,7 +211,7 @@ These apply to every benchmark above and should be verified before kicking off a
   Configured via `BENCH_WARMUP_SECONDS` in each `.env`.
 - Telemetry sink writes happen **off** the `VehicleGrain` turn, so
   grain-tick latency is attributable to the simulator and not to Lattice
-  (see §4 below).
+  (see section 4 below).
 - `FleetGrain.GetFleetStats` continues to use the in-grain aggregator -
   never back it with a Lattice scatter-gather scan, which would dominate
   the measurement.
@@ -256,7 +258,7 @@ own batching, off-turn dispatch, and failure handling, because:
   is purely "enqueue to a bounded channel" - the steady-state hot path
   stays allocation-free.
 - The producer must not be blocked by a slow downstream. A correct sink
-  MUST NOT couple its own latency to the `VehicleGrain` turn (see §4
+  MUST NOT couple its own latency to the `VehicleGrain` turn (see section 4
   below).
 
 ### 2. Sink selection at silo startup

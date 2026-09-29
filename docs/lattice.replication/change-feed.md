@@ -69,7 +69,7 @@ Entries are yielded in `HybridLogicalClock` ascending order, merged across every
 
 ## Caveats
 
-- The feed does not follow a tree's alias. It addresses the WAL partitions by the tree id it is given, while a tree's writes are logged under the physical tree it currently resolves to. After a shadow-cutover restore or a resize repoints a tree at a new physical copy, a `Subscribe` or `GetCurrentCursorAsync` call made with the logical tree id therefore reads the retired copy's log - or nothing, once that copy is purged - rather than the tree's new writes.
+- The feed does not follow a tree's alias. It addresses the WAL partitions by the tree id it is given, while a tree's writes are logged under the physical tree it currently resolves to. After a shadow-cutover restore, a resize or a schema remediation repoints a tree at a new physical copy, a `Subscribe` or `GetCurrentCursorAsync` call made with the logical tree id therefore reads the retired copy's log - or nothing, once that copy is purged - rather than the tree's new writes.
 - Tombstone-reap envelopes (`MutationKind.Tombstone`) are local structural clean-up records with no receiver-side apply rule, so the feed skips them.
 - Each yielded entry's `Mode` is re-stamped from the tree's merge-mode resolution (`ILatticeMergeModeResolver`) taken once per `Subscribe` call, falling back to `LwwRegister` when the tree is not replicated on this host, rather than read from the durable record - so a consumer on a host that does not replicate the tree sees `LwwRegister` even on CRDT-delta entries.
 - `DeleteRange` entries carry the producer's authoring HLC. Entries persisted by older producers carry `HybridLogicalClock.Zero` and therefore sort ahead of every timestamped entry in the HLC-ordered output.

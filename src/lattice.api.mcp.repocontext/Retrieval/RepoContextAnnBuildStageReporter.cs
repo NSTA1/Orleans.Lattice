@@ -67,8 +67,10 @@ internal sealed class RepoContextAnnBuildStageReporter : IVectorIndexBuildObserv
                 + "streams over grain calls; 'key_assign' - mapping identifiers to index keys, including a "
                 + "durable block reservation when one is due; 'index_upsert' - the in-memory insert; and "
                 + "'key_flush' - the one batched write that makes the slice's key-map records durable. The "
-                + "four sum to slightly less than the slice's elapsed time, the remainder being loop "
-                + "bookkeeping that is deliberately not apportioned. Deliberately NOT zero-primed: priming a "
+                + "four do not cover the whole slice: source counting, releasing the source enumerator, the "
+                + "ingest checkpoint and build-state write, and loop bookkeeping belong to no stage, so they "
+                + "sum to less than the slice's elapsed time. A slice records all four only after it has "
+                + "checkpointed and written build state; a slice that throws records nothing here. Deliberately NOT zero-primed: priming a "
                 + "histogram fabricates a zero-valued sample, which reads as a real measurement of an "
                 + "instantaneous stage and destroys the distribution the instrument exists to report.");
         _sliceItems = _meter.CreateCounter<long>(

@@ -20,7 +20,9 @@ mandatory name `{slug}_{tool}`.
 - **Per-tool gating.** A tool is offered only when the caller holds, through the
   shared access gate, every operation of the tool's declared role on at least one
   of the role's scopes, resolved for the caller's tenant exactly as the role
-  compiler resolves them. The same check runs again when the tool is invoked.
+  compiler resolves them. Only an unfiltered allow counts: a key-filtered allow
+  never holds an operation, on a prefix scope as on a tree scope. The same check
+  runs again when the tool is invoked.
 - **Reuses the Lattice MCP pipeline.** The credential bridge, the default-deny
   authorizer, the per-session tool collection, strict argument binding and fault
   translation are shared with every other Lattice MCP tool. App tools run in the
