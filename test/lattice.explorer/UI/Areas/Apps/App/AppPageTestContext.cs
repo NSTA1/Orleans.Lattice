@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App;
 
@@ -22,8 +23,8 @@ public abstract class AppPageTestContext : ShellChromeTestContext
     {
         Workspace = new FakeAppPagesWorkspace();
         Control = new FakeAppPagesControl();
-        Services.AddSingleton<ILatticeAppWorkspace>(Workspace);
-        Services.AddSingleton<ILatticeAppsControl>(Control);
+        Services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, Workspace);
+        Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Control);
         ComponentFactories.AddStub<AppFrame>();
     }
 

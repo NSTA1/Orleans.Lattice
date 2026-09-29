@@ -90,7 +90,7 @@ internal sealed class ShellTransportCircuit : IDisposable
     public TFacade Resolve<TFacade>()
         where TFacade : class
     {
-        var facade = Services.GetRequiredService<TFacade>();
+        var facade = Services.GetRequiredKeyedService<TFacade>(ShellFacades.Key);
         Peer.Serializers = Services.GetRequiredService<ShellTransportSerializer>().Services;
         Peer.Learn(facade);
         return facade;

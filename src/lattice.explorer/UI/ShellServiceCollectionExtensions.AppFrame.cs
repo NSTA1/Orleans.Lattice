@@ -6,6 +6,7 @@ using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.UI.Framing.Broker;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI;
 
@@ -27,12 +28,12 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<IAppFrameHostContext, DefaultAppFrameHostContext>();
 
         services.TryAddScoped(provider => new AppFrameBundleLoader(
-            provider.GetService<ILatticeAppWorkspace>(),
+            provider.GetShellFacade<ILatticeAppWorkspace>(),
             provider.GetRequiredService<AppFrameBundleCache>(),
             provider.GetService<ILogger<AppFrameBundleLoader>>() ?? NullLogger<AppFrameBundleLoader>.Instance));
 
         services.TryAddScoped(provider => new AppBridgeBroker(
-            provider.GetService<ILatticeAppBridge>(),
+            provider.GetShellFacade<ILatticeAppBridge>(),
             provider.GetRequiredService<AppFrameBundleLoader>(),
             provider.GetService<IAppFrameHostContext>(),
             provider.GetService<LtToastService>(),

@@ -13,6 +13,7 @@ using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 
@@ -28,8 +29,8 @@ public abstract class ClusterTestContext : ShellChromeTestContext
     {
         Admin = Substitute.For<ILatticeTreeAdmin>();
         Status = Substitute.For<ILatticeReplicationStatus>();
-        Services.AddSingleton(Admin);
-        Services.AddSingleton(Status);
+        Services.AddKeyedSingleton(ShellFacades.Key, Admin);
+        Services.AddKeyedSingleton(ShellFacades.Key, Status);
 
         // The area under test is registered as the Shell registers it, so the
         // directory and navigator know it however the chrome context seeds areas.

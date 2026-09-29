@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Replication;
 
@@ -26,8 +27,8 @@ public abstract class ReplicationTestContext : ShellChromeTestContext
         Status = new FakeReplicationStatus();
         Control = new FakeReplicationControl();
         Visibility = new FakePageVisibility();
-        Services.AddSingleton<ILatticeReplicationStatus>(Status);
-        Services.AddSingleton<ILatticeReplicationControl>(Control);
+        Services.AddKeyedSingleton<ILatticeReplicationStatus>(ShellFacades.Key, Status);
+        Services.AddKeyedSingleton<ILatticeReplicationControl>(ShellFacades.Key, Control);
         Services.AddSingleton<IReplicationPageVisibility>(Visibility);
 
         // The chrome's test context may clear real areas; this one is under test.

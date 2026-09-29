@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 
@@ -288,7 +289,7 @@ public sealed class ClusterAreaTests
         services.AddSingleton<IExplorerSession>(session ?? _session);
         if (withAdmin)
         {
-            services.AddSingleton(_admin);
+            services.AddKeyedSingleton(ShellFacades.Key, _admin);
         }
 
         return new ClusterFacades(services.BuildServiceProvider());

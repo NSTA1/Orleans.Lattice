@@ -4,6 +4,7 @@ using Orleans.Lattice.Explorer.UI.Areas.Replication;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Replication.ReplicationTestData;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Replication;
 
@@ -253,8 +254,8 @@ public sealed class ReplicationDataSourceTests
     private ReplicationDataSource Create(ReplicationOptions? options = null)
     {
         var services = new ServiceCollection()
-            .AddSingleton<ILatticeReplicationStatus>(_status)
-            .AddSingleton<ILatticeReplicationControl>(_control)
+            .AddKeyedSingleton<ILatticeReplicationStatus>(ShellFacades.Key, _status)
+            .AddKeyedSingleton<ILatticeReplicationControl>(ShellFacades.Key, _control)
             .AddSingleton<Orleans.Lattice.Explorer.Core.Authentication.IExplorerAuthSession>(_auth)
             .AddSingleton<Orleans.Lattice.Explorer.Core.Configuration.IExplorerSession>(_session)
             .BuildServiceProvider();

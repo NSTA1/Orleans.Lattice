@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 
@@ -71,9 +72,9 @@ internal sealed class ReplicationDataSource : IDisposable
     /// <summary>Whether an enrolment facade is registered at all.</summary>
     public bool HasControl => Control is not null;
 
-    private ILatticeReplicationStatus? Status => _services.GetService<ILatticeReplicationStatus>();
+    private ILatticeReplicationStatus? Status => _services.GetShellFacade<ILatticeReplicationStatus>();
 
-    private ILatticeReplicationControl? Control => _services.GetService<ILatticeReplicationControl>();
+    private ILatticeReplicationControl? Control => _services.GetShellFacade<ILatticeReplicationControl>();
 
     /// <summary>
     /// Every link this region reports. A cached read younger than

@@ -223,7 +223,7 @@ public sealed class SchemaReadsTests : SchemaTestContext
     [Test]
     public void The_directory_needs_the_schema_facade()
     {
-        Services.RemoveAll<ILatticeSchemaControl>();
+        Services.RemoveAllKeyed<ILatticeSchemaControl>(ShellFacades.Key);
 
         Assert.That(async () => await Directory.GetAsync(refresh: false, CancellationToken.None), Throws.TypeOf<NotSupportedException>());
     }

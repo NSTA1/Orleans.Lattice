@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.UI;
 using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.Tests.UI.Design;
 using static Orleans.Lattice.Explorer.Tests.UI.Framing.AppFrameTestData;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Framing;
 
@@ -31,8 +32,8 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
         _workspace = Workspace();
         _bridge = new FakeAppBridge();
         _time = new ManualTimeProvider();
-        Services.AddSingleton<ILatticeAppWorkspace>(_ => _workspace);
-        Services.AddSingleton<ILatticeAppBridge>(_bridge);
+        Services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, (_, _) => _workspace);
+        Services.AddKeyedSingleton<ILatticeAppBridge>(ShellFacades.Key, _bridge);
         Services.AddSingleton<TimeProvider>(_time);
         Services.AddLogging();
         Services.AddLatticeExplorerShell();

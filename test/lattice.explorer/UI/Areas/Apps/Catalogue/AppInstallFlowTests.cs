@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 
@@ -24,8 +25,8 @@ public sealed class AppInstallFlowTests
         _catalog = new FakeAppCatalog();
         _control = new FakeAppsControl();
         _services = new ServiceCollection()
-            .AddSingleton<ILatticeAppCatalog>(_catalog)
-            .AddSingleton<ILatticeAppsControl>(_control)
+            .AddKeyedSingleton<ILatticeAppCatalog>(ShellFacades.Key, _catalog)
+            .AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, _control)
             .BuildServiceProvider();
         _facades = new AppsFacades(_services);
     }
@@ -143,7 +144,7 @@ public sealed class AppInstallFlowTests
         await missing.LoadAsync();
 
         _catalog.Descriptions[("in-image", "task-board", "1.0.0")] = AppsTestData.TaskBoard();
-        var throwing = new AppInstallFlow(new AppsFacades(new ServiceCollection().AddSingleton<ILatticeAppCatalog>(new ThrowingCatalog()).BuildServiceProvider()),
+        var throwing = new AppInstallFlow(new AppsFacades(new ServiceCollection().AddKeyedSingleton<ILatticeAppCatalog>(ShellFacades.Key, new ThrowingCatalog()).BuildServiceProvider()),
             new AppInstallFlowKey(null, "in-image", "task-board", null), AppsTestData.InImage);
         await throwing.LoadAsync();
 
@@ -363,7 +364,7 @@ public sealed class AppInstallFlowTests
     {
         var app = AppsTestData.TaskBoard();
         _catalog.Descriptions[("in-image", app.Slug, app.Version)] = app;
-        var catalogOnly = new AppsFacades(new ServiceCollection().AddSingleton<ILatticeAppCatalog>(_catalog).BuildServiceProvider());
+        var catalogOnly = new AppsFacades(new ServiceCollection().AddKeyedSingleton<ILatticeAppCatalog>(ShellFacades.Key, _catalog).BuildServiceProvider());
         var flow = new AppInstallFlow(catalogOnly, new AppInstallFlowKey(null, "in-image", "task-board", null), AppsTestData.InImage);
         await flow.LoadAsync();
         flow.Begin();

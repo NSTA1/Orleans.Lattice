@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.App;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI;
 
@@ -19,8 +20,8 @@ internal static partial class ShellServiceCollectionExtensions
     static partial void AddApp(IServiceCollection services)
     {
         services.TryAddScoped(provider => new AppPageLoader(
-            provider.GetService<ILatticeAppWorkspace>(),
-            provider.GetService<ILatticeAppsControl>(),
+            provider.GetShellFacade<ILatticeAppWorkspace>(),
+            provider.GetShellFacade<ILatticeAppsControl>(),
             provider.GetService<ILogger<AppPageLoader>>()));
     }
 }

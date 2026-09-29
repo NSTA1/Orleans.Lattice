@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
@@ -42,7 +43,7 @@ internal sealed class AccessArea : IExplorerArea
     public AccessArea(IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        _admin = services.GetService<ILatticeAuthAdmin>();
+        _admin = services.GetShellFacade<ILatticeAuthAdmin>();
         _session = services.GetService<IExplorerAuthSession>();
         _catalog = _admin is null ? null : services.GetService<AccessCatalog>() ?? new AccessCatalog(_admin);
         Completions = _catalog is null ? null : new AccessCompletionSource(_catalog);

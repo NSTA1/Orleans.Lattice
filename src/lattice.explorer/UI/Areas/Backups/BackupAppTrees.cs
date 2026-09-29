@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -56,7 +57,7 @@ internal sealed class BackupAppTrees
 
     private async Task<BackupAppInfo?> FromControlAsync(string slug, CancellationToken cancellationToken)
     {
-        if (_services.GetService<ILatticeAppsControl>() is not { } control)
+        if (_services.GetShellFacade<ILatticeAppsControl>() is not { } control)
         {
             return null;
         }
@@ -79,7 +80,7 @@ internal sealed class BackupAppTrees
 
     private async Task<BackupAppInfo?> FromWorkspaceAsync(string slug, CancellationToken cancellationToken)
     {
-        if (_services.GetService<ILatticeAppWorkspace>() is not { } workspace)
+        if (_services.GetShellFacade<ILatticeAppWorkspace>() is not { } workspace)
         {
             return null;
         }

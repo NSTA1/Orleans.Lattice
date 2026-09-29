@@ -50,8 +50,10 @@ public sealed class ShellTransportRegistrationTests
             foreach (var (facade, adapter) in Adapters)
             {
                 var descriptor = services.Single(candidate => candidate.ServiceType == facade);
+                Assert.That(descriptor.IsKeyedService, Is.True, facade.Name + " is keyed, never registered by bare interface");
+                Assert.That(descriptor.ServiceKey, Is.EqualTo(ShellFacades.Key), facade.Name);
                 Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Scoped), facade.Name);
-                Assert.That(descriptor.ImplementationType, Is.EqualTo(adapter), facade.Name);
+                Assert.That(descriptor.KeyedImplementationType, Is.EqualTo(adapter), facade.Name);
             }
 
             Assert.That(Lifetime(services, typeof(ShellTransportChannel)), Is.EqualTo(ServiceLifetime.Scoped));
@@ -95,7 +97,7 @@ public sealed class ShellTransportRegistrationTests
         var transport = new HashSet<Type>(Adapters.Keys.Concat(Adapters.Values)) { typeof(ShellTransportChannel) };
 
         var captives = new List<string>();
-        foreach (var singleton in services.Where(descriptor => descriptor.Lifetime == ServiceLifetime.Singleton && descriptor.ImplementationType is not null))
+        foreach (var singleton in services.Where(descriptor => descriptor.Lifetime == ServiceLifetime.Singleton && !descriptor.IsKeyedService && descriptor.ImplementationType is not null))
         {
             foreach (var dependency in ConstructorDependencies(singleton.ImplementationType!))
             {
@@ -113,7 +115,8 @@ public sealed class ShellTransportRegistrationTests
             Assert.That(captives, Is.Empty, "a singleton captures circuit-scoped state");
             foreach (var facade in Adapters.Keys)
             {
-                Assert.That(() => provider.GetRequiredService(facade), Throws.InvalidOperationException, $"{facade.Name} must not resolve from the root");
+                Assert.That(() => provider.GetRequiredKeyedService(facade, ShellFacades.Key), Throws.InvalidOperationException, $"{facade.Name} must not resolve from the root");
+                Assert.That(provider.GetService(facade), Is.Null, $"{facade.Name} is never registered by bare interface");
             }
         });
     }
@@ -133,19 +136,19 @@ public sealed class ShellTransportRegistrationTests
             foreach (var facade in Adapters.Keys)
             {
                 Assert.That(
-                    first.ServiceProvider.GetRequiredService(facade),
-                    Is.Not.SameAs(second.ServiceProvider.GetRequiredService(facade)),
+                    first.ServiceProvider.GetRequiredKeyedService(facade, ShellFacades.Key),
+                    Is.Not.SameAs(second.ServiceProvider.GetRequiredKeyedService(facade, ShellFacades.Key)),
                     facade.Name);
             }
         });
     }
 
     [Test]
-    public void A_facade_the_host_registered_first_is_kept()
+    public void A_facade_registered_under_the_key_first_is_kept()
     {
         var own = NSubstitute.Substitute.For<ILatticeReplicationControl>();
         var services = new ServiceCollection();
-        services.AddScoped(_ => own);
+        services.AddKeyedScoped(ShellFacades.Key, (_, _) => own);
 
         services.AddShellTransport();
 

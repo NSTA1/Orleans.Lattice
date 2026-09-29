@@ -86,7 +86,7 @@ public sealed class SchemaAreaTests : SchemaTestContext
     [Test]
     public async Task A_head_without_the_schema_facade_hides_the_area()
     {
-        Services.RemoveAll<ILatticeSchemaControl>();
+        Services.RemoveAllKeyed<ILatticeSchemaControl>(ShellFacades.Key);
 
         Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
     }

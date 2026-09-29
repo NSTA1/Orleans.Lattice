@@ -7,6 +7,7 @@ using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 
@@ -151,7 +152,7 @@ public sealed class ClusterOverviewTests : ClusterTestContext
     [Test]
     public void Without_the_peer_report_it_says_so_and_still_links_to_replication()
     {
-        Services.RemoveAll<ILatticeReplicationStatus>();
+        Services.RemoveAllKeyed<ILatticeReplicationStatus>(ShellFacades.Key);
 
         var cut = RenderAt("/cluster");
 

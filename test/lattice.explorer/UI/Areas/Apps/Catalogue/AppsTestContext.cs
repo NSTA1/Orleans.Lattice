@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 
@@ -28,10 +29,10 @@ public abstract class AppsTestContext : ShellChromeTestContext
         Workspace = new FakeAppsWorkspace();
         Auth = Substitute.For<ILatticeAuthAdmin>();
 
-        Services.AddSingleton<ILatticeAppCatalog>(Catalog);
-        Services.AddSingleton<ILatticeAppsControl>(Control);
-        Services.AddSingleton<ILatticeAppWorkspace>(Workspace);
-        Services.AddSingleton(Auth);
+        Services.AddKeyedSingleton<ILatticeAppCatalog>(ShellFacades.Key, Catalog);
+        Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Control);
+        Services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, Workspace);
+        Services.AddKeyedSingleton(ShellFacades.Key, Auth);
 
         // The chrome context may clear the real areas so fake areas cannot collide
         // on a key; these tests are about the real Apps area, so it is registered

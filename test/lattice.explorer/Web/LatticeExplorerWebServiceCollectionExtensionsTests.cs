@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.UI.Session;
 using Orleans.Lattice.Explorer.Web;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.Web;
 
@@ -180,8 +181,9 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
         var descriptor = services.Single(d => d.ServiceType == typeof(Orleans.Lattice.Api.Apps.ILatticeAppBridge));
         Assert.Multiple(() =>
         {
+            Assert.That(descriptor.ServiceKey, Is.EqualTo(ShellFacades.Key));
             Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Scoped));
-            Assert.That(descriptor.ImplementationFactory, Is.Not.Null);
+            Assert.That(descriptor.KeyedImplementationFactory, Is.Not.Null);
         });
     }
 
@@ -214,7 +216,7 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
             .Select(d => d.ServiceType)
             .ToHashSet();
         var captives = services
-            .Where(d => d.Lifetime == ServiceLifetime.Singleton && d.ImplementationType is { IsGenericTypeDefinition: false } && d.ImplementationType.Assembly.GetName().Name!.StartsWith("Orleans.Lattice.Explorer", StringComparison.Ordinal))
+            .Where(d => d.Lifetime == ServiceLifetime.Singleton && !d.IsKeyedService && d.ImplementationType is { IsGenericTypeDefinition: false } && d.ImplementationType.Assembly.GetName().Name!.StartsWith("Orleans.Lattice.Explorer", StringComparison.Ordinal))
             .SelectMany(d => d.ImplementationType!.GetConstructors().SelectMany(c => c.GetParameters())
                 .Where(p => scoped.Contains(p.ParameterType))
                 .Select(p => $"{d.ImplementationType!.Name} -> {p.ParameterType.Name}"))

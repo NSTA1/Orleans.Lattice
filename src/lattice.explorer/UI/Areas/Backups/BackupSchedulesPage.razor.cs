@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -40,7 +41,7 @@ public partial class BackupSchedulesPage : IDisposable
     private bool _confirmCancel;
     private bool _cancelIncremental;
 
-    [Inject]
+    [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
 
     [Inject]

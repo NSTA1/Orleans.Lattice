@@ -82,7 +82,7 @@ public partial class TelemetryChart : IDisposable
     [Parameter]
     public EventCallback<TelemetryTenantScope> OnScope { get; set; }
 
-    [Inject]
+    [Inject(Key = ShellFacades.Key)]
     internal ILatticeTelemetry Telemetry { get; set; } = default!;
 
     internal TelemetryChartGeometry? Geometry => _geometry;

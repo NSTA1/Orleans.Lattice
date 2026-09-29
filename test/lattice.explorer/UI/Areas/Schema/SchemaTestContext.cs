@@ -13,6 +13,7 @@ using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 
@@ -29,8 +30,8 @@ public abstract class SchemaTestContext : ShellChromeTestContext
     {
         Schema = new FakeSchemaControl();
         Apps = new FakeSchemaAppsControl();
-        Services.AddSingleton<ILatticeSchemaControl>(Schema);
-        Services.AddSingleton<ILatticeAppsControl>(Apps);
+        Services.AddKeyedSingleton<ILatticeSchemaControl>(ShellFacades.Key, Schema);
+        Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Apps);
 
         // The chrome's test context may clear real areas; this one is under test.
         Services.AddExplorerArea<SchemaArea>();

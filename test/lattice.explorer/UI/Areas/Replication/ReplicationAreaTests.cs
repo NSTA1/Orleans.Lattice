@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Replication.ReplicationTestData;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Replication;
 
@@ -245,8 +246,8 @@ public sealed class ReplicationAreaTests
         services.AddSingleton<Microsoft.JSInterop.IJSRuntime>(NSubstitute.Substitute.For<Microsoft.JSInterop.IJSRuntime>());
         services.AddSingleton<Orleans.Lattice.Explorer.Core.Configuration.IExplorerSession>(new FakeExplorerSession(new FakeStateConnection()));
         services.AddSingleton<Orleans.Lattice.Explorer.Core.Authentication.IExplorerAuthSession>(new FakeAuthSession());
-        services.AddSingleton<ILatticeReplicationStatus>(_status);
-        services.AddSingleton<ILatticeReplicationControl>(_control);
+        services.AddKeyedSingleton<ILatticeReplicationStatus>(ShellFacades.Key, _status);
+        services.AddKeyedSingleton<ILatticeReplicationControl>(ShellFacades.Key, _control);
         services.AddLatticeExplorerShell();
         services.AddLatticeExplorerShell();
 
@@ -267,8 +268,8 @@ public sealed class ReplicationAreaTests
     private ReplicationArea Create()
     {
         var provider = new ServiceCollection()
-            .AddSingleton<ILatticeReplicationStatus>(_status)
-            .AddSingleton<ILatticeReplicationControl>(_control)
+            .AddKeyedSingleton<ILatticeReplicationStatus>(ShellFacades.Key, _status)
+            .AddKeyedSingleton<ILatticeReplicationControl>(ShellFacades.Key, _control)
             .BuildServiceProvider();
         var data = new ReplicationDataSource(provider, _time, new ReplicationOptions());
         return new ReplicationArea(data, new ReplicationCompletionSource(data));

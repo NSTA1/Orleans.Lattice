@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -31,7 +32,7 @@ internal sealed class DataAdminGate
         {
             try
             {
-                return (ILatticeTreeAdmin?)_services.GetService(typeof(ILatticeTreeAdmin));
+                return _services.GetShellFacade<ILatticeTreeAdmin>();
             }
             catch (InvalidOperationException)
             {

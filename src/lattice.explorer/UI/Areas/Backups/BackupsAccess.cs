@@ -1,6 +1,8 @@
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -44,7 +46,7 @@ internal sealed class BackupsAccess
 
     /// <summary>Creates the probes over the circuit's backup facade.</summary>
     /// <param name="control">The backup facade.</param>
-    public BackupsAccess(ILatticeBackupControl control)
+    public BackupsAccess([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control)
     {
         ArgumentNullException.ThrowIfNull(control);
         _control = control;

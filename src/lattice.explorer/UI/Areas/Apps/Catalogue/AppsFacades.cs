@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
@@ -17,10 +18,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// <param name="services">The circuit's service provider.</param>
 internal sealed class AppsFacades(IServiceProvider services)
 {
-    private readonly Lazy<ILatticeAppCatalog?> _catalog = new(services.GetService<ILatticeAppCatalog>);
-    private readonly Lazy<ILatticeAppsControl?> _control = new(services.GetService<ILatticeAppsControl>);
-    private readonly Lazy<ILatticeAppWorkspace?> _workspace = new(services.GetService<ILatticeAppWorkspace>);
-    private readonly Lazy<ILatticeAuthAdmin?> _auth = new(services.GetService<ILatticeAuthAdmin>);
+    private readonly Lazy<ILatticeAppCatalog?> _catalog = new(services.GetShellFacade<ILatticeAppCatalog>);
+    private readonly Lazy<ILatticeAppsControl?> _control = new(services.GetShellFacade<ILatticeAppsControl>);
+    private readonly Lazy<ILatticeAppWorkspace?> _workspace = new(services.GetShellFacade<ILatticeAppWorkspace>);
+    private readonly Lazy<ILatticeAuthAdmin?> _auth = new(services.GetShellFacade<ILatticeAuthAdmin>);
 
     /// <summary>The administrative catalogue, or <see langword="null"/> when the head serves none.</summary>
     public ILatticeAppCatalog? Catalog => Resolve(_catalog);

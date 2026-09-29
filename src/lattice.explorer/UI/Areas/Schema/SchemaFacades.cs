@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -14,8 +15,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// <param name="services">The circuit's service provider.</param>
 internal sealed class SchemaFacades(IServiceProvider services)
 {
-    private readonly Lazy<ILatticeSchemaControl?> _schema = new(services.GetService<ILatticeSchemaControl>);
-    private readonly Lazy<ILatticeAppsControl?> _apps = new(services.GetService<ILatticeAppsControl>);
+    private readonly Lazy<ILatticeSchemaControl?> _schema = new(services.GetShellFacade<ILatticeSchemaControl>);
+    private readonly Lazy<ILatticeAppsControl?> _apps = new(services.GetShellFacade<ILatticeAppsControl>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
     private readonly Lazy<IExplorerAuthSession?> _auth = new(services.GetService<IExplorerAuthSession>);
 

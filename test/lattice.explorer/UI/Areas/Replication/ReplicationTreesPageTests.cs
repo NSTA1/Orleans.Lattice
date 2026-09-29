@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Replication.ReplicationTestData;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Replication;
 
@@ -220,7 +221,7 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
     [Test]
     public void With_no_enrolment_facade_the_page_says_it_is_not_served()
     {
-        Services.RemoveAll<ILatticeReplicationControl>();
+        Services.RemoveAllKeyed<ILatticeReplicationControl>(ShellFacades.Key);
 
         var cut = RenderAt<ReplicationTreesPage>("replication/trees");
 

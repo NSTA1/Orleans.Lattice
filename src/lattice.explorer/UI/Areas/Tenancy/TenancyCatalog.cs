@@ -4,6 +4,7 @@ using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -31,13 +32,13 @@ internal sealed class TenancyCatalog
     {
         ArgumentNullException.ThrowIfNull(services);
         _services = services;
-        SelfService = services.GetService<ILatticeTenantSelfService>();
-        Admin = services.GetService<ILatticeTenantAdmin>();
-        Access = services.GetService<ILatticeTenantAccessAdmin>();
-        Grants = services.GetService<ILatticeTenantGrantAdmin>();
-        Regions = services.GetService<ILatticeTenantRegionAdmin>();
-        Quota = services.GetService<ILatticeTenantQuotaUsage>();
-        Apps = services.GetService<ILatticeAppsControl>();
+        SelfService = services.GetShellFacade<ILatticeTenantSelfService>();
+        Admin = services.GetShellFacade<ILatticeTenantAdmin>();
+        Access = services.GetShellFacade<ILatticeTenantAccessAdmin>();
+        Grants = services.GetShellFacade<ILatticeTenantGrantAdmin>();
+        Regions = services.GetShellFacade<ILatticeTenantRegionAdmin>();
+        Quota = services.GetShellFacade<ILatticeTenantQuotaUsage>();
+        Apps = services.GetShellFacade<ILatticeAppsControl>();
         Session = services.GetService<IExplorerAuthSession>();
     }
 

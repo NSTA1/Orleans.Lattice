@@ -7,6 +7,7 @@ using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.UI.Areas.Schema;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 
@@ -159,7 +160,7 @@ public sealed class SchemaDirectoryPageTests : SchemaTestContext
     [Test]
     public void A_cluster_that_does_not_serve_schema_says_so()
     {
-        Services.RemoveAll<ILatticeSchemaControl>();
+        Services.RemoveAllKeyed<ILatticeSchemaControl>(ShellFacades.Key);
 
         var cut = RenderAt<SchemaDirectoryPage>("schema");
 

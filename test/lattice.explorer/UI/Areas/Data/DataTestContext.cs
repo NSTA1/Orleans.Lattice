@@ -8,6 +8,7 @@ using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 
@@ -28,7 +29,7 @@ public abstract class DataTestContext : ShellChromeTestContext
             .Returns(call => Task.FromResult(Capabilities(call.Arg<string>(), AdministeredTrees.Contains(call.Arg<string>()))));
 
         Services.AddSingleton<ILatticeStateClient>(Client);
-        Services.AddSingleton(Admin);
+        Services.AddKeyedSingleton(ShellFacades.Key, Admin);
         Services.AddExplorerArea<DataArea>();
     }
 

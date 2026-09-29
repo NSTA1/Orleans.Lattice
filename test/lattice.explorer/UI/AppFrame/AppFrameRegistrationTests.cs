@@ -68,7 +68,7 @@ public sealed class AppFrameRegistrationTests
         // The Shell's transport always registers a workspace, so model a host that
         // serves none by removing it: the loader then receives no workspace at all.
         var services = CircuitServices();
-        services.RemoveAll<ILatticeAppWorkspace>();
+        services.RemoveAllKeyed<ILatticeAppWorkspace>(ShellFacades.Key);
         using var provider = services.BuildServiceProvider(validateScopes: true);
         using var scope = provider.CreateScope();
 
@@ -87,7 +87,7 @@ public sealed class AppFrameRegistrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(scope.ServiceProvider.GetRequiredService<ILatticeAppWorkspace>(), Is.InstanceOf<ShellAppWorkspaceTransport>());
+            Assert.That(scope.ServiceProvider.GetRequiredKeyedService<ILatticeAppWorkspace>(ShellFacades.Key), Is.InstanceOf<ShellAppWorkspaceTransport>());
             Assert.That(result.Failure, Is.EqualTo(AppFrameFailure.Unavailable));
         });
     }
@@ -98,8 +98,8 @@ public sealed class AppFrameRegistrationTests
         var workspace = new FakeAppWorkspace();
         using var provider = new ServiceCollection()
             .AddLogging()
-            .AddScoped<ILatticeAppWorkspace>(_ => workspace)
-            .AddScoped<ILatticeAppBridge, FakeAppBridge>()
+            .AddKeyedScoped<ILatticeAppWorkspace>(ShellFacades.Key, (_, _) => workspace)
+            .AddKeyedScoped<ILatticeAppBridge, FakeAppBridge>(ShellFacades.Key)
             .AddLatticeExplorerShell()
             .BuildServiceProvider(validateScopes: true);
         using var scope = provider.CreateScope();

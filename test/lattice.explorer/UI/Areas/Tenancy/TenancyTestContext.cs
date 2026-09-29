@@ -11,6 +11,7 @@ using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 
@@ -36,13 +37,13 @@ public abstract class TenancyTestContext : ShellChromeTestContext
         Cluster = new FakeTenancyCluster();
         Auth = new FakeAuthSession();
         Auth.SignIn(FakeTenancyCluster.Caller);
-        Services.AddSingleton<ILatticeTenantSelfService>(Cluster);
-        Services.AddSingleton<ILatticeTenantAdmin>(Cluster);
-        Services.AddSingleton<ILatticeTenantAccessAdmin>(Cluster);
-        Services.AddSingleton<ILatticeTenantGrantAdmin>(Cluster);
-        Services.AddSingleton<ILatticeTenantRegionAdmin>(Cluster);
-        Services.AddSingleton<ILatticeTenantQuotaUsage>(Cluster);
-        Services.AddSingleton<ILatticeAppsControl>(Cluster);
+        Services.AddKeyedSingleton<ILatticeTenantSelfService>(ShellFacades.Key, Cluster);
+        Services.AddKeyedSingleton<ILatticeTenantAdmin>(ShellFacades.Key, Cluster);
+        Services.AddKeyedSingleton<ILatticeTenantAccessAdmin>(ShellFacades.Key, Cluster);
+        Services.AddKeyedSingleton<ILatticeTenantGrantAdmin>(ShellFacades.Key, Cluster);
+        Services.AddKeyedSingleton<ILatticeTenantRegionAdmin>(ShellFacades.Key, Cluster);
+        Services.AddKeyedSingleton<ILatticeTenantQuotaUsage>(ShellFacades.Key, Cluster);
+        Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Cluster);
         Services.AddSingleton<IExplorerAuthSession>(Auth);
 
         // The chrome context keeps only its own probe areas; the area under test is put back.

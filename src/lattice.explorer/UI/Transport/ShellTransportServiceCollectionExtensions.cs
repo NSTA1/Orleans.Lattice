@@ -31,8 +31,10 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// services, which the web head registers.
 /// </para>
 /// <para>
-/// Every registration uses <c>TryAdd</c>, so a host (or a test) that registered a
-/// facade first keeps its own.
+/// Every facade is keyed under <see cref="ShellFacades.Key"/> and never registered by
+/// bare interface, so a co-hosted cluster's in-process facades cannot shadow it and
+/// it cannot shadow them. Every registration uses <c>TryAdd</c>, so a test that
+/// registered a facade under the key first keeps its own.
 /// </para>
 /// </remarks>
 internal static class ShellTransportServiceCollectionExtensions
@@ -61,7 +63,11 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeAppWorkspace),
     ];
 
-    /// <summary>Registers the channel and every transport adapter.</summary>
+    /// <summary>
+    /// Registers the channel and every transport adapter, each as a keyed service
+    /// under <see cref="ShellFacades.Key"/> and never by bare interface, so a host's
+    /// own in-process facades and the Explorer's cannot resolve one another.
+    /// </summary>
     /// <param name="services">The service collection to register into.</param>
     /// <returns>The same service collection, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
@@ -73,22 +79,22 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddSingleton<ShellTransportSerializer>();
         services.TryAddScoped<ShellTransportChannel>();
 
-        services.TryAddScoped<ILatticeAuthAdmin, ShellAuthAdminTransport>();
-        services.TryAddScoped<ILatticeBackupControl, ShellBackupControlTransport>();
-        services.TryAddScoped<ILatticeSchemaControl, ShellSchemaControlTransport>();
-        services.TryAddScoped<ILatticeTenantAdmin, ShellTenantAdminTransport>();
-        services.TryAddScoped<ILatticeTenantAccessAdmin, ShellTenantAccessAdminTransport>();
-        services.TryAddScoped<ILatticeTenantGrantAdmin, ShellTenantGrantAdminTransport>();
-        services.TryAddScoped<ILatticeTenantRegionAdmin, ShellTenantRegionAdminTransport>();
-        services.TryAddScoped<ILatticeTenantSelfService, ShellTenantSelfServiceTransport>();
-        services.TryAddScoped<ILatticeTenantQuotaUsage, ShellTenantQuotaUsageTransport>();
-        services.TryAddScoped<ILatticeTelemetry, ShellTelemetryTransport>();
-        services.TryAddScoped<ILatticeTreeAdmin, ShellTreeAdminTransport>();
-        services.TryAddScoped<ILatticeReplicationControl, ShellReplicationControlTransport>();
-        services.TryAddScoped<ILatticeReplicationStatus, ShellReplicationStatusTransport>();
-        services.TryAddScoped<ILatticeAppsControl, ShellAppsControlTransport>();
-        services.TryAddScoped<ILatticeAppCatalog, ShellAppCatalogTransport>();
-        services.TryAddScoped<ILatticeAppWorkspace, ShellAppWorkspaceTransport>();
+        services.TryAddKeyedScoped<ILatticeAuthAdmin, ShellAuthAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeBackupControl, ShellBackupControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeSchemaControl, ShellSchemaControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantAdmin, ShellTenantAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantAccessAdmin, ShellTenantAccessAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantGrantAdmin, ShellTenantGrantAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantRegionAdmin, ShellTenantRegionAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantSelfService, ShellTenantSelfServiceTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantQuotaUsage, ShellTenantQuotaUsageTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTelemetry, ShellTelemetryTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTreeAdmin, ShellTreeAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeReplicationControl, ShellReplicationControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeReplicationStatus, ShellReplicationStatusTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeAppsControl, ShellAppsControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeAppCatalog, ShellAppCatalogTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeAppWorkspace, ShellAppWorkspaceTransport>(ShellFacades.Key);
 
         return services;
     }
@@ -123,7 +129,7 @@ internal static class ShellTransportServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(create);
 
-        services.TryAddScoped(provider =>
+        services.TryAddKeyedScoped(ShellFacades.Key, (provider, _) =>
         {
             var channel = provider.GetRequiredService<ShellTransportChannel>();
             return create(channel.Invoker, channel.SerializerServices);

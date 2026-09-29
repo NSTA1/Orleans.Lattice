@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 
@@ -105,9 +106,9 @@ public sealed class AppsAreaTests : AppsTestContext
     [Test]
     public async Task A_head_serving_no_app_facade_hides_the_area()
     {
-        Services.RemoveAll<ILatticeAppCatalog>();
-        Services.RemoveAll<ILatticeAppsControl>();
-        Services.RemoveAll<ILatticeAppWorkspace>();
+        Services.RemoveAllKeyed<ILatticeAppCatalog>(ShellFacades.Key);
+        Services.RemoveAllKeyed<ILatticeAppsControl>(ShellFacades.Key);
+        Services.RemoveAllKeyed<ILatticeAppWorkspace>(ShellFacades.Key);
 
         Assert.That(await Area().GetAvailabilityAsync(default), Is.EqualTo(AreaAvailability.Hidden));
     }

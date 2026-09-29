@@ -23,7 +23,7 @@ internal static class ShellStylesheets
     /// <summary>The Shell's design folder, relative to the repository root.</summary>
     public const string DesignRoot = "src/lattice.explorer/UI/wwwroot/design";
 
-    /// <summary>The documentation site's tokens, which the Shell links rather than copies.</summary>
+    /// <summary>The documentation site's tokens, the source of the copy the UI serves.</summary>
     public const string DocsSiteTokens = "docs-site/template/public/tokens.css";
 
     /// <summary>The Explorer-only Operate tokens.</summary>
@@ -103,7 +103,10 @@ internal static class ShellStylesheets
     {
         var root = Absolute(WebRoot);
         Assert.That(Directory.Exists(Absolute(DesignRoot)), Is.True, DesignRoot + " must exist");
-        var paths = HygieneRepository.EnumerateFiles(root, "*.css").OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        var paths = HygieneRepository.EnumerateFiles(root, "*.css")
+            .Where(path => !IsDocsSiteCopy(path))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
 
         // The enumeration is git-tracked files only; without this every gate
         // that walks it would pass vacuously on a tree it never read.
@@ -111,6 +114,18 @@ internal static class ShellStylesheets
             "the scan must reach the Shell's fonts, operate, breakpoint and primitive stylesheets");
         return paths;
     }
+
+    /// <summary>
+    /// The documentation site's own tokens, carried byte-identically in the UI's web
+    /// root so the runtime can serve them (ShellTokenParityTests pins the bytes).
+    /// They are the site's source, not the Explorer's, so the Explorer's design
+    /// gates read them where they come from (<see cref="DocsSiteTokens"/>) rather
+    /// than judging the copy as an Explorer stylesheet.
+    /// </summary>
+    public const string DocsSiteTokensCopy = DesignRoot + "/tokens.css";
+
+    private static bool IsDocsSiteCopy(string path) =>
+        string.Equals(Path.GetFullPath(path), Path.GetFullPath(Absolute(DocsSiteTokensCopy)), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The absolute path of a repository-relative path.</summary>
     /// <param name="relative">A path relative to the repository root, with forward slashes.</param>

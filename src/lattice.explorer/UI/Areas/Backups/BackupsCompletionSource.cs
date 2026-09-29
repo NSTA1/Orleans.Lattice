@@ -1,5 +1,7 @@
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -24,7 +26,7 @@ internal sealed class BackupsCompletionSource : IAddressCompletionSource
 
     /// <summary>Creates the source over the circuit's backup facade.</summary>
     /// <param name="control">The backup facade.</param>
-    public BackupsCompletionSource(ILatticeBackupControl control)
+    public BackupsCompletionSource([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control)
     {
         ArgumentNullException.ThrowIfNull(control);
         _control = control;

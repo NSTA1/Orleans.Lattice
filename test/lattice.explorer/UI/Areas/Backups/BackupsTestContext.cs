@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 
@@ -30,12 +31,12 @@ public abstract class BackupsTestContext : ShellChromeTestContext
         Workspace = Substitute.For<ILatticeAppWorkspace>();
         Workspace.DescribeMyAppAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<WorkspaceAppDescriptor?>(null));
 
-        Services.RemoveAll<ILatticeBackupControl>();
-        Services.RemoveAll<ILatticeAppsControl>();
-        Services.RemoveAll<ILatticeAppWorkspace>();
-        Services.AddSingleton<ILatticeBackupControl>(Backups);
-        Services.AddSingleton(AppsControl);
-        Services.AddSingleton(Workspace);
+        Services.RemoveAllKeyed<ILatticeBackupControl>(ShellFacades.Key);
+        Services.RemoveAllKeyed<ILatticeAppsControl>(ShellFacades.Key);
+        Services.RemoveAllKeyed<ILatticeAppWorkspace>(ShellFacades.Key);
+        Services.AddKeyedSingleton<ILatticeBackupControl>(ShellFacades.Key, Backups);
+        Services.AddKeyedSingleton(ShellFacades.Key, AppsControl);
+        Services.AddKeyedSingleton(ShellFacades.Key, Workspace);
 
         Services.RemoveAll<IExplorerArea>();
         Services.AddExplorerArea<BackupsArea>();

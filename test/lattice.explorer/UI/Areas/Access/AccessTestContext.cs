@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
 
@@ -33,7 +34,7 @@ public abstract class AccessTestContext : ShellChromeTestContext
         Admin = new FakeAuthAdmin();
         Auth = new FakeAuthSession();
         Auth.SignIn("ops@example.com");
-        Services.AddSingleton<ILatticeAuthAdmin>(Admin);
+        Services.AddKeyedSingleton<ILatticeAuthAdmin>(ShellFacades.Key, Admin);
         Services.AddSingleton<IExplorerAuthSession>(Auth);
 
         // The chrome context keeps only its own probe areas; the area under test is put back.

@@ -1,6 +1,8 @@
 using Orleans.Lattice.Api.Telemetry;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Telemetry;
 
@@ -27,7 +29,7 @@ internal sealed class TelemetryCatalogCache : IDisposable
     /// <param name="telemetry">The telemetry facade.</param>
     /// <param name="auth">The circuit's sign-in session, whose changes invalidate the cache.</param>
     /// <param name="session">The circuit's connection session, whose changes invalidate the cache.</param>
-    public TelemetryCatalogCache(ILatticeTelemetry telemetry, IExplorerAuthSession? auth = null, IExplorerSession? session = null)
+    public TelemetryCatalogCache([FromKeyedServices(ShellFacades.Key)] ILatticeTelemetry telemetry, IExplorerAuthSession? auth = null, IExplorerSession? session = null)
     {
         ArgumentNullException.ThrowIfNull(telemetry);
         _telemetry = telemetry;

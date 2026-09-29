@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -29,7 +30,7 @@ internal sealed class BackupsArea : IExplorerArea
     /// palette runs the capture command, because the navigator itself depends on
     /// the area directory that holds this area.
     /// </param>
-    public BackupsArea(BackupsAccess access, ILatticeBackupControl control, BackupsCompletionSource completions, IServiceProvider services)
+    public BackupsArea(BackupsAccess access, [FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control, BackupsCompletionSource completions, IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(access);
         ArgumentNullException.ThrowIfNull(control);

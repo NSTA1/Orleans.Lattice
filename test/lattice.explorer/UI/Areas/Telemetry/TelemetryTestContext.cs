@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Telemetry;
 
@@ -22,7 +23,7 @@ public abstract class TelemetryTestContext : ShellChromeTestContext
         Telemetry = new FakeTelemetry();
 
         // Registered after the Shell, so this singleton is the one the circuit resolves.
-        Services.AddSingleton<ILatticeTelemetry>(Telemetry);
+        Services.AddKeyedSingleton<ILatticeTelemetry>(ShellFacades.Key, Telemetry);
 
         // The chrome context may clear the real areas (glue PR #3864); this fixture
         // tests the Telemetry area, so it registers it again (idempotent).

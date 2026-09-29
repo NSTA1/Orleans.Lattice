@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -39,7 +40,7 @@ public partial class BackupsCataloguePage : IDisposable
     private bool _scopeStatusLoading;
     private string? _scopeStatusError;
 
-    [Inject]
+    [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
 
     [Inject]

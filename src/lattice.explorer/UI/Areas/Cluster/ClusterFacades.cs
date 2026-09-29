@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
@@ -13,8 +14,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// <param name="services">The circuit's service provider.</param>
 internal sealed class ClusterFacades(IServiceProvider services)
 {
-    private readonly Lazy<ILatticeTreeAdmin?> _treeAdmin = new(services.GetService<ILatticeTreeAdmin>);
-    private readonly Lazy<ILatticeReplicationStatus?> _replicationStatus = new(services.GetService<ILatticeReplicationStatus>);
+    private readonly Lazy<ILatticeTreeAdmin?> _treeAdmin = new(services.GetShellFacade<ILatticeTreeAdmin>);
+    private readonly Lazy<ILatticeReplicationStatus?> _replicationStatus = new(services.GetShellFacade<ILatticeReplicationStatus>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
 
     /// <summary>Tree administration (T1's adapter), or <see langword="null"/> when the head serves none.</summary>

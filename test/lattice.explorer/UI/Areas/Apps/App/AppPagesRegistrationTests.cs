@@ -11,6 +11,7 @@ using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Design;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App;
 
@@ -28,8 +29,8 @@ public sealed class AppPagesRegistrationTests
         var workspace = new FakeAppPagesWorkspace().Grant(AppPageTestData.Workspace());
         var services = HeadServices();
         services.AddLatticeExplorerShell();
-        services.AddSingleton<ILatticeAppWorkspace>(workspace);
-        services.AddSingleton<ILatticeAppsControl>(new FakeAppPagesControl());
+        services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, workspace);
+        services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, new FakeAppPagesControl());
 
         var descriptor = services.Single(candidate => candidate.ServiceType == typeof(AppPageLoader));
         await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
@@ -52,8 +53,8 @@ public sealed class AppPagesRegistrationTests
     {
         var services = HeadServices();
         services.AddLatticeExplorerShell();
-        services.RemoveAll<ILatticeAppWorkspace>();
-        services.RemoveAll<ILatticeAppsControl>();
+        services.RemoveAllKeyed<ILatticeAppWorkspace>(ShellFacades.Key);
+        services.RemoveAllKeyed<ILatticeAppsControl>(ShellFacades.Key);
         await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
         await using var scope = provider.CreateAsyncScope();
 

@@ -1,6 +1,8 @@
 using System.Globalization;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -23,7 +25,7 @@ internal sealed class BackupActions
     /// <param name="control">The backup facade.</param>
     /// <param name="access">The area's probes.</param>
     /// <param name="operations">The circuit's operations.</param>
-    public BackupActions(ILatticeBackupControl control, BackupsAccess access, BackupOperations operations)
+    public BackupActions([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control, BackupsAccess access, BackupOperations operations)
     {
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(access);
