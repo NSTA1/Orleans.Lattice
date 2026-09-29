@@ -1,0 +1,99 @@
+@*
+    Compliance: a read-only scan of every value of the tree against its policy,
+    started here (or by the "Scan compliance..." command, which arrives with
+    ?scan=start), with the counts and the reasons non-compliant values fail. The
+    last result is kept for this session and summarised in the directory.
+*@
+
+@if (Workspace is not null)
+{
+    @if (!Workspace.Grants.ScanCompliance)
+    {
+        <LtEmptyState Title="You may not scan this tree" HeadingLevel="2">
+            A compliance scan needs read authority on the tree.
+        </LtEmptyState>
+    }
+    else if (Workspace.Row.Policy is null && Workspace.Row.PolicyState == SchemaReadState.Read)
+    {
+        <LtEmptyState Title="Nothing to scan against" HeadingLevel="2">
+            <ChildContent>This tree has no policy, so every value complies. Set a policy on the Policy tab first.</ChildContent>
+            <Actions><a class="lt-schema-action" href="@Workspace.Href(Workspace.ForTab(SchemaTabs.Policy))">Go to the policy</a></Actions>
+        </LtEmptyState>
+    }
+    else
+    {
+        <p class="lt-schema-note">A scan reads every value of the tree and checks it against the policy. It changes nothing, and on a large tree it takes a while.</p>
+        <div class="lt-toolbar lt-schema-actions">
+            @if (_scanning is null)
+            {
+                <LtButton OnClick="ScanAsync">@(_result is null ? "Scan compliance" : "Scan again")</LtButton>
+            }
+            else
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelScan">Stop scanning</LtButton>
+            }
+        </div>
+
+        @if (_scanning is not null)
+        {
+            <p class="lt-schema-status" role="status">Scanning every value of @Workspace.TreeId...</p>
+            <LtSkeleton Lines="3" Label="Scanning" />
+        }
+        else if (_error is not null)
+        {
+            <p class="lt-schema-error" role="alert">@_error</p>
+        }
+
+        @if (_result is { } result)
+        {
+            <section class="lt-schema-result" aria-labelledby="lt-schema-compliance-title">
+                <div class="lt-schema-heading">
+                    <h2 id="lt-schema-compliance-title" class="lt-schema-section-title">Last scan</h2>
+                    @if (!result.Report.HasPolicy)
+                    {
+                        <LtStatusPill Text="No policy" />
+                    }
+                    else if (result.IsCompliant)
+                    {
+                        <LtStatusPill State="LtStateRole.Healthy" Text="Compliant" />
+                    }
+                    else
+                    {
+                        <LtStatusPill State="LtStateRole.Drift" Text="Non-compliant" />
+                    }
+                </div>
+                <LtDefinitionList>
+                    <LtDefinition Term="Scanned">@SchemaFormat.Count(result.Report.ScannedCount, "value")</LtDefinition>
+                    <LtDefinition Term="Compliant">@SchemaFormat.Count(result.Report.CompliantCount, "value")</LtDefinition>
+                    <LtDefinition Term="Non-compliant">@SchemaFormat.Count(result.Report.NonCompliantCount, "value")</LtDefinition>
+                    <LtDefinition Term="Finished">@SchemaFormat.Time(result.ScannedAt)</LtDefinition>
+                </LtDefinitionList>
+
+                @if (result.Report.RuleBreakdown.Count > 0)
+                {
+                    <LtTable TItem="LatticeSchemaComplianceRuleCount"
+                             Items="@result.Report.RuleBreakdown"
+                             Caption="Why values fail, by reason"
+                             CaptionHidden="false">
+                        <ChildContent>
+                            <LtColumn TItem="LatticeSchemaComplianceRuleCount" Title="Reason" RowHeader="true" Value="@(row => row.Reason)" SortBy="@(row => row.Reason)" />
+                            <LtColumn TItem="LatticeSchemaComplianceRuleCount" Title="Values" Align="LtColumnAlign.End" Value="@(row => row.Count.ToString("N0", System.Globalization.CultureInfo.InvariantCulture))" SortBy="@(row => row.Count)" />
+                        </ChildContent>
+                        <CompactRow Context="row">
+                            <LtCompactRow>
+                                <Primary>@row.Reason</Primary>
+                                <Secondary>@SchemaFormat.Count(row.Count, "value")</Secondary>
+                            </LtCompactRow>
+                        </CompactRow>
+                    </LtTable>
+                }
+            </section>
+        }
+        else if (_scanning is null && _error is null)
+        {
+            <LtEmptyState Title="Not scanned in this session" HeadingLevel="2">
+                Scan the tree to see how many of its values comply with its policy.
+            </LtEmptyState>
+        }
+    }
+}

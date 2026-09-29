@@ -1,0 +1,255 @@
+/*
+ * Orleans.Lattice Explorer - the Schema area.
+ *
+ * Headings and meta lines, the directory's "which trees" switch, rule and step
+ * lists, editors, the staged operation drawn as an order diagram (done steps
+ * are filled nodes, the current one is the join node, the rest are hollow), and
+ * notes. Tables, dialogs, fields and pills are the Shell's primitives.
+ *
+ * No width query appears here: the compact band is the layout's
+ * lt-shell--compact class. The marker paints only aria-current states, always
+ * with a weight or a rule. No shadows on the page, no cards.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+/* ==========================================================================
+   1. Headings, meta lines, status and notes
+   ========================================================================== */
+
+.lt-schema-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-3);
+}
+
+.lt-schema-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2) var(--lt-space-5);
+  margin: 0 0 var(--lt-space-5);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-schema-section-title {
+  margin: var(--lt-space-5) 0 var(--lt-space-3);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-schema-subtitle {
+  margin: var(--lt-space-4) 0 var(--lt-space-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-schema-status {
+  margin: var(--lt-space-3) 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-schema-note {
+  max-width: 48rem;
+  margin: var(--lt-space-3) 0;
+  padding-left: var(--lt-space-3);
+  border-left: 1px solid var(--lt-rule-strong);
+  color: var(--lt-ink-2);
+}
+
+.lt-schema-note p {
+  margin: 0 0 var(--lt-space-2);
+}
+
+.lt-schema-muted {
+  color: var(--lt-ink-3);
+}
+
+.lt-schema-error {
+  margin: var(--lt-space-3) 0;
+  color: var(--lt-op-state-failed);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-schema-running {
+  margin: var(--lt-space-3) 0;
+  font-weight: var(--lt-weight-label);
+}
+
+/* ==========================================================================
+   2. The directory toolbar and its "which trees" switch
+   ========================================================================== */
+
+.lt-schema-toolbar {
+  align-items: flex-end;
+  margin-bottom: var(--lt-space-4);
+}
+
+.lt-schema-show {
+  display: flex;
+  gap: var(--lt-space-4);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-schema-show__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lt-schema-show__link:hover {
+  color: var(--lt-ink);
+}
+
+.lt-schema-show__link[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+  box-shadow: inset 0 -3px 0 var(--lt-marker);
+}
+
+/* ==========================================================================
+   3. Links and actions
+   ========================================================================== */
+
+.lt-schema-tree-link,
+.lt-schema-app-link,
+.lt-schema-action {
+  color: var(--lt-link);
+}
+
+.lt-schema-tree-link:hover,
+.lt-schema-app-link:hover,
+.lt-schema-action:hover {
+  color: var(--lt-link-hover);
+}
+
+.lt-schema-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  margin-right: var(--lt-space-4);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-schema-show__link:focus-visible,
+.lt-schema-tree-link:focus-visible,
+.lt-schema-app-link:focus-visible,
+.lt-schema-action:focus-visible,
+.lt-schema-value:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+.lt-schema-actions {
+  margin: var(--lt-space-4) 0;
+}
+
+/* ==========================================================================
+   4. Editors: rule and step lists, builders
+   ========================================================================== */
+
+.lt-schema-editor {
+  max-width: 48rem;
+  margin: var(--lt-space-5) 0;
+  padding-top: var(--lt-space-3);
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-schema-rules {
+  margin: var(--lt-space-3) 0;
+  padding-left: var(--lt-space-5);
+}
+
+.lt-schema-rules__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-schema-rules__text {
+  overflow-wrap: anywhere;
+}
+
+.lt-schema-builder {
+  display: grid;
+  gap: var(--lt-space-3);
+  margin: var(--lt-space-4) 0;
+  padding: var(--lt-space-3) 0 0;
+  border: 0;
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-schema-builder__legend {
+  padding: 0;
+  font-weight: var(--lt-weight-strong);
+}
+
+/* ==========================================================================
+   5. The staged operation, as an order diagram
+   ========================================================================== */
+
+.lt-schema-operation {
+  margin: 0 0 var(--lt-space-5);
+}
+
+.lt-schema-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2) var(--lt-space-5);
+  margin: var(--lt-space-3) 0 var(--lt-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.lt-schema-stages__step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  color: var(--lt-ink-2);
+}
+
+.lt-schema-stages__step[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-schema-stages__title {
+  white-space: nowrap;
+}
+
+.lt-shell--compact .lt-schema-stages {
+  flex-direction: column;
+}
+
+.lt-schema-result,
+.lt-schema-abort {
+  margin: var(--lt-space-4) 0;
+}
+
+/* ==========================================================================
+   6. Values: previews shown as text only
+   ========================================================================== */
+
+.lt-schema-value {
+  max-height: 16rem;
+  margin: var(--lt-space-3) 0;
+  padding: var(--lt-space-3);
+  overflow: auto;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

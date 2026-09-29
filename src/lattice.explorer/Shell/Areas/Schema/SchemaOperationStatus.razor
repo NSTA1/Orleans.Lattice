@@ -1,0 +1,103 @@
+@*
+    The resumable status of a tree's long-running schema operation - a
+    migration or a remediation - drawn as an order diagram of its stages, the
+    current one as the join node. It reads the cluster's own status, so it
+    resumes after a reload or for an operation another session started, and
+    re-reads on a cadence only while something is running. A physical tree id
+    never appears: the remediation's destination copy is not shown.
+*@
+
+@if (Workspace is not null)
+{
+    <section class="lt-schema-operation" aria-labelledby="lt-schema-operation-title">
+        <h2 id="lt-schema-operation-title" class="lt-schema-section-title">Background operation</h2>
+
+        @if (!Workspace.Grants.ViewRemediation && _local is null)
+        {
+            <p class="lt-schema-muted">You may not read this tree's operation status.</p>
+        }
+        else if (_statusError is not null && _local is null && _report is null)
+        {
+            <LtEmptyState Title="The status did not load" HeadingLevel="3">
+                <ChildContent>@_statusError</ChildContent>
+                <Actions><LtButton OnClick="RefreshAsync">Try again</LtButton></Actions>
+            </LtEmptyState>
+        }
+        else if (!_read && _local is null)
+        {
+            <LtSkeleton Lines="2" Label="Reading the operation status" />
+        }
+        else if (Stage is null)
+        {
+            <p class="lt-schema-muted">No migration or remediation has run on this tree.</p>
+        }
+        else
+        {
+            <p class="lt-schema-status" role="status">@Headline</p>
+            <ol class="lt-schema-stages" aria-label="Stages">
+                @foreach (var (step, title) in Steps)
+                {
+                    var position = StepPosition(step);
+                    <li class="lt-schema-stages__step" aria-current="@(position == 0 ? "step" : null)">
+                        <LtNode Kind="@(position == 0 ? LtNodeKind.Join : position < 0 ? LtNodeKind.Filled : LtNodeKind.Hollow)" Size="LtNodeSize.Small" />
+                        <span class="lt-schema-stages__title">@title</span>
+                    </li>
+                }
+            </ol>
+
+            <LtDefinitionList>
+                @if (_local is { } local)
+                {
+                    <LtDefinition Term="Operation">@local.Summary</LtDefinition>
+                    <LtDefinition Term="Started">@SchemaFormat.Time(local.StartedAt)</LtDefinition>
+                    @if (local.FinishedAt is { } finished)
+                    {
+                        <LtDefinition Term="Finished">@SchemaFormat.Time(finished)</LtDefinition>
+                    }
+                }
+                @if (Report is { } report)
+                {
+                    <LtDefinition Term="Phase">@SchemaFormat.Phase(report.Phase)</LtDefinition>
+                    <LtDefinition Term="Values checked">@report.ScannedCount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)</LtDefinition>
+                    @if (report.OperationId is { } operationId)
+                    {
+                        <LtDefinition Term="Operation id" Mono="true">@operationId</LtDefinition>
+                    }
+                }
+            </LtDefinitionList>
+
+            @if (_local?.Failure is { } failure)
+            {
+                <p class="lt-schema-error" role="alert">@failure</p>
+            }
+
+            @if (Report is { DidAbort: true } aborted)
+            {
+                <div class="lt-schema-abort">
+                    <h3 class="lt-schema-subtitle">Stopped at the first value that still fails</h3>
+                    <p>Nothing was cut over: the tree still serves its values as they were.</p>
+                    <LtDefinitionList>
+                        <LtDefinition Term="Key" Mono="true">@aborted.OffendingKey</LtDefinition>
+                        <LtDefinition Term="Reason">@aborted.Reason</LtDefinition>
+                    </LtDefinitionList>
+                    @if (SchemaFormat.Preview(aborted.OffendingValuePreview) is { Length: > 0 } preview)
+                    {
+                        <pre class="lt-schema-value" tabindex="0" aria-label="The offending value's first bytes">@preview</pre>
+                    }
+                </div>
+            }
+
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="RefreshAsync">Refresh status</LtButton>
+                @if (_local is { IsActive: false })
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="Dismiss">Clear this result</LtButton>
+                }
+            </div>
+            @if (IsPolling)
+            {
+                <p class="lt-schema-muted">Read again every @PollInterval.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture) seconds while it runs. You can leave this page; the operation keeps running.</p>
+            }
+        }
+    </section>
+}
