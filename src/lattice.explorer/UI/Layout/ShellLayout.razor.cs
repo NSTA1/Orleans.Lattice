@@ -12,6 +12,7 @@ using Orleans.Lattice.Explorer.UI.Layout.Appearance;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Session;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Layout;
 
@@ -54,6 +55,7 @@ public partial class ShellLayout : IAsyncDisposable
     private ILatticeStateConnection? _watchedConnection;
     private LatticeConnectionState _connectionState;
     private bool _sessionReady;
+    private string? _entriesTenant;
     private (bool Authenticated, string? User)? _tenantResolvedFor;
 
     [Inject]
@@ -89,6 +91,9 @@ public partial class ShellLayout : IAsyncDisposable
     [Inject]
     internal SessionConnectionAnnouncer ConnectionAnnouncer { get; set; } = default!;
 
+    [Inject]
+    internal ShellAssertedTenant AssertedTenant { get; set; } = default!;
+
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
     // The compact modifier is how a stylesheet reacts to the band without a width
@@ -110,6 +115,25 @@ public partial class ShellLayout : IAsyncDisposable
     // A signed-in caller at a tenant-scoped address with tenancy on and no tenant
     // established: every call would reach the cluster as the reserved default
     // tenant, so the page is withheld rather than served under the wrong tenant.
+    // The browser is at an address whose tenant differs from the one the layout
+    // last resolved: the switch is still in flight, so the page would ask the
+    // cluster under the tenant being left.
+    private bool TenantResolving =>
+        _sessionReady
+        && Navigator.Current is { } current
+        && !string.Equals(current.Tenant, _location.Address.Tenant, StringComparison.Ordinal);
+
+    // The page, keyed on the tenant the circuit asserts: a tenant switch disposes
+    // it and builds a fresh one, so nothing a page read under one tenant is shown
+    // under another even when only its route parameters changed.
+    private RenderFragment TenantBody => builder =>
+    {
+        builder.OpenComponent<ShellTenantBoundary>(0);
+        builder.SetKey(AssertedTenant.AssertedTenant ?? string.Empty);
+        builder.AddComponentParameter(1, nameof(ShellTenantBoundary.ChildContent), Body);
+        builder.CloseComponent();
+    };
+
     private bool TenantUnresolved =>
         AuthSession.IsAuthenticated
         && Tenancy.IsTenantUnresolved
@@ -261,11 +285,15 @@ public partial class ShellLayout : IAsyncDisposable
         }
 
         var areaChanged = !string.Equals(_location.Address.Area, resolution.Address.Area, StringComparison.Ordinal);
+
+        // The spine's entries answer for the tenant they were asked under; after a
+        // tenant switch they are not trusted to gate a page until asked again.
+        var tenantChanged = !ShellAssertedTenant.Same(_entriesTenant, AssertedTenant.AssertedTenant);
         _location = _location with
         {
             Address = resolution.Address,
             TenancyActive = Tenancy.IsActive,
-            EntriesLoaded = _location.EntriesLoaded && !areaChanged,
+            EntriesLoaded = _location.EntriesLoaded && !areaChanged && !tenantChanged,
         };
 
         await RefreshEntriesAsync(version, token);
@@ -378,10 +406,12 @@ public partial class ShellLayout : IAsyncDisposable
 
     private async Task RefreshEntriesAsync(int version, CancellationToken token)
     {
+        var tenant = AssertedTenant.AssertedTenant;
         var entries = await Directory.GetEntriesAsync(token);
-        if (version == _version)
+        if (version == _version && ShellAssertedTenant.Same(tenant, AssertedTenant.AssertedTenant))
         {
             _location = _location with { Entries = entries, EntriesLoaded = true };
+            _entriesTenant = tenant;
         }
     }
 

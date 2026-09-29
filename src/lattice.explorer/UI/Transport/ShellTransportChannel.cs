@@ -49,7 +49,7 @@ internal sealed class ShellTransportChannel : IDisposable
     private readonly IExplorerAuthSession _auth;
     private readonly IShellGrpcChannelFactory _channelFactory;
     private readonly ShellTransportSerializer _serializer;
-    private readonly ILatticeActiveTenantProvider? _activeTenant;
+    private readonly ShellAssertedTenant? _activeTenant;
     private readonly object _gate = new();
 
     private GrpcChannel? _channel;
@@ -64,9 +64,8 @@ internal sealed class ShellTransportChannel : IDisposable
     /// <param name="channelFactory">Builds the underlying gRPC channel.</param>
     /// <param name="serializer">The shared Orleans serializer provider.</param>
     /// <param name="activeTenant">
-    /// The circuit's live tenant source, asked on every call for the tenant to
-    /// assert; <see langword="null"/> when the head registers no tenancy, so no
-    /// call carries a tenant.
+    /// The circuit's asserted tenant, asked on every call for the tenant to
+    /// assert; <see langword="null"/> (or one that asserts none) sends no tenant.
     /// </param>
     /// <exception cref="ArgumentNullException">Any required argument is <see langword="null"/>.</exception>
     public ShellTransportChannel(
@@ -74,7 +73,7 @@ internal sealed class ShellTransportChannel : IDisposable
         IExplorerAuthSession auth,
         IShellGrpcChannelFactory channelFactory,
         ShellTransportSerializer serializer,
-        ILatticeActiveTenantProvider? activeTenant = null)
+        ShellAssertedTenant? activeTenant = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(auth);

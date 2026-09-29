@@ -125,6 +125,9 @@ standing in it. Two consequences follow:
 
 An open app is bound to the tenant it was opened in: once the console is scoped
 to another tenant, the app is closed rather than allowed to read or write there.
+In the same way, a staged backup operation finishes in the tenant it started
+in, and after a switch every page is built afresh and every remembered answer is
+read again, so nothing read under one tenant is shown under another.
 
 ## The reserved `default` tenant
 
