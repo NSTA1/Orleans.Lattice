@@ -1,0 +1,159 @@
+@*
+    One tenant's cross-tenant grants in both directions: offers awaiting its
+    decision, grants it holds, and grants it has offered, with the two-step
+    agreement's verbs (offer, approve, reject, revoke).
+*@
+<section class="lt-tenancy-section" aria-labelledby="@HeadingId">
+    <div class="lt-tenancy-section__head">
+        <h2 class="lt-tenancy-section__title" id="@HeadingId">Cross-tenant grants</h2>
+        <LtButton OnClick="OpenOffer" Disabled="@(_report is null || IsDefault)" data-lt-command="@TenancyArea.OfferGrantCommandId">Offer a grant</LtButton>
+    </div>
+    <p class="lt-tenancy-note">
+        A grant shares a scope of one tenant's trees with another tenant. The granting tenant offers it; it authorizes
+        nothing until the receiving tenant approves it. Either tenant may revoke an active grant.
+    </p>
+    @if (IsDefault)
+    {
+        <p class="lt-tenancy-note">The reserved default tenant takes no part in cross-tenant grants.</p>
+    }
+
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Grants could not be read")" HeadingLevel="3">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions>
+                @if (failure.IsRetryable)
+                {
+                    <LtButton OnClick="LoadAsync">Try again</LtButton>
+                }
+            </Actions>
+        </LtEmptyState>
+    }
+    else if (_report is not { } report)
+    {
+        <LtSkeleton Lines="6" Label="Loading grants" />
+    }
+    else
+    {
+        <h3 class="lt-tenancy-subtitle">Offered to tenant <span class="lt-tenancy-mono">@TenantId</span></h3>
+        <LtTable TItem="TenantGrantDescriptor" Items="report.Received" Caption="@($"Grants offered to tenant {TenantId}")" CaptionHidden="true" RowKey="@(grant => grant.GrantId)" DetailTitle="@(grant => $"From {grant.GranterTenantId}")">
+            <ChildContent>
+                <LtColumn TItem="TenantGrantDescriptor" Title="From tenant" RowHeader="true" Mono="true" SortBy="@(grant => grant.GranterTenantId)" Value="@(grant => grant.GranterTenantId)" />
+                <LtColumn TItem="TenantGrantDescriptor" Title="Scope" Mono="true" Value="@(grant => grant.Scope)" />
+                <LtColumn TItem="TenantGrantDescriptor" Title="Access" Value="@(grant => TenancyFormat.AccessLabel(grant.Operations))" />
+                <LtColumn TItem="TenantGrantDescriptor" Title="State">
+                    <LtStatusPill State="@TenancyFormat.GrantStateRole(context.State)" Text="@TenancyFormat.GrantStateLabel(context.State)" />
+                </LtColumn>
+                <LtColumn TItem="TenantGrantDescriptor" Title="Actions" Align="LtColumnAlign.End">
+                    @ReceivedActions(context)
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent><span>No tenant has offered tenant @TenantId a grant.</span></EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context.GranterTenantId</Primary>
+                    <Secondary>@($"{context.Scope}, {TenancyFormat.AccessLabel(context.Operations).ToLowerInvariant()}")</Secondary>
+                    <State><LtStatusPill State="@TenancyFormat.GrantStateRole(context.State)" Text="@TenancyFormat.GrantStateLabel(context.State)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions>@ReceivedActions(context)</DetailActions>
+        </LtTable>
+
+        <h3 class="lt-tenancy-subtitle">Offered by tenant <span class="lt-tenancy-mono">@TenantId</span></h3>
+        <LtTable TItem="TenantGrantDescriptor" Items="report.Issued" Caption="@($"Grants offered by tenant {TenantId}")" CaptionHidden="true" RowKey="@(grant => grant.GrantId)" DetailTitle="@(grant => $"To {grant.GranteeTenantId}")">
+            <ChildContent>
+                <LtColumn TItem="TenantGrantDescriptor" Title="To tenant" RowHeader="true" Mono="true" SortBy="@(grant => grant.GranteeTenantId)" Value="@(grant => grant.GranteeTenantId)" />
+                <LtColumn TItem="TenantGrantDescriptor" Title="Scope" Mono="true" Value="@(grant => grant.Scope)" />
+                <LtColumn TItem="TenantGrantDescriptor" Title="Access" Value="@(grant => TenancyFormat.AccessLabel(grant.Operations))" />
+                <LtColumn TItem="TenantGrantDescriptor" Title="State">
+                    <LtStatusPill State="@TenancyFormat.GrantStateRole(context.State)" Text="@TenancyFormat.GrantStateLabel(context.State)" />
+                </LtColumn>
+                <LtColumn TItem="TenantGrantDescriptor" Title="Actions" Align="LtColumnAlign.End">
+                    @IssuedActions(context)
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent><span>Tenant @TenantId has not offered a grant.</span></EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context.GranteeTenantId</Primary>
+                    <Secondary>@($"{context.Scope}, {TenancyFormat.AccessLabel(context.Operations).ToLowerInvariant()}")</Secondary>
+                    <State><LtStatusPill State="@TenancyFormat.GrantStateRole(context.State)" Text="@TenancyFormat.GrantStateLabel(context.State)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions>@IssuedActions(context)</DetailActions>
+        </LtTable>
+    }
+</section>
+
+<LtDialog Open="_offering" OpenChanged="@(open => _offering = open)" Title="Offer a grant" Placement="DialogPlacement"
+          Description="@($"Share a scope of tenant {TenantId}'s trees. Nothing is shared until the other tenant approves.")">
+    @if (_offering)
+    {
+        <form class="lt-tenancy-form" @onsubmit="OfferAsync" novalidate>
+            <LtTextInput Label="To tenant" Mono="true" Value="@_grantee" ValueChanged="@(value => _grantee = value)" Error="@_granteeError" Hint="The id of the tenant to share with." />
+            <LtTextInput Label="Scope" Mono="true" Value="@_scope" ValueChanged="@(value => _scope = value)" Error="@_scopeError" Hint="A tree name, or a tree-name prefix, in this tenant." />
+            <LtSelect Label="Access" Options="AccessOptions" Value="@_access" ValueChanged="@(value => _access = value)" />
+            @if (_formError is not null)
+            {
+                <p class="lt-tenancy-form__error" role="alert">@_formError</p>
+            }
+            <div class="lt-tenancy-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="_busy">Offer grant</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _offering = false)" Disabled="_busy">Cancel</LtButton>
+            </div>
+        </form>
+    }
+</LtDialog>
+
+<LtDialog Open="@(_rejecting is not null)" OpenChanged="@(open => { if (!open) { _rejecting = null; } })" Title="Reject the offer?" Alert="true" Placement="DialogPlacement">
+    @if (_rejecting is { } offer)
+    {
+        <p>Tenant <code class="lt-tenancy-mono">@offer.GranterTenantId</code> offered <code class="lt-tenancy-mono">@offer.Scope</code>. Rejecting closes the offer; it would have to be offered again.</p>
+        <div class="lt-dialog__actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _rejecting = null)">Cancel</LtButton>
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="RejectAsync" Disabled="_busy">Reject</LtButton>
+        </div>
+    }
+</LtDialog>
+
+<LtConfirmDestructive Open="@(_revoking is not null)"
+                      OpenChanged="@(open => { if (!open) { _revoking = null; } })"
+                      Title="Revoke a grant"
+                      ObjectKind="tenant"
+                      ObjectName="@RevokeName"
+                      ConfirmText="Revoke"
+                      OnConfirm="RevokeAsync">
+    @if (_revoking is { } grant)
+    {
+        <p>Tenant <code class="lt-tenancy-mono">@grant.GranteeTenantId</code> will immediately lose @TenancyFormat.AccessLabel(grant.Operations).ToLowerInvariant() access to <code class="lt-tenancy-mono">@grant.Scope</code> in tenant <code class="lt-tenancy-mono">@grant.GranterTenantId</code>. Revoking cannot be undone; a new offer would be needed.</p>
+    }
+</LtConfirmDestructive>
+
+@code {
+    private RenderFragment ReceivedActions(TenantGrantDescriptor grant) => __builder =>
+    {
+        if (grant.State == TenantGrantLifecycleState.Pending)
+        {
+            <div class="lt-tenancy-row-actions">
+                <LtButton OnClick="@(() => ApproveAsync(grant))" Disabled="_busy">Approve</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _rejecting = grant)" Disabled="_busy">Reject</LtButton>
+            </div>
+        }
+        else if (grant.State == TenantGrantLifecycleState.Active)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _revoking = grant)" Disabled="_busy">Revoke</LtButton>
+        }
+    };
+
+    private RenderFragment IssuedActions(TenantGrantDescriptor grant) => __builder =>
+    {
+        if (grant.State == TenantGrantLifecycleState.Active)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _revoking = grant)" Disabled="_busy">Revoke</LtButton>
+        }
+        else if (grant.State == TenantGrantLifecycleState.Pending)
+        {
+            <span class="lt-tenancy-quiet">Awaiting tenant @grant.GranteeTenantId</span>
+        }
+    };
+}

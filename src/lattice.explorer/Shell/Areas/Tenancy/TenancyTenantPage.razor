@@ -1,0 +1,96 @@
+@page "/tenancy/{p1}"
+@inherits ExplorerPage
+
+@*
+    One tenant's administration overview: its state and lifecycle verbs, where
+    it is resident, its installed apps, and its quota.
+*@
+
+<PageTitle>@($"Tenant {TenantId} - Orleans.Lattice Explorer")</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@TenantId</h1>
+<p class="lt-shell-page-lede">Administration of tenant <span class="lt-tenancy-mono">@TenantId</span>. <a href="@Href(TenancyRoutes.Directory)">All tenants</a></p>
+<TenancyNav Tenant="@TenantId" />
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "This tenant could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions>
+            @if (failure.IsRetryable)
+            {
+                <LtButton OnClick="LoadAsync">Try again</LtButton>
+            }
+        </Actions>
+    </LtEmptyState>
+}
+else if (_view is not { } view)
+{
+    <LtSkeleton Lines="6" Label="Loading the tenant" />
+}
+else
+{
+    <LtDefinitionList>
+        <LtDefinition Term="State">
+            @if (view.Status is { } status)
+            {
+                <LtStatusPill State="@TenancyFormat.TenantStateRole(status)" Text="@TenancyFormat.TenantStateLabel(status)" />
+            }
+            else
+            {
+                <span>Not listed for you: it has no admin subject you hold</span>
+            }
+        </LtDefinition>
+        <LtDefinition Term="Kind">@(view.IsDefault ? "The reserved default tenant" : "Tenant")</LtDefinition>
+        <LtDefinition Term="Resident in" Mono="true">@TenancyFormat.RegionList(TenancyFormat.ResidentRegions(view.Regions))</LtDefinition>
+        <LtDefinition Term="Allowed" Mono="true">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))</LtDefinition>
+        <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@(_apps is { } apps ? (apps == 1 ? "1 app installed" : $"{TenancyFormat.Count(apps)} apps installed") : "Installed apps")</a></LtDefinition>
+        <LtDefinition Term="Workspace"><a href="@Href(TenancyRoutes.MyTenant(TenantId))">@(IsActive ? "Open the tenant's workspace" : "Scope to this tenant")</a></LtDefinition>
+    </LtDefinitionList>
+
+    <section class="lt-tenancy-section" aria-labelledby="tenancy-lifecycle-heading">
+        <h2 class="lt-tenancy-section__title" id="tenancy-lifecycle-heading">Lifecycle</h2>
+        @if (view.IsDefault)
+        {
+            <p class="lt-tenancy-note">The reserved default tenant owns the cluster's un-prefixed trees. It cannot be suspended or deleted.</p>
+        }
+        else
+        {
+            <p class="lt-tenancy-note">A suspended tenant keeps its data, but its trees refuse reads and writes until it is resumed. Deleting a tenant soft-deletes every one of its trees.</p>
+            <div class="lt-tenancy-actions">
+                @if (view.Status == TenantLifecycleStatus.Suspended)
+                {
+                    <LtButton OnClick="ResumeAsync" Disabled="_busy">Resume tenant</LtButton>
+                }
+                else
+                {
+                    <LtButton OnClick="@(() => _confirmSuspend = true)" Disabled="_busy">Suspend tenant</LtButton>
+                }
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="@(() => _confirmDelete = true)" Disabled="_busy">Delete tenant</LtButton>
+            </div>
+        }
+    </section>
+
+    <TenancyQuota TenantId="@TenantId" CanEdit="@(!view.IsDefault)" />
+}
+
+<LtDialog Open="_confirmSuspend" OpenChanged="@(open => _confirmSuspend = open)" Title="@($"Suspend tenant {TenantId}?")" Alert="true" Placement="DialogPlacement">
+    <p>Every tree of tenant <code class="lt-tenancy-mono">@TenantId</code> refuses reads and writes until the tenant is resumed. Its data is kept.</p>
+    <div class="lt-dialog__actions">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _confirmSuspend = false)">Cancel</LtButton>
+        <LtButton Variant="LtButtonVariant.Destructive" OnClick="SuspendAsync" Disabled="_busy">Suspend</LtButton>
+    </div>
+</LtDialog>
+
+<LtConfirmDestructive Open="_confirmDelete"
+                      OpenChanged="@(open => _confirmDelete = open)"
+                      Title="Delete a tenant"
+                      ObjectKind="tenant"
+                      ObjectName="@TenantId"
+                      ConfirmText="Delete tenant"
+                      OnConfirm="DeleteAsync">
+    <p>
+        Every tree of tenant <code class="lt-tenancy-mono">@TenantId</code> is soft-deleted, and the tenant is removed. Its trees
+        stay recoverable only until the cluster's soft-delete window ends.
+    </p>
+</LtConfirmDestructive>
