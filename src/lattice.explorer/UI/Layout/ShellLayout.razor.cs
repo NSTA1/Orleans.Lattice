@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.JSInterop;
+using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Slots;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -47,6 +50,8 @@ public partial class ShellLayout : IAsyncDisposable
     private DotNetObjectReference<ShellLayoutCallbacks>? _callbacks;
     private IJSObjectReference? _shortcuts;
     private IJSObjectReference? _viewport;
+    private ILatticeStateConnection? _watchedConnection;
+    private LatticeConnectionState _connectionState;
 
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
@@ -69,6 +74,12 @@ public partial class ShellLayout : IAsyncDisposable
     [Inject]
     internal SessionChromeState Session { get; set; } = default!;
 
+    [Inject]
+    internal IExplorerSession ExplorerSession { get; set; } = default!;
+
+    [Inject]
+    internal IExplorerAuthSession AuthSession { get; set; } = default!;
+
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
     // The compact modifier is how a stylesheet reacts to the band without a width
@@ -88,6 +99,13 @@ public partial class ShellLayout : IAsyncDisposable
     {
         Directory.Changed -= OnDirectoryChanged;
         Session.OverlayOpening -= OnSessionOverlayOpening;
+        AuthSession.AuthenticationChanged -= OnSessionStateChanged;
+        ExplorerSession.ConfigurationChanged -= OnSessionStateChanged;
+        if (_watchedConnection is not null)
+        {
+            _watchedConnection.StatusChanged -= OnConnectionStatusChanged;
+        }
+
         await _lifetime.CancelAsync();
         _lifetime.Dispose();
 
@@ -102,6 +120,15 @@ public partial class ShellLayout : IAsyncDisposable
     {
         Directory.Changed += OnDirectoryChanged;
         Session.OverlayOpening += OnSessionOverlayOpening;
+
+        // An area's availability follows the circuit's connection and sign-in,
+        // which change without a navigation: the session initialises, the
+        // environment credential signs the circuit in, the operator connects or
+        // signs in or out. Each asks the directory again, so a probe that ran
+        // before the session was ready is never left standing.
+        AuthSession.AuthenticationChanged += OnSessionStateChanged;
+        ExplorerSession.ConfigurationChanged += OnSessionStateChanged;
+        WatchConnection();
     }
 
     /// <inheritdoc />
@@ -160,6 +187,17 @@ public partial class ShellLayout : IAsyncDisposable
         _directoryOpen = false;
         _menuOpen = false;
 
+        // Areas probe the circuit's connection and sign-in, so the persisted
+        // configuration and any stored credential are loaded before the first
+        // probe. It runs once per circuit; every later navigation awaits the
+        // same completed task. A failed initialisation leaves the session
+        // unconfigured, which every area already answers fail-closed.
+        await EnsureSessionInitializedAsync();
+        if (version != _version)
+        {
+            return;
+        }
+
         // The operator verdict decides whether a caller scoped to the reserved
         // default tenant sees tenancy chrome, and canonicalisation reads it
         // synchronously, so it is refreshed before the address is resolved.
@@ -196,6 +234,58 @@ public partial class ShellLayout : IAsyncDisposable
         };
 
         await RefreshEntriesAsync(version, token);
+    }
+
+    private async Task EnsureSessionInitializedAsync()
+    {
+        try
+        {
+            await Session.EnsureInitializedAsync(_lifetime.Token);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The session chrome reports the failure itself; the areas see an
+            // unconfigured session and answer for it.
+        }
+
+        WatchConnection();
+    }
+
+    private void WatchConnection()
+    {
+        var connection = ExplorerSession.Connection;
+        if (ReferenceEquals(connection, _watchedConnection))
+        {
+            return;
+        }
+
+        if (_watchedConnection is not null)
+        {
+            _watchedConnection.StatusChanged -= OnConnectionStatusChanged;
+        }
+
+        _watchedConnection = connection;
+        _connectionState = connection.Status.State;
+        connection.StatusChanged += OnConnectionStatusChanged;
+    }
+
+    // Raised on a thread-pool thread for every status report, including the
+    // periodic health checks, so only a change of state asks the areas again.
+    private void OnConnectionStatusChanged(LatticeConnectionStatus status)
+    {
+        if (status.State == _connectionState)
+        {
+            return;
+        }
+
+        _connectionState = status.State;
+        Directory.Invalidate();
+    }
+
+    private void OnSessionStateChanged()
+    {
+        WatchConnection();
+        Directory.Invalidate();
     }
 
     private async Task RefreshEntriesAsync(int version, CancellationToken token)

@@ -47,24 +47,14 @@
   </ItemGroup>
 
   <!--
-    The documentation site's design tokens, fonts, licences and favicon, LINKED
-    into the UI's static web assets rather than copied (epic #3807, E10).
-    docs-site/template/public/ stays the one source of truth: the Explorer
-    serves those exact bytes at _content/Orleans.Lattice.Explorer.UI/design/,
-    and ShellTokenParityTests fails the build if this link is ever replaced by a
-    hand-maintained copy under wwwroot/design/.
+    wwwroot/design/ carries byte-identical copies of the documentation site's
+    tokens.css, fonts, font licences and favicon (epic #3807, E10). They are
+    real files, not build-time links or staged copies: the static web asset
+    runtime resolves every asset as its project's content root plus a relative
+    path, so a file that lives anywhere else is served as an empty 200 under
+    `dotnet run` and every token is undefined. docs-site/template/public/ stays
+    the one source of truth, and ShellTokenParityTests fails the build the
+    moment a copy's bytes differ from it.
   -->
-  <PropertyGroup>
-    <LatticeDocsSitePublic>$(MSBuildThisFileDirectory)..\..\..\docs-site\template\public\</LatticeDocsSitePublic>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <Content Include="$(LatticeDocsSitePublic)tokens.css" Link="wwwroot\design\tokens.css" />
-    <Content Include="$(LatticeDocsSitePublic)favicon.svg" Link="wwwroot\design\favicon.svg" />
-    <Content Include="$(LatticeDocsSitePublic)fonts\recursive-sans-linear.woff2" Link="wwwroot\design\fonts\recursive-sans-linear.woff2" />
-    <Content Include="$(LatticeDocsSitePublic)fonts\cascadia-mono.woff2" Link="wwwroot\design\fonts\cascadia-mono.woff2" />
-    <Content Include="$(LatticeDocsSitePublic)fonts\OFL-Recursive.txt" Link="wwwroot\design\fonts\OFL-Recursive.txt" />
-    <Content Include="$(LatticeDocsSitePublic)fonts\OFL-CascadiaMono.txt" Link="wwwroot\design\fonts\OFL-CascadiaMono.txt" />
-  </ItemGroup>
 
 </Project>

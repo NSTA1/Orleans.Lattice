@@ -16,7 +16,8 @@ internal static class StaticWebAssetManifest
     /// <param name="Identity">The absolute path of the file whose bytes are served.</param>
     /// <param name="BasePath">The asset's base path, such as <c>_content/Orleans.Lattice.Explorer.UI</c>.</param>
     /// <param name="IsCompressed">Whether this is a pre-compressed (gzip) variant of another asset.</param>
-    internal sealed record Asset(string RelativePath, string Identity, string BasePath, bool IsCompressed);
+    /// <param name="ContentRoot">The directory the runtime resolves the asset's relative path against.</param>
+    internal sealed record Asset(string RelativePath, string Identity, string BasePath, bool IsCompressed, string ContentRoot = "");
 
     /// <summary>The build configuration this test assembly was compiled in.</summary>
     public static string Configuration =>
@@ -48,7 +49,8 @@ internal static class StaticWebAssetManifest
                 StripFingerprint(compressed ? relative[..^3] : relative),
                 asset.GetProperty("Identity").GetString() ?? string.Empty,
                 asset.GetProperty("BasePath").GetString() ?? string.Empty,
-                compressed));
+                compressed,
+                asset.GetProperty("ContentRoot").GetString() ?? string.Empty));
         }
 
         Assert.That(assets, Is.Not.Empty, "the manifest must list assets");
