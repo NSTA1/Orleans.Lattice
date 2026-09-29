@@ -42,6 +42,21 @@ public sealed class ShellChromeInteropTests : BunitContext
     }
 
     [Test]
+    public async Task Focus_goes_through_the_module_and_a_refused_focus_is_swallowed()
+    {
+        var module = JSInterop.SetupModule(ShellChromeAssets.ModuleSpecifier);
+        var focus = module.SetupVoid("focusElement", _ => true);
+        await using var interop = new ShellChromeInterop(JSInterop.JSRuntime);
+
+        focus.SetVoidResult();
+        await interop.FocusAsync(default);
+        Assert.That(module.Invocations["focusElement"], Has.Count.EqualTo(1));
+
+        // A focus the browser refuses - its element already gone - costs only the focus.
+        focus.SetException(new JSException("Unable to focus an invalid element."));
+        Assert.That(async () => await interop.FocusAsync(default), Throws.Nothing);
+    }
+    [Test]
     public async Task Every_call_is_best_effort_when_the_module_cannot_be_reached()
     {
         var js = Substitute.For<IJSRuntime>();
@@ -56,6 +71,7 @@ public sealed class ShellChromeInteropTests : BunitContext
             Assert.That(await interop.ObserveViewportAsync(default, target, [1, 2]), Is.Null);
             Assert.That(async () => await interop.ApplyAppearanceAsync("light", "system", "comfortable"), Throws.Nothing);
             Assert.That(async () => await interop.FocusAndSelectAsync(default), Throws.Nothing);
+            Assert.That(async () => await interop.FocusAsync(default), Throws.Nothing);
         });
     }
 

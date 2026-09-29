@@ -93,8 +93,35 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
         {
             Assert.That(cut.FindAll("input"), Is.Empty);
             Assert.That(cut.FindAll(".lt-chain__text").Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "data", "orders" }));
-            Assert.That(JSInterop.Invocations.Any(invocation => invocation.Identifier.EndsWith("focus", StringComparison.Ordinal)), Is.True);
+            Assert.That(JSInterop.Invocations.Any(invocation => invocation.Identifier == "focusElement"), Is.True);
         });
+    }
+
+    [Test]
+    public void A_focus_that_lands_on_a_vanished_element_never_ends_the_circuit()
+    {
+        // The browser refuses a focus whose element has already gone - Blazor's own
+        // "Unable to focus an invalid element". On a loaded server that happens when the
+        // edit control is re-rendered away before its focus request lands. It must cost
+        // nothing but the focus: escaping OnAfterRenderAsync, it ends the circuit, and the
+        // console stops answering (the red UI leg on #3943).
+        var refused = new JSException("Unable to focus an invalid element.");
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true).SetException(refused);
+        var module = JSInterop.SetupModule(ShellChromeAssets.ModuleSpecifier);
+        module.SetupVoid("focusElement", _ => true).SetException(refused);
+        module.SetupVoid("focusAndSelect", _ => true).SetException(refused);
+
+        var cut = RenderLine(Location("/data/orders"));
+        cut.Find(".lt-shell-address-line__edit").Click();
+        cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+        cut.InvokeAsync(() => cut.Instance.FocusAsync().AsTask()).GetAwaiter().GetResult();
+
+        // Still answering: it opens, takes typing and closes again.
+        cut.Find(".lt-shell-address-line__edit").Click();
+        cut.Find("input").Input("/apps");
+        Assert.That(cut.Find("input").GetAttribute("value"), Is.EqualTo("/apps"));
+        cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+        Assert.That(cut.FindAll("input"), Is.Empty);
     }
 
     [Test]

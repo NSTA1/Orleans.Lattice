@@ -1,8 +1,10 @@
 using Bunit;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
 using NSubstitute;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
@@ -94,7 +96,27 @@ public sealed class ShellLayoutTests : ShellLayoutTestContext
         cut.FindAll(".lt-shell-skip__link")[0].Click();
         cut.FindAll(".lt-shell-skip__link")[1].Click();
 
-        Assert.That(JSInterop.Invocations.Count(invocation => invocation.Identifier.EndsWith("focus", StringComparison.Ordinal)), Is.GreaterThanOrEqualTo(3));
+        // Every skip link focuses through the chrome module, which focuses only an element
+        // still in the document.
+        Assert.That(JSInterop.Invocations.Count(invocation => invocation.Identifier == "focusElement"), Is.GreaterThanOrEqualTo(3));
+    }
+
+    [Test]
+    public void A_refused_skip_link_focus_leaves_the_layout_alive()
+    {
+        var refused = new JSException("Unable to focus an invalid element.");
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true).SetException(refused);
+        JSInterop.SetupModule(ShellChromeAssets.ModuleSpecifier).SetupVoid("focusElement", _ => true).SetException(refused);
+        var cut = RenderLayout();
+
+        foreach (var index in new[] { 0, 1, 2 })
+        {
+            cut.FindAll(".lt-shell-skip__link")[index].Click();
+        }
+
+        // Still answering: the address line still opens.
+        cut.Find(".lt-shell-address-line__edit").Click();
+        Assert.That(cut.FindAll("input[role='combobox']"), Has.Count.EqualTo(1));
     }
 
     [Test]
