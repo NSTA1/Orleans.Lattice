@@ -125,7 +125,10 @@ explains the install that is already in `acme`.
 `operators` group may `Read` and `RangeRead` `factory-floor`. In **Explain**,
 `alice` reading `factory-floor` is *Allowed* by the matched rule, and `bob` is
 *Denied* by the default. Rules also grant each tenant admin its tenant's
-`orders` tree.
+`orders` tree, and `globex-admin-read-acme-orders` lets `globex-admin` read acme's
+`t/acme/orders` (`Read` and `RangeRead`). A cross-tenant grant opens the boundary
+between two tenants but never bypasses this policy, so that rule is what lets
+globex actually read the tree acme shares with it.
 
 ### Schema
 
@@ -141,8 +144,9 @@ state, quota use and apps. Open a tenant for its overview and lifecycle, its
 
 - **Quota**: `acme` is capped at 500 keys and `globex` at 200, each at ten trees
   with a 20% burst allowance.
-- **Grants**: `acme` has offered `globex` Read on its `orders` tree. The grant is
-  *Pending* until `globex` approves it.
+- **Grants**: `acme` has offered `globex` Read on `t/acme/orders`, by its full
+  tree id, which is what the cluster's tenant gate matches. The grant is *Pending*
+  until `globex` approves it.
 - **Regions**: both tenants may use `east` and `west`. Residency is left
   unconfigured, so the page lists both regions as not resident, which the
   cluster treats as online in every region. Setting residency starts a region
@@ -155,7 +159,10 @@ console opens at `/t/acme` with only Data, Apps, Tenancy, Replication and
 Backups on the spine (Backups says a backup grant is needed). Tenancy is now
 **My tenant** at `/t/acme/tenancy`: Members, Quota, Regions and Sharing, with no
 other tenant in sight. Restart with `--sign-in-as globex-admin` and approve
-acme's offer under `/t/globex/tenancy/sharing`.
+acme's offer under `/t/globex/tenancy/sharing`. globex's Data directory at
+`/t/globex/data` then lists acme's orders as a **Shared tree**, shared by `acme`
+with Read only access, at `/t/globex/data/t/acme/orders`, and globex can browse its
+five entries.
 
 Every call the console makes asserts the tenant its address names, so
 `acme-admin` sees acme's `orders` and task board under Data and Apps, and an

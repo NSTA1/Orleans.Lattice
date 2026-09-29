@@ -24,7 +24,7 @@ Data is the Explorer's state browser. It has two routed pages:
 
 | Address | What it shows |
 | --- | --- |
-| `/data`, `/t/{tenant}/data` | Every tree and view the caller can reach. Rows show the logical name, kind, owning app, shard count, lifecycle and source view tree. The table is virtualised and can be filtered by text and by tree/view kind. |
+| `/data`, `/t/{tenant}/data` | Every tree and view the caller can reach, followed, with tenancy on, by the trees other tenants share with the tenant through an approved grant. Rows show the logical name, kind, owning app, shard count, lifecycle and source view tree, plus a **Shared by** column with tenancy on. The table is virtualised and can be filtered by text and by kind: All, Trees, Views, and with tenancy on **Shared with this tenant**. |
 | `/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`, plus the tenant-rooted equivalent | One tree workspace. The route accepts up to six logical tree-id path segments. The page shows the logical id, kind, owning app link, view source, shard count and live-key count when metrics are available. |
 
 The directory uses `?filter=` for the text filter. A tree workspace keeps state
@@ -84,6 +84,16 @@ App-owned trees use logical ids shaped like `a/{slug}/...`. Data links their
 owner badge to `/apps/{slug}`, and tag and view member rows preserve those
 logical links. Physical state ids, tenant-composed ids, restore shadows and view
 generation trees are not shown.
+
+Trees shared through a cross-tenant grant (see
+[Trees shared through a grant](tenant-scope.md#trees-shared-through-a-grant)) are
+listed as **Shared tree** rows with their owner and access, and a shared prefix as
+one **Shared prefix** row that does not open. A shared tree keeps its full id and
+is addressed under the tenant's own root, as in `/t/globex/data/t/acme/orders`; its
+page carries "Shared by acme" and access pills and offers no administration. Tree
+pickers and address completions offer shared trees with their owner and access,
+and Home's Data line counts them ("..., and 2 shared with this tenant."). When the
+tenant's grants cannot be listed, the directory shows its own trees with a note.
 
 The Data palette command is:
 
