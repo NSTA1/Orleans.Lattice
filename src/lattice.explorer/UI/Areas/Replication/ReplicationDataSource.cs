@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 /// peer status report (paging <see cref="ILatticeReplicationStatus"/> to its end)
 /// and the enrolment report (<see cref="ILatticeReplicationControl"/>), keeps the
 /// last of each briefly for the directory badge, Home and completions, and forgets
-/// both whenever the connection or the signed-in identity changes.
+/// both whenever the connection, the signed-in identity or the asserted tenant
+/// changes.
 /// </summary>
 /// <remarks>
 /// Both facades are resolved optionally, so a host that serves neither leaves the
@@ -32,7 +33,9 @@ internal sealed class ReplicationDataSource : IDisposable
     private readonly ReplicationOptions _options;
     private readonly IExplorerAuthSession? _auth;
     private readonly IExplorerSession? _session;
+    private readonly ShellAssertedTenant _tenant;
     private readonly object _gate = new();
+    private string? _memoTenant;
     private (ReplicationRead<ReplicationEstate> Read, DateTimeOffset At)? _estate;
     private (ReplicationRead<ReplicationConfigReport> Read, DateTimeOffset At)? _config;
     private long _generation;
@@ -52,6 +55,7 @@ internal sealed class ReplicationDataSource : IDisposable
 
         _auth = services.GetService<IExplorerAuthSession>();
         _session = services.GetService<IExplorerSession>();
+        _tenant = services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None;
         if (_auth is not null)
         {
             _auth.AuthenticationChanged += Invalidate;
@@ -88,6 +92,7 @@ internal sealed class ReplicationDataSource : IDisposable
         long generation;
         lock (_gate)
         {
+            ForgetIfTenantChanged();
             if (!refresh && Fresh(_estate?.At))
             {
                 return _estate!.Value.Read;
@@ -99,6 +104,7 @@ internal sealed class ReplicationDataSource : IDisposable
         var read = await ReadLinksAsync(treeId: null, cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
+            ForgetIfTenantChanged();
             if (generation == _generation)
             {
                 _estate = (read, _time.GetUtcNow());
@@ -128,6 +134,7 @@ internal sealed class ReplicationDataSource : IDisposable
         long generation;
         lock (_gate)
         {
+            ForgetIfTenantChanged();
             if (!refresh && Fresh(_config?.At))
             {
                 return _config!.Value.Read;
@@ -156,6 +163,7 @@ internal sealed class ReplicationDataSource : IDisposable
 
         lock (_gate)
         {
+            ForgetIfTenantChanged();
             if (generation == _generation)
             {
                 _config = (read, _time.GetUtcNow());
@@ -235,6 +243,23 @@ internal sealed class ReplicationDataSource : IDisposable
         if (_session is not null)
         {
             _session.ConfigurationChanged -= Invalidate;
+        }
+    }
+
+    /// <summary>
+    /// Forgets both reads, and moves the generation on so a read in flight is not
+    /// remembered, when the circuit asserts a different tenant from the one they
+    /// were read under. Call under the gate.
+    /// </summary>
+    private void ForgetIfTenantChanged()
+    {
+        var tenant = _tenant.AssertedTenant;
+        if (!ShellAssertedTenant.Same(_memoTenant, tenant))
+        {
+            _memoTenant = tenant;
+            _estate = null;
+            _config = null;
+            _generation++;
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Core.Connection;
 
 namespace Orleans.Lattice.Explorer.UI.Framing;
 
@@ -25,7 +26,8 @@ namespace Orleans.Lattice.Explorer.UI.Framing;
 internal sealed partial class AppFrameBundleLoader(
     ILatticeAppWorkspace? workspace,
     AppFrameBundleCache cache,
-    ILogger<AppFrameBundleLoader> logger)
+    ILogger<AppFrameBundleLoader> logger,
+    ILatticeActiveTenantProvider? activeTenant = null)
 {
     /// <summary>
     /// The per-launch workspace gate: the app must be in the caller's
@@ -42,6 +44,9 @@ internal sealed partial class AppFrameBundleLoader(
             return AppFrameLaunchResult.Refused(AppFrameFailure.NoGrant);
         }
 
+        // The tenant the workspace gate below is asked in, and so the one the app is
+        // installed in: the launch carries it so every bridge call stays in it.
+        var tenant = activeTenant?.AssertedTenant;
         try
         {
             var mine = await workspace.ListMyAppsAsync(cancellationToken).ConfigureAwait(false);
@@ -87,7 +92,7 @@ internal sealed partial class AppFrameBundleLoader(
                 return AppFrameLaunchResult.Refused(AppFrameFailure.ProtocolUnsupported);
             }
 
-            return new AppFrameLaunchResult(new AppFrameLaunch(this, descriptor, ui, summary.Roles), default);
+            return new AppFrameLaunchResult(new AppFrameLaunch(this, descriptor, ui, summary.Roles, tenant), default);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

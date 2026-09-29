@@ -30,6 +30,7 @@ internal sealed class ShellTransportCircuit : IDisposable
 
     private readonly ServiceProvider _root;
     private readonly IServiceScope _scope;
+    private readonly List<IServiceScope> _siblings = [];
 
     /// <summary>Builds a circuit whose endpoint is configured and whose user is signed out.</summary>
     /// <param name="configure">Registers extra services before the Shell registers its own.</param>
@@ -88,10 +89,29 @@ internal sealed class ShellTransportCircuit : IDisposable
     /// <typeparam name="TFacade">The facade interface.</typeparam>
     /// <returns>The circuit's adapter.</returns>
     public TFacade Resolve<TFacade>()
+        where TFacade : class => Resolve<TFacade>(Services);
+
+    /// <summary>
+    /// Opens another circuit on the same host: its own scope, so its own channel,
+    /// adapters and tenant context, over the same singletons and the same peer.
+    /// </summary>
+    /// <returns>The sibling circuit's scoped services; disposed with this circuit.</returns>
+    public IServiceProvider CreateSibling()
+    {
+        var scope = _root.CreateScope();
+        _siblings.Add(scope);
+        return scope.ServiceProvider;
+    }
+
+    /// <summary>Resolves <typeparamref name="TFacade"/> in <paramref name="services"/> and teaches the peer its RPCs.</summary>
+    /// <typeparam name="TFacade">The facade interface.</typeparam>
+    /// <param name="services">A circuit's scoped services, from <see cref="Services"/> or <see cref="CreateSibling"/>.</param>
+    /// <returns>That circuit's adapter.</returns>
+    public TFacade Resolve<TFacade>(IServiceProvider services)
         where TFacade : class
     {
-        var facade = Services.GetRequiredKeyedService<TFacade>(ShellFacades.Key);
-        Peer.Serializers = Services.GetRequiredService<ShellTransportSerializer>().Services;
+        var facade = services.GetRequiredKeyedService<TFacade>(ShellFacades.Key);
+        Peer.Serializers = services.GetRequiredService<ShellTransportSerializer>().Services;
         Peer.Learn(facade);
         return facade;
     }
@@ -99,6 +119,11 @@ internal sealed class ShellTransportCircuit : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        foreach (var sibling in _siblings)
+        {
+            sibling.Dispose();
+        }
+
         _scope.Dispose();
         _root.Dispose();
         Peer.Dispose();

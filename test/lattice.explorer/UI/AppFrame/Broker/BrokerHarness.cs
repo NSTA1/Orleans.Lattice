@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.UI.Framing.Broker;
@@ -60,7 +61,8 @@ internal sealed class BrokerHarness
         ImmutableArray<AppUiBridgeGrantDescriptor>? grants = null,
         bool withBridge = true,
         bool withToasts = true,
-        bool withHostContext = true)
+        bool withHostContext = true,
+        ILatticeActiveTenantProvider? tenant = null)
     {
         var workspace = Workspace(Describe(Ui(grants)));
         var bridge = withBridge ? new FakeAppBridge() : null;
@@ -68,8 +70,8 @@ internal sealed class BrokerHarness
         var toasts = withToasts ? new LtToastService() : null;
         var time = new ManualTimeProvider();
         var log = new CapturingLogger();
-        var loader = new AppFrameBundleLoader(workspace, new AppFrameBundleCache(), NullLogger<AppFrameBundleLoader>.Instance);
-        var broker = new AppBridgeBroker(bridge, loader, withHostContext ? host : null, toasts, time, log);
+        var loader = new AppFrameBundleLoader(workspace, new AppFrameBundleCache(), NullLogger<AppFrameBundleLoader>.Instance, tenant);
+        var broker = new AppBridgeBroker(bridge, loader, withHostContext ? host : null, toasts, time, log, tenant);
         var launch = (await loader.AuthorizeAsync(Slug)).Launch!;
         return new BrokerHarness(workspace, bridge, host, toasts, time, log, loader, broker, broker.Open(launch));
     }

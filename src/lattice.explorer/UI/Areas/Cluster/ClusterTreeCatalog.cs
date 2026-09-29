@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// Physical trees are filtered out: a resize or restore shadow appears in the
 /// registry beside the logical tree that aliases it, and the Cluster area never
 /// shows a physical id (a restore shadow is flagged by the registry; a resize
-/// shadow is the target of another entry's alias).
+/// shadow is the target of another entry's alias). The remembered list is keyed
+/// on the tenant the circuit asserts, so a tenant switch reads it again.
 /// </remarks>
 /// <param name="facades">The area's facades.</param>
 /// <param name="time">The clock the freshness window is measured on.</param>
@@ -23,8 +24,7 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
     /// <summary>The most pages one read follows.</summary>
     public const int MaximumPages = 50;
 
-    private IReadOnlyList<ClusterTreeEntry>? _trees;
-    private DateTimeOffset _readAt;
+    private Remembered? _remembered;
 
     /// <summary>Whether the last read stopped at <see cref="MaximumPages"/> with more to come.</summary>
     public bool Truncated { get; private set; }
@@ -36,9 +36,13 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
     /// <exception cref="InvalidOperationException">No cluster connection is configured.</exception>
     public async ValueTask<IReadOnlyList<ClusterTreeEntry>> GetAsync(bool refresh, CancellationToken cancellationToken)
     {
-        if (!refresh && _trees is { } remembered && time.GetUtcNow() - _readAt < Freshness)
+        var tenant = facades.AssertedTenant;
+        if (!refresh
+            && _remembered is { } remembered
+            && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal)
+            && time.GetUtcNow() - remembered.ReadAt < Freshness)
         {
-            return remembered;
+            return remembered.Trees;
         }
 
         if (facades.Session is not { IsConfigured: true } session)
@@ -61,13 +65,20 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
         while (token is not null && pages < MaximumPages);
 
         Truncated = token is not null;
-        _trees = Project(entries);
-        _readAt = time.GetUtcNow();
-        return _trees;
+        var trees = Project(entries);
+
+        // Remembered only for the tenant it was read under, and only while the
+        // circuit still asserts it.
+        if (string.Equals(facades.AssertedTenant, tenant, StringComparison.Ordinal))
+        {
+            _remembered = new Remembered(trees, tenant, time.GetUtcNow());
+        }
+
+        return trees;
     }
 
     /// <summary>Forgets the remembered list, so the next read goes to the cluster.</summary>
-    public void Invalidate() => _trees = null;
+    public void Invalidate() => _remembered = null;
 
     /// <summary>Projects catalogue entries onto logical trees, dropping every physical shadow.</summary>
     /// <param name="entries">The raw catalogue.</param>
@@ -92,4 +103,7 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
             .OrderBy(entry => entry.TreeId, StringComparer.Ordinal)
             .ToArray();
     }
+
+    /// <summary>A read catalogue, the tenant it was read under, and when.</summary>
+    private sealed record Remembered(IReadOnlyList<ClusterTreeEntry> Trees, string? Tenant, DateTimeOffset ReadAt);
 }

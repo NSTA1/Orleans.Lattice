@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -19,6 +20,14 @@ internal sealed class SchemaFacades(IServiceProvider services)
     private readonly Lazy<ILatticeAppsControl?> _apps = new(services.GetShellFacade<ILatticeAppsControl>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
     private readonly Lazy<IExplorerAuthSession?> _auth = new(services.GetService<IExplorerAuthSession>);
+    private readonly Lazy<ILatticeActiveTenantProvider?> _tenant = new(services.GetService<ILatticeActiveTenantProvider>);
+
+    /// <summary>
+    /// The tenant the circuit's calls assert right now, or <see langword="null"/>
+    /// when they assert none. Everything the area remembers is keyed on it, so an
+    /// answer read under one tenant is never served under another.
+    /// </summary>
+    public string? AssertedTenant => _tenant.Value?.AssertedTenant;
 
     /// <summary>The schema control facade (T1's adapter), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeSchemaControl? Schema => _schema.Value;

@@ -26,6 +26,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     private readonly ClusterFacades _facades;
     private AreaAvailability? _verdict;
     private ClusterStorageUsageSummary? _usage;
+    private string? _verdictTenant;
 
     /// <summary>Creates the area for one circuit.</summary>
     /// <param name="facades">The facades the area reads.</param>
@@ -92,6 +93,15 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             return AreaAvailability.Unavailable("Connect to a cluster to see its estate.");
         }
 
+        // The verdict and the usage it read belong to the tenant asserted when they
+        // were read; under another tenant the cluster is asked again.
+        var tenant = _facades.AssertedTenant;
+        if (!string.Equals(_verdictTenant, tenant, StringComparison.Ordinal))
+        {
+            Forget();
+            _verdictTenant = tenant;
+        }
+
         if (_verdict is { } remembered)
         {
             return remembered;
@@ -119,18 +129,28 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             return AreaAvailability.Unavailable("The cluster did not answer. Try again in a moment.");
         }
 
-        return _verdict.Value;
+        var answer = _verdict.Value;
+        if (!string.Equals(_facades.AssertedTenant, tenant, StringComparison.Ordinal))
+        {
+            // The circuit moved to another tenant while the probe ran: answer this
+            // caller, but remember nothing read under the tenant it left.
+            Forget();
+        }
+
+        return answer;
     }
 
     /// <inheritdoc />
     public ValueTask<string?> GetHomeStatusAsync(CancellationToken cancellationToken) =>
-        ValueTask.FromResult(_usage is { } usage
+        ValueTask.FromResult(_usage is { } usage && string.Equals(_verdictTenant, _facades.AssertedTenant, StringComparison.Ordinal)
             ? $"{ClusterFormat.Plural(usage.TreeCount, "tree")}, {ClusterFormat.Bytes(usage.TotalBytes)} stored."
             : null);
 
     /// <inheritdoc />
     public ValueTask<string?> GetDirectoryBadgeAsync(CancellationToken cancellationToken) =>
-        ValueTask.FromResult(_usage is { } usage ? ClusterFormat.Count(usage.TreeCount) : null);
+        ValueTask.FromResult(_usage is { } usage && string.Equals(_verdictTenant, _facades.AssertedTenant, StringComparison.Ordinal)
+            ? ClusterFormat.Count(usage.TreeCount)
+            : null);
 
     /// <inheritdoc />
     public void Dispose()

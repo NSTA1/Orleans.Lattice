@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Framing.Broker;
@@ -36,8 +37,10 @@ internal sealed partial class AppBridgeBroker(
     IAppFrameHostContext? hostContext,
     LtToastService? toasts,
     TimeProvider time,
-    ILogger<AppBridgeBroker> logger)
+    ILogger<AppBridgeBroker> logger,
+    ILatticeActiveTenantProvider? activeTenant = null)
 {
+
     private const int Action = 1 << 0;
     private const int Tree = 1 << 1;
     private const int Key = 1 << 2;
@@ -221,6 +224,16 @@ internal sealed partial class AppBridgeBroker(
         if (bridge is null)
         {
             return Refuse(id, launch.Slug, op, AppBridgeDenial.CollaboratorMissing, AppFrameProtocol.ErrorUnavailable);
+        }
+
+        // The bridge call asserts the circuit's tenant as it starts, so it must be the
+        // tenant the app was launched in. Once the circuit asserts any other, the frame
+        // is closed rather than let it read or write another tenant's data.
+        if (!string.Equals(launch.Tenant, activeTenant?.AssertedTenant, StringComparison.Ordinal))
+        {
+            session.Close();
+            LogDenied(logger, launch.Slug, op, AppBridgeDenial.TenantChanged);
+            return new AppBridgeOutcome(WriteError(id, AppFrameProtocol.ErrorUnavailable), AppBridgeEffect.Revoked, AppFrameProtocol.RevokedClosed);
         }
 
         var target = new AppBridgeTarget
