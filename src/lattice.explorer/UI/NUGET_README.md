@@ -20,9 +20,12 @@ registration API: the only way third parties put UI into the Explorer is a
 Lattice App, whose UI runs in a sandboxed, credential-free frame.
 
 Static assets are served from `_content/Orleans.Lattice.Explorer.UI/`, with
-the design system under `design/` and the navigation chrome under `shell/`. You
-do not reference this package directly; the Explorer web head
-(`AddLatticeExplorerWeb` and `MapLatticeExplorer`) brings it in.
+the design system under `design/` and the navigation chrome under `shell/`. They
+are mapped with no extra wiring when the host is published or runs under the
+Development environment; a host run from its build output under any other
+environment calls `builder.WebHost.UseStaticWebAssets()`. You do not reference
+this package directly; the Explorer web head (`AddLatticeExplorerWeb` and
+`MapLatticeExplorer`) brings it in.
 
 ## The address grammar
 

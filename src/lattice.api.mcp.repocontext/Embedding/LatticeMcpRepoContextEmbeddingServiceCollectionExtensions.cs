@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// DI extensions that bind the default <see cref="IEmbeddingProvider"/> for the
-/// repository-context surface: the thin client for the companion Onyx
-/// model-server embedding container.
+/// repository-context surface: the thin client for the companion embedding
+/// container.
 /// </summary>
 public static class LatticeMcpRepoContextEmbeddingServiceCollectionExtensions
 {
@@ -23,7 +23,8 @@ public static class LatticeMcpRepoContextEmbeddingServiceCollectionExtensions
     /// <param name="configure">Optional callback to populate
     /// <see cref="OnyxEmbeddingOptions"/> (endpoint base address, model, dimension).
     /// When omitted, the defaults target the model and endpoint baked into the
-    /// shipped <c>apps/embedding</c> image.</param>
+    /// shipped companion image; the sample composes the ONNX Runtime image at
+    /// <c>apps/embedding-onnx</c>, and the Onyx image serves the same contract.</param>
     /// <returns>The service collection for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is null.</exception>
     public static IServiceCollection AddOnyxEmbeddingProvider(

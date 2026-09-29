@@ -4,10 +4,19 @@ The public surface is the options (covered in [configuration](configuration.md))
 
 ## `ExplorerEntraWebServiceCollectionExtensions`
 
-```csharp
-public static IServiceCollection AddLatticeExplorerEntraWebAuth(
-    this IServiceCollection services,
-    Action<ExplorerEntraWebOptions> configure)
+```csharp verify
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.Entra.Web;
+
+var services = new ServiceCollection();
+services.AddLatticeExplorerEntraWebAuth(options =>
+{
+    options.Instance = "https://login.microsoftonline.com/";
+    options.TenantId = "tenant-id";
+    options.ClientId = "client-id";
+    options.ClientSecret = "client-secret";
+    options.Scopes.Add("api://state-api/.default");
+});
 ```
 
 Registers the Microsoft.Identity.Web OpenID Connect app (auth-code + PKCE, cookie session), the scoped `EntraWebExplorerAuthMethod` for the `entra` scheme, the scoped `IExplorerWebTokenAcquirer`, the selected token cache, and (by default) a fallback authorization policy plus the auto-sign-in circuit handler.
@@ -21,39 +30,55 @@ Registers the Microsoft.Identity.Web OpenID Connect app (auth-code + PKCE, cooki
 
 ## `ExplorerEntraWebEndpointRouteBuilderExtensions`
 
-```csharp
-public const string DefaultSignOutPattern = "/explorer-entra/signout";
+```csharp verify
+using Microsoft.AspNetCore.Builder;
+using Orleans.Lattice.Explorer.Entra.Web;
 
-public static IEndpointConventionBuilder MapLatticeExplorerEntraWebSignOut(
-    this IEndpointRouteBuilder endpoints,
-    string pattern = DefaultSignOutPattern,
-    string redirectUri = "/")
+var builder = WebApplication.CreateBuilder();
+var app = builder.Build();
+
+string defaultPattern = ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultSignOutPattern;
+app.MapLatticeExplorerEntraWebSignOut(
+    pattern: defaultPattern,
+    redirectUri: "/");
 ```
 
 Maps a federated sign-out **`POST`** endpoint that drops the local State API credential (via `IExplorerAuthSession.LogoutAsync`, when the session is registered), clears the OpenID Connect cookie, and signs the user out of Entra, redirecting to `redirectUri` afterwards. Because signing out mutates session state it is a `POST` guarded by antiforgery validation - a cross-site `GET` (a logout-CSRF) cannot trigger it - so the Explorer's "Sign out" button renders an HTML form carrying a `RequestVerificationToken`. `AddLatticeExplorerEntraWebAuth` publishes `SignOutPath` as the core `ExplorerSignOutOptions.FederatedSignOutPath` so the button posts here automatically. This is distinct from the Explorer's own in-process State API sign-out, which only drops the API credential and leaves the browser session in place (letting the fallback authorization policy silently re-authenticate the circuit). Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern` is blank.
 
-```csharp
-public const string DefaultReauthPattern = "/explorer-entra/reauth";
-public const string DefaultReauthPrompt = "login";
-public const string DefaultReturnUrlParameter = "returnUrl";
+```csharp verify
+using Microsoft.AspNetCore.Builder;
+using Orleans.Lattice.Explorer.Entra.Web;
 
-public static IEndpointConventionBuilder MapLatticeExplorerEntraWebReauth(
-    this IEndpointRouteBuilder endpoints,
-    string pattern = DefaultReauthPattern,
-    string prompt = DefaultReauthPrompt,
-    string returnUrlParameter = DefaultReturnUrlParameter)
+var builder = WebApplication.CreateBuilder();
+var app = builder.Build();
+
+app.MapLatticeExplorerEntraWebReauth(
+    pattern: ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultReauthPattern,
+    prompt: ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultReauthPrompt,
+    returnUrlParameter: ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultReturnUrlParameter);
 ```
 
 Maps a forced-interactive re-authentication **`GET`** endpoint that issues an OpenID Connect challenge with `prompt=login` (or the supplied `prompt`), so a **new** authorization code is redeemed even when a valid session cookie already exists - repopulating a failover replica's token cache. The core Explorer's re-authentication interstitial navigates here when the credential latches into its revoked state. The endpoint honours the `returnUrlParameter` query value only when it is a **local** path (an absolute or protocol-relative URL is rejected and the browser returns to `/`), so it cannot be abused as an open redirect. Pass `select_account` for `prompt` to let the operator pick a different account. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern`, `prompt`, or `returnUrlParameter` is blank.
 
 ## `IExplorerWebTokenAcquirer`
 
-```csharp
-public interface IExplorerWebTokenAcquirer
+```csharp verify
+using Orleans.Lattice.Explorer.Entra.Web;
+
+public sealed class StaticExplorerWebTokenAcquirer : IExplorerWebTokenAcquirer
 {
-    Task<ExplorerWebToken> AcquireTokenAsync(
+    public Task<ExplorerWebToken> AcquireTokenAsync(
         IReadOnlyList<string> scopes,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scopes);
+        return Task.FromResult(new ExplorerWebToken
+        {
+            AccessToken = "token",
+            ExpiresOn = DateTimeOffset.UtcNow.AddHours(1),
+            Username = "operator@example.com",
+        });
+    }
 }
 ```
 
@@ -67,16 +92,27 @@ A `readonly record struct` holding the acquired access token, its `ExpiresOn` in
 
 The public sealed `IExplorerAuthMethod` for the `entra` scheme. Registered scoped by `AddLatticeExplorerEntraWebAuth`; resolves the State API scope from `Scopes` or, when empty, from the advertised audience (appending `/.default` to a bare resource id), and wires token renewal so a re-auth-required signal latches the credential as revoked.
 
-```csharp
-public EntraWebExplorerAuthMethod(
-    IExplorerWebTokenAcquirer acquirer,
-    IOptionsMonitor<ExplorerEntraWebOptions> options)
+```csharp verify
+using Microsoft.Extensions.Options;
+using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Entra.Web;
 
-public string SchemeId { get; }
-public bool CanHandle(string advertisedScheme)
-public Task<ExplorerAuthSignIn> ChallengeAsync(
-    ExplorerAuthChallengeContext context,
-    CancellationToken cancellationToken = default)
+IExplorerWebTokenAcquirer acquirer = null!;
+IOptionsMonitor<ExplorerEntraWebOptions> options = null!;
+var method = new EntraWebExplorerAuthMethod(acquirer, options);
+
+string schemeId = method.SchemeId;
+bool canHandle = method.CanHandle("entra");
+ExplorerAuthSignIn signIn = await method.ChallengeAsync(
+    new ExplorerAuthChallengeContext
+    {
+        SchemeId = schemeId,
+        Parameters = new Dictionary<string, string>
+        {
+            [ExplorerAuthSchemes.AudienceParameter] = "api://state-api",
+        },
+    },
+    cancellationToken);
 ```
 
 `SchemeId` returns the `entra` scheme id; `CanHandle` matches that scheme case-insensitively; `ChallengeAsync` acquires the initial downstream token and returns a bearer sign-in whose renewal delegate latches the credential as revoked on a re-auth-required signal.
@@ -85,10 +121,14 @@ public Task<ExplorerAuthSignIn> ChallengeAsync(
 
 Thrown when the browser must complete (or repeat) the interactive OIDC sign-in before a State API token can be acquired.
 
-```csharp
-public ExplorerWebReauthRequiredException()
-public ExplorerWebReauthRequiredException(string message)
-public ExplorerWebReauthRequiredException(string message, Exception innerException)
+```csharp verify
+using Orleans.Lattice.Explorer.Entra.Web;
+
+var defaultException = new ExplorerWebReauthRequiredException();
+var messageException = new ExplorerWebReauthRequiredException("Sign in again.");
+var innerException = new ExplorerWebReauthRequiredException(
+    "Sign in again.",
+    new InvalidOperationException("Token cache is empty."));
 ```
 
 A `sealed` exception deriving directly from `System.Exception` with the three standard constructors (default message, custom message, and message-plus-inner-exception).

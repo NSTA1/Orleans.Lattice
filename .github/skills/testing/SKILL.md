@@ -9,14 +9,15 @@ All Orleans.Lattice testing rules live in a single master file:
 
 > **[`.github/instructions/testing.instructions.md`](../../instructions/testing.instructions.md)**
 
-That file is the authority for everything this skill covers - do not restate its rules here or elsewhere; link to it so there is one place to change and nothing to drift. It contains:
+That file is the authority for everything this skill covers - do not restate its rules here or elsewhere; link to it so there is one place to change and nothing to drift. It covers:
 
-- **Coverage policy** - every public type and member needs at least one test.
-- **Framework and conventions** - NUnit 4.x / NSubstitute, test naming, unit vs integration fixtures, assertions, file organization.
-- **The tiered run strategy** - Tier 1 (single method) through Tier 4 (pre-PR), and the rule that the pre-PR run is **scoped to the fixtures your change can plausibly break** within the test project(s) covering the packages you changed, never the whole solution (on every PR CI re-runs the suites of every package the change can reach - the changed packages, every package that project-references them, and `lattice.dashboards` - so repeating that locally buys only wall-clock).
-- **Categorization conventions** - which fixtures get `[Category("Integration")]` / `Chaos` / `AzureStorageEmulator` / `Docs` / `Coyote` / `Tlc` / `UI`.
-- **Starting Azurite, and the false-green trap** - emulator-gated fixtures call `Assert.Inconclusive` when Azurite is unreachable, and NUnit counts that as neither passed, failed, nor skipped. A run missing 89 tests still prints `Passed!` with `Skipped: 0`, so the only signal is a lower `Total`. The master file has the `docker run` command and the affected projects.
-- **False greens** - a green check that never exercised the property it names, which is worse than a red because it also asserts there is nothing to fix. The master file covers the seven shapes that have cost real time here, among them **reflection past the public seam** (a `BindingFlags.NonPublic` + `Invoke` fixture proves the member works when called and nothing about whether anything calls it - judge the *caller*, not the access modifier), and **restoring a perturbed file with `Copy-Item`** (it writes back the original `LastWriteTime`, so MSBuild skips the rebuild and keeps the perturbed binary).
-- **The repository hygiene gates** - em-dash, mojibake, deletion-mandate, integration-category (and its per-project enrolment gate), serializable-exception deep-copy enrolment, UI-category, docs-snippet, performance-marker, duplicate-XML-summary, framework-namespace-shadowing, AppContext-switch, and perturbation-residue gates, what each enforces, and how to stay green.
+- **Coverage policy and framework conventions** - the coverage rule, the test framework and mocking library, test naming, unit vs integration fixtures, assertions, file organization, and the shared test helpers to reuse instead of writing a private copy.
+- **The tiered run strategy** - Tier 1 (while editing) through Tier 4 (before opening a PR): how to scope each run, and what CI re-runs on every PR, so a local run does not repeat it.
+- **Starting Azurite, and the false-green trap** - emulator-gated fixtures fall through to `Assert.Inconclusive` when Azurite is unreachable, which NUnit counts as neither passed, failed, nor skipped, so a run without Azurite still reads as a pass. The master file has the `docker run` command and the affected projects.
+- **The repository-wide gates** - the fixtures that scan every package whichever test project they live in, which a per-package run cannot see, and the `tools/Invoke-RepositoryWideGates.ps1` runner that executes them.
+- **Categorization conventions** - which `[Category(...)]` each kind of fixture carries.
+- **False greens** - the shapes of a green check that never exercised the property it names, which is worse than a red because it also asserts there is nothing to fix, and how to avoid each.
+- **The Coyote concurrency tier, the browser UI tier, and the TLA+ specification** - what each verifies and how it runs.
+- **The repository hygiene gates** - what each enforces, how to stay green, and how the gates reach CI.
 
 Open that file and follow it directly.

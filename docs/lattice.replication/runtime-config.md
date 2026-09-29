@@ -17,9 +17,18 @@ Because the configuration is a converging tree, an operator flips a tree on once
 
 The config tree must itself replicate before it can carry anything, so it is statically enrolled under a fixed merge mode on every cluster by the opt-in `enableRuntimeConfig` flag on `AddLatticeReplication(...)`, mirroring the sibling `ReplicateLatticeSystemTrees()`. This is the one static anchor the runtime path rests on. A host opts in on the engine call:
 
-```csharp
-siloBuilder
-    .AddLatticeReplication(/* ... */, enableRuntimeConfig: true);
+```csharp verify
+siloBuilder.AddLatticeReplication(
+    options =>
+    {
+        options.ClusterId = "site-a";
+        options.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
+        {
+            ["catalog"] = LatticeMergeMode.LwwRegister,
+        };
+        options.ReplicationPeers = new[] { "site-b" };
+    },
+    enableRuntimeConfig: true);
 ```
 
 The existing static replicated-tree options map (`LatticeReplicationOptions.ReplicatedTrees`) stays as a **seed and fallback**, so a deployment that configures its replicated set statically is unaffected: static entries still apply, and the runtime tree layers on top.
@@ -30,7 +39,7 @@ An [installed app](../lattice.apps/README.md#replication-intent) that declares r
 
 ## The compiled snapshot
 
-A grain call must never sit on the commit hot path, so the config tree is projected into an in-memory snapshot. The compiled-snapshot maintainer observes commits to the config tree through the core mutation-observer hook (`IMutationObserver`) and rebuilds a `treeId -> { enabled, mode, ambiguous }` projection whenever the tree advances, mirroring how the auth stack compiles its policy snapshot. A commit only schedules a coalesced background rebuild, so the snapshot is eventually consistent - an edit is reflected shortly after it commits - and a read is a lock-light lookup against a fixed epoch, not a grain round-trip.
+A grain call must never sit on the commit hot path, so the config tree is projected into an in-memory snapshot. The compiled-snapshot maintainer observes commits to the config tree through the core mutation-observer hook (`IMutationObserver`) and rebuilds a `treeId -> { enabled, mode, ambiguous }` projection whenever the tree advances, mirroring how the auth stack compiles its policy snapshot. A commit only schedules a coalesced background rebuild, so the snapshot is eventually consistent - an edit is reflected shortly after it commits - and a read is a lock-light lookup against a fixed epoch, not a grain round-trip. That rebuild runs only on the silo that observes the commit: each silo keeps its own snapshot, the mutation-observer hook fires only on the silo hosting the config-tree grain that commits the change, and the maintainer has no other rebuild trigger after its first build, so on a multi-silo cluster the other silos keep serving the snapshot they built on first use until one of them observes a later commit itself or restarts.
 
 Two dynamic seams read that snapshot:
 

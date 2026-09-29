@@ -47,7 +47,7 @@ The Basic form behaves exactly as it always has. Nothing changes for an endpoint
 that requires a username and password; Basic is simply one login method among
 many now.
 
-```csharp
+```csharp verify
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 
@@ -61,23 +61,11 @@ Add the optional Entra package and register the Entra login method. The MSAL and
 Entra dependencies stay out of the core Explorer, so hosts that do not need Entra
 never pay for it.
 
-```csharp
-using Microsoft.Extensions.DependencyInjection;
-using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.Entra;
-
-var services = new ServiceCollection();
-services.AddExplorerAuth();
-services.AddExplorerEntraAuth(options =>
-{
-    // These are public OIDC parameters. What you configure here always wins;
-    // the endpoint's advertised authority, client id and audience are used
-    // only to fill in what you leave unset.
-    options.Authority = "https://login.microsoftonline.com/<tenant>";
-    options.ClientId = "<public-client-id>";
-    options.Scopes.Add("api://<state-api-app-id>/.default");
-});
-```
+Add the `Orleans.Lattice.Explorer.Entra` package, call `AddExplorerAuth()`,
+then call `AddExplorerEntraAuth(...)` to set the public OIDC authority (or
+tenant), client id, and State API scope. The verified setup snippet lives in the
+[`Orleans.Lattice.Explorer.Entra` package docs](../lattice.explorer.entra/README.md#setup),
+where the Entra package is part of the compiling reference set.
 
 Configured values take precedence over the advertisement, so the advertised
 authority, client id and audience are used only for the fields you leave unset -
@@ -119,6 +107,11 @@ Explorer may persist to its injected credential store; a token is never
 persisted by the core Explorer. Persistence of refresh material is a
 provider-owned, opt-in concern.
 
+A sign-in is bound to the endpoint it was made against. Applying a configuration
+that points the console at a different endpoint signs the session out, so the new
+endpoint challenges for a sign-in of its own rather than receiving the one made
+for the old endpoint.
+
 ## Reaching an endpoint behind an origin-locked proxy
 
 Some deployments front the State API with a proxy that only accepts requests
@@ -138,7 +131,7 @@ independently of the sign-in state.
 Set it through `ExplorerConfiguration.TransportHeaders`, which maps straight onto
 the connection settings:
 
-```csharp
+```csharp verify
 using System.Collections.Generic;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Connection;

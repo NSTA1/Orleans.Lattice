@@ -18,7 +18,7 @@ param location string = resourceGroup().location
 @description('Base name used for all resources.')
 param namePrefix string = 'lat'
 
-@description('VM size. Must support accelerated networking. Default: smallest D-family. F8as_v6 was tried 2026-06-04 but the silo only used ~5 of 8 cores even at saturation; D2 is enough.')
+@description('VM size. Must support accelerated networking. Default: Standard_D2as_v5; heavier cohorts should be sized from the run CPU and saturation evidence.')
 param vmSize string = 'Standard_D2as_v5'
 
 @description('Linux admin username.')

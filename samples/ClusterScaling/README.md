@@ -113,7 +113,8 @@ flowchart TB
   *AcrPull* to the app's managed identity).
 - Azure CLI with the `containerapp` extension (`deploy.ps1` installs/updates it).
 - The .NET SDK (net10.0) to run the load driver.
-- PowerShell 7+.
+- PowerShell 7.2 or later: `deploy.ps1` hashes the admin password with
+  `tools/New-LatticeStateCredential.ps1`, which requires 7.2.
 
 No container registry, image, or local Docker daemon is required up front:
 `deploy.ps1` provisions a Basic Azure Container Registry as part of the

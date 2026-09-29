@@ -75,8 +75,12 @@ and enforced by a coverage test in `Orleans.Lattice.Scaling.Tests`.
 
 Load it the same way as the other bundled dashboards:
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Dashboards;
 
-string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Scaling);
+public static class ScalingDashboardLoader
+{
+    public static string LoadScalingDashboard()
+        => LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Scaling);
+}
 ```

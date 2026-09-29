@@ -96,7 +96,7 @@ if ($powerState -ne 'PowerState/running') {
 
 Write-Host "Fetching last deployment outputs..." -ForegroundColor Cyan
 $lastDeploy = Invoke-AzQuery -AzArgs @('deployment','group','list','-g',$rg,'--query',"[?properties.provisioningState=='Succeeded'] | sort_by(@, &properties.timestamp) | [-1].name",'-o','tsv')
-if (-not $lastDeploy) { throw "No successful deployment found in resource group $rg. Run deploy-vm.ps1 first." }
+if (-not $lastDeploy) { throw "No successful deployment found in resource group $rg. Run deploy.ps1 first." }
 $outsJson = Invoke-AzQuery -AzArgs @('deployment','group','show','-g',$rg,'-n',$lastDeploy,'--query','properties.outputs','-o','json')
 $outs = $outsJson | ConvertFrom-Json
 $tableEndpoint = $outs.storageTableEndpoint.value

@@ -103,7 +103,7 @@ switch ($Command) {
 	'build' {
 		$reference = if ($Ref) { $Ref } elseif ($Argument1) { $Argument1 } else { 'HEAD' }
 		$record = Invoke-RigBuild -Config $config -Ref $reference -NuGetConfigFile $NuGetConfigFile -ScriptRoot $here
-		Write-Host "Recorded as the run's source image; `./rig.ps1 tag` and run-cohort.ps1 will now tag from $($record.image)." -ForegroundColor Green
+		Write-Host "Recorded as the run's source image; `./rig.ps1 tag` and prepare-master.ps1 will now tag from $($record.image); run-cohort.ps1 checks the tag still resolves to it." -ForegroundColor Green
 	}
 
 	'tag' {

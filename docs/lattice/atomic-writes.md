@@ -53,12 +53,29 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
    `ArgumentException` before any write is attempted. A null value fails fast
    for an upsert entry, but is permitted for a delete entry in a mixed
    set+delete batch (a delete carries no value). An empty batch returns
-   immediately without contacting any leaf grain.
+   immediately without contacting any leaf grain. The tree's write bounds are
+   applied up front as well, before the saga starts, so a batch they refuse
+   stages and persists nothing: with
+   [`MaxKeyLength`](configuration.md#maxkeylength) or
+   [`MaxValueSizeBytes`](configuration.md#maxvaluesizebytes) set, an upsert
+   with a longer key or a larger value fails with `ArgumentException`, and
+   while the tree is at an enforcing
+   [`MaxLiveKeys`](configuration.md#maxlivekeys) or
+   [`MaxEstimatedBytes`](configuration.md#maxestimatedbytes) cap (a
+   best-effort check against a cached footprint) the call fails with
+   `LatticeQuotaExceededException`. A delete-only batch skips the caps,
+   because it can only shrink the tree. Delete keys are not length-checked up
+   front: a delete key longer than `MaxKeyLength` is refused only when the
+   saga writes the batch, so the saga aborts and the call throws
+   `InvalidOperationException`.
 5. **Idempotent client retry.** A re-invocation of the same saga grain (same
    `treeId` + `operationId`) after successful completion returns success
    without re-executing. A re-invocation after a compensated-failure replays
    the original `InvalidOperationException` with the preserved failure
-   message.
+   message. A re-invocation passes the same up-front checks as a first call,
+   though, so they can refuse it before it reaches the saga - while the tree
+   is at an enforcing cap, for example, the retry throws
+   `LatticeQuotaExceededException` instead of returning the original outcome.
 
 ### What `SetManyAtomicAsync` does **not** guarantee
 
@@ -226,8 +243,10 @@ refuses the saga with a `LatticeSaturatedException` whose `SaturationSource`
 is `LatticeSaturationSource.TxRegistryCapacity` when its estimated row size
 is still at or above `LatticeOptions.TxRegistryAdmissionBudgetBytes`
 (default 768 KiB; `null` disables the bound) after it has purged expired
-tombstones. The refusal comes before the saga registers a reminder,
-persists anything or touches a tree shard, so nothing is written. Only a
+tombstones, counting the refusal on `orleans.lattice.saturation.refusals`
+with `source=tx_registry_capacity`. The refusal comes before the saga
+registers a reminder, persists anything or touches a tree shard, so
+nothing is written. Only a
 new saga is checked (each sub-saga of a cross-tree write included); a
 resumed or re-attached saga is never refused. A refused saga discards the
 transaction id it drew, so a retry - under the same `operationId` or a new
@@ -717,7 +736,12 @@ fast-path that mirrors the shutdown one: it skips the retry and the
 compensate pivot (either would re-enter the same throttled storage
 account), keeps its persisted progress in the execute phase, and throws
 `LatticeSaturatedException` with source
-`LatticeSaturationSource.AtomicWriteSaga`. Back off and retry with the
+`LatticeSaturationSource.AtomicWriteSaga`, counted on
+`orleans.lattice.saturation.refusals` with `source=atomic_write_saga`. An
+inner refusal it wraps was already counted by its own seam (the
+writer-side gate under `wal_admission`), and a refusal because the quiesce
+budget elapsed is counted twice under `atomic_write_saga`. Back off and
+retry with the
 same `operationId` once the signal returns to healthy (the keepalive
 reminder also resumes it); the saga continues from its persisted
 progress, and re-staging a write it already staged is idempotent.
@@ -740,6 +764,11 @@ identity (`{treeId}/{operationId}`). Re-submitting the same
   observes the original outcome.
 - If it is still in flight, the second call awaits the saga's terminal
   state.
+
+The re-submission is checked on entry exactly like a first call (see
+[Atomicity Guarantees](#atomicity-guarantees)), so a check that refuses it -
+an enforcing cap the tree has reached since, for example - surfaces before
+the call can re-attach.
 
 This turns a transport-level failure into a recoverable client-side retry
 - the caller simply calls again with the same `operationId`.
@@ -1032,7 +1061,12 @@ must be distinct and non-empty, and each tree's slice must not repeat a
 key - staging a `Set` and a `Delete` for the same key counts as a repeat.
 A batch that breaks either rule throws `ArgumentException` before any
 write is staged or any saga state is persisted, so the `operationId`
-stays free for a corrected retry.
+stays free for a corrected retry. Unlike the single-tree calls, the
+cross-tree write checks neither the tree's write-size bounds nor its
+`MaxLiveKeys` / `MaxEstimatedBytes` caps up front: no cap refuses it, and a
+key longer than `MaxKeyLength` or a value larger than `MaxValueSizeBytes`
+fails inside the saga, which aborts every tree, so the call throws
+`InvalidOperationException` rather than `ArgumentException`.
 
 ### Usage
 

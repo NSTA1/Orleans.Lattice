@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
 /// DI extensions for wiring up the unified
-/// <c>Orleans.Lattice.Replication.Grpc</c> binding (live push, snapshot
-/// bootstrap, saga control, sender + receiver) on a silo.
+/// <c>Orleans.Lattice.Replication.Grpc</c> binding (live push, digest probe,
+/// snapshot bootstrap, saga control, sender + receiver) on a silo.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -30,10 +30,10 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// app.MapLatticeReplicationGrpc();
 /// </code>
 /// <para>
-/// <see cref="AddLatticeReplicationGrpc"/> registers the live-push,
-/// snapshot, and saga-control clients and servers, the shared auth interceptor,
-/// and the secret-provider chain. <see cref="MapLatticeReplicationGrpc"/>
-/// maps the live-push, snapshot, and saga-control routes on the endpoint
+/// <see cref="AddLatticeReplicationGrpc"/> registers the live-push and
+/// digest-probe, snapshot, and saga-control clients and servers, the shared auth
+/// interceptor, and the secret-provider chain. <see cref="MapLatticeReplicationGrpc"/>
+/// maps the live-push and digest-probe, snapshot, and saga-control routes on the endpoint
 /// builder. Active-active
 /// is the zero-ceremony default: a silo that registers the binding is
 /// both a sender (peer receivers can pull live pushes and snapshot
@@ -54,9 +54,9 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the unified <c>Orleans.Lattice.Replication.Grpc</c>
-    /// binding. Wires the live-push client + server, the snapshot
-    /// client + server, the shared-secret auth interceptor, and the
-    /// secret-provider chain in a single call. Call it once: the
+    /// binding. Wires the live-push and digest-probe client + server, the snapshot
+    /// client + server, the saga-control client + server, the shared-secret auth
+    /// interceptor, and the secret-provider chain in a single call. Call it once: the
     /// transport seams are replaced rather than stacked and the service
     /// registrations are TryAdd-guarded, but every call layers the
     /// supplied <paramref name="configure"/> delegate over the options

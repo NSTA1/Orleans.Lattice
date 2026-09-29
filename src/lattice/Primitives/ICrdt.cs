@@ -17,9 +17,7 @@ namespace Orleans.Lattice;
 /// <para>
 /// The contract is intentionally minimal so the primitive types it
 /// is mixed into stay free of replication-package or accessor-layer
-/// concerns. Every existing primitive (<see cref="OrSet"/>,
-/// <see cref="PnCounter"/>, <see cref="VersionVector"/>,
-/// <see cref="MvRegister"/>) implements it without behavioural change;
+/// concerns. Existing state types implement it without behavioural change;
 /// the contract is what <see cref="OrMap{TKey, TValue}"/> binds against
 /// when it merges a per-key value snapshot through the lattice.
 /// </para>
@@ -35,19 +33,25 @@ namespace Orleans.Lattice;
 /// the type's internal shape.
 /// </para>
 /// <para>
-/// <b>Buffer ownership.</b> Every primitive in this family stores opaque
-/// <see cref="byte"/>[] payloads, and who owns a given array is decided by
-/// its <em>provenance</em>, not by the type holding it. The rule is uniform
-/// across the family and implementers must follow all three legs:
+/// <b>Buffer ownership.</b> Primitives that carry caller payloads treat them
+/// as opaque <see cref="byte"/>[] values, and who owns a given array is decided
+/// by its <em>provenance</em>, not by the type holding it. Counters, flags,
+/// clocks and version vectors carry no caller bytes; set primitives encode byte
+/// arrays into stable element keys; registers and sequences retain byte arrays;
+/// and OR-Map values are CRDT instances cloned on ingress. Implementers that
+/// store payload arrays must follow all three legs:
 /// </para>
 /// <list type="bullet">
 /// <item>
 /// <description>
-/// <b>Ingress from the caller is a hand-off.</b> An array passed to an
-/// authoring method (<c>Set</c>, <c>Add</c>, <c>InsertAfter</c>) is stored by
-/// reference: the caller has just authored it and has no reason to retain it,
-/// so a copy here would be pure waste. The caller must not mutate the array
-/// afterwards, and the method's documentation must say so.
+/// <b>Ingress from the caller is a hand-off when the primitive stores the
+/// array.</b> <c>BoundedRegister.Set</c>, <c>MvRegister.Set</c> and
+/// <c>Rga.InsertAfter</c> keep the supplied array by reference: the caller has
+/// just authored it and has no reason to retain it, so a copy here would be pure
+/// waste. The caller must not mutate the array afterwards, and the method's
+/// documentation must say so. Set additions encode the array into the element
+/// key and keep no array, and <c>OrMap.Set</c> stores a clone of the supplied
+/// CRDT value rather than the caller's instance.
 /// </description>
 /// </item>
 /// <item>

@@ -2718,10 +2718,9 @@
         "source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#ObserveAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "No idempotency or resume contract is documented for ObserveMetrics streams.",
-        "required_source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs",
-        "issue": 3636
+        "idempotent": false,
+        "basis": "ObserveAsync has no resume cursor; every subscription starts with a private empty baseline, emits a new full initial snapshot, and then emits deltas relative only to that subscription.",
+        "source": "src/lattice.api.state/LatticeStateMetricsObserver.cs#LatticeStateMetricsObserver.ObserveAsync"
       },
       "concurrency": {
         "rule": "The first tick is a full snapshot and later ticks are deltas containing only changed trees.",

@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Backup;
 /// <see cref="LatticeBackupOptions.CrossTreeFenceDrainTimeout"/>, or a cross-tree
 /// saga kept registering on the set during the capture window across every one of
 /// <see cref="LatticeBackupOptions.MaxCrossTreeFenceAttempts"/> attempts. The
-/// capture wrote no member manifests. Retry when the set is quieter, or raise the
-/// drain timeout / attempt budget.
+/// failed set capture writes no set manifest, but individual attempts may leave
+/// catalogued per-tree member backups that are not reported as the completed set.
+/// Retry when the set is quieter, or raise the drain timeout / attempt budget.
 /// </summary>
 [GenerateSerializer]
 public sealed class LatticeBackupCrossTreeFenceException : Exception

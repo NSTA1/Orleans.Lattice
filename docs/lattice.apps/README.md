@@ -143,10 +143,9 @@ A tree declaration names an **app-local** tree. The physical tree is the
 structural `a/{app}/{name}`, composed per tenant as described above. Omitted shape
 pins inherit the host's defaults. `virtualShardCount` is applied when the install
 first registers the tree, and a manifest upgrade may not change it or drop the pin.
-The tree keeps the declared slot count only until a resize of the tree once it holds
-data drops its shard map, or a reshard to a different shard count while it is still
-empty rebuilds that map with 4096 slots; it then routes over the default 4096 virtual
-slots (see [Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
+A resize carries the declared slot count over to the resized copy and a reshard keeps
+it, and a reshard target cannot exceed it (see
+[Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
 
 `rebuildable: true` marks a tree whose contents can be re-derived rather than
 restored. It is descriptive metadata: the control facade's describe reports it, and no
@@ -351,9 +350,11 @@ upgrade. A manifest upgrade that drops a tree soft-deletes that tree, and one th
 drops a tree from the `replication` section unenrols it. Reconciling an app in any
 other state withdraws its owned rules; reconcile never changes the registry state.
 
-Every run records its outcome, and the manifest whose trees and rules are currently
+Each run records its outcome, and the manifest whose trees and rules are currently
 applied, as the app's `AppActivationStatus` in a second reserved system tree,
-`sys-app-activation`, keyed like the registry. That record is the evidence the
+`sys-app-activation`, keyed like the registry; a run that cannot read the existing
+status leaves it untouched rather than overwrite it, and a failed status write is
+only logged. That record is the evidence the
 control facade reports as a `Failed` state; a disabled registry state alone is never
 read as a failure.
 
@@ -462,7 +463,8 @@ registrations are returned as structured results (`AppSourceStatus`), never thro
 `InImageAppSource` is the only implementation in this version. It resolves apps
 that ship in the image by ordinary package reference and are registered with
 `AddLatticeApp`; each manifest is parsed once and cached. Its provenance is
-`in-image` with a first-party publisher. The seam is designed so that a future
+`in-image`, with the registration's `Publisher` (`first-party` unless the
+registration sets another). The seam is designed so that a future
 runtime source - one that acquires apps after deployment - is a provider swap; the
 XML documentation on `IAppSource` states what such a source must additionally
 guarantee (signature verification against a pinned publisher key, allow-listing by

@@ -126,9 +126,11 @@ components:
 # Design System: Orleans.Lattice documentation
 
 The visual system of the documentation site built from `docs-site/`. The site
-loads its values from `docs-site/template/public/tokens.css`. The frontmatter
-above mirrors that file, and both change together. Other surfaces that must
-match the site, such as the video series, read the same file.
+loads its tokens from `docs-site/template/public/tokens.css` and composes its
+pages in `main.css` beside it, which sets a few values of its own, such as the
+42rem prose measure and the home page's display size. The frontmatter above
+mirrors both, and they change together. Other surfaces that must match the
+site, such as the video series, read `tokens.css`.
 
 ## Overview
 
@@ -208,8 +210,8 @@ and the paler paper marker.
 
 ### Syntax
 
-Code uses token roles rather than a stock theme: keywords in link blue, types in
-teal (#0a6b62 on paper, #72d1c5 on slate), strings in green (#1d7433, #a8d98f),
+Code uses token roles rather than a stock theme: keywords in link blue (chalk
+blue on slate), types in teal (#0a6b62 on paper, #72d1c5 on slate), strings in green (#1d7433, #a8d98f),
 numbers in rust (#a1401b, #f2b17a), comments in tertiary ink, and metadata and
 attributes in plum (#7b3a99, #d7a9f2). They are the `--lt-syn-*` custom
 properties in `tokens.css`, and every one clears 4.8:1 on its code background.

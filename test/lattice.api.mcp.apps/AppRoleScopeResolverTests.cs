@@ -77,4 +77,22 @@ public sealed class AppRoleScopeResolverTests
 
         Assert.That(AppRoleScopeResolver.Resolve(Notes, role, [], default), Is.Empty);
     }
+
+    [Test]
+    public void Resolve_skips_an_absent_scope_template_without_dropping_its_neighbours()
+    {
+        // The template array is manifest-supplied, so a hole in it must cost that one scope and
+        // not the rest of the role - a role silently resolved to nothing would widen nothing,
+        // but a role that threw would take the whole tool surface down with it.
+        var role = new AppRoleDeclaration
+        {
+            Name = "holed",
+            Operations = LatticeOperation.Read,
+            Scopes = [AppMcpTestData.TreeScope("notes"), null!, AppMcpTestData.TreeScope("board", Tasks)],
+        };
+
+        var resolved = AppRoleScopeResolver.Resolve(Notes, role, [new AppTreeDeclaration { Name = "notes" }], TenantId.Default);
+
+        Assert.That(resolved.Select(s => s.TreeId), Is.EqualTo(new[] { "a/notes/notes", "a/tasks/board" }));
+    }
 }

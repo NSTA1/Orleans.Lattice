@@ -2,7 +2,7 @@
 # One-shot post-provision bootstrap for the azure-throughput benchmark VM.
 # Installs the .NET 10 SDK, dotnet diagnostic global tools, rsync, and lays
 # down the /opt/lattice tree owned by the admin user. The silo systemd unit
-# is dropped in by bootstrap-vm.ps1 (it needs the storage table endpoint
+# is dropped in by update.ps1 (it needs the storage table endpoint
 # which is a deploy-time output, not known here).
 
 package_update: true

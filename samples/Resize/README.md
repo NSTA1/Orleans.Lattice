@@ -5,8 +5,11 @@
 `ILattice.ResizeAsync` changes a tree's structural sizing
 (`MaxLeafKeys` / `MaxInternalChildren`) on a tree that already holds data. It
 runs **online**: reads and writes stay available while it drains the source into
-a freshly-sized destination tree (shadow-forwarding live writes) and atomically
-swaps the alias. Every entry is preserved. This sample populates a tree with 500
+a freshly-sized destination tree (shadow-forwarding plain writes - typed CRDT
+deltas and streaming bulk appends are not forwarded) and atomically swaps the
+alias. The copy follows the tree's shard map, so every live entry is carried
+over, including one on a shard an adaptive split added - see the
+[feature doc](../../docs/lattice/tree-sizing.md) for the limits. This sample populates a tree with 500
 entries (hashed across the default 64 shards, so each shard's root is still a
 single leaf), resizes its leaf capacity from the default 128 to 256 and its
 internal fan-out from the default 128 to 64, polls `IsResizeCompleteAsync`
@@ -52,7 +55,7 @@ Done.
 - Changing the shard count - that requires re-hashing keys and is done with
   `ReshardAsync`, not `ResizeAsync`.
 - Casually or on the hot path. A resize on a populated tree copies the whole
-  tree and adds a forward hop to every write until the swap. After the alias
+  tree and adds a forward hop to every plain write until the swap. After the alias
   swap the resize soft-deletes the retired copy rather than purging it, so
   storage stays at roughly 2x until the soft-delete window
   (`LatticeOptions.SoftDeleteDuration`, 72 hours by default, during which

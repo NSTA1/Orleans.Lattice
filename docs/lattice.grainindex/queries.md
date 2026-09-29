@@ -94,9 +94,9 @@ client-side, which is exactly what the cursor executions are designed to avoid.
 
 | Mode | What it does | When to use it |
 |---|---|---|
-| `DurableCursor` (default) | A durable server-side cursor, checkpointed after every page. A long scan survives silo failovers, client restarts, and shard splits, and only one page is ever in flight. | Anything long-running or large. |
+| `DurableCursor` (default) | A durable server-side cursor, checkpointed after every page. A long scan survives silo failovers and shard splits, and only one page is ever in flight. The cursor belongs to the enumeration, which does not expose it, so a caller that restarts runs the query again from the start. | Anything long-running or large. |
 | `Stream` | A stateless streaming scan that opens no server-side cursor state. Bounded by the tree's scan-retry budget rather than checkpointed, so a long scan can be interrupted by topology change. | Small result sets where cursor setup is the dominant cost. |
-| `SnapshotCursor` | A durable cursor served from a tree-wide snapshot captured when the query starts. Every page sees the same index state, so concurrent index maintenance cannot make a grain appear twice or not at all across page boundaries. | When you need a stable page-to-page view. |
+| `SnapshotCursor` | A durable cursor served from a tree-wide snapshot captured when the cursor opens. Every page of that cursor sees the same index state, so concurrent index maintenance cannot make a grain appear twice or not at all across its page boundaries. The query opens one cursor per key range it scans, each capturing its own snapshot as its scan begins, so the whole result reflects one instant only when the plan scans a single range - typically not the case for a `!=`, a disjunction, or an `&&` over two properties. | When you need a stable page-to-page view. |
 
 Every mode returns the same rows; the difference is what the scan survives and
 what it costs. The `SnapshotCursor` snapshot is over the *index*, not over grain
@@ -162,7 +162,7 @@ offending sub-expression:
 | A comparison between two state members | An entry stores a projected value against a constant bound. | Make one side a constant or a captured local. |
 | A date/time clause that cannot be served as an exact range, for example `u => u.CreatedAt.ToString().StartsWith("2024")` | A date is stored in the entry payload in round-trip form but captured from a lambda through `ToString()`, so the two never compare equal and the clause can only be served from the key range. | Use a direct comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`) against a date constant, which is exact and is supported. |
 | A non-boolean expression in boolean position | The predicate must be a boolean expression tree. | Rewrite as an explicit comparison. |
-| A predicate expanding to more than 64 disjunctions once `&&` is distributed over `||` | The plan would fan out into an unbounded number of scans. | Split it into several queries. |
+| A predicate expanding to more than 64 disjunctions once `&&` is distributed over `\|\|` | The plan would fan out into an unbounded number of scans. | Split it into several queries. |
 
 A predicate naming a property that is not `Include`d throws
 `GrainIndexPropertyNotIndexedException`, which names the index, the property

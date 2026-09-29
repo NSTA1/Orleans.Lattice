@@ -20,8 +20,8 @@ two explorer libraries, which restore automatically for a consumer:
   session chrome, the compiled-in Data, Apps, Access, Schema, Tenancy,
   Replication, Backups, Telemetry and Cluster areas, the design system, the
   credential-aware transport, and the sandboxed Lattice App frame host. Its
-  static web assets are served automatically at
-  `_content/Orleans.Lattice.Explorer.UI/`, and it brings
+  static web assets are served at `_content/Orleans.Lattice.Explorer.UI/` (see
+  Interactivity and static assets below), and it brings
   `Orleans.Lattice.Explorer.AppKit`, the kit a Lattice App UI runs on inside
   its frame.
 - `Orleans.Lattice.Explorer.Core` - the head-agnostic connection,

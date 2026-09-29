@@ -159,8 +159,10 @@ the shards rather than served from a report cached for
 session opened just after chunks were grafted is still refused. The probe counts
 both live keys and tombstones, so a tree you emptied by deleting every key - which leaves tombstoned
 rows in the leaves even though no live keys remain - is correctly rejected rather
-than grafted onto. Creating a fresh tree is still the cleanest restart story, but
-emptying an existing one no longer slips past the guard.
+than grafted onto. A shard the probe could not sample makes the call fail
+closed with `InvalidOperationException` rather than count as empty. Creating a
+fresh tree is still the cleanest restart story, but emptying an existing one no
+longer slips past the guard.
 
 The streaming extension performs no emptiness check at all - neither a probe of
 its own nor the one-shot path's per-shard rejection. It appends to whatever is
@@ -216,10 +218,10 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
   set, they are checked on entry by `SetAsync` (both overloads),
   `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`,
   `SetManyWherePredicateAsync`, the single-tree `SetManyAtomicAsync` and
-  `SetManyAtomicWhereAsync` batches, `ApplyCrdtDeltaAsync` (both overloads)
-  and `ApplyCrdtDeltaManyAsync`, and on a cross-tree atomic batch only when
-  its saga writes the batch, where a violation rolls the whole batch back and
-  the call throws `InvalidOperationException`. No bulk-load path checks them,
+  `SetManyAtomicWhereAsync` batches, `ApplyCrdtDeltaAsync` (both overloads),
+  `ApplyCrdtDeltaManyAsync` and the cross-tree atomic batch, which checks
+  every participating tree's entries before any tree is staged. No bulk-load
+  path checks them,
   and neither does `MergeAsync`. A key or
   value you successfully bulk-load can therefore be rejected by a later
   `SetAsync` against the same tree. Check the bounds in the producer if you
@@ -227,11 +229,12 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
   [`MaxKeyLength`](configuration.md#maxkeylength) and
   [`MaxValueSizeBytes`](configuration.md#maxvaluesizebytes).
 - **It does not enforce the admission caps.** `LatticeOptions.MaxLiveKeys` and
-  `LatticeOptions.MaxEstimatedBytes` are checked by the same non-atomic calls,
-  once per call, and by nothing else - an atomic batch is never checked
-  against them - so a bulk load can carry a tree past them; those calls are
-  then refused with `LatticeQuotaExceededException` until the tree's cached
-  live-key count or estimated footprint is back under the cap. See
+  `LatticeOptions.MaxEstimatedBytes` are checked once per call by the same
+  calls, the single-tree atomic batches included (a batch carrying only
+  deletes is exempt, as `DeleteAsync` is), and by nothing else - a cross-tree
+  atomic batch never is - so a bulk load can carry a tree past them; those
+  calls are then refused with `LatticeQuotaExceededException` until the
+  tree's cached live-key count or estimated footprint is back under the cap. See
   [`MaxLiveKeys`](configuration.md#maxlivekeys) and
   [`MaxEstimatedBytes`](configuration.md#maxestimatedbytes).
 - **It does not merge.** `DataEntry` carries a `MergeMode` and a `Raw` flag, but

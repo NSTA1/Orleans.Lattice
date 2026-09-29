@@ -61,11 +61,12 @@ public static class LatticeApiMcpMetrics
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A client error is answered with an MCP error result and logged at Debug
-    /// without a stack. It used to be thrown, and the ModelContextProtocol SDK logs
-    /// every thrown tool exception at Error with its stack, so a malformed call was
-    /// indistinguishable in the log from a server fault. This counter is how the
-    /// rate stays visible now that it no longer reaches the error log. Server
+    /// A client error classified by the MCP host is answered with an MCP error
+    /// result and logged by the host at Debug without a stack. It used to be
+    /// thrown, and the ModelContextProtocol SDK logs every thrown tool exception
+    /// at Error with its stack, so a malformed call was indistinguishable in the
+    /// log from a server fault. This counter is how the rate stays visible in the
+    /// host record. A tool group can still log the same failed call itself; server
     /// faults and authorization denials are still thrown, so they still log at
     /// Error.
     /// </para>

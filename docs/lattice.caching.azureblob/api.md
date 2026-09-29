@@ -10,10 +10,22 @@ A sealed class configuring the account, container, key layout, and client. Every
 
 A static class with one extension method.
 
-```csharp
-public static IServiceCollection AddAzureBlobDistributedCache(
-    this IServiceCollection services,
-    Action<LatticeAzureBlobCacheOptions> configure)
+```csharp verify
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Caching.AzureBlob;
+
+public static class AzureBlobCacheRegistration
+{
+    public static IServiceCollection AddCache(IServiceCollection services)
+    {
+        services.AddAzureBlobDistributedCache(options =>
+        {
+            options.ConnectionString = "UseDevelopmentStorage=true";
+        });
+
+        return services;
+    }
+}
 ```
 
 Registers the Azure Blob-backed cache as the application's `IDistributedCache`.

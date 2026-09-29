@@ -6,9 +6,15 @@ The package has one public options type, `LatticeApiReplicationOptions`, bound t
 
 The facade currently exposes no tunable knobs. The type is the stable registration front door: it lets later work add configuration without changing the `AddLatticeReplicationApi` signature. Register the facade with no options today:
 
-```csharp
+```csharp verify
+using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Replication;
+
 siloBuilder
-    .AddLatticeReplication(/* ... */, enableRuntimeConfig: true)
+    .AddLatticeReplication(options =>
+    {
+        options.ClusterId = "cluster-a";
+    }, enableRuntimeConfig: true)
     .AddLatticeReplicationApi();
 ```
 
@@ -17,5 +23,5 @@ siloBuilder
 This facade drives the replication config authority but does not re-expose its configuration.
 
 - The **static seed / fallback** replicated-tree set and the local cluster identity are configured on [`Orleans.Lattice.Replication`](../lattice.replication/configuration.md) through `LatticeReplicationOptions` (`ReplicatedTrees`, `ClusterId`).
-- Which trees are **runtime-enabled** is not configuration at all: it is authored through this facade at runtime and distributed as the `sys-replication-config` tree. See [runtime replication configuration](../lattice.replication/runtime-config.md).
+- Which trees are **runtime-enabled** is not configuration at all: it is authored at runtime - through this facade, or by an installed app as it activates (see [`Orleans.Lattice.Apps`](../lattice.apps/README.md#replication-intent)) - and distributed as the `sys-replication-config` tree. See [runtime replication configuration](../lattice.replication/runtime-config.md).
 - Transport concerns - authorization enforcement, the credential and active-tenant headers, and advertised auth schemes - live on the [gRPC binding](../lattice.api.replication.grpc/configuration.md), not here; TLS and other channel policy belong to the hosting ASP.NET Core server and the caller's gRPC channel.

@@ -16,8 +16,9 @@ public sealed record TreeCatalogEntry
 
     /// <summary>
     /// <see langword="true"/> when this logical id is an alias that resolves to
-    /// a different physical tree (set after a resize). <see cref="PhysicalTreeId"/>
-    /// carries the resolved id in that case.
+    /// a different physical tree, for example after a resize, shadow-cutover
+    /// restore, schema remediation, or explicit alias assignment.
+    /// <see cref="PhysicalTreeId"/> carries the resolved id in that case.
     /// </summary>
     [Id(1)] public bool IsAlias { get; init; }
 

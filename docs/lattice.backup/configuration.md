@@ -50,7 +50,7 @@ The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptio
 
 ## `LatticeBackupHealthOptions`
 
-Cluster-wide configuration for the periodic backup-health monitor. Unlike scheduling and retention, health monitoring is **on by default**: every catalogued backup is auto-enrolled and re-verified on the sweep cadence, so a silently corrupted or deleted sink payload is surfaced without any opt-in. Bind it through `ConfigureLatticeBackupHealth(configure)` on the silo builder. A per-backup `BackupHealthConfig` overrides the default enrolment and cadence for a single backup.
+Cluster-wide configuration for the periodic backup-health monitor. Unlike scheduling and retention, health monitoring is **on by default**: every catalogued backup is auto-enrolled and re-verified by the periodic sweep once its interval has elapsed (see [Disaster recovery](disaster-recovery.md#keeping-backups-recoverable-health-monitoring) for how that interval rounds to sweeps), so a silently corrupted or deleted sink payload is surfaced without any opt-in. Bind it through `ConfigureLatticeBackupHealth(configure)` on the silo builder. A per-backup `BackupHealthConfig` overrides the default enrolment and cadence for a single backup.
 
 The monitor is only meaningful against a durable, external sink. With the ephemeral in-cluster sink it stays inert regardless of these options, because verifying payload that lives in the same cluster the backup protects proves nothing about disaster recovery.
 

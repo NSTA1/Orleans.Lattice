@@ -44,7 +44,7 @@ Each run does **at most one** of these, in this order, and then stops:
 | Episode branch | `feat/videos-<slug>` on the remote |
 | Pull request labels | `enhancement` and `video-series` |
 | Lease owner | a name for this run, such as `video-producer-2026-09-28-0300` |
-| State directory | `npm run series -- lease status` prints its lease file; it also holds the voice's Python environment and the clip and take caches (`tools/lib/layout.js`, `stateDir`) |
+| State directory | `%LOCALAPPDATA%\orleans-lattice\videos` on Windows, `$XDG_STATE_HOME/orleans-lattice/videos` (by default `~/.local/state/orleans-lattice/videos`) elsewhere; `VIDEOS_HOME` overrides it (`tools/lib/layout.js`, `stateDir`). It holds the production lease (`production-lease.json`; `npm run series -- lease status` prints whether it is held and the lease record), the voice's Python environment, and the clip and take caches |
 
 Push the way the repository requires, never with `-u`:
 

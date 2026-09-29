@@ -1854,9 +1854,9 @@ function Read-SiloLogStats {
 	# workload mode; fall back to lattice.op.duration_ms (the silo's ingest
 	# envelope, present for every workload). Read modes now have their own
 	# per-call lattice-grain instruments (get.duration / get_many.duration),
-	# shipped alongside the existing write-side envelopes, so all five
-	# workload modes use a real per-call duration histogram and the per-
-	# batch-size divisor below has been retired.
+	# shipped alongside the existing write-side envelopes, so each workload
+	# mode uses a real per-call duration histogram and the per-batch-size
+	# divisor below has been retired.
 	#
 	# Each [phaseA] line shape:
 	#   [phaseA] t=10.3s instrument=NAME tree=T shard=S phase=P status=... count=N sum=... min=... p50=... p75=... p90=... p99=... max=...
@@ -2353,7 +2353,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
+		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }

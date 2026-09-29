@@ -7,7 +7,7 @@
 # Cohort knobs (BENCH_VEHICLE_COUNT, BENCH_TICK_HZ, BENCH_DURATION_SEC) are
 # overridden per run via `systemctl edit --runtime lattice-producer` (or via
 # scripts/run-cohort.ps1 which writes a drop-in before starting). Defaults
-# here match the 4k:5 baseline rung from repro/wedge-orleans/throughput.md
+# here match the 4k:5 baseline rung from benchmark/azure-throughput/throughput.md
 # section 25.
 #
 # Restart=no: we want the producer to exit cleanly when its duration is up;
