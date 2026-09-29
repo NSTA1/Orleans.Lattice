@@ -277,7 +277,7 @@ internal sealed partial class RepoContextSearchService
         internal static SemanticOutcome VectorPlaneUnavailable { get; } =
             new(null, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, "no_semantic_matches_in_query_space");
 
-        /// <summary>The semantic index ran but is degraded: it threw, or ranked candidates that no longer hydrate.</summary>
+        /// <summary>The semantic index ran but is degraded: it threw, or no ranked candidate hydrated.</summary>
         internal static SemanticOutcome IndexDegraded { get; } =
             new(null, RepoContextRetrievalPath.KeywordIndexDegraded, "semantic_candidates_did_not_hydrate");
 

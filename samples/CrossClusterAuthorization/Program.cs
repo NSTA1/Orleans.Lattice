@@ -162,7 +162,7 @@ Console.WriteLine($"    bob   -> {await ReadOutcome(treeA, "bob", SecretKey)}  (
 Console.WriteLine($"    carol -> {await ReadOutcome(treeA, "carol", SecretKey)}  (low-privilege: soft-denied)");
 Console.WriteLine("  Range read of the whole tree returns only authorized keys:");
 Console.WriteLine($"    bob   sees {await RangeCount(treeA, "bob")} keys (auditor: all)");
-Console.WriteLine($"    alice sees {await RangeCount(treeA, "alice")} keys (stations + own config key)");
+Console.WriteLine($"    alice sees {await RangeCount(treeA, "alice")} keys (her station keys)");
 Console.WriteLine($"    carol sees {await RangeCount(treeA, "carol")} keys (nothing)\n");
 
 // -- Act 4: converge a revoke across clusters -------------------------------

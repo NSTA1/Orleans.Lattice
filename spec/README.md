@@ -137,7 +137,7 @@ domain, which is a larger change than that conjunct.
 To widen the instance, declare the new model values on the `CONSTANTS` line of
 `AtomicCommit.tla`, extend `TxWrites`, `Txns`, and `Keys` there, and add the
 matching model-value assignments to `AtomicCommit.cfg`. The state space stays
-small for the default instance (a few thousand distinct states), but no
+small for the default instance (several thousand distinct states), but no
 protocol action's guard refers to another saga, so the sagas' reachable states
 combine as a product: every saga added multiplies the count by what one saga
 alone can reach, and larger instances grow quickly.
@@ -226,7 +226,8 @@ code that no longer exists, while the note went on reading as authoritative.
 it parses the backticked `Type.Member` references out of the three mapping
 tables and fails if any of them no longer resolves in `src/`. It is
 toolchain-free, needs no JVM, and runs in the deterministic tier in
-milliseconds.
+milliseconds. It skips the `Detector` column, whose test names
+`RefinementDetectorMappingTests` resolves against `test/` instead.
 
 Resolution handles three forms deliberately: an ordinary type member, a nested
 type, and a **partial-class file suffix**. The mapping tables rely on the first

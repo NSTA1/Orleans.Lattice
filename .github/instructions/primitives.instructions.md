@@ -57,11 +57,11 @@ public sealed class MyAggregate
 
 ## Buffer Ownership (`byte[]` payloads)
 
-Every primitive stores opaque `byte[]` payloads. Who owns a given array is decided by its **provenance**, not by the type holding it. All three legs are mandatory - this is the rule `ICrdt<TSelf>` documents, and the one `BoundedRegister`, `Rga` and `MvRegister` are the reference implementations of.
+Every primitive that carries caller values handles them as opaque `byte[]` payloads (an `OrMap`'s values are CRDTs, which the map snapshots with `Clone` on ingress rather than taking over). Who owns a given array is decided by its **provenance**, not by the type holding it. All three legs are mandatory - this is the rule `ICrdt<TSelf>` documents, and the one `BoundedRegister`, `Rga` and `MvRegister` are the reference implementations of.
 
 | Seam | Rule | Why |
 |---|---|---|
-| **Ingress** from the caller (`Set`, `Add`, `InsertAfter`) | **Hand-off** - store by reference, no copy | The caller just authored the array and has no reason to retain it, so copying is pure waste. Document the hand-off on the parameter, and state that the caller must not mutate afterwards. |
+| **Ingress** from the caller (`Set`, `Add`, `InsertAfter`) | **Hand-off** - store by reference, no copy, as `BoundedRegister.Set`, `MvRegister.Set` and `Rga.InsertAfter` do. Two ingress seams take nothing over: the set primitives' `Add` encodes the element instead (see below), and `OrMap.Set` snapshots its CRDT value with `Clone`. | The caller just authored the array and has no reason to retain it, so copying is pure waste. Document the hand-off on the parameter, and state that the caller must not mutate afterwards. |
 | **Fold** from a peer or a delta (`MergeFrom`, `MergeDelta`) | **Copy** the winning candidate | The array belongs to a peer replica still using it, or a producer that may retry or fan out. Adopting it aliases durable state to another owner's buffer. A *losing* candidate must still allocate nothing. |
 | **Egress** to a caller (`Clone`, composite `Get`, materialised projections) | **Copy** | Otherwise a caller can write through the returned value into durable state without passing any mutation API. |
 

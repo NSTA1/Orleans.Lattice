@@ -30,8 +30,11 @@ public interface ILatticeBackupRestoreService
     /// <param name="cancellationToken">Cancels the restore.</param>
     /// <returns>The restore outcome.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException">The target tree id is reserved for backup infrastructure.</exception>
     /// <exception cref="LatticeRestoreValidationException">The backup fails pre-apply validation.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - on a cross-tree retarget - to back up the manifest's captured source scope.</exception>
+    /// <exception cref="InvalidOperationException">The target tree cannot change aliases because another alias-changing operation or a delete is in progress.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias swap.</exception>
     Task<LatticeRestoreResult> RestoreAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
@@ -53,6 +56,8 @@ public interface ILatticeBackupRestoreService
     /// <exception cref="ArgumentException"><paramref name="setId"/> is <c>null</c> or empty, or resolves to no member trees.</exception>
     /// <exception cref="LatticeRestoreValidationException">A member backup fails pre-apply validation, or the coordinated restore aborted.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore a member tree's scope.</exception>
+    /// <exception cref="InvalidOperationException">A member tree cannot change aliases because another alias-changing operation or a delete is in progress.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeTreeOwnershipDeniedException">The registered ownership guard refuses a member alias swap.</exception>
     Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync(
         string setId,
         CancellationToken cancellationToken = default);
@@ -68,7 +73,10 @@ public interface ILatticeBackupRestoreService
     /// <param name="cancellationToken">Cancels the revert.</param>
     /// <exception cref="ArgumentNullException"><paramref name="restore"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="restore"/> is not a shadow-cutover restore result.</exception>
+    /// <exception cref="LatticeRestoreValidationException">The supplied physical tree ids do not belong to the target tree.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    /// <exception cref="InvalidOperationException">The target tree cannot change aliases because another alias-changing operation or a delete is in progress.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias swap.</exception>
     Task RevertRestoreAsync(
         LatticeRestoreResult restore,
         CancellationToken cancellationToken = default);

@@ -41,7 +41,9 @@ namespace Orleans.Lattice.Replication;
 /// the per-entry slow path - bypass it, so this decorator records the contact
 /// itself on exactly those branches, through the same
 /// <see cref="ReplicationInboundContact"/> rule. The batch fast path is recorded
-/// by the inner applier and is not recorded again here.
+/// by the inner applier; if that batch path throws and this decorator falls back
+/// to per-entry applies, entries from runs the inner path already attempted can
+/// record contact a second time for the same push.
 /// </para>
 /// </summary>
 internal sealed class DeadLetterTrackingReplicationApplier(

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Vector.Persistence;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
@@ -50,12 +51,12 @@ public sealed class RepoContextAnnIndexSchedulingTests
         // well inside this window - the wait exists to make the absence provable,
         // not to wait for something expected. Streaming the store of record is what
         // a build does first and cannot skip, so it is the earliest possible
-        // evidence rather than a lagging one.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (DateTime.UtcNow < deadline && fixture.Source.FullEnumerations == 0)
-        {
-            await Task.Delay(10, Ct);
-        }
+        // evidence rather than a lagging one. The result is deliberately discarded:
+        // this is the soft form, and the negative assertion below is the verdict.
+        _ = await TestPoll.TryUntilAsync(
+            () => fixture.Source.FullEnumerations > 0,
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromMilliseconds(10));
 
         Assert.Multiple(() =>
         {

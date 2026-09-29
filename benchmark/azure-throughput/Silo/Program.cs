@@ -128,11 +128,11 @@
 //                           [phaseA] line per (instrument, tree, shard,
 //                           phase, status) tuple per cadence tick,
 //                           carrying p50/p90/p99/count/min/max over the
-//                           preceding window. The ladder script
-//                           (40-ladder.ps1) scrapes these lines to
-//                           attribute caller-visible append latency to
-//                           grain-side queueing vs storage-provider
-//                           commit time.
+//                           preceding window. performance-report.ps1
+//                           (Read-SiloLogStats) reads these lines for its
+//                           per-call quantile cells, attributing
+//                           caller-visible append latency to grain-side
+//                           queueing vs storage-provider commit time.
 //   BENCH_EXPECTED_SILOS    Silo count each silo waits for in its cluster manifest
 //                           before warming the tree up (default 0 = no gate). The
 //                           multi-silo rig sets it to the cohort's replica count so
@@ -793,9 +793,9 @@ builder.UseOrleans(silo =>
         // c2-xxviii: opt the bench into the leaf-side digest coalescing
         // window so the bulk-write hot path collapses N per-call
         // OnChildDigestPublishedAsync hops into one per window. Library
-        // default is 0 (wire-compat synchronous publish, preserves the
-        // read-your-own-digest-after-write invariant integration tests
-        // pin); the bench has no such consumer.
+        // default is 5 ms; the bench assigns the knob unconditionally so
+        // a cohort can vary the window without a redeploy, and it has no
+        // consumer that requires immediate digest publication.
         o.DigestCoalescingWindowMs = digestCoalescingMs;
         // See the BENCH_WAL_REPLAY_QUEUE_DEPTH block above. Assigned
         // unconditionally because the default IS the library default, so

@@ -508,7 +508,7 @@
           "id": "saga-origin-check",
           "check": "Call is a saga control RPC.",
           "on_true": "origin-authorized",
-          "on_false": "allow",
+          "on_false": "body-origin-check",
           "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs"
         },
         {
@@ -517,6 +517,20 @@
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs"
+        },
+        {
+          "id": "body-origin-check",
+          "check": "Call is Push, ExchangeContentManifest, or GetPeerHighWaterMark, which key the durable per-origin high-water mark by a body-declared OriginClusterId.",
+          "on_true": "body-origin-bound",
+          "on_false": "allow",
+          "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
+        },
+        {
+          "id": "body-origin-bound",
+          "check": "The x-lattice-replication-origin header is absent or blank, or ordinally equals the body OriginClusterId.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
         }
       ],
       "terminals": [
@@ -537,13 +551,14 @@
           "outcome": "The call fails with gRPC status Unauthenticated."
         }
       ],
-      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, and saga control also requires an authorized peer origin.",
+      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, and saga control also requires an authorized peer origin; a peer may only advance or read the high-water mark of its own stamped origin.",
       "sources": [
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs",
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs",
         "src/lattice.replication.grpc/LatticeSagaGrpcService.cs",
         "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs",
-        "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs"
+        "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs"
       ]
     },
     {
@@ -992,10 +1007,10 @@
         },
         {
           "id": "role-held",
-          "check": "The access gate allows every operation of the tool's declared role on at least one resolved scope for the caller subject.",
+          "check": "The access gate returns an unfiltered allow for every operation of the tool's declared role on at least one resolved scope for the caller subject; a key-filtered allow never holds an operation, on a prefix scope as on a tree scope.",
           "on_true": "coarse-authorizer",
           "on_false": "not-advertised",
-          "source": "src/lattice.api.mcp.apps/AppMcpRoleGate.cs"
+          "source": "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate"
         },
         {
           "id": "coarse-authorizer",
@@ -1015,7 +1030,7 @@
           "outcome": "The app tool is absent from tools/list and therefore unreachable from tools/call; if a stale session invokes it, the namespaced tool throws an authorization McpException."
         }
       ],
-      "fail_closed": "A missing collaborator, unvalidated tenant, disabled app, unpinned ceiling, bad tool pairing, lost role grant, or MCP coarse-authorizer denial withholds the app tool and the invocation path re-checks current state.",
+      "fail_closed": "A missing collaborator, unvalidated tenant, disabled app, unpinned ceiling, bad tool pairing, lost role grant, or MCP coarse-authorizer denial withholds the app tool and the invocation path re-checks current state; a key-filtered allow does not hold a role operation.",
       "sources": [
         "src/lattice.api.mcp/Discovery/ILatticeApiMcpAppToolSource.cs",
         "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
@@ -1066,9 +1081,16 @@
         {
           "id": "group-granted",
           "check": "The session access set contains the group required by LatticeApiMcpGroupCapabilityMap.",
-          "on_true": "write-opt-in",
+          "on_true": "tool-minimum",
           "on_false": "not-advertised",
           "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpGroupCapabilityMap.cs"
+        },
+        {
+          "id": "tool-minimum",
+          "check": "The permission resolver carries no operation detail, or the granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName); the data group requires Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad for each mutating data tool and its coarse group mask otherwise.",
+          "on_true": "write-opt-in",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.AddPermittedGroupToolsAsync"
         },
         {
           "id": "write-opt-in",
@@ -1115,7 +1137,7 @@
           "outcome": "The caller credential and active tenant are stamped and the tool handler runs, subject to the facade access gate."
         }
       ],
-      "fail_closed": "The endpoint requires authentication by default, DenyAllMcpAuthorizer denies by default, missing HttpContext or authorizer denies, unauthenticated sessions get no tools, and data write tools are absent unless explicitly enabled.",
+      "fail_closed": "The endpoint requires authentication by default, DenyAllMcpAuthorizer denies by default, missing HttpContext or authorizer denies, unauthenticated sessions get no tools, and data write tools are absent unless explicitly enabled, and a mutating data tool withheld by the per-tool minimum is unreachable at tools/call because the session tool collection serves both.",
       "sources": [
         "src/lattice.api.mcp/LatticeApiMcpOptions.cs",
         "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs",
@@ -1124,7 +1146,9 @@
         "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
         "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs",
         "src/lattice.api.mcp/Discovery/AuthorizedMetaTool.cs",
-        "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs"
+        "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs",
+        "src/lattice.api.mcp/Discovery/ILatticeApiMcpToolGroup.cs",
+        "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs"
       ]
     },
     {
@@ -1153,7 +1177,7 @@
         },
         {
           "id": "match-tree-scoped-operations",
-          "check": "rule.Operations with the cluster-wide-only bits (LatticeOperation.Telemetry) masked out intersects the group capability mask.",
+          "check": "rule.Operations with the cluster-wide-only bits (LatticeOperation.Telemetry and LatticeOperation.AppInstall) masked out intersects the group capability mask.",
           "on_true": "group-discoverable",
           "on_false": "rule-ignored",
           "source": "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
@@ -1169,7 +1193,7 @@
           "outcome": "The rule contributes nothing; the next rule is evaluated, and a group no rule grants is not advertised."
         }
       ],
-      "fail_closed": "Deny rules are not consulted at discovery and stay the call-time gate job; a tree-scoped rule never confers the scopeless Telemetry capability, for group discovery or for per-tool minimums.",
+      "fail_closed": "Deny rules are not consulted at discovery and stay the call-time gate job; a tree-scoped rule never confers the scopeless Telemetry or AppInstall capability, for group discovery or for per-tool minimums.",
       "sources": [
         "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.GroupIsGranted",
         "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.CarriedOperations",

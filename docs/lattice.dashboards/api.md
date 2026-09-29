@@ -4,10 +4,14 @@ This document is the contract for the public `Orleans.Lattice.Dashboards` surfac
 
 ## Retrieving a dashboard
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Dashboards;
 
-string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview);
+public static class DashboardExample
+{
+    public static string GetOverviewJson()
+        => LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview);
+}
 ```
 
 | Type | Kind | Purpose | Key public members |
@@ -26,7 +30,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 
 | Value | Source meter | Operator workflow |
 |---|---|---|
-| `Overview` | `orleans.lattice` | At-a-glance per-tree throughput, latency envelopes, cache hit-rate, tombstone churn, splits, split admission and forwarding, shard consolidation and healing, compaction, atomic-write outcomes, coordinator completions and phase-tick failures, lifecycle, events, and runtime configuration changes, plus storage footprint, WAL compression and saturation, snapshot, write-admission, distributed-lock, atomic-action (saga / TCC), grain-call contention, tree-registry, shard-root optimistic point-read and leaf-division panels. Does not require the replication package. |
+| `Overview` | `orleans.lattice`, plus `Orleans.Lattice.Api.Mcp.RepoContext` for its exact-KNN panels | At-a-glance per-tree throughput, latency envelopes, cache hit-rate, tombstone churn, splits, split admission and forwarding, shard consolidation and healing, compaction, atomic-write outcomes, coordinator completions and phase-tick failures, lifecycle, events, and runtime configuration changes, plus storage footprint, WAL compression and saturation, snapshot, write-admission, distributed-lock, atomic-action (saga / TCC), grain-call contention, tree-registry, shard-root optimistic point-read and leaf-division panels, and three exact-KNN gather panels (work, wall time, and budget and gather outcomes) over the repository-context meter, which populate only where that package is hosted and its meter exported. Does not require the replication package. |
 | `CommitPath` | `orleans.lattice` | WAL-first commit pipeline: per-step commit latency, leaf commit concurrency and per-observer latency, `SetAsync` / `SetManyAsync` envelope and stage breakdowns, the WAL append, writer-admission and shard-dispatch pipeline, storage-provider write latency, phase-2 commit, retries and timeouts, compaction latency, scan-page coalescing and shard-root wedge guards, and leaf lifecycle diagnostics (materialiser pin path, activation and deactivation outcomes, snapshot capture and hydration, the WAL replay permit gate, deferred-terminal ledger refusals, the resident leaf working set, span fail-open commits, the WAL GC blocked-consumer population). |
 | `Replication` | `orleans.lattice.replication`, plus `orleans.lattice` for its WAL, WAL-compaction and WAL GC panels | Cross-cluster operator view: ship / apply / lag durations, WAL ship vs trim throughput and the log-tailing producer's append vs ship rate, dead-letter churn, apply FIFO and causal violations, causal apply-buffer occupancy, fall-off-log events, per-peer cursor lag, batches in flight and wire version, and anti-entropy (digest probes, Merkle walks, leaf re-replay, drift remediation), bootstrap, shipping-optimisation and coordinated-restore panels. Its replication panels need the replication package registered on the silo; its WAL, WAL-compaction and WAL GC panels read the core meter. |
 | `AtomicWrites` | `orleans.lattice` | `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration and batch-size percentiles, per-tree committed throughput, a dedicated saga-failure-rate panel, saga phase and per-key breakdowns, cross-tree atomic-write outcome, failure-rate, duration and fan-out panels, and saga decision registry write-rate, group-commit coalescing and write-duration panels. |
@@ -40,13 +44,19 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 
 ## Enumerating every dashboard
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Dashboards;
 
-foreach (LatticeDashboardKind kind in LatticeDashboards.All)
+public static class DashboardExporter
 {
-    string json = LatticeDashboards.GetGrafanaDashboardJson(kind);
-    // write json to a provisioning directory, POST to the Grafana API, etc.
+    public static IEnumerable<(LatticeDashboardKind Kind, string Json)> ReadAll()
+    {
+        foreach (LatticeDashboardKind kind in LatticeDashboards.All)
+        {
+            string json = LatticeDashboards.GetGrafanaDashboardJson(kind);
+            yield return (kind, json);
+        }
+    }
 }
 ```
 

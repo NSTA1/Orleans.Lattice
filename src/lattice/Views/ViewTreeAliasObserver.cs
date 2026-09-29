@@ -7,9 +7,10 @@ namespace Orleans.Lattice.Views;
 /// physical-identity swap into an immediate, event-driven rebind of every
 /// materialised-view maintainer whose source is the affected logical tree. The
 /// core registry fires <see cref="ITreeAliasObserver.OnTreeAliasChangedAsync"/>
-/// from its single alias-mutation choke point when a shadow-cutover restore,
-/// resize, or reshard repoints a logical tree onto a new physical WAL; this
-/// observer fans the change out to the per-view maintainer grains
+/// from its single alias-mutation choke point when a shadow-cutover restore or
+/// revert, resize or undo, schema remediation, or administrative alias
+/// assignment repoints a logical tree onto another physical WAL; this observer
+/// fans the change out to the per-view maintainer grains
 /// (<see cref="IViewMaintainerGrain.NotifySourceIdentityChangedAsync"/>) so they
 /// rebind on their next drain without re-reading the registry on every idle tick.
 /// <para>

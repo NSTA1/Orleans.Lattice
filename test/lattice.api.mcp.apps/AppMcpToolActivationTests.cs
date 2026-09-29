@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Server;
 using Orleans.Lattice.Apps;
 
 namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
@@ -100,6 +101,25 @@ public sealed class AppMcpToolActivationTests
             Assert.That(activation.Manifest, Is.Null);
             Assert.That(activation.Succeeded, Is.False);
             Assert.That(activation.Failure, Is.EqualTo("why"));
+        });
+    }
+
+    [Test]
+    public void Pair_fails_on_an_implementation_carrying_no_name()
+    {
+        // A nameless implementation cannot be paired with a declaration or addressed over the
+        // wire, and it must not be silently skipped: skipping it would leave the app's declared
+        // tool unimplemented, which is the mismatch the pairing exists to refuse.
+        var manifest = AppMcpTestData.ReaderManifest(Notes, AppMcpTestData.V1, "search");
+
+        var activation = AppMcpToolActivation.Pair(
+            manifest, [new RawToolProvider(Notes, new McpServerTool[] { null! })], Owner());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(activation.Succeeded, Is.False);
+            Assert.That(activation.Failure, Does.Contain("no name"));
+            Assert.That(activation.Tools, Is.Empty);
         });
     }
 }

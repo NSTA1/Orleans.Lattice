@@ -112,8 +112,10 @@ made on one site becomes visible on another only after:
 
 1. the mutation is captured and shipped to the peer, and
 2. the peer applies it, and
-3. the peer's compiled-policy snapshot maintainer rebuilds off the change feed so the
-   new rule participates in decisions.
+3. the peer's compiled-policy snapshot rebuilds so the new rule participates in
+   decisions. The applied write is published to the core `IMutationObserver` hook,
+   which schedules the rebuild on a background continuation (not the
+   [`IChangeFeed`](change-feed.md), which leaves out replication-installed entries).
 
 During that window a revoke authored on site A is not yet enforced on site B: a user
 may still perform on B an operation that A's newer policy forbids. This is the
@@ -140,17 +142,24 @@ is allowed:
   epoch is older than the required floor - the revoke has not yet been observed
   locally, so the write is fenced rather than allowed under stale policy.
 
-```csharp
+```csharp verify
 // Auth-side configuration (Orleans.Lattice.Auth): opt a tree into strict mode.
-authOptions.StrictConsistencyTrees = new HashSet<string>(StringComparer.Ordinal)
+var authOptions = new LatticeAuthOptions
 {
-    "billing-ledger",
+    StrictConsistencyTrees = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "billing-ledger",
+    },
 };
+
+var observedPolicyEpoch = 42L;
+var key = "invoice-123";
+var value = Encoding.UTF8.GetBytes("paid");
 
 // On a user write that must not run under stale policy, require an epoch floor:
 using (LatticePolicyEpochFenceContext.RequireAtLeast(observedPolicyEpoch))
 {
-    await lattice.SetAsync(treeId, key, value);
+    await lattice.SetAsync(key, value, cancellationToken);
 }
 ```
 

@@ -17,11 +17,12 @@ public enum AppLifecycleState
     /// <summary>The app was uninstalled; this does not imply physical data purge.</summary>
     Uninstalled = 4,
     /// <summary>
-    /// An installed app's last activation is known to have failed and the app is not
-    /// enabled. Inspection-only: <see cref="ILatticeAppsControl.DescribeAsync"/> and
+    /// An installed app's last activation evidence records a failed run. Inspection-only:
+    /// <see cref="ILatticeAppsControl.DescribeAsync"/> and
     /// <see cref="ILatticeAppsControl.ListAsync"/> may report this when failure evidence
-    /// is available; implementations must not infer it from a disabled registry state.
-    /// Lifecycle mutations report failures by exception, not by returning this state.
+    /// is available; implementations must not infer it from a disabled registry state,
+    /// and the underlying install may still be enabled. Lifecycle mutations report
+    /// failures by exception, not by returning this state.
     /// </summary>
     Failed = 5,
 }

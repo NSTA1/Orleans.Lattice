@@ -96,6 +96,15 @@ This overload is **not atomic** - each key is decided independently, so a
 partial result is possible. Use `SetManyAtomicAsync` when you need
 all-or-nothing semantics.
 
+Like the unguarded `SetManyAsync`, it checks every entry against the optional
+write-size bounds (`LatticeOptions.MaxKeyLength` and
+`LatticeOptions.MaxValueSizeBytes`) and the tree's admission caps
+(`LatticeOptions.MaxLiveKeys` and `LatticeOptions.MaxEstimatedBytes`) before any
+key is evaluated, so adding a predicate bypasses neither: an oversized key or
+value throws `ArgumentException`, and a tree at a configured cap throws
+`LatticeQuotaExceededException`. The guarded atomic batch below makes the same
+checks before its saga starts.
+
 ```csharp verify
 var entries = new List<KeyValuePair<string, User>>
 {

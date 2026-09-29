@@ -16,7 +16,7 @@ before calling `AddLatticeReplication`.
 |------|-------|---------|
 | `ISnapshotProvider` | `Task<SnapshotStream> ExportAsync(string treeName, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, string sourceClusterId, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, IReadOnlyList<LeafReReplayRange> ranges, HybridLogicalClock asOfHlc, CancellationToken ct)` | Streaming as-of-HLC export of a tree's primary state. The three-arg overload carries the sender-cluster identifier and is the one the bootstrap coordinator invokes; intra-cluster implementations inherit a default interface method that delegates to the two-arg overload after validating `sourceClusterId`. The range-scoped overload - used by the [bootstrap fallback](anti-entropy-bootstrap-fallback.md) - yields only entries inside the half-open `[StartKey, EndKey)` ranges; its default interface method filters the whole-tree export client-side. |
 | `SnapshotStream` | sealed class with `TreeName`, `AsOfHlc`, `CausalStableFrontier` (`VersionVector`), `Entries` (`IAsyncEnumerable<SnapshotEntry>`) | Carries the export metadata + entry stream produced by `ExportAsync`. |
-| `SnapshotEntry` | `readonly record struct` with `Key`, `Value`, `Timestamp`, `IsPrepared`, `IsTombstone`, `TransactionId`, `SourceShardIndex`, `AtomicBatchSize`, `AtomicBatchIndex`, `ExpiresAtTicks`, `Delta`, `Mode` | A single exported record stamped with its commit-time HLC so the receiver can pin the value at exactly that timestamp. A committed-projection row sets `Key`, `Value`, and `Timestamp`; a prepared saga row additionally sets `IsPrepared`, `IsTombstone`, `TransactionId`, `ExpiresAtTicks`, and the typed CRDT `Delta` / `Mode` (see [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)). `SourceShardIndex` is reserved and always `0`. |
+| `SnapshotEntry` | `readonly record struct` with `Key`, `Value`, `Timestamp`, `IsPrepared`, `IsTombstone`, `TransactionId`, `SourceShardIndex`, `AtomicBatchSize`, `AtomicBatchIndex`, `ExpiresAtTicks`, `Delta`, `Mode` | A single exported record stamped with its commit-time HLC so the receiver can pin the value at exactly that timestamp. A committed-projection row sets `Key`, `Value`, `Timestamp`, and `ExpiresAtTicks`; a prepared saga row additionally sets `IsPrepared`, `IsTombstone`, `TransactionId`, and the typed CRDT `Delta` / `Mode` (see [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)). `SourceShardIndex` is reserved and always `0`. |
 
 `SnapshotEntry` is alias `olr.se`.
 
@@ -61,9 +61,12 @@ before calling `AddLatticeReplication`.
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
 - **A live key's TTL is carried.** Every exported row - a
   committed-projection row as well as a prepared saga row - carries the
-  source entry's absolute `ExpiresAtTicks` (`0` for a durable key), so a
-  key that has a TTL on the source expires at the same instant on the
-  bootstrapped peer.
+  source entry's absolute `ExpiresAtTicks` (`0` for a durable key), so on
+  a last-writer-wins tree a key that has a TTL on the source expires at
+  the same instant on the bootstrapped peer. On a typed CRDT tree the
+  receiver folds a committed row's full state through a state-based
+  merge that does not apply the carried expiry, so the key is written
+  there as a durable entry.
 
 ## Default implementation
 
@@ -404,9 +407,11 @@ The bootstrap state machine that drains an `ISnapshotProvider` export
 on the receiver, applies every entry through the local apply seam
 preserving the source HLC, and pins the snapshot's causal-stable
 frontier on the per-tree high-water-mark grain ships as the public
-`ILatticeBootstrapCoordinator` seam. Triggered by the auto-bootstrap
-detector (when the inbound apply path observes the sender's cursor
-has fallen off the WAL) and by operator-driven re-seed flows.
+`ILatticeBootstrapCoordinator` seam. Triggered by the fall-off
+detector (when the per-tree maintenance pass finds a peer's per-origin
+high-water mark behind the oldest entry that peer authored in the local
+WAL - see [Auto-Bootstrap](auto-bootstrap.md)) and by operator-driven
+re-seed flows.
 
 | Type | Shape | Purpose |
 |------|-------|---------|

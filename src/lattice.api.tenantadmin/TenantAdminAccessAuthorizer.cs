@@ -89,7 +89,7 @@ public sealed class TenantAdminAccessAuthorizer
 
     /// <summary>
     /// Authorizes a tenant-administration <b>mutation</b> (create, suspend,
-    /// resume, delete) for the current caller over the platform-operator
+    /// resume, delete, set quotas) for the current caller over the platform-operator
     /// control-plane scope, throwing
     /// <see cref="LatticeAuthorizationDeniedException"/> when
     /// <see cref="LatticeOperation.Admin"/> authority on the reserved policy tree

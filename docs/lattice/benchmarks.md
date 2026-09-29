@@ -320,6 +320,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `condsetmanyadmission` | The declared-span admission step at the front of the conditional batch write path. |
 | `orphanedsurvey` | A shard's orphaned-leaf audit against its opt-in full survey, on one 128-key orphan. |
 | `blockedcensus` | WAL GC on a blocked tree holding more pins than the diagnostic's eight-id cap: the residual scan the uncapped census needs. |
+| `sharetouch` | The launch cost of one WAL GC reactivation pass's touches: the earlier start-every-touch-at-once fan-out against the share-bounded runner, at an unnarrowed width and at a share of three. |
 | `detachedtransfer` | Detached-leaf split transfer planning, dictionary construction and donor removal. |
 | `leafgetmany` | A leaf multi-get with and without a committed prepared override, resolved against one fixed registry view. |
 | `leafrangeread` | Leaf key and entry range reads with and without a prepared transactional write in the range, so the cost of the signal that stops a reused scan page serving a stale transactional outcome is visible against the steady-state read. |
@@ -332,6 +333,10 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `ormapfilterhoisttrims` | Three per-item costs: view-projection filter eligibility settled once per projection, the OR-Map delta key surrogate encoded once per dot group, and the OR-Map live-key tombstone test. |
 | `historyreadtrims` | Three per-row read-path costs: predicate JSON validation deferred until a row evaluates true, fast-path eligibility settled once instead of per row, and the entry-history per-revision delta wrapper. |
 | `dataapicrdtreads` | The three whole-collection CRDT projections the data-plane API runs on every read: an OR-Set, an OR-Map and a remove-wins set. |
+| `ormapdotspantranscode` | Three read-path trims, each with a baseline, an optimised and a no-gain control lane: the OR-Map provenance decoder's dot scans walking spans instead of the list indexer, the same change on the OR-Set and RW-Set decoders' state-decode emit loops, and two remaining double UTF-8 transcodes of one string on a routing hash and a cache key map. |
+| `ormapkeyorderfoldbox` | The CRDT decode and delta-fold trims: the OR-Map state decoder sorting its distinct keys instead of every event, with and without a pooled per-key scratch, and the boxed enumerators the delta coalescing fold paid per member per delta. |
+| `rowtranscodecopytrims` | Three trims on the aggregation row encoder and the CRDT provenance decoders: the row writer transcoding a short string once instead of twice, the multi-value register's current-value projection without an intermediate list, and the flag provenance's constant UTF-8 conversion replaced by a literal. |
+| `leafsnapshotframetrims` | Three trims on the leaf snapshot frame codec that every bounded hydration reads through, each removing a repeated re-validation of the 24-byte frame header: hydration admission reading the header once instead of once per question and once per row, a lower-bound seek reading it once instead of once per binary-search probe, and a block hydration reading it once per block instead of once per row. Every group carries a control lane where the trim can buy little. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'
@@ -458,9 +463,7 @@ The harness deploys a single Linux VM with accelerated networking into
 Azure. Its committed parameters file defaults to Standard_D2as_v5, the
 smallest D-family SKU that supports accelerated networking, and
 recommends Standard_D4as_v5 for the 4,000-vehicle rung, which is the
-default `-VmSize` of `benchmark/performance-report.ps1` - though at the
-current revision that script's Layer 1 and Layer 2 runs throw before they
-provision anything (see the note on it below). The producer and silo run
+default `-VmSize` of `benchmark/performance-report.ps1`. The producer and silo run
 as co-located systemd units; the silo authenticates to a real Azure
 Tables WAL via the VM's system-assigned managed identity. A cohort
 runner script applies env-var drop-ins, restarts the silo, runs the

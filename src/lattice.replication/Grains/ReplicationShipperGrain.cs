@@ -112,9 +112,9 @@ internal sealed class ReplicationShipperGrain(
 
     // The physical tree id the WAL shards are addressed by. A logical tree can
     // be repointed to a new physical tree by a registry alias swap (shadow-
-    // cutover restore, resize, reshard); WAL shards are keyed by the physical
-    // id. Re-resolved from _treeName each pump tick by
-    // EnsureBoundToCurrentSourceIdentityAsync so a mid-stream swap does not
+    // cutover restore, resize, schema remediation, or operator alias change);
+    // WAL shards are keyed by the physical id. Re-resolved from _treeName by
+    // event notification plus a backstop so a mid-stream swap does not
     // silently orphan the ship cursor. Defaults to _treeName (logical ==
     // physical for a tree that has never been swapped) until the first resolve.
     private string _walTreeId = "";
@@ -687,7 +687,8 @@ internal sealed class ReplicationShipperGrain(
     /// <para>
     /// Reports the logical tree name rather than <c>_walTreeId</c>: the
     /// physical id can be repointed mid-stream by a registry alias swap, and a
-    /// series whose identity changes under a restore or reshard cannot be
+    /// series whose identity changes under a restore, restore-revert, resize,
+    /// resize-undo, schema remediation, or operator alias change cannot be
     /// compared with itself across that boundary.
     /// </para>
     /// <para>
@@ -1879,12 +1880,12 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Bounded sender-side pipelining path. Maintains a window of up to
     /// <paramref name="window"/> in-flight unacked batches per
-    /// <c>(tree, peer)</c>, draining the WAL into successive
-    /// strictly-ascending-HLC batches and launching each
+    /// <c>(tree, peer)</c>, draining the WAL into successive batches in
+    /// k-way HLC-merge order and launching each
     /// <see cref="IReplicationTransport.SendAsync"/> without awaiting it
     /// inline. Acks are consumed in strict FIFO order, and the durable
     /// cursor advances past a batch only once that batch <b>and</b>
-    /// every lower-HLC batch before it have acked (advance-strictly-on-ack,
+    /// every earlier-launched batch before it has acked (advance-strictly-on-ack,
     /// no cursor hole), preserving the per-origin FIFO invariant.
     /// <para>
     /// On the first transport throw or ack rejection the window stops
@@ -2376,8 +2377,8 @@ internal sealed class ReplicationShipperGrain(
 
         // Rebind to the source tree's current physical identity before seeding
         // this tick's cursors. A registry alias swap (shadow-cutover restore,
-        // resize, reshard) can repoint the logical tree to a new physical WAL
-        // underneath a live shipper; the persisted per-partition cursors are
+        // resize, schema remediation, or operator alias change) can repoint the
+        // logical tree to a new physical WAL underneath a live shipper; the persisted per-partition cursors are
         // absolute offsets into the retired log, so on an identity change they
         // are reset and the shipper re-ships from the new source's log start.
         // The rebind is driven primarily by an event-driven push
@@ -2458,7 +2459,7 @@ internal sealed class ReplicationShipperGrain(
     /// into <see cref="_drainBuffer"/> / <see cref="_drainEncodedSegments"/>,
     /// k-way merging by HLC ascending. Clears the drain buffers at the
     /// start so it is safe to call repeatedly within a tick: each call
-    /// produces the next strictly-ascending-HLC batch, resuming exactly
+    /// produces the next batch in the k-way HLC merge, resuming exactly
     /// where the prior call left off (the partition page cursors carry
     /// over). Requires <see cref="InitializeDrainTickAsync"/> to have
     /// run first.
@@ -3344,8 +3345,8 @@ internal sealed class ReplicationShipperGrain(
     /// interval to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.
     /// Transport throws apply the standard backoff path; ack
     /// rejection leaves the cursor untouched (there is nothing to
-    /// advance past). The encoded payload is the 16-byte framing
-    /// header alone.
+    /// advance past). The encoded payload is the 32-byte framing
+    /// header plus the encoded tree and origin identifiers.
     /// </summary>
     private async Task TryEmitLivenessProbeAsync(LatticeReplicationOptions options, CancellationToken cancellationToken)
     {
@@ -4116,7 +4117,7 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Event-driven rebind entry point. Invoked by the replication tree-alias
     /// observer when the tree registry swaps the logical source tree's alias to a
-    /// new physical identity (shadow-cutover restore, resize, reshard), so the
+    /// new physical identity (shadow-cutover restore, resize, schema remediation, or operator alias change), so the
     /// shipper rebinds immediately rather than waiting for the backstop poll to
     /// notice. The new physical id is supplied by the registry alias change
     /// itself, so no registry read is needed here; the backstop

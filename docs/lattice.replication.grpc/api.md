@@ -62,6 +62,11 @@ See [Transport](../lattice.replication/transport.md) and [Wire Format](../lattic
 | `ReplicationBatchEnvelope` | The decoded transport envelope written onto the gRPC call body. |
 | `ReplicationAck` | Receiver acknowledgement containing acceptance, high-water mark, and optional flow-control hints. |
 | `IReplicationApplier` | Receiver-side seam invoked after the endpoint decodes a batch. |
+| `IReplicationDigestProbeTransport` | Sender-side contract for the peer probes (digest, Merkle-walk, and peer high-water mark), the content-manifest exchange, and the compression-dictionary pull. The binding serves it from the same instance, and per-peer channel cache, as live push. |
+| `IRemoteSnapshotTransport` | Receiver-driven snapshot bootstrap: pulls a peer's cut-point metadata and snapshot entry stream. The binding registers a gRPC implementation. |
+| `ISagaControlChannel` | Outbound cross-cluster saga control (prepare, commit, abort, status). The binding routes a call addressed to the local cluster in-process and a call to any other participant over gRPC. |
+| `ISagaPeerAuthorizer` | The gate the inbound saga service consults before it runs a call. The binding's default admits only origin cluster ids present in `Peers`. |
+| `ILatticeSagaControlHandler` | The participant-side handler the inbound saga service calls. `AddLatticeReplication` registers the durable participant handler; on a host without it the binding falls back to a handler that holds no participant state and votes to abort on prepare. |
 | `IChangeFeed` | In-process pull feed over the locally-authored WAL for custom consumers. The replication shipper does not read it; it tails the WAL partitions directly before transport dispatch. |
 
 The transport does not interpret application payloads. It moves encoded replication envelopes between clusters and relies on the receiver apply path for idempotency, causal buffering, and CRDT-aware merge semantics.
@@ -75,7 +80,7 @@ See [Configuration](configuration.md).
 | `Peers` | `IDictionary<string, Uri>` | Maps remote cluster ids to the endpoint URI used for outbound live push, bootstrap, anti-entropy probe, and saga control traffic. |
 | `AllowPlaintextEndpoints` | `bool` | Allows `http://` peer endpoints for loopback or diagnostic use. Default is `false`. |
 | `ConfigureChannel` | `Action<string, GrpcChannelOptions>?` | Lets the host customize each peer channel after package defaults are applied. |
-| `LocalClusterId` | `string?` | Overrides the outbound origin header. When unset, `LatticeReplicationOptions.ClusterId` is used. |
+| `LocalClusterId` | `string?` | Overrides the outbound origin header, one value per peer channel shared by every tree. When unset, the cluster-wide `LatticeReplicationOptions.ClusterId` is used. Each live push, content-manifest exchange, and peer high-water-mark probe names its tree's own `ClusterId`, and the receiver refuses one whose origin differs from the header, so leave this unset (or equal to `ClusterId`) and give no replicated tree a per-tree `ClusterId` that differs from the cluster-wide value. See [Security](#security). |
 
 ## Endpoint mapping
 
@@ -97,7 +102,7 @@ A host that only sends to peers can omit endpoint mapping. A host that only rece
 
 ## Security
 
-The binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication and custom secret sources are part of the replication security surface; while `LatticeReplicationSecurityOptions.RequireAuthentication` is on (the default), the receiver-side shared-secret check covers every RPC in the endpoint table above and no other gRPC service on the host. Two further receiver-side gates apply on top of it: the peer-read RPCs (the digest and Merkle-walk probes, the peer high-water mark, the content-manifest exchange) and the snapshot RPCs refuse, with `PermissionDenied`, a tree that is not enrolled for replication on the receiving cluster, and the saga control RPCs pass an `ISagaPeerAuthorizer` gate that by default admits only origin cluster ids present in `Peers`. See [Transport Security](../lattice.replication/transport-security.md).
+The binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication and custom secret sources are part of the replication security surface; while `LatticeReplicationSecurityOptions.RequireAuthentication` is on (the default), the receiver-side shared-secret check covers every RPC in the endpoint table above and no other gRPC service on the host. Three further receiver-side gates apply on top of it: the peer-read RPCs (the digest and Merkle-walk probes, the peer high-water mark, the content-manifest exchange) and the snapshot RPCs refuse, with `PermissionDenied`, a tree that is not enrolled for replication on the receiving cluster; `Push`, `ExchangeContentManifest`, and `GetPeerHighWaterMark` refuse, with `PermissionDenied`, a call whose request names an origin cluster id (for `Push`, the batch envelope's) that disagrees with the origin header present on the call; and the saga control RPCs pass an `ISagaPeerAuthorizer` gate that by default admits only origin cluster ids present in `Peers`. See [Transport Security](../lattice.replication/transport-security.md).
 
 ## Observability
 

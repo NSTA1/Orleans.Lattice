@@ -10,6 +10,25 @@ public sealed class AppsControlMappingTests
     private static AppCapabilityCeilingDescriptor Ceiling(params AppExceptionScope[] scopes) =>
         new() { AllowedOperations = LatticeOperation.Read, ApprovedExceptionScopes = [.. scopes] };
 
+    private static AppProvenance Provenance =>
+        new() { Source = "in-image", Publisher = "first-party", Reference = "ref" };
+
+    private static AppManifest EmptyManifest() =>
+        new()
+        {
+            Identity = new AppIdentity
+            {
+                Slug = AppSlug.Parse(AppsControlHarness.Slug),
+                Version = AppVersion.Parse(AppsControlHarness.Version),
+            },
+            Trees = [],
+            Roles = [],
+            Subscriptions = [],
+            McpTools = [],
+            Replication = null,
+            Schema = null,
+        };
+
     private static IEnumerable<TestCaseData> InvalidScopes()
     {
         yield return new TestCaseData(null!).SetName("null scope");
@@ -115,6 +134,152 @@ public sealed class AppsControlMappingTests
     public void ToEngineBindings_default_is_empty()
     {
         Assert.That(AppsControlMapping.ToEngineBindings(default), Is.Empty);
+    }
+
+    [Test]
+    public void ToEngineBindings_accepts_several_distinct_roles()
+    {
+        // The duplicate-role scan only completes normally when a later binding clears every
+        // earlier one. Every existing case either supplies a single binding (so the scan never
+        // runs) or a duplicate (so it throws on the first comparison), leaving the pass arm of
+        // the scan unexercised.
+        var engine = AppsControlMapping.ToEngineBindings(
+        [
+            new AppRoleBindingDescriptor { RoleName = "reader", GroupId = "g-readers" },
+            new AppRoleBindingDescriptor { RoleName = "writer", GroupId = "g-writers" },
+            new AppRoleBindingDescriptor { RoleName = "admin", GroupId = "g-admins" },
+        ]);
+
+        Assert.That(engine.Select(b => b.RoleName), Is.EqualTo(new[] { "reader", "writer", "admin" }));
+        Assert.That(engine.Select(b => b.GroupId), Is.EqualTo(new[] { "g-readers", "g-writers", "g-admins" }));
+    }
+
+    [Test]
+    public void ToEngineBindings_still_rejects_a_duplicate_role_after_several_distinct_ones()
+    {
+        // Pins the scan's reject arm at an index the pass arm above has to walk past, so a scan
+        // that stopped comparing after the first binding could not satisfy both tests at once.
+        var duplicate = Assert.Throws<ArgumentException>(() => AppsControlMapping.ToEngineBindings(
+        [
+            new AppRoleBindingDescriptor { RoleName = "reader", GroupId = "g-readers" },
+            new AppRoleBindingDescriptor { RoleName = "writer", GroupId = "g-writers" },
+            new AppRoleBindingDescriptor { RoleName = "reader", GroupId = "g-others" },
+        ]));
+
+        Assert.That(duplicate!.Message, Does.Contain("already bound"));
+    }
+
+    [Test]
+    public void ToWireBindings_maps_an_absent_or_empty_binding_list_to_empty()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppsControlMapping.ToWireBindings(null), Is.Empty);
+            Assert.That(AppsControlMapping.ToWireBindings([]), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void ToWireBindings_maps_a_populated_binding_list()
+    {
+        // Anti-vacuity for the two empty cases above: a mapper that always returned empty would
+        // satisfy them both, and only this case separates "absent maps to empty" from "maps nothing".
+        var wire = AppsControlMapping.ToWireBindings(
+            [AppRoleBinding.Create("reader", "g-readers"), AppRoleBinding.Create("writer", "g-writers")]);
+
+        Assert.That(wire.Select(b => b.RoleName), Is.EqualTo(new[] { "reader", "writer" }));
+        Assert.That(wire.Select(b => b.GroupId), Is.EqualTo(new[] { "g-readers", "g-writers" }));
+    }
+
+    [Test]
+    public void ToDescriptor_maps_a_manifest_declaring_nothing_to_empty_collections()
+    {
+        // Every optional manifest collection carries its own verbatim absent-or-empty guard, and
+        // a manifest declaring none of them is the only input that reaches all of them at once.
+        var descriptor = AppsControlMapping.ToDescriptor(
+            EmptyManifest(), Provenance, AppLifecycleState.Installed, record: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.Trees, Is.Empty);
+            Assert.That(descriptor.Roles, Is.Empty);
+            Assert.That(descriptor.Subscriptions, Is.Empty);
+            Assert.That(descriptor.McpTools, Is.Empty);
+            Assert.That(descriptor.Replication, Is.Empty);
+            Assert.That(descriptor.Schema, Is.Empty);
+            Assert.That(descriptor.RoleBindings, Is.Empty);
+            Assert.That(descriptor.Ceiling, Is.Null);
+            Assert.That(descriptor.Slug, Is.EqualTo(AppsControlHarness.Slug));
+        });
+    }
+
+    [Test]
+    public void ToDescriptor_maps_a_populated_manifest_to_populated_collections()
+    {
+        // Anti-vacuity for the empty-manifest case: these are the same six guards, taken on the
+        // other side, so a mapper that dropped every collection cannot pass both.
+        var descriptor = AppsControlMapping.ToDescriptor(
+            AppsControlHarness.Manifest(), Provenance, AppLifecycleState.Enabled, record: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.Trees, Is.Not.Empty);
+            Assert.That(descriptor.Roles, Is.Not.Empty);
+            Assert.That(descriptor.Subscriptions, Is.Not.Empty);
+            Assert.That(descriptor.McpTools, Is.Not.Empty);
+            Assert.That(descriptor.Replication, Is.Not.Empty);
+            Assert.That(descriptor.Schema, Is.Not.Empty);
+        });
+    }
+
+    [Test]
+    public void ToDescriptor_reports_no_ownership_conflict_when_none_were_supplied()
+    {
+        // The conflict lookup is only consulted per declared tree, so reaching its absent-list
+        // guard needs a manifest that declares at least one tree and a null conflict list.
+        var descriptor = AppsControlMapping.ToDescriptor(
+            AppsControlHarness.Manifest(), Provenance, AppLifecycleState.Installed, record: null, conflicts: null);
+
+        Assert.That(descriptor.Trees, Is.Not.Empty);
+        Assert.That(descriptor.Trees.Select(t => t.OwnershipConflict), Is.All.Null);
+    }
+
+    [Test]
+    public void ToDescriptor_reports_a_conflict_against_the_tree_it_names()
+    {
+        // Anti-vacuity for the case above, and it pins the per-tree match: a lookup that always
+        // returned null would pass that test, and one that ignored the tree name would report the
+        // conflict against both trees.
+        var descriptor = AppsControlMapping.ToDescriptor(
+            AppsControlHarness.Manifest(),
+            Provenance,
+            AppLifecycleState.Installed,
+            record: null,
+            conflicts: [new AppTreeOwnershipConflict(
+                "contacts", AppTreeOwnershipConflictReason.OwnedByAnotherApp, AppSlug.Parse("billing"), "owned by a/billing/contacts")]);
+
+        var contacts = descriptor.Trees.Single(t => t.Name == "contacts");
+        var legacy = descriptor.Trees.Single(t => t.Name == "legacy");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(legacy.OwnershipConflict, Is.Null);
+            Assert.That(contacts.OwnershipConflict, Is.Not.Null);
+            Assert.That(contacts.OwnershipConflict, Does.Not.Contain("a/billing"), "the conflict message is sanitized");
+        });
+    }
+
+    [Test]
+    public void ToDescriptor_maps_a_record_holding_no_role_bindings_to_empty()
+    {
+        var descriptor = AppsControlMapping.ToDescriptor(
+            AppsControlHarness.Manifest(),
+            Provenance,
+            AppLifecycleState.Installed,
+            AppsControlHarness.Record(AppRegistryLifecycleState.Installed, bindings: []));
+
+        Assert.That(descriptor.RoleBindings, Is.Empty);
+        Assert.That(descriptor.Ceiling, Is.Not.Null, "a record with no bindings still carries its ceiling");
     }
 
     [Test]

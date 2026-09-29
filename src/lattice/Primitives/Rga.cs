@@ -157,7 +157,11 @@ public sealed class Rga : ICrdt<Rga>
     /// </summary>
     /// <param name="parentDot">The parent dot to link under, or <see cref="Root"/> for a top-level insert.</param>
     /// <param name="replicaId">The replica authoring the insert. Must be non-empty.</param>
-    /// <param name="value">The value bytes to attach. Must not be <c>null</c>.</param>
+    /// <param name="value">
+    /// The value bytes to attach. Must not be <c>null</c>. Stored by reference:
+    /// <c>InsertAfter</c> is a hand-off, so the sequence takes ownership of the
+    /// array and the caller must not mutate it afterwards.
+    /// </param>
     public OrSetDot InsertAfter(OrSetDot parentDot, string replicaId, byte[] value)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);

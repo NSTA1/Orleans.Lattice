@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Lattice.Testing;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Indexing;
@@ -123,24 +124,17 @@ internal sealed class RepoIndexRunnerHarness : IDisposable
     /// <summary>
     /// Waits for a condition the background run drives, so a test never races the
     /// runner's own task. Returns false if the condition never holds.
+    /// <para>
+    /// Routed to the shared <see cref="TestPoll"/>: the 20-second budget and 10ms
+    /// cadence are carried over verbatim, and the deadline becomes monotonic
+    /// rather than being derived from <see cref="DateTime.UtcNow"/>, which a
+    /// wall-clock step could move under a waiting barrier.
+    /// </para>
     /// </summary>
     /// <param name="condition">The condition to poll.</param>
     /// <returns>Whether the condition became true inside the budget.</returns>
-    internal static async Task<bool> WaitForAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(10).ConfigureAwait(false);
-        }
-
-        return condition();
-    }
+    internal static Task<bool> WaitForAsync(Func<bool> condition)
+        => TestPoll.TryUntilAsync(condition, TimeSpan.FromSeconds(20), TimeSpan.FromMilliseconds(10));
 
     /// <inheritdoc />
     public void Dispose()

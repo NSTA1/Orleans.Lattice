@@ -41,6 +41,14 @@ public class LatticeReplicationOptions
     /// freeze - both of which fail loudly rather than proceeding on a premise
     /// that no longer holds.
     /// </para>
+    /// <para>
+    /// When the gRPC transport is used, keep per-tree overrides aligned with
+    /// the cluster-wide identity (and any transport-level local identity
+    /// override). The transport stamps an origin header from the peer channel,
+    /// while push, content-manifest, and peer high-water-mark requests declare
+    /// this tree-resolved value in their bodies. A receiver that sees both
+    /// values and finds they differ refuses the request as an origin mismatch.
+    /// </para>
     /// </summary>
     public string ClusterId { get; set; } = DefaultClusterId;
 
@@ -768,8 +776,9 @@ public class LatticeReplicationOptions
     /// Backstop cadence at which the per-<c>(tree, peer)</c> shipper re-resolves
     /// the source tree's logical -&gt; physical identity from the tree registry as
     /// a safety net for a missed alias-swap notification. The primary rebind
-    /// mechanism is event-driven: an alias swap (shadow-cutover restore, resize,
-    /// reshard) pushes a source-identity-change notification to the shipper, which
+    /// mechanism is event-driven: an alias swap (shadow-cutover restore,
+    /// restore-revert, resize, resize-undo, schema remediation, or operator
+    /// alias change) pushes a source-identity-change notification to the shipper, which
     /// rebinds immediately without a registry read. This backstop only covers the
     /// rare case where that push is missed (for example a shipper activated after
     /// the swap, or a transient notification failure); it does not replace the

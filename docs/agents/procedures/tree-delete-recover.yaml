@@ -49,9 +49,11 @@ postconditions:
     source: "docs/lattice/tree-deletion.md"
   - check: "Purge is irreversible."
     source: "docs/lattice.api.treeadmin/README.md"
+  - check: "On an aliased tree, delete, recover and purge act on the live backing copy the delete pinned, and purge unregisters both that copy and the logical tree."
+    source: "docs/lattice/tree-registry.md"
 failure_modes:
   - id: not-deleted
-    signal: "Recover rejects a tree that is not deleted."
+    signal: "Recover rejects a tree that is not deleted, including a live resized tree."
     effect: "No state change."
     response: "Read deletion status before recover."
   - id: purge-unconfirmed
@@ -62,6 +64,14 @@ failure_modes:
     signal: "Delete is rejected while the tree is the source of a materialised view."
     effect: "Tree remains live."
     response: "Drop dependent views first."
+  - id: alias-change-in-progress
+    signal: "Delete is rejected while a resize, restore or remediation holds the tree's alias-change reservation."
+    effect: "Tree remains live."
+    response: "Wait for the alias-changing operation to complete, then retry the delete."
+  - id: alias-not-owned
+    signal: "Delete is rejected because the tree's alias targets a tree it does not own or another tree aliases it."
+    effect: "Tree remains live and no tree is deleted through the wrong name."
+    response: "Correct or remove the alias, or delete the aliasing tree first, then retry."
 rollback:
   supported: true
   mechanism: "RecoverTreeAsync reverses soft delete within the recovery window; purge has no rollback."
@@ -80,9 +90,14 @@ concurrency:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
   - rule: "Shard enumeration uses the registry shard map or split allocation high-water mark rather than only the pinned ShardCount."
     source: "docs/lattice/tree-deletion.md"
+  - rule: "Alias-changing operations and logical deletion never overlap: a delete refuses while an alias-change reservation is held, and an alias change refuses while the tree is deleted or a delete is pending."
+    source: "docs/lattice/tree-registry.md"
+  - rule: "The resolved alias target is pinned in durable state before any physical effect, so a retry after an ambiguous failure continues on the same target."
+    source: "docs/lattice/tree-registry.md"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
   - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
   - "docs/lattice.api.treeadmin/README.md"
   - "docs/lattice/tree-deletion.md"
+  - "docs/lattice/tree-registry.md"

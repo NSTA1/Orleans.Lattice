@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -61,19 +62,17 @@ public class BPlusLeafGrainHydrationContiguityTests
     private static long SpaciousBudgetBytes
         => LeafSnapshotHydrationAdmission.ToHeapCostBytes(OversizedStoredBytes) * 4;
 
-    private static async Task SpinUntilAsync(Func<bool> condition, string because)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                Assert.Fail($"Timed out waiting for {because}.");
-            }
-
-            await Task.Delay(10);
-        }
-    }
+    /// <summary>
+    /// The fixture's bounded-poll barrier, routed to the shared
+    /// <see cref="TestPoll"/>. The 15-second budget is carried over verbatim, so
+    /// the barrier is no weaker than the private copy it replaces; what changes
+    /// is that the deadline is now monotonic instead of being derived from
+    /// <see cref="DateTime.UtcNow"/>, and that a condition which becomes true
+    /// during the final sampling delay is still observed rather than failing the
+    /// test on a scheduling hiccup that straddled the deadline.
+    /// </summary>
+    private static Task SpinUntilAsync(Func<bool> condition, string because) =>
+        TestPoll.UntilAsync(condition, because, TimeSpan.FromSeconds(15));
 
     // Every claim below is taken through a bounded token. A clause that has been
     // reverted must redden a test rather than park a task on the gate forever,

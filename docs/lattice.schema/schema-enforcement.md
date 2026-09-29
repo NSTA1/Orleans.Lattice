@@ -171,9 +171,20 @@ the same way and the partial destination is discarded (soft-deleted). Only a ful
 successful build cuts the logical tree over to the remediated destination: it
 installs the target policy, then repoints the tree via physical-tree aliasing, then
 arms a retained redirect that steers already-materialised readers to the new data.
-A remediation pass holds the tree's alias reservation, so a delete of the tree is
-refused while it runs and a remediation of a deleted tree is refused; see
+A remediation holds the tree's alias reservation from the moment it starts until it
+completes or aborts - including while an interrupted one waits to be requested
+again - so a delete of the tree is refused for that whole time, and a remediation
+is refused with `InvalidOperationException` while the tree is deleted, a delete is
+pending, or a resize or restore holds the reservation; see
 [Deleting an aliased tree](../lattice/tree-deletion.md#deleting-an-aliased-tree).
+The destination is registered as derived from the tree, so after cutover a delete,
+recover or purge of the tree acts on the remediated copy the alias targets. The
+cutover's alias swap is put to the host's `ITreeOwnershipGuard` like every alias
+change (see
+[Ownership-bounded aliasing](../lattice/tree-registry.md#ownership-bounded-aliasing)).
+A refused swap throws `LatticeTreeOwnershipDeniedException` out of the cutover and
+leaves the remediation in flight at `Cutover`, with the target policy already
+installed on the tree.
 
 The build copies at the logical level and does not shadow-forward writes that land
 on the source while it runs, so run a remediation while the tree is

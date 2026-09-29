@@ -140,6 +140,14 @@ attempts inside the window. At most `MaxReportedBlockingConsumers` consumers are
 reported per pass. Hence 16, which is what run 12 measured on every tree in a
 ten-tree cohort spanning two tenants and three naming families.
 
+The derivation bounds the blocked-arm remedy, not the series. The drive of dormant
+pins holding a tree's offset floor records on the same `outcome=attempted` arm
+through the same reactivation pass, with candidates drawn from a floor-holder sample
+rather than from the `MaxReportedBlockingConsumers`-capped blocking report, and with a
+per-pass touch budget that widens as the tree's floor-holding pin population grows.
+On a tree whose floor holders are being driven, `attempted` is not bounded by this
+derivation and can exceed 16 inside the window.
+
 The previously registered 200 was never reachable. Even ignoring the
 per-consumer rate limit entirely, the absolute bound is
 `MaxReactivationTouchesPerPass * blocked passes`, which on run 11's 46 blocked

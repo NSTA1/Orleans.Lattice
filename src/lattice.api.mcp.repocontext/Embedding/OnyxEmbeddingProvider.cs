@@ -7,8 +7,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The default <see cref="IEmbeddingProvider"/>: a thin HTTP client for the
-/// companion Onyx model-server embedding container. It does <b>not</b> embed
-/// in-process - every call is ordinary egress to the configured
+/// companion embedding container that serves the Onyx-compatible contract. It
+/// does <b>not</b> embed in-process - every call is ordinary egress to the configured
 /// <see cref="OnyxEmbeddingOptions.BaseAddress"/> - so the repository-context MCP
 /// host keeps its single, MCP-only listener.
 /// </summary>

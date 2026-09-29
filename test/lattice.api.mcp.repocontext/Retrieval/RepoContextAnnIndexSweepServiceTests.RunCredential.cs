@@ -182,7 +182,15 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
         await sweep.StartAsync(Ct);
         try
         {
-            await WaitForAsync(() => sweep.Reporter.Read().Armed >= 1, Ct);
+            // The discarded result this replaces made the test vacuous under
+            // failure: every assertion below is about what the pass left behind,
+            // and all of them hold trivially when no pass ever ran. Asserting
+            // the barrier opened is what makes the guard specific to a pass that
+            // actually took, used, and released a run credential.
+            Assert.That(
+                await WaitForAsync(() => sweep.Reporter.Read().Armed >= 1, Ct), Is.True,
+                "the sweep must actually arm a repository, or the restore assertion "
+                + "below would pass against a pass that never ran");
         }
         finally
         {

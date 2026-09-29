@@ -18,8 +18,9 @@ public enum LatticeDashboardKind
     /// <c>get.stage.duration</c>, <c>get_many.duration</c>,
     /// <c>get_many.stage.duration</c>, <c>exists.duration</c>,
     /// <c>get_with_version.duration</c>). Sources the
-    /// <c>orleans.lattice</c> meter only and does not require the
-    /// replication package.
+    /// <c>orleans.lattice</c> meter and the
+    /// <c>Orleans.Lattice.Api.Mcp.RepoContext</c> meter for RepoContext exact
+    /// KNN panels; it does not require the replication package.
     /// </summary>
     Overview = 0,
 
@@ -38,8 +39,9 @@ public enum LatticeDashboardKind
     /// durations, WAL append vs trim throughput, dead-letter queue
     /// churn, apply FIFO violations, causal-wait histograms,
     /// fall-off-log events, and per-peer cursor lag. Sources the
-    /// <c>orleans.lattice.replication</c> meter; useful only when the
-    /// replication package is registered on the silo.
+    /// <c>orleans.lattice.replication</c> meter and core WAL series from
+    /// <c>orleans.lattice</c>; the replication-specific panels are useful only
+    /// when the replication package is registered on the silo.
     /// </summary>
     Replication = 2,
 

@@ -177,10 +177,9 @@ internal sealed class LatticeReplicationHealthCheck(
         // entries_behind / bytes_behind and the outbound contact /
         // error tiers apply only to outbound rows (the receiver does
         // not track an outbound backlog from itself). Inbound rows
-        // carry zero EntriesBehind and zero ConsecutiveErrors by
-        // construction so the existing tier comparisons would never
-        // trigger on them anyway, but skipping the comparison up
-        // front keeps the intent legible.
+        // carry zero EntriesBehind, but ConsecutiveErrors may be
+        // incremented by the inbound contact recorder; no tier
+        // currently classifies that inbound error streak.
         if (peer.Direction == ReplicationContactDirection.Outbound)
         {
             if (options.EntriesBehind is { } entries)

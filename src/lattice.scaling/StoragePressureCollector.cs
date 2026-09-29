@@ -183,15 +183,15 @@ internal sealed class StoragePressureCollector(
     }
 
     /// <summary>
-    /// Normalises the configured advisory fraction: a non-positive value falls
-    /// back to <see cref="LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio"/>
+    /// Normalises the configured advisory fraction: a non-positive or NaN value
+    /// falls back to <see cref="LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio"/>
     /// and anything above 1 is clamped to 1, so the effective ratio is always in
     /// <c>(0, 1]</c>.
     /// </summary>
     private static double ResolveAdvisoryRatio(LatticeScalingSignalOptions options)
     {
         var ratio = options.RetainedBytesAdvisoryRatio;
-        if (ratio <= 0d)
+        if (double.IsNaN(ratio) || ratio <= 0d)
         {
             return LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio;
         }

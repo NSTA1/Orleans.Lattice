@@ -200,6 +200,69 @@ public class AdmissionControlIntegrationTests
         Assert.That(await tree.GetAsync("k0"), Is.Null);
     }
 
+    [Test]
+    public async Task Enforcing_cap_rejects_a_cross_tree_write_once_a_participating_tree_reaches_it()
+    {
+        // Regression: a cross-tree atomic write never checked the per-tree
+        // admission caps. Its sub-sagas apply every leg under the prepared scope,
+        // which bypasses admission by design, and the coordinator admitted the
+        // batch without the check the single-tree atomic entry points perform -
+        // so a tree at its cap still accepted cross-tree writes.
+        var capped = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.CrossTreeEnforcingTreeId);
+        Assert.That(await FillUntilCapAsync(capped, SmallValue()), Is.True,
+            "precondition: the unconditional path must reach the cap");
+
+        var freeTreeId = $"adm-xtree-free-{Guid.NewGuid():N}";
+        var free = _cluster.GrainFactory.GetGrain<ILattice>(freeTreeId);
+
+        string? rejectedFreeKey = null;
+        var rejection = await PollForQuotaRejectionAsync(async i =>
+        {
+            rejectedFreeKey = $"f{i}";
+            await _cluster.GrainFactory.SetManyAtomicAsync(
+                [
+                    new LatticeTreeBatch(AdmissionControlClusterFixture.CrossTreeEnforcingTreeId, [new($"x{i}", SmallValue())]),
+                    new LatticeTreeBatch(freeTreeId, [new(rejectedFreeKey, SmallValue())]),
+                ],
+                $"op-xtree-cap-{i}-{Guid.NewGuid():N}");
+        });
+
+        Assert.That(rejection, Is.Not.Null,
+            "a cross-tree write touching a tree at its enforcing MaxLiveKeys cap must be refused");
+        Assert.Multiple(() =>
+        {
+            Assert.That(rejection!.Dimension, Is.EqualTo(LatticeQuotaExceededException.KeysDimension));
+            Assert.That(rejection.TreeId, Is.EqualTo(AdmissionControlClusterFixture.CrossTreeEnforcingTreeId));
+        });
+        Assert.That(await free.GetAsync(rejectedFreeKey!), Is.Null,
+            "the refused cross-tree write must not have written the uncapped tree's leg");
+    }
+
+    [Test]
+    public async Task Enforcing_cap_still_admits_a_cross_tree_write_that_only_deletes_on_the_capped_tree()
+    {
+        // A delete-only leg can only shrink the capped tree, so the cap must never
+        // stop a cross-tree write from getting it back under the cap.
+        var capped = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.CrossTreeDeleteEnforcingTreeId);
+        Assert.That(await FillUntilCapAsync(capped, SmallValue()), Is.True,
+            "precondition: the unconditional path must reach the cap");
+
+        var freeTreeId = $"adm-xtree-delete-free-{Guid.NewGuid():N}";
+        var outcome = await _cluster.GrainFactory.SetManyAtomicAsync(
+            [
+                new LatticeTreeBatch(
+                    AdmissionControlClusterFixture.CrossTreeDeleteEnforcingTreeId,
+                    [new("k0", Array.Empty<byte>())],
+                    EntryDeletes: [true]),
+                new LatticeTreeBatch(freeTreeId, [new("f", SmallValue())]),
+            ],
+            $"op-xtree-delete-{Guid.NewGuid():N}");
+
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await capped.GetAsync("k0"), Is.Null);
+        Assert.That(await _cluster.GrainFactory.GetGrain<ILattice>(freeTreeId).GetAsync("f"), Is.EqualTo(SmallValue()));
+    }
+
     private static List<KeyValuePair<string, byte[]>> Batch(string key) =>
         new() { new(key, Encoding.UTF8.GetBytes("{\"Score\":2}")) };
 

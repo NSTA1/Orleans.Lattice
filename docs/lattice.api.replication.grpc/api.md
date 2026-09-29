@@ -9,7 +9,7 @@ The package exposes a public typed client, two registration entry points, public
 | `AddLatticeReplicationApiGrpc` | `IServiceCollection AddLatticeReplicationApiGrpc(this IServiceCollection services, Action<LatticeReplicationApiGrpcOptions>? configure = null)` | Registers the server-side binding: the method definitions, the service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. |
 | `MapLatticeReplicationApiGrpc` | `IEndpointRouteBuilder MapLatticeReplicationApiGrpc(this IEndpointRouteBuilder endpoints)` | Maps the gRPC service onto the ASP.NET Core endpoint routing. |
 
-Both are extension methods on the public static `LatticeReplicationApiGrpcServiceCollectionExtensions` class.
+Both are extension methods on the public static `LatticeReplicationApiGrpcServiceCollectionExtensions` class. Call `AddLatticeReplicationApiGrpc` once: its other registrations are `TryAdd`-guarded, but each call appends the authorization interceptor to the gRPC pipeline again, so after two calls every guarded call is authorized twice.
 
 ## Client
 
@@ -66,7 +66,7 @@ The typed client maps these onto the facade model records, so a caller of `Latti
 | Failure | gRPC status |
 |---|---|
 | Caller not authorized (interceptor or facade gate), or a fail-closed tenant resolution | `PermissionDenied` |
-| In-place mode change on an enabled tree; unmet enable precondition | `FailedPrecondition` |
+| In-place mode change on an enabled tree; unmet enable or disable precondition | `FailedPrecondition` |
 | Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
 | Any other fault | `Internal` (with a non-leaking message) |
