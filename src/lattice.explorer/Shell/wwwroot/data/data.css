@@ -1,0 +1,313 @@
+/*
+ * Orleans.Lattice Explorer - the Data area.
+ *
+ * The tree directory and a tree's workspace: toolbars, the entry and value
+ * cells, the history timeline drawn on a spine, diffs, the metrics figures,
+ * tag lists and notes. Drawn in the order-diagram world (DESIGN.md): hairline
+ * depth, booktabs tables from the primitives, one marker for "you are here"
+ * and "selected" (always with a weight), no cards, no shadows.
+ *
+ * lt-data-* classes only. No width query appears here: below the small
+ * breakpoint the layout marks its root lt-shell--compact, and the rules that
+ * change there hang off that class. Plain ASCII only.
+ */
+
+/* ==========================================================================
+   1. Toolbars, headings and notes
+   ========================================================================== */
+
+.lt-data-toolbar__grow {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.lt-data-toolbar__status {
+  margin-inline-start: auto;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.lt-shell--compact .lt-data-toolbar__status {
+  margin-inline-start: 0;
+}
+
+.lt-data-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-1);
+}
+
+.lt-data-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-3);
+}
+
+.lt-data-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-1) var(--lt-space-4);
+  margin: 0 0 var(--lt-space-4);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-section-title {
+  margin: var(--lt-space-5) 0 var(--lt-space-3);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+  overflow-wrap: anywhere;
+}
+
+.lt-data-subtitle {
+  margin: var(--lt-space-4) 0 var(--lt-space-2);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-data-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  max-width: var(--lt-measure);
+  margin: var(--lt-space-2) 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+}
+
+/* ==========================================================================
+   2. Keys, values and entries
+   ========================================================================== */
+
+.lt-data-key {
+  overflow-wrap: anywhere;
+}
+
+.lt-data-inline {
+  display: block;
+  max-width: 48ch;
+  overflow: hidden;
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-shell--compact .lt-data-inline {
+  max-width: none;
+}
+
+.lt-data-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-3);
+  margin: var(--lt-space-3) 0;
+}
+
+.lt-data-pager__position {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.lt-data-entry {
+  margin-top: var(--lt-space-5);
+  padding-top: var(--lt-space-2);
+  border-top: 1px solid var(--lt-rule-strong);
+}
+
+.lt-data-entry__key {
+  margin: 0 0 var(--lt-space-2);
+  font-size: var(--lt-text-md);
+}
+
+.lt-data-value,
+.lt-data-diff {
+  max-height: 32rem;
+  margin: var(--lt-space-3) 0;
+  padding: var(--lt-space-3);
+  overflow: auto;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-code-bg);
+  color: var(--lt-code-ink);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+  line-height: var(--lt-leading-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lt-data-diff__line {
+  display: block;
+}
+
+.lt-data-diff__line--added {
+  color: var(--lt-op-state-healthy);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-data-diff__line--removed {
+  color: var(--lt-op-state-failed);
+  text-decoration: line-through;
+}
+
+.lt-data-link {
+  min-height: var(--lt-op-control-height);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--lt-link);
+  font: inherit;
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.lt-data-link[aria-pressed="true"] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-data-link:focus-visible,
+.lt-data-tag:focus-visible,
+.lt-data-value:focus-visible,
+.lt-data-diff:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+/* ==========================================================================
+   3. The history timeline: revisions as stops on a spine
+   ========================================================================== */
+
+.lt-data-timeline {
+  margin: var(--lt-space-3) 0;
+  padding: 0;
+  list-style: none;
+  border-inline-start: var(--lt-diagram-edge-width) solid var(--lt-diagram-edge);
+}
+
+.lt-data-timeline__rev {
+  padding: var(--lt-space-2) 0 var(--lt-space-2) var(--lt-space-4);
+}
+
+.lt-data-timeline__rev + .lt-data-timeline__rev {
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-data-timeline__rev[aria-current] {
+  box-shadow: inset var(--lt-diagram-ring-width) 0 0 var(--lt-marker);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-data-timeline__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+}
+
+.lt-data-timeline__time {
+  font-family: var(--lt-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.lt-data-timeline__kind {
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-data-timeline__meta {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-timeline__divider {
+  padding: var(--lt-space-1) 0 var(--lt-space-1) var(--lt-space-4);
+  border-top: 1px dashed var(--lt-rule-strong);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-members {
+  margin: var(--lt-space-2) 0;
+  padding-inline-start: var(--lt-space-4);
+  font-size: var(--lt-text-sm);
+}
+
+/* ==========================================================================
+   4. Figures, lists and tags
+   ========================================================================== */
+
+.lt-data-figure {
+  margin: var(--lt-space-4) 0 var(--lt-space-5);
+}
+
+.lt-data-list {
+  margin: 0 0 var(--lt-space-3);
+  padding-inline-start: var(--lt-space-4);
+}
+
+.lt-data-list li {
+  min-height: var(--lt-op-row-height);
+}
+
+.lt-data-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  margin: 0 0 var(--lt-space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.lt-data-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-3);
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  color: var(--lt-ink);
+  text-decoration: none;
+}
+
+.lt-data-tag[aria-current] {
+  border-color: var(--lt-ink);
+  background: var(--lt-marker);
+  color: var(--lt-marker-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+/* ==========================================================================
+   5. Forced colours - the platform's palette replaces ours; keep every cue
+   ========================================================================== */
+
+@media (forced-colors: active) {
+  .lt-data-tag[aria-current] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .lt-data-timeline__rev[aria-current] {
+    border-inline-start: var(--lt-diagram-ring-width) solid Highlight;
+  }
+}

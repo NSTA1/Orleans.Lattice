@@ -1,0 +1,79 @@
+@page "/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@page "/t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@inherits ExplorerPage
+
+@*
+    A tree's workspace. The heading is the logical tree id in mono (a physical
+    id never appears), with the tree's kind and owning app beside it and a one
+    line summary below; then the tab row, whose selection is the ?tab= query
+    parameter so every tab has its own address.
+*@
+
+<PageTitle>@(_tree?.DisplayName ?? "Data") - Orleans.Lattice Explorer</PageTitle>
+
+@if (_missing)
+{
+    <NotFoundPage />
+}
+else if (_error is not null)
+{
+    <h1 class="lt-shell-page-title lt-shell-mono">@Address.TreeId</h1>
+    <LtEmptyState Title="This tree did not load" HeadingLevel="2">
+        <ChildContent>@_error</ChildContent>
+        <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_tree is null || _workspace is null)
+{
+    <LtSkeleton Lines="6" Label="Loading the tree" />
+}
+else
+{
+    <div class="lt-data-heading">
+        <h1 class="lt-shell-page-title lt-shell-mono">@_tree.DisplayName</h1>
+        <LtStatusPill Text="@_tree.KindText" />
+        @if (_tree.AppSlug is { } slug)
+        {
+            <LtStatusPill Text="@($"app: {slug}")" />
+        }
+    </div>
+    <p class="lt-data-meta">
+        @if (_tree.AppSlug is { } owner)
+        {
+            <span>Owned by app <a class="lt-shell-mono" href="@_workspace.Href(ExplorerAddress.ForArea(DataArea.AppsAreaKey, owner))">@owner</a></span>
+        }
+        @if (_tree.Kind == DataTreeKind.View)
+        {
+            <span>
+                View of
+                @if (_source is not null)
+                {
+                    <a class="lt-shell-mono" href="@_workspace.Href(_source.Address)">@_source.LogicalId</a>
+                }
+                else
+                {
+                    <span>a tree you cannot see</span>
+                }
+            </span>
+        }
+        @if (_tree.ShardCount is { } shards)
+        {
+            <span>@DataArea.Plural(shards, "shard")</span>
+        }
+        @if (_liveKeys is { } keys)
+        {
+            <span>@DataArea.Plural(keys, "live key")</span>
+        }
+    </p>
+
+    <CascadingValue Value="_workspace">
+        <LtTabs Label="@($"{_tree.DisplayName} workspace")" ActiveId="@_workspace.Tab" ActiveIdChanged="OnTabChanged">
+            <LtTab Id="@DataTabs.Keys" Title="Keys"><DataKeysPanel /></LtTab>
+            <LtTab Id="@DataTabs.History" Title="History"><DataHistoryPanel /></LtTab>
+            <LtTab Id="@DataTabs.Metrics" Title="Metrics"><DataMetricsPanel /></LtTab>
+            <LtTab Id="@DataTabs.DeadLetters" Title="Dead letters"><DataDeadLettersPanel /></LtTab>
+            <LtTab Id="@DataTabs.TagIndexes" Title="Tag indexes"><DataTagIndexesPanel /></LtTab>
+            <LtTab Id="@DataTabs.Views" Title="Views"><DataViewsPanel /></LtTab>
+        </LtTabs>
+    </CascadingValue>
+}
