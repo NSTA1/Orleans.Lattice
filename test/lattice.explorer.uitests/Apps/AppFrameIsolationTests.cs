@@ -168,6 +168,33 @@ public sealed class AppFrameIsolationTests(string engine) : UiTestBase(engine)
     }
 
     /// <summary>
+    /// An app role is held by binding, never by capability (#3902): a viewer who holds
+    /// broad rights of their own is told they hold <c>viewer</c> and nothing else, so the
+    /// task board, which shows its write controls only to an <c>editor</c>, shows them none.
+    /// </summary>
+    [Test]
+    public async Task A_viewer_who_holds_broad_rights_is_told_only_viewer_and_shown_no_write_controls()
+    {
+        var world = await UiHosts.WorldAsync();
+        await world.InstallTaskBoardAsync();
+
+        var page = await NewPageAsync(world.Head, WorldIdentities.Bob);
+        await AppFrames.OpenAsync(page, world.Head, TaskBoardApp.Slug);
+        var frame = await AppFrames.DocumentAsync(page);
+
+        var roles = await frame.EvaluateAsync<string[]>(
+            "() => lattice.ready.then(() => lattice.request('context.read', {})).then(context => context.roles)");
+        Assert.That(roles, Is.EqualTo(new[] { "viewer" }), "The frame was told a role the viewer is not bound to.");
+
+        var board = AppFrames.Content(page);
+        await Expect(board.Locator("#tb-read-only")).ToBeVisibleAsync();
+        await Expect(board.Locator("#tb-add")).ToBeHiddenAsync();
+        await Expect(board.Locator("#tb-add-title")).ToBeHiddenAsync();
+        await Expect(board.Locator("#tb-add-button")).ToBeHiddenAsync();
+        await Expect(board.Locator("#tb-detail-actions")).ToBeHiddenAsync();
+    }
+
+    /// <summary>
     /// Compares a bundle's report with the expected one, attempt by attempt. Where the
     /// fixture expects <c>denied</c>, the AppKit inside the frame may already have refused
     /// the request as <c>invalid</c> - a tree name that is not a manifest name, an operation
