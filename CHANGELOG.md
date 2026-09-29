@@ -68,6 +68,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - Every call asserts the page's tenant.** Each cluster call carries the active tenant, a switch rebuilds the page and forgets what was read, a signed-in caller whose tenant is not established sees no tenant-scoped page, and an operator can reach the reserved default tenant. ([#3896](https://github.com/NSTA1/Orleans.Lattice/issues/3896)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Apps - An app role is held by binding.** A member of a bound group holds the role; the caller's other rights never add one, and the access gate is asked only to take it away, so a deny on a bound member withholds the role in the workspace and the app's MCP tools and is enforced on the bridge. ([#3902](https://github.com/NSTA1/Orleans.Lattice/issues/3902)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Mcp.Apps`)
+
 - **CRDT - Counter component overflow.** A G-Counter or PN-Counter advance past `long.MaxValue` wrapped the component negative, so the pointwise-max merge discarded it and the write succeeded having counted nothing. It now throws `OverflowException` and writes nothing. ([#3926](https://github.com/NSTA1/Orleans.Lattice/issues/3926)) (`Orleans.Lattice`)
 
 - **Observability - Telemetry step overflow.** A range query whose step was too large to multiply, on a catalogue entry declaring no step ceiling, threw `OverflowException`. The rate window and defaulted span now saturate, so the deployment step guardrail rejects it as a bounds violation. ([#3924](https://github.com/NSTA1/Orleans.Lattice/issues/3924)) (`Orleans.Lattice.Api.Telemetry`)

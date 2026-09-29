@@ -187,7 +187,7 @@ siloBuilder.AddLatticeAppBridgeApi(options => options.RateLimitPermitLimit = 200
 | Contract | Who may call it | What it serves |
 |---|---|---|
 | `ILatticeAppCatalog` | Callers holding `AppInstall` over `LatticeScope.ClusterWide()`, the same gate as the control facade | The configured app sources (`ListSourcesAsync`); what each source offers, joined with the active tenant's installs (`ListAvailableAsync`, filtered by source key, text, and `All`, `Installed`, `Available` or `Updates`); a pre-install description of an exact source version (`DescribeFromSourceAsync`); the pre-install icon (`GetIconAsync`). |
-| `ILatticeAppWorkspace` | Any caller who holds at least one app-owned compiled rule of an enabled install in the active tenant | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
+| `ILatticeAppWorkspace` | Any caller who holds at least one role of an enabled install in the active tenant: a group it belongs to is bound to the role, and no deny takes the role away | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
 | `ILatticeAppBridge` | Per operation (see below) | Get, scan, set and delete on an app's own logical trees, on behalf of that app's UI. |
 
 A caller that fails the gate learns nothing. The catalogue refuses the call before

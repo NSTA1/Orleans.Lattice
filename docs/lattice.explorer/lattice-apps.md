@@ -69,6 +69,24 @@ a role leaves lose that role. For an installed or disabled app the bindings take
 effect when it is enabled. The change goes through
 [`ILatticeAppRoleBindings`](../lattice.api.apps/README.md#re-binding-roles).
 
+### Who holds an app role
+
+A user holds an app role when a membership group they belong to is bound to that role,
+and the role confers something within the consented ceiling. That is the only way to
+hold one: rights granted through any other rule never add an app role, so an operator
+with broad rights of their own sees only the apps whose roles they are bound to, and an
+app's UI is never told a role the bridge would then refuse.
+
+The cluster's access rules are consulted only after the binding holds, and only to take
+a role away. An explicit deny on a bound member, on the role's trees or cluster-wide,
+removes the role from **Your apps**, from the `roles` an app's UI is told, and from the
+app's MCP tools. A deny narrower than the role, such as one key of a tree, leaves the
+role held; it is enforced on each bridge call, because every bridge call runs under the
+user's own identity.
+
+One definition serves every surface, so Your apps, the app frame and the MCP tools
+cannot disagree about who holds a role.
+
 App-supplied text (names, descriptions, categories) is shown as text only, and icons
 only through `<img>`. An app can never inject markup into the Explorer.
 
@@ -144,7 +162,9 @@ const page = await lattice.request("data.read", { action: "scan", tree: "tasks",
 Guidance:
 
 - **Role-driven controls.** Decide which controls to show from the `roles` that
-  `context.read` returns. Treat any `denied` as the cluster's final word. Never probe
+  `context.read` returns: they are exactly the roles the user holds by binding, less any
+  a deny took away. Treat any `denied` as the cluster's final word, since a deny
+  narrower than a role still refuses individual calls. Never probe
   permissions with a write: every request is enforced by the cluster, so a wrong guess
   can only hide a control, never grant one.
 - **No forms.** The sandbox has no `allow-forms`, so a `<form>` never submits. Use
