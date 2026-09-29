@@ -9,7 +9,8 @@ app UI.
 ## The Apps area
 
 `/apps` opens on **Your apps**: the enabled installs in the active tenant where the
-signed-in user holds at least one app role. A caller who holds `AppInstall` also sees
+signed-in user holds at least one app role, that is, is a member of a group bound to
+one of its roles. A caller who holds `AppInstall` also sees
 the **Catalogue** view, an **Install app...** control (palette command `apps.install`),
 and a call-out for any installed app whose activation failed, with a link to review
 and re-consent it.
@@ -144,7 +145,10 @@ const page = await lattice.request("data.read", { action: "scan", tree: "tasks",
 Guidance:
 
 - **Role-driven controls.** Decide which controls to show from the `roles` that
-  `context.read` returns. Treat any `denied` as the cluster's final word. Never probe
+  `context.read` returns. A role is listed only when the user is a member of a group
+  bound to it, which is exactly what the bridge enforces, so a user with broad rights
+  of their own who is bound only as a viewer is told `viewer` alone. Treat any
+  `denied` as the cluster's final word. Never probe
   permissions with a write: every request is enforced by the cluster, so a wrong guess
   can only hide a control, never grant one.
 - **No forms.** The sandbox has no `allow-forms`, so a `<form>` never submits. Use

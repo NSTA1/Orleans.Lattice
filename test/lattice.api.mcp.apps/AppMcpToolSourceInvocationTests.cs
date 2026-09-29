@@ -28,7 +28,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task An_advertised_tool_invokes_the_apps_implementation()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         var tool = await host.SessionToolAsync("notes_search");
         var result = await host.InvokeAsync(tool!);
@@ -45,13 +45,13 @@ public sealed class AppMcpToolSourceInvocationTests
     }
 
     [Test]
-    public async Task Revoking_the_grant_after_advertisement_denies_the_invocation()
+    public async Task Revoking_the_membership_after_advertisement_denies_the_invocation()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = await host.SessionToolAsync("notes_search");
 
-        host.Gate.RevokeAll();
+        host.Member("alice");
 
         Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!));
     }
@@ -60,7 +60,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task Disabling_the_app_after_advertisement_denies_the_invocation()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = await host.SessionToolAsync("notes_search");
 
         host.Publish(2, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, AppRegistryLifecycleState.Disabled));
@@ -73,7 +73,7 @@ public sealed class AppMcpToolSourceInvocationTests
     {
         var host = NotesHost();
         host.Source.Add(AppMcpTestData.ReaderManifest(Notes, AppMcpTestData.V2, "search"));
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = await host.SessionToolAsync("notes_search");
 
         host.Publish(2, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V2));
@@ -85,7 +85,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task A_tool_advertised_to_one_tenant_is_denied_when_invoked_under_another()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = await host.SessionToolAsync("notes_search");
 
         Assert.ThrowsAsync<McpException>(() => host.InvokeAsync(tool!, TenantId.Parse("acme")));
@@ -95,7 +95,7 @@ public sealed class AppMcpToolSourceInvocationTests
     public async Task The_current_region_is_an_accepted_target_but_a_peer_region_is_rejected()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = (await host.SessionToolAsync("notes_search"))!;
         var router = new LatticeApiMcpRegionRouter("home", [
             new LatticeApiMcpRegionDefinition { RegionId = "home", ClusterId = "c1", IsCurrent = true, Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.Data] = null } },

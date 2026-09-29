@@ -34,8 +34,9 @@ namespace Orleans.Lattice.Api.Mcp.Apps;
 /// re-materialised per session.
 /// </para>
 /// <para>
-/// <b>Fail-closed.</b> Without a registry projection, an app source, an access gate or
-/// any provider the source offers nothing. A denied tenant resolution offers nothing. A
+/// <b>Fail-closed.</b> Without a registry projection, an app source, an access gate (the
+/// app-owned rules a role is held through are enforced nowhere without one) or any
+/// provider the source offers nothing. A caller with no resolved group holds no role. A denied tenant resolution offers nothing. A
 /// transient backend fault surfaces as a retryable discovery error rather than a falsely
 /// narrow tool list; any other fault offers nothing and is logged.
 /// </para>
@@ -147,7 +148,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
                     }
                     else
                     {
-                        allowed = await AppMcpRoleGate.IsHeldAsync(app.Roles[role], _gate!, subject, cancellationToken).ConfigureAwait(false);
+                        allowed = AppMcpRoleGate.IsHeld(app.Roles[role], subject);
                         if (role < 32)
                         {
                             evaluated |= 1u << role;
@@ -217,7 +218,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
 
             var subject = await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
                 .ConfigureAwait(false);
-            return await AppMcpRoleGate.IsHeldAsync(app.Roles[current.RoleIndex], _gate!, subject, cancellationToken).ConfigureAwait(false);
+            return AppMcpRoleGate.IsHeld(app.Roles[current.RoleIndex], subject);
         }
         catch (LatticeTenantAccessDeniedException)
         {

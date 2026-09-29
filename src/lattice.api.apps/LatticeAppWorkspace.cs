@@ -14,9 +14,11 @@ namespace Orleans.Lattice.Api.Apps;
 /// <remarks>
 /// <para>
 /// <b>Gate.</b> Every verb evaluates the caller through the shared <see cref="AppRoleGrantEvaluator"/> - the
-/// evaluation that gates the app MCP tools - against the install recorded in the current registry snapshot,
-/// and serves nothing unless the caller holds at least one role of that enabled install. The evaluation
-/// happens before any source is read.
+/// evaluation that gates the app MCP tools and that the app bridge derives from - against the install recorded
+/// in the current registry snapshot, and serves nothing unless the caller holds at least one role of that
+/// enabled install. A role is held by binding (membership of a group bound to it), never by rights the caller
+/// holds outside the app's own rules, so the roles reported here are exactly the roles the bridge honours. The
+/// evaluation happens before any source is read.
 /// </para>
 /// <para>
 /// <b>Fail closed, and a denial looks like absence.</b> A missing membership context, a missing collaborator, a
@@ -83,8 +85,7 @@ internal sealed class LatticeAppWorkspace : ILatticeAppWorkspace
                     continue;
                 }
 
-                var roles = await AppRoleGrantEvaluator.EvaluateAsync(caller.Gate, install, caller.Subject, cancellationToken)
-                    .ConfigureAwait(false);
+                var roles = AppRoleGrantEvaluator.Evaluate(install, caller.Subject);
                 if (roles.IsEmpty)
                 {
                     continue;
@@ -239,7 +240,7 @@ internal sealed class LatticeAppWorkspace : ILatticeAppWorkspace
     /// </summary>
     private async ValueTask<Caller?> ResolveCallerAsync(CancellationToken cancellationToken)
     {
-        if (_membership is null or NullLatticeMembershipContext || _tenants is null || !_evaluator.CanServe || _evaluator.Gate is not { } gate)
+        if (_membership is null or NullLatticeMembershipContext || _tenants is null || !_evaluator.CanServe)
         {
             return null;
         }
@@ -255,8 +256,8 @@ internal sealed class LatticeAppWorkspace : ILatticeAppWorkspace
         }
 
         var subject = await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken).ConfigureAwait(false);
-        return new Caller(tenant, subject, gate);
+        return new Caller(tenant, subject);
     }
 
-    private readonly record struct Caller(TenantId Tenant, LatticeSubject Subject, ILatticeAccessGate Gate);
+    private readonly record struct Caller(TenantId Tenant, LatticeSubject Subject);
 }

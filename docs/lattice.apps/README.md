@@ -48,6 +48,14 @@ The package is the engine. Operators reach it through companion packages:
   individual users. Role hierarchy is expressed by nesting groups in
   [`Orleans.Lattice.Membership`](../lattice.membership/README.md), so the manifest
   has no inheritance construct and compilation is a flat, total function.
+- **A role is held by binding.** A caller holds an app role if and only if the
+  app-owned rules compiled for that role's bindings grant it: the caller is a member
+  of a group bound to the role, and the role still confers something within the
+  ceiling. Rights the caller holds under any other rule, however broad, never make it
+  hold an app role. The app workspace (and so the roles an app's UI is told it
+  holds), the app MCP tool gate and the app bridge all use this one definition, so a
+  user bound only as a viewer is a viewer everywhere. Re-binding a role moves it on
+  the next evaluation.
 - **Capability ceiling.** Every install records a ceiling of allowed operations and
   operator-approved exception scopes, pinned to the installed version. Every
   compiled rule is checked against it; a manifest that asks for more fails

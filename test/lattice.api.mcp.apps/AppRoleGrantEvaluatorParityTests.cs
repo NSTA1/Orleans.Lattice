@@ -35,35 +35,52 @@ public sealed class AppRoleGrantEvaluatorParityTests
         ["notes_edit"] = "editor",
     };
 
-    private static readonly string[] GrantMatrix =
+    private static readonly AppRoleBinding[] Bindings =
     [
-        "none", "read-notes", "write-notes", "read-write-notes", "read-write-drafts", "other-subject", "filtered-everywhere",
+        AppRoleBinding.Create("reader", "g-readers"),
+        AppRoleBinding.Create("writer", "g-writers"),
+        AppRoleBinding.Create("editor", "g-editors"),
     ];
 
-    private static void Apply(string grantCase, GrantingAccessGate gate)
+    private static readonly string[] GrantMatrix =
+    [
+        "none", "reader", "writer", "editor", "reader-and-writer", "unbound-group", "broad-rights-no-group", "other-subject", "filtered-everywhere",
+    ];
+
+    private static void Apply(string grantCase, AppMcpTestHost host)
     {
         switch (grantCase)
         {
-            case "read-notes": gate.Grant("alice", "a/notes/notes", LatticeOperation.Read); break;
-            case "write-notes": gate.Grant("alice", "a/notes/notes", LatticeOperation.Write); break;
-            case "read-write-notes": gate.Grant("alice", "a/notes/notes", LatticeOperation.Read | LatticeOperation.Write); break;
-            case "read-write-drafts": gate.Grant("alice", "a/notes/drafts", LatticeOperation.Read | LatticeOperation.Write); break;
-            case "other-subject": gate.Grant("bob", "a/notes/notes", LatticeOperation.Read | LatticeOperation.Write); break;
-            case "filtered-everywhere": gate.Override = static _ => LatticeAccessDecision.Filtered(static _ => false); break;
+            case "reader": host.Member("alice", "g-readers"); break;
+            case "writer": host.Member("alice", "g-writers"); break;
+            case "editor": host.Member("alice", "g-editors"); break;
+            case "reader-and-writer": host.Member("alice", "g-writers", "g-readers"); break;
+            case "unbound-group": host.Member("alice", "g-operators"); break;
+            case "broad-rights-no-group":
+                host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read | LatticeOperation.Write);
+                host.Gate.Grant("alice", "a/notes/drafts", LatticeOperation.Read | LatticeOperation.Write);
+                break;
+            case "other-subject": host.Member("bob", "g-readers", "g-writers", "g-editors"); break;
+            case "filtered-everywhere":
+                host.Member("alice", "g-readers");
+                host.Gate.Override = static _ => LatticeAccessDecision.Filtered(static _ => false);
+                break;
         }
     }
+
     [TestCaseSource(nameof(GrantMatrix))]
     public async Task The_tool_gate_offers_exactly_the_tools_of_the_roles_the_evaluator_reports_held(string grantCase)
     {
         var host = new AppMcpTestHost()
             .Provide(Notes, AppMcpTestData.Tool("read"), AppMcpTestData.Tool("write"), AppMcpTestData.Tool("edit"))
-            .Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1));
+            .Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, bindings: Bindings));
         host.Source.Add(ThreeRoleManifest());
-        Apply(grantCase, host.Gate);
+        Apply(grantCase, host);
 
         var advertised = (await host.AdvertisedAsync()).Where(ToolRoles.ContainsKey).Select(t => ToolRoles[t]).ToHashSet();
         var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source, host.Gate);
-        var evaluation = await evaluator.EvaluateAsync(TenantId.Default, Notes, new LatticeSubject("alice"), CancellationToken.None);
+        var alice = new LatticeSubject("alice", host.Membership.Groups.TryGetValue("alice", out var groups) ? groups : null);
+        var evaluation = await evaluator.EvaluateAsync(TenantId.Default, Notes, alice, CancellationToken.None);
 
         Assert.That(evaluation, Is.Not.Null);
         Assert.That(evaluation!.HeldRoles, Is.EquivalentTo(advertised));
@@ -77,7 +94,7 @@ public sealed class AppRoleGrantEvaluatorParityTests
             .Provide(Notes, AppMcpTestData.Tool("read"))
             .Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, AppRegistryLifecycleState.Disabled));
         host.Source.Add(ThreeRoleManifest());
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source, host.Gate);
 

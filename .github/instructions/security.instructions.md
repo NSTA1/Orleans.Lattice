@@ -175,11 +175,17 @@ gate will tell you if you forget.
   policy store rejects any other write or delete of such an id with
   `LatticeAppOwnedRuleException` before it issues any read or write, so a rejected
   delete does not disclose whether the rule exists.
-- App MCP tools are gated per tool on the declared role's compiled grants, and the
-  same evaluation runs when a tool is advertised and again when it is invoked, against
-  the current registry snapshot - the lock-step rule of the MCP surface above. Only an
-  unfiltered allow holds a role's operation on its scope; a key-filtered decision
-  fails closed, on a prefix scope exactly as on a tree scope (#3863).
+- An app role is held **by binding, not by capability** (#3902): a caller holds a
+  role if and only if it is a member of a group the install binds to that role, and
+  the role still confers an operation within the ceiling. There is one definition,
+  `AppRoleGate` compiled by `AppRoleGrantEvaluator`, and the app workspace role report,
+  the app MCP tool gate and the app bridge's app-owned grants all derive from it. Rights
+  the caller holds under any other rule - including a key-filtered allow that spells a
+  prefix (#3863) - never make it hold a role, and the access gate is not consulted to
+  decide one; do not reintroduce a capability probe there. No membership answer, an
+  anonymous caller or an unreadable binding means no role. App MCP tools run the same
+  evaluation when a tool is advertised and again when it is invoked, against the
+  current registry snapshot - the lock-step rule of the MCP surface above.
 - Alias changes are bounded by tree ownership. The tree registry consults the core
   `ITreeOwnershipGuard` seam on every alias assignment - system-origin maintenance
   included - after its namespace and target-control checks: a denial throws

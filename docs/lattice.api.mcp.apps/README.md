@@ -78,16 +78,20 @@ registration would let a second contribution shadow the first.
 ## Authorization
 
 Like every other Lattice MCP tool, app tools are offered only to an authenticated
-caller. Every app tool is advertised to a caller only when the shared access gate allows
-the caller **every** operation of the tool's declared role on at least one of that
-role's scopes. Only an unfiltered allow holds an operation: a key-filtered allow, which
-admits only some keys of the scope, never does, on a prefix scope as on a tree scope.
-The scopes are resolved exactly as the role compiler resolves them -
-the app's own `a/{app}/{tree}`, an adopted tree, or another app's tree - and composed
-for the caller's active tenant. Because the session's tool collection serves both
+caller. Every app tool is advertised to a caller only when the caller **holds the
+tool's declared role** in the caller's active tenant. A caller holds a role if and only
+if it is a member of a group the install binds to that role - the app-owned rules
+compiled for the role's bindings grant it - and the role still confers an operation
+within the install's ceiling. Rights the caller holds under any other rule, however
+broad (a cluster-wide allow, or a key-filtered allow that happens to spell a prefix),
+never make it hold an app role, and the access gate is not consulted to decide one.
+This is the same definition the app workspace reports and the app bridge enforces (see
+[`Orleans.Lattice.Api.Apps`](../lattice.api.apps/README.md#catalogue-workspace-and-bridge)).
+Because the session's tool collection serves both
 `tools/list` and `tools/call`, a tool withheld at advertisement is unreachable at
 invocation, and the decision is checked again at invocation against the current
-registry state, so disabling an app or revoking a grant takes effect mid-session.
+registry state and the caller's current membership, so disabling an app, re-binding a
+role or leaving a bound group takes effect mid-session.
 The tool itself then runs under the caller's credential, so every data-plane call it
 makes is authorized again by the gate.
 

@@ -26,7 +26,7 @@ internal sealed class AppMcpTestHost
             .AddSingleton<IAppRegistryProjection>(Projection)
             .AddSingleton<IAppSource>(Source)
             .AddSingleton<ILatticeAccessGate>(Gate)
-            .AddSingleton<ILatticeMembershipContext, CredentialEchoMembershipContext>()
+            .AddSingleton<ILatticeMembershipContext>(Membership)
             .AddSingleton<ITenantContextResolver, AmbientTenantResolver>();
         services.AddSingleton<IEnumerable<IAppMcpToolProvider>>(_ => Providers);
         if (registerApps)
@@ -35,6 +35,16 @@ internal sealed class AppMcpTestHost
     }
 
     public FakeCredentialBridge Bridge { get; }
+
+    /// <summary>The membership context; <see cref="Member"/> sets a principal's group closure.</summary>
+    public CredentialEchoMembershipContext Membership { get; } = new();
+
+    /// <summary>Makes <paramref name="principal"/> a member of exactly <paramref name="groups"/>.</summary>
+    public AppMcpTestHost Member(string principal, params string[] groups)
+    {
+        Membership.Groups[principal] = groups;
+        return this;
+    }
 
     public FakeAppRegistryProjection Projection { get; } = new(CompiledAppRegistrySnapshot.Empty);
 

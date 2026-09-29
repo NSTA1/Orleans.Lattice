@@ -44,12 +44,20 @@ internal static class AppMcpTestData
             [Role("reader", LatticeOperation.Read, TreeScope("notes"))],
             toolNames.Select(n => ToolDecl(n, "reader")).ToArray());
 
+    /// <summary>The bindings a record carries by default: <c>reader</c> to <c>g-readers</c>, <c>writer</c> to <c>g-writers</c>.</summary>
+    public static readonly AppRoleBinding[] DefaultBindings =
+    [
+        AppRoleBinding.Create("reader", "g-readers"),
+        AppRoleBinding.Create("writer", "g-writers"),
+    ];
+
     public static AppRegistryRecord Record(
         TenantId tenant,
         AppSlug slug,
         AppVersion version,
         AppRegistryLifecycleState state = AppRegistryLifecycleState.Enabled,
-        AppVersion? ceilingVersion = null) =>
+        AppVersion? ceilingVersion = null,
+        IReadOnlyList<AppRoleBinding>? bindings = null) =>
         new()
         {
             Isolation = new AppIsolationContext { Tenant = tenant, ClusterId = "test-cluster" },
@@ -58,6 +66,7 @@ internal static class AppMcpTestData
             Provenance = new AppProvenance(),
             Ceiling = AppCapabilityCeiling.Structural(LatticeOperation.Read | LatticeOperation.Write),
             CeilingVersion = ceilingVersion ?? version,
+            RoleBindings = bindings ?? DefaultBindings,
             State = state,
             Revision = 1,
         };

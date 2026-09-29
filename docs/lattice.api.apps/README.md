@@ -187,7 +187,7 @@ siloBuilder.AddLatticeAppBridgeApi(options => options.RateLimitPermitLimit = 200
 | Contract | Who may call it | What it serves |
 |---|---|---|
 | `ILatticeAppCatalog` | Callers holding `AppInstall` over `LatticeScope.ClusterWide()`, the same gate as the control facade | The configured app sources (`ListSourcesAsync`); what each source offers, joined with the active tenant's installs (`ListAvailableAsync`, filtered by source key, text, and `All`, `Installed`, `Available` or `Updates`); a pre-install description of an exact source version (`DescribeFromSourceAsync`); the pre-install icon (`GetIconAsync`). |
-| `ILatticeAppWorkspace` | Any caller who holds at least one app-owned compiled rule of an enabled install in the active tenant | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
+| `ILatticeAppWorkspace` | Any caller who holds at least one role of an enabled install in the active tenant, by membership of a group bound to it | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
 | `ILatticeAppBridge` | Per operation (see below) | Get, scan, set and delete on an app's own logical trees, on behalf of that app's UI. |
 
 A caller that fails the gate learns nothing. The catalogue refuses the call before
@@ -195,6 +195,15 @@ it reads any source or the registry. The workspace answers as if the app did not
 exist. The workspace description excludes the ceiling, the approved exception
 scopes, consent history, role-to-group bindings and every physical tree id: those
 remain behind `AppInstall` on the control facade.
+
+**Who holds a role.** A caller holds a role of an install if and only if it is a
+member of a group the install binds to that role (the app-owned rules compiled for the
+role's bindings grant it). Rights the caller holds under any other rule never make it
+hold an app role, and the access gate is not consulted to decide one. The roles
+`ListMyAppsAsync` reports, the app MCP tool gate and the bridge's app-owned grants
+(step 4 below) all derive from this one definition, so they cannot disagree. No
+membership answer, an anonymous caller, an unreadable binding or a role the ceiling no
+longer covers means no role.
 
 When the same slug is offered by more than one source, the catalogue lists one row
 per source. An install names its source with `AppInstallRequest.SourceKey`. Without

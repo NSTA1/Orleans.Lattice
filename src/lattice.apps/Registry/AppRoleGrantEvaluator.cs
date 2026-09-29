@@ -5,11 +5,12 @@ using System.Runtime.InteropServices;
 namespace Orleans.Lattice.Apps;
 
 /// <summary>
-/// The shared app-role evaluation: whether a caller holds a role of an enabled install, evaluated against
-/// the roles of the installed manifest (the scopes the role compiler writes as the app-owned
-/// <c>app:{slug}</c> rules) through the shared access gate, for the install recorded in the current
-/// registry snapshot. The app MCP tool surface gates each tool with it, and the app workspace gates every
-/// read with it, so the two surfaces can never disagree about who holds a role.
+/// The shared app-role evaluation: which roles of an enabled install a caller holds, for the install recorded
+/// in the current registry snapshot. A caller holds a role if and only if the app-owned <c>app:{slug}:</c>
+/// rules compiled for the role's bindings grant it - the caller is a member of a group bound to the role (see
+/// <see cref="AppRoleGate"/>). The app workspace (and so the roles a frame is told it holds), the app MCP tool
+/// gate and the app bridge all derive from the roles compiled here, so no two surfaces can disagree about who
+/// holds a role.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -19,12 +20,19 @@ namespace Orleans.Lattice.Apps;
 /// the same slug cannot substitute the roles.
 /// </para>
 /// <para>
-/// <b>Fail closed.</b> A missing projection, source or gate, an install whose manifest does not resolve to
-/// exactly the installed slug and version, or a source fault, evaluates to no install at all.
+/// <b>Held by binding, not by capability.</b> Rights a caller holds outside the app's own rules never make it
+/// hold an app role, and the access gate is not consulted to decide one. A re-bound role changes who holds it
+/// on the next evaluation, because a re-binding bumps the record revision the compiled roles are cached by.
+/// </para>
+/// <para>
+/// <b>Fail closed.</b> A missing projection, source or gate (without a gate the app-owned rules are enforced
+/// nowhere, so they confer nothing), an install whose manifest does not resolve to exactly the installed slug
+/// and version, or a source fault, evaluates to no install at all. A caller with no resolved group holds no
+/// role, and an unreadable binding binds nothing.
 /// </para>
 /// <para>
 /// <b>Cost.</b> Each install's roles are compiled once per registry record revision and cached; a warm
-/// evaluation resolves no manifest and allocates only the list of held role names.
+/// evaluation resolves no manifest, consults no gate, and allocates only the list of held role names.
 /// </para>
 /// </remarks>
 internal sealed class AppRoleGrantEvaluator
@@ -45,15 +53,17 @@ internal sealed class AppRoleGrantEvaluator
         _gate = gate;
     }
 
-    /// <summary>Whether every collaborator is present; when false, every evaluation reports no install.</summary>
+    /// <summary>
+    /// Whether every collaborator is present; when false, every evaluation reports no install. The gate is
+    /// required although it is not consulted: with no gate registered the app-owned rules are enforced nowhere.
+    /// </summary>
     public bool CanServe => _projection is not null && _source is not null && _gate is not null;
 
-    /// <summary>The shared access gate roles are evaluated through, or null when none is registered.</summary>
-    public ILatticeAccessGate? Gate => _gate;
-
     /// <summary>
-    /// Compiles the roles of <paramref name="manifest"/> for the tenant of <paramref name="record"/>, in
-    /// manifest order.
+    /// Compiles the roles of <paramref name="manifest"/> for <paramref name="record"/>, in manifest order, as
+    /// the role compiler writes them into the app-owned rules: each role's operations within the record's
+    /// consented ceiling, its scopes resolved for the record's tenant, and the distinct groups the record binds
+    /// to it.
     /// </summary>
     /// <param name="record">The install record.</param>
     /// <param name="manifest">The installed manifest.</param>
@@ -64,16 +74,49 @@ internal sealed class AppRoleGrantEvaluator
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(manifest);
         var declared = manifest.Roles ?? [];
+        var ceiling = (record.Ceiling?.AllowedOperations ?? LatticeOperation.None) & AppManifestValidator.RoleOperations;
         var roles = new AppRoleGate[declared.Length];
         for (var i = 0; i < roles.Length; i++)
         {
             var role = declared[i];
+            if (role is null)
+            {
+                roles[i] = new AppRoleGate(LatticeOperation.None, [], []);
+                continue;
+            }
+
             roles[i] = new AppRoleGate(
-                role.Operations,
-                AppRoleScopeResolver.Resolve(record.Slug, role, manifest.Trees ?? [], record.Tenant));
+                role.Operations & ceiling,
+                AppRoleScopeResolver.Resolve(record.Slug, role, manifest.Trees ?? [], record.Tenant),
+                BoundGroups(record.RoleBindings, role.Name));
         }
 
         return roles;
+    }
+
+    /// <summary>The distinct, non-empty group ids <paramref name="bindings"/> bind to <paramref name="roleName"/>, in binding order.</summary>
+    private static string[] BoundGroups(IReadOnlyList<AppRoleBinding>? bindings, string? roleName)
+    {
+        if (bindings is null || bindings.Count == 0 || string.IsNullOrEmpty(roleName))
+        {
+            return [];
+        }
+
+        List<string>? groups = null;
+        foreach (var binding in bindings)
+        {
+            if (binding is null
+                || string.IsNullOrEmpty(binding.GroupId)
+                || !string.Equals(binding.RoleName, roleName, StringComparison.Ordinal)
+                || (groups is not null && groups.Contains(binding.GroupId, StringComparer.Ordinal)))
+            {
+                continue;
+            }
+
+            (groups ??= []).Add(binding.GroupId);
+        }
+
+        return groups is null ? [] : groups.ToArray();
     }
 
     /// <summary>Returns whether <paramref name="record"/> is an install the evaluation considers.</summary>
@@ -160,33 +203,27 @@ internal sealed class AppRoleGrantEvaluator
         if (install is null)
             return null;
 
-        return new AppRoleGrantEvaluation(install, await EvaluateAsync(_gate!, install, subject, cancellationToken).ConfigureAwait(false));
+        return new AppRoleGrantEvaluation(install, Evaluate(install, subject));
     }
 
-    /// <summary>Evaluates which of an install's roles <paramref name="subject"/> holds.</summary>
-    /// <param name="gate">The shared access gate.</param>
+    /// <summary>Evaluates which of an install's roles <paramref name="subject"/> holds, by binding.</summary>
     /// <param name="install">The compiled install.</param>
     /// <param name="subject">The resolved caller.</param>
-    /// <param name="cancellationToken">Cancels the evaluation.</param>
     /// <returns>The names of the held roles, in manifest order; empty when none is held.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="gate"/> or <paramref name="install"/> is null.</exception>
-    public static async ValueTask<ImmutableArray<string>> EvaluateAsync(
-        ILatticeAccessGate gate,
-        AppRoleGrantInstall install,
-        LatticeSubject subject,
-        CancellationToken cancellationToken)
+    /// <exception cref="ArgumentNullException"><paramref name="install"/> is null.</exception>
+    public static ImmutableArray<string> Evaluate(AppRoleGrantInstall install, LatticeSubject subject)
     {
-        ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(install);
         var roles = install.Roles;
+        var declared = install.Manifest.Roles ?? [];
         string[]? held = null;
         var count = 0;
-        for (var i = 0; i < roles.Length; i++)
+        for (var i = 0; i < roles.Length && i < declared.Length; i++)
         {
-            if (!await roles[i].IsHeldAsync(gate, subject, cancellationToken).ConfigureAwait(false))
+            if (!roles[i].IsHeldBy(subject))
                 continue;
             held ??= new string[roles.Length - i];
-            held[count++] = install.Manifest.Roles[i].Name;
+            held[count++] = declared[i].Name;
         }
 
         if (held is null)

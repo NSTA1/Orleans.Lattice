@@ -26,7 +26,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
     public async Task An_enabled_apps_tool_is_advertised_under_its_namespaced_name_when_the_caller_holds_its_role()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities", "notes_search" }));
     }
@@ -35,26 +35,27 @@ public sealed class AppMcpToolSourceDiscoveryTests
     public async Task A_caller_without_the_role_is_not_offered_the_tool()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Write);
+        host.Member("alice", "g-writers");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
     }
 
     [Test]
-    public async Task The_gate_is_asked_under_the_callers_own_credential()
+    public async Task The_role_is_evaluated_for_the_callers_own_credential()
     {
-        var host = NotesHost();
-        host.Gate.Grant("bob", "a/notes/notes", LatticeOperation.Read);
+        var host = NotesHost().Member("bob", "g-readers");
 
-        Assert.That(await host.AdvertisedAsync(), Does.Not.Contain("notes_search"));
-        Assert.That(host.Gate.Requests.Select(r => r.Subject.SubjectId).Distinct(), Is.EqualTo(new[] { "alice" }));
+        Assert.That(await host.AdvertisedAsync(), Does.Not.Contain("notes_search"), "bob's membership is not alice's");
+
+        host.Member("alice", "g-readers");
+        Assert.That(await host.AdvertisedAsync(), Does.Contain("notes_search"));
     }
 
     [Test]
     public async Task An_unauthenticated_session_is_offered_no_app_tools_and_the_source_is_not_consulted()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         host.Bridge.Credential = null;
 
         Assert.Multiple(async () =>
@@ -71,7 +72,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
         host.Source.Add(AppMcpTestData.ReaderManifest(Notes, AppMcpTestData.V1, "search"));
         host.Provide(Notes, AppMcpTestData.Tool("search"));
         host.Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1));
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
     }
@@ -90,15 +91,14 @@ public sealed class AppMcpToolSourceDiscoveryTests
             [AppMcpTestData.ToolDecl("search", "reader"), AppMcpTestData.ToolDecl("put", "writer"), AppMcpTestData.ToolDecl("list", "reader")]));
         host.Provide(Notes, AppMcpTestData.Tool("search"), AppMcpTestData.Tool("put"), AppMcpTestData.Tool("list"));
         host.Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1));
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         var advertised = await host.AdvertisedAsync();
 
         Assert.Multiple(() =>
         {
             Assert.That(advertised, Is.EqualTo(new[] { "lattice_capabilities", "notes_list", "notes_search" }));
-            Assert.That(host.Gate.Requests, Has.Count.EqualTo(2),
-                "Each role is evaluated once per app and session, not once per tool.");
+            Assert.That(host.Gate.Requests, Is.Empty, "A role is held by binding; the access gate is not consulted.");
         });
     }
 
@@ -116,9 +116,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
             1,
             AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1),
             AppMcpTestData.Record(TenantId.Default, Tasks, AppMcpTestData.V1));
-        host.Gate
-            .Grant("alice", "a/notes/notes", LatticeOperation.Read)
-            .Grant("alice", "a/tasks/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         var advertised = await host.AdvertisedAsync();
 
@@ -142,9 +140,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
             1,
             AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1),
             AppMcpTestData.Record(TenantId.Default, Tasks, AppMcpTestData.V1));
-        host.Gate
-            .Grant("alice", "a/notes/notes", LatticeOperation.Read)
-            .Grant("alice", "a/tasks/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities", "notes_search", "tasks_search" }));
 
@@ -172,9 +168,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
             1,
             AppMcpTestData.Record(acme, Notes, AppMcpTestData.V1),
             AppMcpTestData.Record(TenantId.Default, Tasks, AppMcpTestData.V1));
-        host.Gate
-            .Grant("alice", "t/acme/a/notes/notes", LatticeOperation.Read)
-            .Grant("alice", "a/tasks/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.Multiple(async () =>
         {
@@ -190,7 +184,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
     {
         var host = NotesHost();
         host.Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, state));
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
     }
@@ -200,7 +194,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
     {
         var host = NotesHost();
         host.Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, ceilingVersion: AppMcpTestData.V2));
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
     }
@@ -210,7 +204,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
     {
         var host = NotesHost();
         host.Source.Override = slug => AppSourceResult.NotFound(slug);
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         Assert.Multiple(async () =>
         {
@@ -223,7 +217,7 @@ public sealed class AppMcpToolSourceDiscoveryTests
     public async Task The_catalog_is_built_once_per_epoch_and_a_successful_activation_is_reused_across_epochs()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         await host.AdvertisedAsync();
         await host.AdvertisedAsync();
@@ -255,19 +249,19 @@ public sealed class AppMcpToolSourceDiscoveryTests
     }
 
     [Test]
-    public void A_transient_gate_fault_surfaces_as_a_retryable_discovery_error()
+    public void A_transient_membership_fault_surfaces_as_a_retryable_discovery_error()
     {
         var host = NotesHost();
-        host.Gate.Fault = new TimeoutException("gate unreachable");
+        host.Membership.Fault = new TimeoutException("membership unreachable");
 
         Assert.ThrowsAsync<LatticeApiMcpDiscoveryUnavailableException>(() => host.AdvertisedAsync());
     }
 
     [Test]
-    public async Task A_non_transient_gate_fault_offers_no_app_tools()
+    public async Task A_non_transient_membership_fault_offers_no_app_tools()
     {
-        var host = NotesHost();
-        host.Gate.Fault = new InvalidOperationException("broken");
+        var host = NotesHost().Member("alice", "g-readers");
+        host.Membership.Fault = new InvalidOperationException("broken");
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
     }
@@ -276,14 +270,14 @@ public sealed class AppMcpToolSourceDiscoveryTests
     public async Task A_caller_whose_tenant_resolution_is_denied_is_offered_no_app_tools()
     {
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tools = await new AppMcpToolSource(
                 host.Providers,
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<AppMcpToolSource>.Instance,
                 host.Projection,
                 host.Source,
                 host.Gate,
-                new CredentialEchoMembershipContext(),
+                host.Membership,
                 new DenyingTenantResolver())
             .GetPermittedToolsAsync(host.Context(), new LatticeCredential("t", principalId: "alice"), CancellationToken.None);
 

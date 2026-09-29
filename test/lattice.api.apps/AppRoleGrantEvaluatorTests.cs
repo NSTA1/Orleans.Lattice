@@ -19,11 +19,13 @@ public sealed class AppRoleGrantEvaluatorTests
     [Test]
     public async Task EvaluateAsync_reports_the_held_roles_in_manifest_order()
     {
-        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record());
-        harness.Gate.Grant(WorkspaceHarness.Alice, "a/crm/contacts", LatticeOperation.Read);
-        harness.Gate.Grant(WorkspaceHarness.Alice, "a/crm/contacts", LatticeOperation.Write);
+        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record() with
+        {
+            RoleBindings = [AppRoleBinding.Create("writer", "g-writers"), AppRoleBinding.Create("reader", "g-readers")],
+        });
+        var member = new LatticeSubject(WorkspaceHarness.Alice, ["g-writers", "g-readers"]);
 
-        var evaluation = await Evaluator(harness).EvaluateAsync(TenantId.Default, WorkspaceHarness.Crm, Alice, CancellationToken.None);
+        var evaluation = await Evaluator(harness).EvaluateAsync(TenantId.Default, WorkspaceHarness.Crm, member, CancellationToken.None);
 
         Assert.That(evaluation!.HeldRoles, Is.EqualTo(new[] { "reader", "writer" }));
         Assert.That(evaluation.HasGrant, Is.True);
@@ -141,6 +143,56 @@ public sealed class AppRoleGrantEvaluatorTests
         Assert.That(roles, Has.Length.EqualTo(2));
         Assert.That(roles[0].Scopes.Select(s => s.TreeId), Is.EqualTo(new[] { "t/acme/a/crm/contacts", "t/acme/a/billing/ledger", "t/acme/a/crm/contacts" }));
         Assert.That(roles[1].Operations, Is.EqualTo(LatticeOperation.Write));
+        Assert.That(roles[0].GroupIds, Is.EqualTo(new[] { "g-readers" }));
+        Assert.That(roles[1].GroupIds, Is.Empty, "the writer role is unbound");
+    }
+
+    [Test]
+    public void CompileRoles_binds_the_distinct_readable_groups_of_each_role_in_binding_order()
+    {
+        var record = WorkspaceHarness.Record() with
+        {
+            RoleBindings =
+            [
+                AppRoleBinding.Create("writer", "g-b"),
+                AppRoleBinding.Create("reader", "g-a"),
+                AppRoleBinding.Create("writer", "g-a"),
+                AppRoleBinding.Create("writer", "g-b"),
+                new AppRoleBinding { RoleName = "writer", GroupId = string.Empty },
+                null!,
+                AppRoleBinding.Create("undeclared", "g-c"),
+            ],
+        };
+
+        var roles = AppRoleGrantEvaluator.CompileRoles(record, AppsControlHarness.Manifest());
+
+        Assert.That(roles[0].GroupIds, Is.EqualTo(new[] { "g-a" }));
+        Assert.That(roles[1].GroupIds, Is.EqualTo(new[] { "g-b", "g-a" }));
+    }
+
+    [Test]
+    public void CompileRoles_confines_each_role_to_the_consented_ceiling()
+    {
+        var readOnly = WorkspaceHarness.Record() with { Ceiling = AppCapabilityCeiling.Structural(LatticeOperation.Read) };
+        var noCeiling = WorkspaceHarness.Record() with { Ceiling = null! };
+
+        var roles = AppRoleGrantEvaluator.CompileRoles(readOnly, AppsControlHarness.Manifest());
+
+        Assert.That(roles[0].Operations, Is.EqualTo(LatticeOperation.Read));
+        Assert.That(roles[1].Operations, Is.EqualTo(LatticeOperation.None), "the writer role exceeds a read-only ceiling");
+        Assert.That(AppRoleGrantEvaluator.CompileRoles(noCeiling, AppsControlHarness.Manifest()).Select(r => r.Operations), Is.All.EqualTo(LatticeOperation.None));
+    }
+
+    [Test]
+    public void Evaluate_reports_the_roles_held_by_binding_whatever_else_the_caller_holds()
+    {
+        var install = new AppRoleGrantInstall(
+            WorkspaceHarness.Record(),
+            AppsControlHarness.Manifest(),
+            AppRoleGrantEvaluator.CompileRoles(WorkspaceHarness.Record(), AppsControlHarness.Manifest()));
+
+        Assert.That(AppRoleGrantEvaluator.Evaluate(install, new LatticeSubject(WorkspaceHarness.Alice, [WorkspaceHarness.ReadersGroup])), Is.EqualTo(new[] { "reader" }));
+        Assert.That(AppRoleGrantEvaluator.Evaluate(install, Alice), Is.Empty);
     }
 
     [Test]
@@ -152,8 +204,7 @@ public sealed class AppRoleGrantEvaluatorTests
         Assert.Throws<ArgumentNullException>(() => AppRoleGrantEvaluator.CompileRoles(null!, AppsControlHarness.Manifest()));
         Assert.Throws<ArgumentNullException>(() => AppRoleGrantEvaluator.CompileRoles(WorkspaceHarness.Record(), null!));
         Assert.ThrowsAsync<ArgumentNullException>(async () => await Evaluator(harness).GetInstallAsync(null!, CancellationToken.None));
-        Assert.ThrowsAsync<ArgumentNullException>(async () => await AppRoleGrantEvaluator.EvaluateAsync(null!, install, Alice, CancellationToken.None));
-        Assert.ThrowsAsync<ArgumentNullException>(async () => await AppRoleGrantEvaluator.EvaluateAsync(harness.Gate, null!, Alice, CancellationToken.None));
+        Assert.Throws<ArgumentNullException>(() => AppRoleGrantEvaluator.Evaluate(null!, Alice));
         Assert.Throws<ArgumentNullException>(() => new AppRoleGrantInstall(null!, AppsControlHarness.Manifest(), []));
         Assert.Throws<ArgumentNullException>(() => new AppRoleGrantInstall(WorkspaceHarness.Record(), null!, []));
         Assert.Throws<ArgumentNullException>(() => new AppRoleGrantInstall(WorkspaceHarness.Record(), AppsControlHarness.Manifest(), null!));

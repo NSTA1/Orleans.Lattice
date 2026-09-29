@@ -38,7 +38,7 @@ internal sealed class RepoContextAppTestHost
             .AddSingleton<IAppRegistryProjection>(Projection)
             .AddSingleton<IAppSource, InImageAppSource>()
             .AddSingleton<ILatticeAccessGate>(Gate)
-            .AddSingleton<ILatticeMembershipContext, RepoContextAppMembershipContext>()
+            .AddSingleton<ILatticeMembershipContext>(Membership)
             .AddSingleton<ITenantContextResolver, RepoContextAppTenantResolver>();
         register(services);
         Services = services.BuildServiceProvider();
@@ -47,6 +47,12 @@ internal sealed class RepoContextAppTestHost
     public RepoContextAppRegistryProjection Projection { get; } = new();
 
     public RepoContextAppGrantingGate Gate { get; } = new();
+
+    /// <summary>The membership context every session resolves through.</summary>
+    public RepoContextAppMembershipContext Membership { get; } = new();
+
+    /// <summary>The group <see cref="Record"/> binds the manifest's <c>reader</c> role to.</summary>
+    public const string ReadersGroup = "g-repo-readers";
 
     public ServiceProvider Services { get; }
 
@@ -62,6 +68,7 @@ internal sealed class RepoContextAppTestHost
             Provenance = new AppProvenance(),
             Ceiling = AppCapabilityCeiling.Structural(LatticeOperation.Read | LatticeOperation.RangeRead),
             CeilingVersion = version,
+            RoleBindings = [AppRoleBinding.Create("reader", ReadersGroup)],
             State = state,
             Revision = 1,
         };

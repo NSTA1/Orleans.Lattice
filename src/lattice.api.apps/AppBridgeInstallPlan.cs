@@ -100,21 +100,20 @@ internal sealed class AppBridgeInstallPlan
 
     private static TreeGrant[] BuildGrants(AppRoleGrantInstall install, string local, string effective, bool adopted)
     {
-        var record = install.Record;
-        var roles = install.Manifest.Roles ?? [];
-        var ceiling = record.Ceiling;
-        var ceilingOperations = (ceiling?.AllowedOperations ?? LatticeOperation.None) & AppManifestValidator.RoleOperations;
+        var ceiling = install.Record.Ceiling;
         List<TreeGrant>? grants = null;
-        for (var i = 0; i < roles.Length && i < install.Roles.Length; i++)
+
+        // Each grant derives from the shared compiled role (AppRoleGate): its operations already within the
+        // consented ceiling, its bound groups, and its resolved scopes. A role that confers nothing - which
+        // AppRoleGate.IsHeldBy therefore never reports held - contributes no grant.
+        foreach (var role in install.Roles)
         {
-            var role = roles[i];
-            var operations = role.Operations & ceilingOperations;
-            if (operations == LatticeOperation.None)
+            if (!role.ConfersAnything)
             {
                 continue;
             }
 
-            foreach (var scope in install.Roles[i].Scopes)
+            foreach (var scope in role.Scopes)
             {
                 if (!string.Equals(scope.TreeId, effective, StringComparison.Ordinal)
                     || (scope.Kind != LatticeScopeKind.Tree && scope.KeyOrPrefix is null)
@@ -123,14 +122,9 @@ internal sealed class AppBridgeInstallPlan
                     continue;
                 }
 
-                foreach (var binding in record.RoleBindings ?? [])
+                foreach (var groupId in role.GroupIds)
                 {
-                    if (binding is not null
-                        && !string.IsNullOrEmpty(binding.GroupId)
-                        && string.Equals(binding.RoleName, role.Name, StringComparison.Ordinal))
-                    {
-                        (grants ??= []).Add(new TreeGrant(binding.GroupId, operations, scope.Kind, scope.KeyOrPrefix));
-                    }
+                    (grants ??= []).Add(new TreeGrant(groupId, role.Operations, scope.Kind, scope.KeyOrPrefix));
                 }
             }
         }
@@ -212,23 +206,7 @@ internal sealed class AppBridgeInstallPlan
             return false;
         }
 
-        private static bool Contains(IReadOnlyCollection<string> groups, string groupId)
-        {
-            if (groups is IReadOnlySet<string> set)
-            {
-                return set.Contains(groupId);
-            }
-
-            foreach (var group in groups)
-            {
-                if (string.Equals(group, groupId, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
+        private static bool Contains(IReadOnlyCollection<string> groups, string groupId) => AppRoleGate.IsMember(groups, groupId);
     }
 
     /// <summary>One app-owned grant: what one compiled <c>app:{slug}</c> rule allows over one tree.</summary>

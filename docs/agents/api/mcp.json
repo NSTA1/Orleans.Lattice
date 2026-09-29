@@ -25,7 +25,7 @@
     "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.GetPermittedToolsAsync",
     "src/lattice.api.mcp.apps/AppMcpToolActivation.cs#AppMcpToolActivation.Pair",
     "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
-    "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate.IsHeldAsync",
+    "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate.IsHeld",
     "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.Compose",
     "src/lattice.api.mcp.apps/IAppMcpToolProvider.cs#IAppMcpToolProvider",
     "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",

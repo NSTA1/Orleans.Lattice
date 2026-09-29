@@ -153,7 +153,7 @@ public sealed class AppMcpToolSourceCatalogTests
         // Tenancy is optional: with no resolver registered the surface must still serve, and it
         // serves the default tenant rather than refusing.
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = await FirstToolAsync(host);
         var source = Build(host, tenantResolver: null);
 
@@ -168,7 +168,7 @@ public sealed class AppMcpToolSourceCatalogTests
         // The synchronous fast path exists so a tenant-unaware client pays no await per
         // invocation; the shared test resolver only answers asynchronously, so nothing reached it.
         var host = NotesHost();
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
         var tool = await FirstToolAsync(host);
         var resolver = new SynchronousTenantResolver(TenantId.Default);
         var source = Build(host, resolver);
@@ -196,7 +196,7 @@ public sealed class AppMcpToolSourceCatalogTests
             new AppMcpToolProvider(Notes, [AppMcpTestData.Tool("search", "found")]),
         };
         var source = Build(host, new AmbientTenantResolver(), providers);
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Member("alice", "g-readers");
 
         var catalog = await source.GetCatalogAsync(CancellationToken.None);
 
@@ -267,7 +267,7 @@ public sealed class AppMcpToolSourceCatalogTests
             host.Projection,
             host.Source,
             host.Gate,
-            new CredentialEchoMembershipContext(),
+            host.Membership,
             tenantResolver);
 
     private sealed class DenyingTenantResolver : ITenantContextResolver

@@ -30,7 +30,7 @@ public sealed class AddRepoContextToolsAppRegistrationTests
     {
         var host = FlagOn();
         host.Projection.Publish(1, RepoContextAppTestHost.Record());
-        host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read | LatticeOperation.RangeRead);
+        host.Membership.Groups.Add(RepoContextAppTestHost.ReadersGroup);
         return host;
     }
 
@@ -93,6 +93,7 @@ public sealed class AddRepoContextToolsAppRegistrationTests
         var flagOff = await FlagOff().SnapshotAsync();
         var host = FlagOn();
         host.Projection.Publish(1, RepoContextAppTestHost.Record(AppRegistryLifecycleState.Disabled));
+        host.Membership.Groups.Add(RepoContextAppTestHost.ReadersGroup);
         host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read | LatticeOperation.RangeRead);
 
         Assert.That(await host.SnapshotAsync(), Is.EqualTo(flagOff));
@@ -175,7 +176,8 @@ public sealed class AddRepoContextToolsAppRegistrationTests
     {
         var host = FlagOn();
         host.Projection.Publish(1, RepoContextAppTestHost.Record());
-        host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read);
+        host.Membership.Groups.Add("g-operators");
+        host.Gate.Grant(RepoContextAppTestHost.Principal, RepoContextTrees.Memory, LatticeOperation.Read | LatticeOperation.RangeRead);
 
         var advertised = await host.AdvertisedAsync();
 
@@ -205,7 +207,7 @@ public sealed class AddRepoContextToolsAppRegistrationTests
         var tool = await host.SessionToolAsync("repo-context_stats");
         Assert.That(tool, Is.Not.Null);
 
-        host.Gate.RevokeAll();
+        host.Membership.Groups.Clear();
 
         Assert.That(async () => await host.InvokeAsync(tool!), Throws.InstanceOf<ModelContextProtocol.McpException>());
     }
