@@ -17,6 +17,11 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// </remarks>
 public abstract class UiTestBase
 {
+    // A first navigation to a cold head (its circuit hub, its published assets, a browser
+    // engine launched moments before) can outlast Playwright's 30-second default on a
+    // loaded agent; the budget only bounds how long a slow start is given, never an assertion.
+    private const float NavigationTimeoutMs = 90_000;
+
     private static readonly ConcurrentDictionary<string, Task<string>> SignedIn = new(StringComparer.Ordinal);
 
     private readonly List<IBrowserContext> _contexts = [];
@@ -87,6 +92,7 @@ public abstract class UiTestBase
         var browser = await UiBrowsers.GetAsync(Engine);
         var context = await browser.NewContextAsync(options);
         _contexts.Add(context);
+        context.SetDefaultNavigationTimeout(NavigationTimeoutMs);
         await context.AddInitScriptAsync(Shell.InitScript);
         await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true, Sources = true });
 
@@ -171,6 +177,7 @@ public abstract class UiTestBase
     {
         var browser = await UiBrowsers.GetAsync(Engine);
         await using var context = await browser.NewContextAsync(ContextOptions(head, Shell.LargeWidth));
+        context.SetDefaultNavigationTimeout(NavigationTimeoutMs);
         await context.AddInitScriptAsync(Shell.InitScript);
         var page = await context.NewPageAsync();
         await Shell.GotoAsync(page, head, "/");
