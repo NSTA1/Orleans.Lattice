@@ -172,6 +172,39 @@ public sealed class TenantRegistrySnapshotCrossSiloTests
         Assert.That(decision.Reason, Does.Contain("not online"));
     }
 
+    [TestCase(TenantRegionStatus.Offline, false)]
+    [TestCase(TenantRegionStatus.Online, true)]
+    public async Task Residency_with_policy_also_stale_is_answered_from_the_record_the_confirmation_already_read(
+        TenantRegionStatus status,
+        bool admitted)
+    {
+        // Policy and residency views both stale: the request is confirmed against the
+        // active tenant's registry record (#4053), and residency is answered from that
+        // same record - one registry read, not two.
+        var registry = new HoldableTenantRegistry();
+        var acme = Record("acme", admins: ["alice"]);
+        acme.SetRegionStatus(Region, status, Clock(10), "test");
+        registry.Records.Add(acme);
+        var policy = TenantPolicyEpochTestCluster.Unleased(registry);
+        await policy.RebuildNowAsync();
+        var enforcer = new TenantGateEnforcer(
+            new LatticeTenantPolicyEngine(policy),
+            new TenantResidencyResolver(TenantPolicyEpochTestCluster.UnleasedResidency(registry, Region), registry),
+            policy,
+            registry,
+            NullLogger<TenantGateEnforcer>.Instance);
+        LatticeActiveTenantContext.Current = Acme;
+
+        var request = ResidencyWorld.Request();
+        var decision = await enforcer.EnforceAsync(in request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Allowed, Is.EqualTo(admitted), $"reason: {decision.Reason}");
+            Assert.That(registry.PointReads, Is.EqualTo(1), "residency reused the record the confirmation read");
+        });
+    }
+
     [Test]
     public async Task Residency_replication_gate_on_a_peer_silo_rejects_a_tenant_taken_offline_on_another_silo()
     {
