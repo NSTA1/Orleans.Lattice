@@ -78,6 +78,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - A tenant-scoped address lists only that tenant's items.** `/t/{tenant}/access` and `/t/{tenant}/cluster` join the other areas; counts, badges, completions and pickers follow. Rule and backup listings take `ActiveTenantOnly`, narrowed to the caller's validated tenant. ([#4025](https://github.com/NSTA1/Orleans.Lattice/issues/4025)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Auth.Grpc`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Cached answers never outlive the caller who read them.** Every per-circuit memo is keyed on the sign-in, endpoint and asserted tenant, and dropped on a sign-in, sign-out or connection change; pages are rebuilt on a sign-in change, and a new identity never inherits the last one's tenant. ([#4019](https://github.com/NSTA1/Orleans.Lattice/issues/4019)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Core`)
 
 - **Explorer - Leaving a page mid-read no longer ends the session.** A read still under way when its page is left is cancelled without ending the console's circuit, and in Development the web head keeps Blazor's circuit-fault log, with its stack trace, visible. ([#4011](https://github.com/NSTA1/Orleans.Lattice/issues/4011)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)

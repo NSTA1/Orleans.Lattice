@@ -82,7 +82,7 @@ Response envelopes:
 | Type | Role |
 |------|------|
 | `LatticeAuthApiGrpcClient` | Public typed client; one method per RPC over a caller-supplied `CallInvoker`. |
-| `LatticeAuthApiGrpcOptions` | Server-side options (`RequireAuthorization`, `CredentialHeaderName`, `CredentialScheme`). |
+| `LatticeAuthApiGrpcOptions` | Server-side options (`RequireAuthorization`, `CredentialHeaderName`, `CredentialScheme`, `ActiveTenantHeaderName`). `ActiveTenantHeaderName` (default `lattice-active-tenant`; `null` or empty disables it) is read only by a `ListRules` call with `AuthPageRequest.ActiveTenantOnly` set; there a denied tenant assertion fails the call with `PermissionDenied`. |
 | `ILatticeAuthApiAuthorizer` | Transport meta-authorization seam. |
 | `DenyAllAuthApiAuthorizer` | Default-deny authorizer, registered by `AddLatticeAuthApiGrpc` only when the host has not already registered an `ILatticeAuthApiAuthorizer`; one the host registers afterwards, as the Quick start does, takes precedence. |
 | `AllowAllAuthApiAuthorizer` | Opt-in permissive authorizer for trusted-network use. |

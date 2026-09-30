@@ -50,6 +50,13 @@ Every admin call passes through two independent gates, both fail-closed:
    against the resolved caller's subject. An anonymous caller (no credential) is
    denied here even when the transport gate allowed the call.
 
+A `ListRules` call with `AuthPageRequest.ActiveTenantOnly` set also lifts the
+caller's asserted active tenant from the `ActiveTenantHeaderName` header
+(default `lattice-active-tenant`; `null` or empty disables it). The facade
+re-validates it against the caller's membership, and an assertion the caller
+may not make fails the call with `PermissionDenied`. No other auth call reads
+the header.
+
 A denial from the facade check is mapped to `PermissionDenied` with response
 trailers carrying only non-sensitive fields (`lattice-denied-tree`,
 `lattice-denied-operation`, `lattice-denied-subject`, `lattice-denied-reason`) -

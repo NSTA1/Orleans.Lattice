@@ -48,6 +48,11 @@ un-authorized write path to the membership or policy trees.
   actionable message otherwise.
 - **Zero background work.** Registration wires a lazy singleton only: no hosted
   service, timer, or reminder. Nothing runs until a facade method is called.
+- **Tenant-narrowed listing.** `AuthPageRequest.ActiveTenantOnly` narrows
+  `ListRulesAsync` to the rules governing the caller's active tenant's own trees,
+  and the page names that tenant in `AuthRulePage.Tenant`. The tenant is the
+  caller's validated active-tenant assertion, never one the request names; an
+  assertion the caller may not make is refused, never defaulted.
 
 ## Usage
 

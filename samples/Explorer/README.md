@@ -106,7 +106,9 @@ starts there. Choose `acme` in the **Tenant** switcher in the top bar, type
 `t/acme` in the address line and choose it, or open `/t/acme`, to follow the walk
 below. The switcher appears only for a platform operator who can reach two or more
 tenants, so `acme-admin` does not see it. The address is rooted at `/t/{tenant}` for
-every tenant-scoped area; Access and Cluster are cluster-wide and never are.
+every tenant-scoped area. Access and Cluster are cluster-wide at `/access` and
+`/cluster`; their tenant-rooted forms, such as `/t/acme/access`, show only that
+tenant's rules and trees.
 
 ### Home
 

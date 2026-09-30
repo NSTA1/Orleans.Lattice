@@ -35,7 +35,11 @@ capture / incremental / restore authorizes its target scope (a restore whose
 target cannot be resolved authorizes the reserved backup catalog tree instead,
 so the check is never skipped); a list / describe /
 delete authorizes the scope carried by each manifest, and a manifest whose scope
-the caller may not read is hidden from list and inventory results.
+the caller may not read is hidden from list and inventory results. A listing
+with `BackupCatalogRequest.ActiveTenantOnly` set is further narrowed to the
+backups of the caller's active tenant's own trees, taken from the caller's
+validated assertion and never from the request, and names that tenant in
+`BackupCatalogPage.Tenant`.
 
 - **Opt-in and absent by default.** Nothing is registered unless the host calls
   `AddLatticeBackupApi()`, and once added the facade does no background work until

@@ -85,6 +85,7 @@ Paging request for the catalog listing. By default the catalog is enumerated asc
 - `string? NamePrefix` - optional case-insensitive starts-with filter on the row's display name. Applied only in newest-first mode.
 - `string? TreeId` - optional exact scope tree-id filter. Applied only in newest-first mode.
 - `string? CreatedPrefix` - optional starts-with filter on the created timestamp rendered as the invariant UTC string `yyyy-MM-dd HH:mm:ss`. Applied only in newest-first mode.
+- `bool ActiveTenantOnly` - when set, lists only the backups of trees the caller's active tenant owns. The tenant is never taken from the request: it is the caller's validated active-tenant assertion, or the reserved default tenant when the call asserts none, and an assertion the caller may not make is refused. It matters most for the default tenant: a platform operator asserting no tenant may read every tenant's backups, and this narrows the listing to the default tenant's own (bare) trees. A backup of a platform tree belongs to no tenant. The narrowing happens before the page is cut, so every page but the last is full. `false` (the default) lists every backup the caller may read.
 
 ### `BackupCatalogPage`
 
@@ -92,6 +93,7 @@ One page of the catalog.
 
 - `IReadOnlyList<BackupManifest> Entries` - the manifests on this page (defaults to empty), in the request's order: ascending by backup id by default, or newest-first with backup-set members adjacent when `OrderByCreatedDescending` is set.
 - `string? NextPageToken` - the cursor to pass back in the next request, or `null` on the final page.
+- `string? Tenant` - the tenant the page was narrowed to when the request set `ActiveTenantOnly`, or `null` for an unnarrowed page. A caller that asked for a narrowed page and reads `null` here was answered by a server that predates the narrowing.
 
 ### `BackupChainDescription`
 

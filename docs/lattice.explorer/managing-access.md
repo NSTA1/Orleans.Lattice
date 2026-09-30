@@ -2,7 +2,7 @@
 
 The **Access** area is the Explorer surface for the cluster's authorization rule store, local membership groups, and access explanations. It drives the auth administration facade; the Explorer presents and submits the data, but the cluster remains the enforcement point for every read and mutation.
 
-Access is cluster-wide. Tenant-rooted route forms exist so typed addresses can be normalised, but the navigator strips the tenant from Access addresses. App links from Access re-enter the current tenant where the Apps area is tenant-scoped.
+`/access` is cluster-wide. Its tenant-rooted form, `/t/{tenant}/access`, keeps its tenant root and shows only that tenant's part of the policy: the rules whose governed tree is one of the tenant's own trees. App links from Access re-enter the current tenant where the Apps area is tenant-scoped.
 
 ## Availability
 
@@ -22,15 +22,15 @@ Other faults are presented as plain sentences, for example that the cluster does
 
 ## Addresses
 
-The Access area is cluster-wide. These route forms exist in the shipped pages:
+The plain addresses are cluster-wide. The tenant-rooted forms show only that tenant's items:
 
 | Page | Plain address | Tenant-rooted form | Notes |
 | --- | --- | --- | --- |
-| Rules | `/access`, `/access/rules` | `/t/{tenant}/access`, `/t/{tenant}/access/rules` | Lists authorization rules and opens the new-rule dialog with `?new=true`. |
-| Rule details | `/access/rules/{ruleId}` | `/t/{tenant}/access/rules/{ruleId}` | Shows one rule. Use `?tree={treeId}` when the rule id is reused under more than one governed tree. |
-| Groups | `/access/groups` | `/t/{tenant}/access/groups` | Lists groups and opens the new-group dialog with `?new=true`. |
-| Group details | `/access/groups/{groupId}` | `/t/{tenant}/access/groups/{groupId}` | Shows one group, its direct members, parent groups, and matching rules. |
-| Explain | `/access/explain` | `/t/{tenant}/access/explain` | Explains one operation or lists effective permissions. |
+| Rules | `/access`, `/access/rules` | `/t/{tenant}/access`, `/t/{tenant}/access/rules` | Lists authorization rules and opens the new-rule dialog with `?new=true`. Tenant-rooted, only the rules governing the tenant's own trees, with one quiet line counting the cluster-wide rules that also apply and linking to `/access/rules`. |
+| Rule details | `/access/rules/{ruleId}` | `/t/{tenant}/access/rules/{ruleId}` | Shows one rule. Use `?tree={treeId}` when the rule id is reused under more than one governed tree. Tenant-rooted, another tenant's rule or a cluster-wide one is not found. |
+| Groups | `/access/groups` | `/t/{tenant}/access/groups` | Lists groups and opens the new-group dialog with `?new=true`. Groups belong to the whole cluster, so the tenant-rooted page lists none and links to the cluster's groups. |
+| Group details | `/access/groups/{groupId}` | `/t/{tenant}/access/groups/{groupId}` | Shows one group, its direct members, parent groups, and matching rules. Tenant-rooted, not found. |
+| Explain | `/access/explain` | `/t/{tenant}/access/explain` | Explains one operation or lists effective permissions. Tenant-rooted, effective permissions list the tenant's own rules and count the cluster-wide ones that also apply. |
 
 Access uses these query keys:
 

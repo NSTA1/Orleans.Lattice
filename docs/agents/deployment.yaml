@@ -1003,6 +1003,10 @@ configuration_schema:
         type: "string"
         default: "\"Bearer\""
         source: "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs#LatticeAuthApiGrpcOptions.CredentialScheme"
+      - name: "ActiveTenantHeaderName"
+        type: "string?"
+        default: "LatticeActiveTenantAssertion.DefaultHeaderName"
+        source: "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs#LatticeAuthApiGrpcOptions.ActiveTenantHeaderName"
   - type: "LatticeAuthOptions"
     package: "Orleans.Lattice.Auth"
     registration:
