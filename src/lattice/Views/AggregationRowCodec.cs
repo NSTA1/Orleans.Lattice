@@ -389,7 +389,20 @@ internal static class AggregationRowCodec
     /// <param name="row">A row produced by <see cref="EncodeInverse"/>.</param>
     /// <param name="sourceKey">The source key whose entry is being spliced.</param>
     /// <param name="add">The replacement entry, or <see langword="null"/> to remove.</param>
-    internal static byte[]? SpliceInverse(ReadOnlySpan<byte> row, string sourceKey, MemberEntry? add)
+    /// <param name="moveToEnd">
+    /// When <see langword="true"/>, an existing entry for <paramref name="sourceKey"/>
+    /// is elided rather than replaced where it sits, and
+    /// <paramref name="add"/> is appended after the surviving entries. This is
+    /// the byte-for-byte result of splicing the key out and then splicing it back
+    /// in - the removal elides it, and the re-add finds the key absent and
+    /// appends - which is exactly what
+    /// <c>AggregationApplier.ContributeInverseAsync</c> used to produce with two
+    /// store round trips when a source key was re-contributed to the group it
+    /// already belonged to. Fusing the pair keeps the row identical and halves
+    /// the read-modify-write. Ignored when <paramref name="add"/> is
+    /// <see langword="null"/>, a removal having no entry to position.
+    /// </param>
+    internal static byte[]? SpliceInverse(ReadOnlySpan<byte> row, string sourceKey, MemberEntry? add, bool moveToEnd = false)
     {
         byte[]? rented = null;
         var maxKeyBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
@@ -462,7 +475,7 @@ internal static class AggregationRowCodec
                     continue;
                 }
 
-                if (add is { } replacement && !written)
+                if (add is { } replacement && !written && !moveToEnd)
                 {
                     WriteInverseEntry(ref writer, sourceKey, replacement);
                     written = true;
@@ -684,7 +697,16 @@ internal static class AggregationRowCodec
     /// <param name="row">A row produced by <see cref="EncodeFoldInverse"/>.</param>
     /// <param name="sourceKey">The source key whose entry is being spliced.</param>
     /// <param name="add">The replacement entry, or <see langword="null"/> to remove.</param>
-    internal static byte[]? SpliceFoldInverse(ReadOnlySpan<byte> row, string sourceKey, FoldMember? add)
+    /// <param name="moveToEnd">
+    /// When <see langword="true"/>, an existing entry for <paramref name="sourceKey"/>
+    /// is elided rather than replaced in place and <paramref name="add"/> is
+    /// appended after the survivors. See the corresponding parameter on
+    /// <see cref="SpliceInverse"/>: it makes one splice produce exactly the row
+    /// a remove-then-add pair produced, so a same-group re-contribution costs one
+    /// store round trip instead of two. Ignored when <paramref name="add"/> is
+    /// <see langword="null"/>.
+    /// </param>
+    internal static byte[]? SpliceFoldInverse(ReadOnlySpan<byte> row, string sourceKey, FoldMember? add, bool moveToEnd = false)
     {
         byte[]? rented = null;
         var maxKeyBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
@@ -744,7 +766,7 @@ internal static class AggregationRowCodec
                     continue;
                 }
 
-                if (add is { } replacement && !written)
+                if (add is { } replacement && !written && !moveToEnd)
                 {
                     WriteFoldInverseEntry(ref writer, sourceKey, replacement);
                     written = true;

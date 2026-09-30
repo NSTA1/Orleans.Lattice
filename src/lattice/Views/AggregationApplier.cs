@@ -396,7 +396,22 @@ internal sealed class AggregationApplier(
         // re-group to a different group key). The inverse mutation is
         // map.Remove(sourceKey) / map[sourceKey]=entry, which is idempotent on
         // replay, so this path needs no atomic flip.
-        if (prior is { } old)
+        //
+        // A re-contribution that KEEPS its group - the steady-state case, since
+        // a source key's group only changes when the grouped column changes -
+        // sends both of those mutations to the SAME shard row, so the pair cost
+        // two reads, two splices and two writes to change one entry. The fused
+        // splice elides the old entry and appends the new one in a single pass,
+        // which is byte-for-byte the row the pair produced (the removal elides,
+        // and the re-add then finds the key absent and appends), so the shard is
+        // unchanged and the round trip is halved. It also removes the transient
+        // delete-then-recreate a single-entry shard went through.
+        var entry = new MemberEntry(contribution.Numeric, contribution.Member);
+        var fused = prior is { } same
+            && _maxGroupEntries <= 0
+            && string.Equals(same.GroupKey, contribution.GroupKey, StringComparison.Ordinal);
+
+        if (prior is { } old && !fused)
         {
             await MutateInverseAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
         }
@@ -404,8 +419,9 @@ internal sealed class AggregationApplier(
         await MutateInverseAsync(
             contribution.GroupKey,
             sourceKey,
-            add: new MemberEntry(contribution.Numeric, contribution.Member),
-            cancellationToken);
+            add: entry,
+            cancellationToken,
+            moveToEnd: fused);
 
         await store.SetAsync(
             membershipKey,
@@ -435,7 +451,7 @@ internal sealed class AggregationApplier(
         await MaterialiseInverseAsync(old.GroupKey, cancellationToken);
     }
 
-    private async Task MutateInverseAsync(string groupKey, string sourceKey, MemberEntry? add, CancellationToken cancellationToken)
+    private async Task MutateInverseAsync(string groupKey, string sourceKey, MemberEntry? add, CancellationToken cancellationToken, bool moveToEnd = false)
     {
         var slot = Slot(sourceKey, _fanout);
         var key = InverseKey(groupKey, slot);
@@ -455,7 +471,7 @@ internal sealed class AggregationApplier(
         // test on a method that is already making a store round trip.
         if (_maxGroupEntries <= 0)
         {
-            var spliced = SpliceInverse(absent ? EmptyEntryRow : bytes, sourceKey, add);
+            var spliced = SpliceInverse(absent ? EmptyEntryRow : bytes, sourceKey, add, moveToEnd);
             if (spliced is null)
             {
                 await store.DeleteAsync(key, cancellationToken);
@@ -700,7 +716,15 @@ internal sealed class AggregationApplier(
         var membershipKey = MembershipKey(sourceKey);
         var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
 
-        if (prior is { } old)
+        // See ContributeInverseAsync: when the source key keeps its group, both
+        // mutations address the same fold-inverse shard, so they fuse into one
+        // read-modify-write that produces the identical row. This path saves
+        // strictly more than the inverse one, because each redundant decode and
+        // re-encode also copied every member's opaque value payload.
+        var fused = prior is { } same
+            && string.Equals(same.GroupKey, contribution.GroupKey, StringComparison.Ordinal);
+
+        if (prior is { } old && !fused)
         {
             await MutateFoldAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
         }
@@ -709,7 +733,8 @@ internal sealed class AggregationApplier(
             contribution.GroupKey,
             sourceKey,
             add: new FoldMember(contribution.Value ?? [], contribution.Timestamp),
-            cancellationToken);
+            cancellationToken,
+            moveToEnd: fused);
 
         await store.SetAsync(
             membershipKey,
@@ -739,7 +764,7 @@ internal sealed class AggregationApplier(
         await MaterialiseFoldAsync(old.GroupKey, cancellationToken);
     }
 
-    private async Task MutateFoldAsync(string groupKey, string sourceKey, FoldMember? add, CancellationToken cancellationToken)
+    private async Task MutateFoldAsync(string groupKey, string sourceKey, FoldMember? add, CancellationToken cancellationToken, bool moveToEnd = false)
     {
         var key = FoldInverseKey(groupKey, Slot(sourceKey, _fanout));
         var bytes = await store.GetAsync(key, cancellationToken);
@@ -750,7 +775,7 @@ internal sealed class AggregationApplier(
         // mode, so there is no fallback to gate - and it saves strictly more,
         // because a fold entry's decode also copies its whole value payload onto
         // the heap only for the re-encode to copy it straight back out.
-        var spliced = SpliceFoldInverse(absent ? EmptyEntryRow : bytes, sourceKey, add);
+        var spliced = SpliceFoldInverse(absent ? EmptyEntryRow : bytes, sourceKey, add, moveToEnd);
         if (spliced is null)
         {
             await store.DeleteAsync(key, cancellationToken);
