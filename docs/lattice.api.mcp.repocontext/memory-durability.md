@@ -84,7 +84,7 @@ the host will:
 | Variable | Default | Meaning |
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | unset | Directory the archive is written to. **Unset disables the whole mechanism**, so it is opt-in and a host that sets nothing behaves exactly as before. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. Positive values below 30 are raised to 30, so a misconfiguration cannot turn the exporter into a busy loop against the store; a zero, negative or unparseable value falls back to `300`. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. Positive values below 30 are raised to 30, so a misconfiguration cannot turn the exporter into a busy loop against the store, and values above the longest delay a timer can wait (about 49.7 days) are lowered to it; a zero, negative, unparseable or out-of-range value falls back to `300`. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores when the store holds no memory at all, or when its restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores and leaves the archive write-only. `none` and `false` are also accepted for `off`, and `on-empty` for `auto`; any other value falls back to `auto`. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60 seconds. It is deliberately a fraction of the container's stop grace period, which the drain also needs. |
 

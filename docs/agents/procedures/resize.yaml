@@ -76,7 +76,7 @@ rollback:
 concurrency:
   - rule: "A matching in-flight target is idempotent; different resize parameters are rejected."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
-  - rule: "The destination physical tree is registered with the source ShardCount and no inherited shard map; the snapshot copies matching shard indices."
+  - rule: "The destination physical tree is registered with the source ShardCount and inherited shard map; the snapshot copies every routed shard index, including adaptive-split shards above the pinned count."
     source: "docs/lattice/tree-sizing.md"
   - rule: "Resize and reshard are mutually exclusive in-flight operations."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"

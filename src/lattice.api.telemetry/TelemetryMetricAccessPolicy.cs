@@ -27,6 +27,14 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// constructor, so a per-name admission check performs at most one set lookup and
 /// a walk over the precompiled patterns and never recompiles a pattern.
 /// </para>
+/// <para>
+/// The names tested here are caller-supplied (they arrive as a named metadata
+/// lookup, or are lifted out of a submitted query), so each pattern is matched with
+/// the non-backtracking engine and anchored to the very end of the input. That keeps
+/// every match linear in the name's length and keeps a whole-name match exactly
+/// whole-name; see the remarks on the private pattern compiler for why each of those
+/// two properties is load-bearing.
+/// </para>
 /// </remarks>
 public sealed class TelemetryMetricAccessPolicy
 {
@@ -114,6 +122,34 @@ public sealed class TelemetryMetricAccessPolicy
         return false;
     }
 
+    /// <summary>
+    /// Translates one <c>*</c>-wildcard allow-list entry into an anchored, whole-name
+    /// <see cref="Regex"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="RegexOptions.NonBacktracking"/> - not
+    /// <see cref="RegexOptions.Compiled"/>, which it is mutually exclusive with -
+    /// bounds every match to linear time in the length of the name being tested. The
+    /// names tested here are caller-supplied, and a pattern with several wildcards
+    /// (<c>lattice_*_*_*_total</c>) compiles to a chain of <c>.*</c> whose cost under
+    /// the backtracking engine depends on optimiser heuristics rather than on any
+    /// guarantee. Taking the guarantee instead keeps an allow-list check linear by
+    /// construction (CWE-1333), which is the same posture the repository's other
+    /// wire-facing matchers take. The grammar emitted here is only literals, <c>.*</c>
+    /// and anchors, with no backreference or lookaround, so it is fully
+    /// non-backtracking-compatible.
+    /// </para>
+    /// <para>
+    /// The tail anchor is <c>\z</c> rather than <c>$</c> because <c>$</c> also matches
+    /// immediately before a trailing newline, so <c>^lattice_.*$</c> would admit
+    /// <c>lattice_x\n</c>. <see cref="RegexOptions.Singleline"/> is likewise not set,
+    /// so <c>.</c> does not match a newline and a name cannot smuggle one through the
+    /// middle of a wildcard either. A metric name never contains a newline, so
+    /// refusing one costs no legitimate match and makes the admission decision the
+    /// strict whole-name test the allow-list is documented to perform.
+    /// </para>
+    /// </remarks>
     private static Regex Compile(string pattern)
     {
         var builder = new StringBuilder(pattern.Length + 4).Append('^');
@@ -129,9 +165,9 @@ public sealed class TelemetryMetricAccessPolicy
             }
         }
 
-        builder.Append('$');
+        builder.Append(@"\z");
         return new Regex(
             builder.ToString(),
-            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+            RegexOptions.NonBacktracking | RegexOptions.CultureInvariant);
     }
 }

@@ -1,5 +1,6 @@
 using System.Text;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Auth.Tests;
 
@@ -67,21 +68,19 @@ public sealed class SystemTreeReplicationConvergenceAutoRebuildIntegrationTests
         }
     }
 
-    private async Task<bool> PollAsync(Func<Task<bool>> condition)
-    {
-        var deadline = DateTime.UtcNow + SettleTimeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(100);
-        }
-
-        return await condition();
-    }
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds or the settle budget
+    /// elapses, returning the last observation either way so the caller's own
+    /// assertion reports the outcome.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to the shared <see cref="TestPoll"/> barrier's negative form,
+    /// which is the correct one here: two of the three call sites assert that
+    /// the polled condition is eventually <c>false</c>, so failing at the
+    /// barrier would be wrong.
+    /// </remarks>
+    private Task<bool> PollAsync(Func<Task<bool>> condition) =>
+        TestPoll.TryUntilAsync(condition, SettleTimeout, TimeSpan.FromMilliseconds(100));
 
     [Test]
     public async Task Replicated_grant_is_enforced_on_site_b_without_a_forced_rebuild()

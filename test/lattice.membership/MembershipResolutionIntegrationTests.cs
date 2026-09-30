@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Membership.Tests;
 
@@ -191,19 +192,18 @@ public sealed class MembershipResolutionIntegrationTests
         return await probe() ?? throw new TimeoutException("Condition not met within the poll timeout.");
     }
 
-    private static async Task<bool> PollUntilAsync(Func<Task<bool>> condition, int timeoutMs = 5000)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (stopwatch.ElapsedMilliseconds < timeoutMs)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(50);
-        }
-
-        return await condition();
-    }
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds or the timeout
+    /// elapses, returning whether it was ever observed to hold.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to the shared <see cref="TestPoll"/> barrier's negative form,
+    /// which matches this helper's contract: the caller asserts on the returned
+    /// value, so the barrier must report rather than fail.
+    /// </remarks>
+    private static Task<bool> PollUntilAsync(Func<Task<bool>> condition, int timeoutMs = 5000) =>
+        TestPoll.TryUntilAsync(
+            condition,
+            TimeSpan.FromMilliseconds(timeoutMs),
+            TimeSpan.FromMilliseconds(50));
 }

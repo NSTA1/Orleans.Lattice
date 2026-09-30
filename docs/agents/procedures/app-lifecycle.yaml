@@ -74,7 +74,7 @@ steps:
     expects: "Tool advertisement and invocation are checked against the current registry state and access gate; there is no lifecycle MCP tool."
     source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
 postconditions:
-  - check: "An enabled app has provisioned structural trees, persisted app-owned rules, and recorded activation status."
+  - check: "An enabled app has provisioned structural trees and persisted app-owned rules; activation status is recorded only when the status record can be read and written."
     source: "src/lattice.apps/Activation/AppActivationEngine.cs#AppActivationEngine.ExecuteAsync"
   - check: "A disabled app has no owned rules and keeps trees and data in place."
     source: "test/lattice.apps/Activation/AppActivationEngineTests.Lifecycle.cs"

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
@@ -113,24 +112,17 @@ public sealed class RepoContextDeployManifestScriptTests
     [Test]
     public void The_deploy_manifest_suite_passes()
     {
-        var shell = FindExecutable("pwsh") ?? FindExecutable("powershell");
+        var shell = ScriptSuiteProcess.FindExecutable("pwsh") ?? ScriptSuiteProcess.FindExecutable("powershell");
         if (shell is null)
         {
             Assert.Ignore("Neither pwsh nor powershell is available on this host.");
         }
 
-        var psi = new ProcessStartInfo(shell!, $"-NoProfile -File \"{SuitePath}\"")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = ScriptsDirectory,
-        };
-
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(180_000);
+        var (exitCode, stdout, stderr) = ScriptSuiteProcess.Run(
+            shell!,
+            SuitePath,
+            ScriptsDirectory,
+            180_000);
 
         var tally = stdout
             .Split('\n')
@@ -151,9 +143,9 @@ public sealed class RepoContextDeployManifestScriptTests
                 + stderr);
 
         Assert.That(
-            process.ExitCode,
+            exitCode,
             Is.Zero,
-            $"the deploy manifest suite reported {process.ExitCode} failing assertion(s)."
+            $"the deploy manifest suite reported {exitCode} failing assertion(s)."
                 + Environment.NewLine
                 + stdout
                 + stderr);
@@ -188,32 +180,4 @@ public sealed class RepoContextDeployManifestScriptTests
         }
     }
 
-    private static string? FindExecutable(string name)
-    {
-        var extensions = OperatingSystem.IsWindows()
-            ? new[] { ".exe", ".cmd", ".bat" }
-            : new[] { string.Empty };
-
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var extension in extensions)
-            {
-                try
-                {
-                    var candidate = Path.Combine(directory.Trim('"'), name + extension);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // A malformed PATH entry is not this fixture's problem.
-                }
-            }
-        }
-
-        return null;
-    }
 }

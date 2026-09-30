@@ -1,4 +1,3 @@
-using System.Diagnostics;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
@@ -63,24 +62,17 @@ public sealed class RepoContextContainerProvenanceScriptTests
     [Test]
     public void The_provenance_suite_passes()
     {
-        var shell = FindExecutable("pwsh") ?? FindExecutable("powershell");
+        var shell = ScriptSuiteProcess.FindExecutable("pwsh") ?? ScriptSuiteProcess.FindExecutable("powershell");
         if (shell is null)
         {
             Assert.Ignore("Neither pwsh nor powershell is available on this host.");
         }
 
-        var psi = new ProcessStartInfo(shell!, $"-NoProfile -File \"{SuitePath}\"")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = ScriptsDirectory,
-        };
-
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(120_000);
+        var (exitCode, stdout, stderr) = ScriptSuiteProcess.Run(
+            shell!,
+            SuitePath,
+            ScriptsDirectory,
+            120_000);
 
         // The suite exits with its failure count, so a non-zero exit and the printed
         // tally are two independent readings of the same run. Both are asserted, because
@@ -109,9 +101,9 @@ public sealed class RepoContextContainerProvenanceScriptTests
                 + stderr);
 
         Assert.That(
-            process.ExitCode,
+            exitCode,
             Is.Zero,
-            $"the provenance suite reported {process.ExitCode} failing assertion(s)."
+            $"the provenance suite reported {exitCode} failing assertion(s)."
                 + Environment.NewLine
                 + stdout
                 + stderr);
@@ -132,32 +124,4 @@ public sealed class RepoContextContainerProvenanceScriptTests
                 + "ended before the last one");
     }
 
-    private static string? FindExecutable(string name)
-    {
-        var extensions = OperatingSystem.IsWindows()
-            ? new[] { ".exe", ".cmd", ".bat" }
-            : new[] { string.Empty };
-
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var extension in extensions)
-            {
-                try
-                {
-                    var candidate = Path.Combine(directory.Trim('"'), name + extension);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // A malformed PATH entry is not this fixture's problem.
-                }
-            }
-        }
-
-        return null;
-    }
 }

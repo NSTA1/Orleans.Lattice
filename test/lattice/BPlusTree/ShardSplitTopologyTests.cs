@@ -27,6 +27,14 @@ public class ShardSplitTopologyTests
     private const int IterationCount = 15;
     private static readonly TimeSpan PollCadence = TimeSpan.FromMilliseconds(10);
 
+    /// <summary>
+    /// Ceiling on the post-iteration drain. Generous enough that a healthy
+    /// split always quiesces well inside it, so it never reddens a passing
+    /// run; bounded so a wedged saga is reported as the named completion
+    /// assertion rather than as an indefinite hang.
+    /// </summary>
+    private static readonly TimeSpan DrainBudget = TimeSpan.FromSeconds(30);
+
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
@@ -160,8 +168,12 @@ public class ShardSplitTopologyTests
             try { await reader; } catch (OperationCanceledException) { }
         }
 
-        // Drain any residual split work against a quiescent saga loop.
-        while (!await split.IsIdleAsync())
+        // Drain any residual split work against a quiescent saga loop. The
+        // drain is bounded so a saga that never quiesces fails the assertion
+        // below by name instead of spinning here until the run is killed - and
+        // so that assertion is reachable with a false subject at all.
+        using var drainCts = new CancellationTokenSource(DrainBudget);
+        while (!drainCts.IsCancellationRequested && !await split.IsIdleAsync())
         {
             await split.RunSplitPassAsync();
             await Task.Delay(50);

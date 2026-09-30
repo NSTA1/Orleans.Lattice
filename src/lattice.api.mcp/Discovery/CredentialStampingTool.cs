@@ -65,6 +65,21 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal sealed class CredentialStampingTool : DelegatingMcpServerTool
 {
+    /// <summary>
+    /// How many unknown argument names a rejection message names. The set comes from
+    /// the caller's own JSON, so it is capped to keep the message (and the log line it
+    /// is written to) a bounded size rather than a caller-chosen one.
+    /// </summary>
+    private const int MaxReportedUnknownArguments = 5;
+
+    /// <summary>
+    /// How many characters of one unknown argument name are echoed before truncation.
+    /// </summary>
+    private const int MaxReportedArgumentNameLength = 64;
+
+    /// <summary>Marks a name that was truncated by the cap above.</summary>
+    private const string Ellipsis = "...";
+
     private static readonly Action<ILogger, string, string, string, Exception?> LogClientError =
         LoggerMessage.Define<string, string, string>(
             LogLevel.Debug,
@@ -338,12 +353,61 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         }
 
         unknown.Sort(StringComparer.Ordinal);
-        var offending = string.Join(", ", unknown.Select(static n => $"'{n}'"));
+
+        // The names come straight off the caller's JSON and are echoed into both the
+        // rejection message and the server log, so they are sanitized and capped here.
+        // McpToolClientErrors documents that a client-error message "must not echo raw
+        // caller content": unbounded, unfiltered names let a caller drive the length of
+        // a log line and smuggle control characters (CR/LF) into a plain-text sink to
+        // forge a record beside a genuine one.
+        var reported = unknown.Count > MaxReportedUnknownArguments
+            ? unknown.Take(MaxReportedUnknownArguments)
+            : unknown;
+        var offending = string.Join(", ", reported.Select(static n => $"'{SanitizeArgumentName(n)}'"));
+        if (unknown.Count > MaxReportedUnknownArguments)
+        {
+            offending += $" (and {unknown.Count - MaxReportedUnknownArguments} more)";
+        }
+
         return (
             $"The '{ProtocolTool.Name}' tool does not accept the argument(s): {offending}. "
             + $"Accepted arguments: {_acceptedArgumentsDescription}. "
             + "Check for a misspelled or unsupported argument name; unknown arguments are "
             + "rejected rather than silently ignored.");
+    }
+
+    /// <summary>
+    /// Renders one caller-supplied argument name safe to echo: anything outside the
+    /// conservative identifier set a real JSON schema property uses is replaced, and
+    /// the result is truncated, so neither the character set nor the length of the
+    /// echoed text is caller-controlled.
+    /// </summary>
+    /// <param name="name">The raw argument name taken from the caller's JSON.</param>
+    /// <returns>The sanitized, length-capped name.</returns>
+    private static string SanitizeArgumentName(string name)
+    {
+        var length = Math.Min(name.Length, MaxReportedArgumentNameLength);
+        var truncated = length < name.Length;
+
+        return string.Create(
+            truncated ? length + Ellipsis.Length : length,
+            (name, length, truncated),
+            static (destination, state) =>
+            {
+                var (source, take, wasTruncated) = state;
+                for (var i = 0; i < take; i++)
+                {
+                    var c = source[i];
+                    destination[i] = char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.'
+                        ? c
+                        : '?';
+                }
+
+                if (wasTruncated)
+                {
+                    Ellipsis.CopyTo(destination[take..]);
+                }
+            });
     }
 
     private static HashSet<string> ExtractAllowedArgumentNames(JsonElement inputSchema)

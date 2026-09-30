@@ -83,6 +83,79 @@ public sealed class CredentialStampingToolClientErrorTests
     }
 
     [Test]
+    public async Task An_unknown_argument_name_is_sanitized_before_it_is_echoed()
+    {
+        // The names come straight off the caller's JSON and are echoed into both the
+        // caller-facing message and the server log. McpToolClientErrors documents that
+        // a client-error message "must not echo raw caller content": a name carrying
+        // CR/LF forges a second record beside the genuine one in any plain-text sink.
+        var name = UniqueToolName();
+        var tool = Wrap(name, (string key) => key);
+        var logs = new CapturingLoggerProvider();
+        await using var services = Services(logs);
+
+        var result = await McpToolInvocation.CallAsync(
+            tool, services, McpToolInvocation.Args(("key", "k"), ("evil\r\nFAKE LOG LINE", "x")));
+
+        var text = ErrorText(result);
+        var logged = logs.Entries.Single(e => e.EventId.Name == "McpToolClientError").Message;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.True);
+            Assert.That(text, Does.Contain("'evil??FAKE?LOG?LINE'"),
+                "Characters outside the identifier set a real schema property uses are replaced.");
+            Assert.That(text, Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "A caller must not be able to inject a newline into the rejection message.");
+            Assert.That(logged, Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "Nor into the log record built from it.");
+        });
+    }
+
+    [Test]
+    public async Task A_long_unknown_argument_name_is_truncated_before_it_is_echoed()
+    {
+        var name = UniqueToolName();
+        var tool = Wrap(name, (string key) => key);
+        await using var services = Services(new CapturingLoggerProvider());
+        var overlong = new string('a', 4096);
+
+        var result = await McpToolInvocation.CallAsync(
+            tool, services, McpToolInvocation.Args(("key", "k"), (overlong, "x")));
+
+        var text = ErrorText(result);
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain($"'{new string('a', 64)}...'"));
+            Assert.That(text, Does.Not.Contain(overlong),
+                "The length of the echoed text must not be caller-chosen.");
+        });
+    }
+
+    [Test]
+    public async Task The_number_of_unknown_argument_names_echoed_is_capped()
+    {
+        var name = UniqueToolName();
+        var tool = Wrap(name, (string key) => key);
+        await using var services = Services(new CapturingLoggerProvider());
+        var args = new (string, object?)[9];
+        args[0] = ("key", "k");
+        for (var i = 1; i < args.Length; i++)
+        {
+            args[i] = ($"u{i:D2}", "x");
+        }
+
+        var result = await McpToolInvocation.CallAsync(tool, services, McpToolInvocation.Args(args));
+
+        var text = ErrorText(result);
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("'u01', 'u02', 'u03', 'u04', 'u05' (and 3 more)"));
+            Assert.That(text, Does.Not.Contain("'u06'"),
+                "The size of the message must not be caller-chosen either.");
+        });
+    }
+
+    [Test]
     public async Task An_unmarked_McpException_still_throws()
     {
         var name = UniqueToolName();

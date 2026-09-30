@@ -487,7 +487,7 @@
           "id": "require-authentication",
           "check": "LatticeReplicationSecurityOptions.RequireAuthentication is true.",
           "on_true": "secret-present",
-          "on_false": "allow",
+          "on_false": "saga-origin-check",
           "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
         },
         {
@@ -500,9 +500,23 @@
         {
           "id": "secret-accepted",
           "check": "IReplicationSecretProvider.IsAcceptedAsync accepts the presented secret.",
-          "on_true": "saga-origin-check",
+          "on_true": "origin-binding-option",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "origin-binding-option",
+          "check": "LatticeReplicationSecurityOptions.BindCredentialToOriginCluster is true.",
+          "on_true": "origin-credential-bound",
+          "on_false": "saga-origin-check",
+          "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "origin-credential-bound",
+          "check": "The x-lattice-replication-origin header is non-blank, IReplicationSecretProvider.GetOutboundSecretAsync returns a non-empty secret for that origin, and the presented secret equals it in fixed time.",
+          "on_true": "saga-origin-check",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor.EnforceOriginBindingAsync"
         },
         {
           "id": "saga-origin-check",
@@ -513,10 +527,10 @@
         },
         {
           "id": "origin-authorized",
-          "check": "Origin header or coordinator cluster id is a non-empty key in LatticeReplicationGrpcOptions.Peers.",
+          "check": "The x-lattice-replication-origin header is non-blank, agrees ordinally with a non-blank CoordinatorClusterId in the request body, and ISagaPeerAuthorizer.IsAuthorizedAsync accepts it (by default PeerMapSagaPeerAuthorizer: a non-empty key in LatticeReplicationGrpcOptions.Peers).",
           "on_true": "allow",
           "on_false": "deny-permission-denied",
-          "source": "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs"
+          "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
         },
         {
           "id": "body-origin-check",
@@ -527,7 +541,7 @@
         },
         {
           "id": "body-origin-bound",
-          "check": "The x-lattice-replication-origin header is absent or blank, or ordinally equals the body OriginClusterId.",
+          "check": "The x-lattice-replication-origin header is non-blank and ordinally equals the body OriginClusterId.",
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
@@ -1089,7 +1103,7 @@
         },
         {
           "id": "tool-minimum",
-          "check": "The permission resolver carries no operation detail, or the granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName); the data group requires Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad for each mutating data tool and its coarse group mask otherwise.",
+          "check": "The permission resolver carries no operation detail, or the granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName); mutating data tools and mutating repository-context tools require Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad, while read-only tools use each group's coarse mask.",
           "on_true": "write-opt-in",
           "on_false": "not-advertised",
           "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.AddPermittedGroupToolsAsync"

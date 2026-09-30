@@ -396,7 +396,22 @@ internal sealed class AggregationApplier(
         // re-group to a different group key). The inverse mutation is
         // map.Remove(sourceKey) / map[sourceKey]=entry, which is idempotent on
         // replay, so this path needs no atomic flip.
-        if (prior is { } old)
+        //
+        // A re-contribution that KEEPS its group - the steady-state case, since
+        // a source key's group only changes when the grouped column changes -
+        // sends both of those mutations to the SAME shard row, so the pair cost
+        // two reads, two splices and two writes to change one entry. The fused
+        // splice elides the old entry and appends the new one in a single pass,
+        // which is byte-for-byte the row the pair produced (the removal elides,
+        // and the re-add then finds the key absent and appends), so the shard is
+        // unchanged and the round trip is halved. It also removes the transient
+        // delete-then-recreate a single-entry shard went through.
+        var entry = new MemberEntry(contribution.Numeric, contribution.Member);
+        var fused = prior is { } same
+            && _maxGroupEntries <= 0
+            && string.Equals(same.GroupKey, contribution.GroupKey, StringComparison.Ordinal);
+
+        if (prior is { } old && !fused)
         {
             await MutateInverseAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
         }
@@ -404,8 +419,9 @@ internal sealed class AggregationApplier(
         await MutateInverseAsync(
             contribution.GroupKey,
             sourceKey,
-            add: new MemberEntry(contribution.Numeric, contribution.Member),
-            cancellationToken);
+            add: entry,
+            cancellationToken,
+            moveToEnd: fused);
 
         await store.SetAsync(
             membershipKey,
@@ -435,14 +451,42 @@ internal sealed class AggregationApplier(
         await MaterialiseInverseAsync(old.GroupKey, cancellationToken);
     }
 
-    private async Task MutateInverseAsync(string groupKey, string sourceKey, MemberEntry? add, CancellationToken cancellationToken)
+    private async Task MutateInverseAsync(string groupKey, string sourceKey, MemberEntry? add, CancellationToken cancellationToken, bool moveToEnd = false)
     {
         var slot = Slot(sourceKey, _fanout);
         var key = InverseKey(groupKey, slot);
         var bytes = await store.GetAsync(key, cancellationToken);
-        var map = bytes is null || IsEmpty(bytes)
+        var absent = bytes is null || IsEmpty(bytes);
+
+        // A contribution changes exactly ONE entry of this shard, so splice the
+        // encoded row rather than decoding every entry into a dictionary and
+        // re-encoding every entry back out - both of which cost the shard's whole
+        // size for a constant-sized change. See SpliceInverse for why the result
+        // is byte-identical to the decode / mutate / re-encode it replaces, and
+        // why it validates the row just as strictly.
+        //
+        // The approximate mode is the one caller that genuinely needs the map: it
+        // evicts by comparing entries against each other, which is not a splice.
+        // It keeps the original path unchanged, so the gate is a single field
+        // test on a method that is already making a store round trip.
+        if (_maxGroupEntries <= 0)
+        {
+            var spliced = SpliceInverse(absent ? EmptyEntryRow : bytes, sourceKey, add, moveToEnd);
+            if (spliced is null)
+            {
+                await store.DeleteAsync(key, cancellationToken);
+            }
+            else
+            {
+                await store.SetAsync(key, spliced, cancellationToken);
+            }
+
+            return;
+        }
+
+        var map = absent
             ? new Dictionary<string, MemberEntry>(StringComparer.Ordinal)
-            : DecodeInverse(bytes);
+            : DecodeInverse(bytes!);
 
         if (add is { } entry)
         {
@@ -672,7 +716,15 @@ internal sealed class AggregationApplier(
         var membershipKey = MembershipKey(sourceKey);
         var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
 
-        if (prior is { } old)
+        // See ContributeInverseAsync: when the source key keeps its group, both
+        // mutations address the same fold-inverse shard, so they fuse into one
+        // read-modify-write that produces the identical row. This path saves
+        // strictly more than the inverse one, because each redundant decode and
+        // re-encode also copied every member's opaque value payload.
+        var fused = prior is { } same
+            && string.Equals(same.GroupKey, contribution.GroupKey, StringComparison.Ordinal);
+
+        if (prior is { } old && !fused)
         {
             await MutateFoldAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
         }
@@ -681,7 +733,8 @@ internal sealed class AggregationApplier(
             contribution.GroupKey,
             sourceKey,
             add: new FoldMember(contribution.Value ?? [], contribution.Timestamp),
-            cancellationToken);
+            cancellationToken,
+            moveToEnd: fused);
 
         await store.SetAsync(
             membershipKey,
@@ -711,30 +764,25 @@ internal sealed class AggregationApplier(
         await MaterialiseFoldAsync(old.GroupKey, cancellationToken);
     }
 
-    private async Task MutateFoldAsync(string groupKey, string sourceKey, FoldMember? add, CancellationToken cancellationToken)
+    private async Task MutateFoldAsync(string groupKey, string sourceKey, FoldMember? add, CancellationToken cancellationToken, bool moveToEnd = false)
     {
         var key = FoldInverseKey(groupKey, Slot(sourceKey, _fanout));
         var bytes = await store.GetAsync(key, cancellationToken);
-        var map = bytes is null || IsEmpty(bytes)
-            ? new Dictionary<string, FoldMember>(StringComparer.Ordinal)
-            : DecodeFoldInverse(bytes);
+        var absent = bytes is null || IsEmpty(bytes);
 
-        if (add is { } entry)
-        {
-            map[sourceKey] = entry;
-        }
-        else
-        {
-            map.Remove(sourceKey);
-        }
-
-        if (map.Count == 0)
+        // See MutateInverseAsync: one entry changes, so the row is spliced rather
+        // than round-tripped through a dictionary. This path has no approximate
+        // mode, so there is no fallback to gate - and it saves strictly more,
+        // because a fold entry's decode also copies its whole value payload onto
+        // the heap only for the re-encode to copy it straight back out.
+        var spliced = SpliceFoldInverse(absent ? EmptyEntryRow : bytes, sourceKey, add, moveToEnd);
+        if (spliced is null)
         {
             await store.DeleteAsync(key, cancellationToken);
         }
         else
         {
-            await store.SetAsync(key, EncodeFoldInverse(map), cancellationToken);
+            await store.SetAsync(key, spliced, cancellationToken);
         }
     }
 
@@ -806,10 +854,16 @@ internal sealed class AggregationApplier(
         await store.SetAsync(groupKey, accumulator, cancellationToken);
     }
 
-    private async Task<MembershipRow?> ReadMembershipAsync(string key, CancellationToken cancellationToken)
+    private async Task<MembershipHead?> ReadMembershipAsync(string key, CancellationToken cancellationToken)
     {
+        // Every caller of this method uses the row for exactly two things: the
+        // group shard to retract from and the numeric to subtract. None reads the
+        // member, so the member string is decoded here only to be dropped - once
+        // per contribute and once per retract, on every set-union view. See
+        // DecodeMembershipHead: the member's length prefix is still read and
+        // still bounded, so the row is validated exactly as strictly.
         var bytes = await store.GetAsync(key, cancellationToken);
-        return bytes is null || IsEmpty(bytes) ? null : DecodeMembership(bytes);
+        return bytes is null || IsEmpty(bytes) ? null : DecodeMembershipHead(bytes);
     }
 
     private async Task<AccumulatorRow?> ReadAccumulatorAsync(string key, CancellationToken cancellationToken)

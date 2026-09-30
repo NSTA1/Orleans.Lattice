@@ -314,13 +314,22 @@ public sealed class RepoContextComposeShutdownBehaviourTests
         using var process = new Process { StartInfo = startInfo };
 
         process.Start();
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
+
+        // Both pipes must be drained concurrently. Awaiting stdout to EOF before
+        // starting the stderr read deadlocks the moment the child fills the unread
+        // stderr buffer, and it deadlocks inside that await - before WaitForExit is
+        // reached - so the timeout below cannot bound it. `docker compose` writes its
+        // pull, build and shutdown progress to stderr, which is exactly that case.
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(timeout))
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException($"'docker {args}' did not complete within {timeout}.");
         }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
 
         return (process.ExitCode, stdout + Environment.NewLine + stderr);
     }

@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
@@ -72,6 +70,15 @@ internal sealed class RepoContextMemoryArchiveOptions
     /// </summary>
     internal static readonly TimeSpan MinimumInterval = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The ceiling the export cadence is clamped to: the longest delay a timer can wait
+    /// (<c>0xFFFFFFFE</c> milliseconds, about 49.7 days). The cadence is awaited with
+    /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>, which throws
+    /// for anything longer, and that fault would end the archive loop - and, under the
+    /// default hosted-service exception behaviour, the host with it.
+    /// </summary>
+    internal static readonly TimeSpan MaximumInterval = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <summary>The ceiling the stop-time export budget is clamped to.</summary>
     internal static readonly TimeSpan MaximumStopTimeout = TimeSpan.FromSeconds(60);
 
@@ -111,8 +118,22 @@ internal sealed class RepoContextMemoryArchiveOptions
     /// <summary>Whether an archive directory was configured at all.</summary>
     public bool IsEnabled => !string.IsNullOrWhiteSpace(Directory);
 
-    /// <summary>The export cadence actually in force, with <see cref="MinimumInterval"/> applied.</summary>
-    public TimeSpan EffectiveInterval => Interval < MinimumInterval ? MinimumInterval : Interval;
+    /// <summary>
+    /// The export cadence actually in force, clamped to the range
+    /// [<see cref="MinimumInterval"/>, <see cref="MaximumInterval"/>].
+    /// </summary>
+    public TimeSpan EffectiveInterval
+    {
+        get
+        {
+            if (Interval < MinimumInterval)
+            {
+                return MinimumInterval;
+            }
+
+            return Interval > MaximumInterval ? MaximumInterval : Interval;
+        }
+    }
 
     /// <summary>The stop-time export budget actually in force, clamped to the supported range.</summary>
     public TimeSpan EffectiveStopTimeout
@@ -150,19 +171,7 @@ internal sealed class RepoContextMemoryArchiveOptions
     }
 
     private static TimeSpan ReadSeconds(string key, TimeSpan fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(key);
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return fallback;
-        }
-
-        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
-            && seconds > 0
-            && !double.IsInfinity(seconds)
-                ? TimeSpan.FromSeconds(seconds)
-                : fallback;
-    }
+        => RepoContextEnvironmentDurations.ReadSeconds(key, fallback, allowZero: false);
 
     private static RepoContextMemoryArchiveRestoreMode ReadRestoreMode(
         RepoContextMemoryArchiveRestoreMode fallback)

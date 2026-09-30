@@ -3,6 +3,7 @@ using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -105,9 +106,10 @@ public class LatticeOptionsResolverRegistryCoalescingTests
 
         // Wait until the first read is genuinely inside the registry call, so a
         // pass cannot come from the followers merely being scheduled late.
-        var spun = 0;
-        while (entered() == 0 && spun++ < 500)
-            await Task.Delay(10);
+        await TestPoll.UntilAsync(
+            () => entered() > 0,
+            "the first resolve to enter the gated registry call",
+            TimeSpan.FromSeconds(5));
         Assert.That(entered(), Is.EqualTo(1), "the first resolve must be inside the registry call");
 
         var followers = Enumerable.Range(0, 32)
@@ -166,9 +168,10 @@ public class LatticeOptionsResolverRegistryCoalescingTests
         var a = resolver.ResolveAsync(UniqueTree());
         var b = resolver.ResolveAsync(UniqueTree());
 
-        var spun = 0;
-        while (entered() < 2 && spun++ < 500)
-            await Task.Delay(10);
+        await TestPoll.UntilAsync(
+            () => entered() >= 2,
+            "both tree resolves to enter the gated registry call",
+            TimeSpan.FromSeconds(5));
 
         Assert.That(calls(), Is.EqualTo(2),
             "two distinct trees must each get their own read.");
@@ -222,9 +225,11 @@ public class LatticeOptionsResolverRegistryCoalescingTests
         var treeId = UniqueTree();
 
         var first = resolver.ResolveAsync(treeId);
-        var spun = 0;
-        while (Volatile.Read(ref entered) == 0 && spun++ < 500)
-            await Task.Delay(10);
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref entered) > 0,
+            "the failing first resolve to enter the gated registry call, so the next "
+            + "resolver call joins that flight instead of starting a second one",
+            TimeSpan.FromSeconds(5));
 
         var joiner = resolver.ResolveAsync(treeId);
         gate.SetResult();

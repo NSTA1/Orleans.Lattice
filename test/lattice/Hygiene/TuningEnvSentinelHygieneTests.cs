@@ -571,9 +571,16 @@ public sealed class TuningEnvSentinelHygieneTests
                 continue;
             }
 
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
+            // Both pipes must be drained concurrently. Reading one to EOF while the
+            // other is unread deadlocks the moment the child fills the unread pipe's
+            // buffer, and it deadlocks INSIDE the read, before WaitForExit is ever
+            // reached, so the 120s bound below cannot apply. This helper exists to run
+            // a script whose failure output goes to stderr, which is exactly that case.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             process.WaitForExit(milliseconds: 120_000);
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
 
             return (process.ExitCode, stdout + stderr);
         }

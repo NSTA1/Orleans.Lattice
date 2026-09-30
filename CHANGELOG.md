@@ -56,6 +56,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Aggregation same-group re-contribution.** A min, max or set-union contribution that keeps its group sent its retraction and its addition to the same shard row, so the applier read, spliced and wrote that row twice. One fused splice now does it: 44% faster, 48% less allocated. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation fold re-contribution.** The custom-fold contribution path fuses the same way, and saves more: each redundant row walk also copied every member's opaque value payload. The fused splice is 46% faster and allocates 48% less. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
+
+- **Performance - History view drain reshape.** The history drain re-serialised every row it shaped, including the rows retention left untouched, reproducing bytes it already held. It now keeps the original bytes when shaping is a no-op: 47% faster and 49% less allocated on a CRDT delta row. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation contribution row splice.** Changing one entry of a group shard decoded the whole row into a map and re-encoded it, and every membership read decoded a member no caller uses. Rows are spliced in place instead: up to 69% faster and 79% less allocated. ([#3981](https://github.com/NSTA1/Orleans.Lattice/pull/3981)) (`Orleans.Lattice`)
+
 - **Performance - Aggregation group re-materialise.** Re-folding a group decoded every shard into a keyed map, materialising a source-key string per entry that the fold never looks up. It now walks the row directly: the min/max gather allocates nothing at all, and the set-union gather 59% less. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation saga operation id.** Every numeric contribution and retraction interpolated a payload string purely to transcode it into the buffer that hashes it, then built the id from three more. It now composes those bytes in place and formats once, a third faster. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
@@ -92,11 +100,26 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Apps - An app role is held by binding.** A member of a bound group holds the role; the caller's other rights never add one, and the access gate is asked only to take it away, so a deny on a bound member withholds the role in the workspace and the app's MCP tools and is enforced on the bridge. ([#3902](https://github.com/NSTA1/Orleans.Lattice/issues/3902)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Mcp.Apps`)
 
+- **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
+- **Config - Tenant lease cycle timeout above the timer ceiling.** With `LeaseInterval` and `LeaseCycleTimeout` both longer than a timer can wait (about 49.7 days), the rate-budget lease loop died on its first cycle and never apportioned a rate. The timeout now clamps to the ceiling. ([#4013](https://github.com/NSTA1/Orleans.Lattice/issues/4013)) (`Orleans.Lattice.Tenancy`)
+- **Config - ANN slice budgets above the timer ceiling.** An open or ingest slice budget longer than a timer can wait (about 49.7 days) faulted every open attempt and every build slice that waited, so the approximate index never opened or built. Both deadlines now clamp to the ceiling. ([#4014](https://github.com/NSTA1/Orleans.Lattice/issues/4014)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 - **CRDT - Counter component overflow.** A G-Counter or PN-Counter advance past `long.MaxValue` wrapped the component negative, so the pointwise-max merge discarded it and the write succeeded having counted nothing. It now throws `OverflowException` and writes nothing. ([#3926](https://github.com/NSTA1/Orleans.Lattice/issues/3926)) (`Orleans.Lattice`)
 
 - **Observability - Telemetry step overflow.** A range query whose step was too large to multiply, on a catalogue entry declaring no step ceiling, threw `OverflowException`. The rate window and defaulted span now saturate, so the deployment step guardrail rejects it as a bounds violation. ([#3924](https://github.com/NSTA1/Orleans.Lattice/issues/3924)) (`Orleans.Lattice.Api.Telemetry`)
 
 - **Config - Telemetry request timeout ceiling.** A `RequestTimeout` longer than `HttpClient` accepts (`int.MaxValue` milliseconds) passed validation and then failed every resolution of the backend client. Validation now rejects it, naming the ceiling. ([#3925](https://github.com/NSTA1/Orleans.Lattice/issues/3925)) (`Orleans.Lattice.Api.Telemetry`)
+
+- **Config - Embedding request timeout ceiling.** An `OnyxEmbeddingOptions.RequestTimeout` that `HttpClient` refuses (non-positive, or above `int.MaxValue` milliseconds) made every embedding health probe and embed call throw instead of failing closed. Validation now rejects it. ([#3966](https://github.com/NSTA1/Orleans.Lattice/issues/3966)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Config - Unrepresentable RepoContext durations.** A seconds variable too large for a `TimeSpan`, such as `1e20` or `Infinity`, stopped the host at startup instead of falling back to its default, and a memory archive cadence above about 49.7 days ended the archive loop. It now falls back or clamps. ([#3968](https://github.com/NSTA1/Orleans.Lattice/issues/3968)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Config - Self-index tick above the timer ceiling.** A `LATTICE_SELFINDEX_TICK_SECONDS` longer than a grain timer can wait (about 49.7 days) failed repository onboarding and every keep-alive re-arm, and one just under it failed at random. The tick now runs at the ceiling. ([#3991](https://github.com/NSTA1/Orleans.Lattice/issues/3991)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Replication - The leaf snapshot feed lost expiry and saga state.** It rebuilt every exported row as a durable committed value, so a TTL row outlived its lease and an in-flight saga's prepared write or delete surfaced as committed. Rows now keep their expiry, and prepared rows stay prepared. ([#3989](https://github.com/NSTA1/Orleans.Lattice/issues/3989)) (`Orleans.Lattice.Replication`)
+
+- **Dashboards - Panels filtered on labels their series lack.** The Backup scope selector offered no values and blanked most panels, the CommitPath retry-attempts line drew a permanent zero, and the Replication fell-off-log panel never showed data. Each now filters on labels its instrument carries. ([#3990](https://github.com/NSTA1/Orleans.Lattice/issues/3990)) (`Orleans.Lattice.Dashboards`)
+
+- **Backup - Timings above the timer ceiling.** A `CrossTreeFencePollInterval` or `SinkSharingProbeTimeout` longer than a timer can wait (about 49.7 days) passed validation, then failed every cross-tree capture that had to wait, or blocked silo start. Validation now rejects it. ([#3967](https://github.com/NSTA1/Orleans.Lattice/issues/3967)) (`Orleans.Lattice.Backup`)
 
 - **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)
 
@@ -200,11 +223,17 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A metric allow-list admitted names it was not written for.** Wildcard entries anchored with `$` and matched with `Singleline`, so a caller-supplied name carrying a newline satisfied a deny-all pattern. Entries now anchor with `\z`, reject newlines, and match without backtracking. ([#3929](https://github.com/NSTA1/Orleans.Lattice/pull/3929)) (`Orleans.Lattice.Api.Telemetry`)
+
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
+
+- **Security - A rejected MCP call echoed the caller's argument names.** Unknown argument names reached the rejection message and the server log verbatim and unbounded, so a caller could forge a log record with CR/LF. Names are now sanitized, truncated, and capped in number. ([#3972](https://github.com/NSTA1/Orleans.Lattice/pull/3972)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - A single-key allow certified a whole prefix.** An app role scoped to a key prefix probed its key filter with the prefix string, which resolves on the exact-key tier, so a policy allowing only the key equal to that prefix held the role prefix-wide. Filtered decisions now fail closed. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp.Apps`)
 
 - **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
+
+- **Security - An Explorer sign-out could be undone.** Logout needs no sign-in, so junk cookie values flushed the bounded revocation ledger and resurrected a credential. Only minted values are admitted now, and a credential carries the endpoint it was minted for and is refused elsewhere. ([#3972](https://github.com/NSTA1/Orleans.Lattice/pull/3972)) (`Orleans.Lattice.Explorer`)
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 

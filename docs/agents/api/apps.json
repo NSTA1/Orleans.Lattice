@@ -1068,7 +1068,7 @@
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Uninstalling an already uninstalled record is an idempotent no-op; uninstall withdraws grants and soft-deletes structural trees, adopted trees are untouched, and uninstall never purges data itself, but each soft-deleted structural tree is purged by the core once its soft-delete window elapses unless the app is installed and enabled again first.",
+        "basis": "Uninstalling an already uninstalled record is an idempotent no-op; uninstall withdraws the app rules, soft-deletes structural trees, never touches adopted trees but releases their ownership claims, and never purges data itself; the core purges each soft-deleted structural tree once its soft-delete window elapses unless it is recovered first.",
         "source": "docs/lattice.api.apps/README.md"
       },
       "concurrency": {

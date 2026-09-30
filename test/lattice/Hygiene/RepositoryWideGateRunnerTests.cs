@@ -205,16 +205,13 @@ public sealed class RepositoryWideGateRunnerTests
         psi.ArgumentList.Add("-Project");
         psi.ArgumentList.Add(project);
 
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var (exitCode, stdout, stderr) = RunRunner(psi);
 
         Assert.That(
-            process.ExitCode,
+            exitCode,
             Is.Zero,
             $"{RunnerRelativePath} -Emit -Fixture {fixture} -Project {project} exited "
-                + $"{process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}"
+                + $"{exitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}"
                 + $"{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
         var cells = stdout.Trim().Split('\t');
@@ -225,6 +222,30 @@ public sealed class RepositoryWideGateRunnerTests
                 + $"-Fixture {fixture} -Project {project}: '{stdout.Trim()}'");
 
         return cells[3].Trim();
+    }
+
+    /// <summary>
+    /// Runs the prepared shell invocation and returns its exit code and both captured
+    /// streams.
+    /// <para>
+    /// Both pipes are drained concurrently. Reading one to EOF while the other is
+    /// unread deadlocks the moment the child fills the unread pipe's buffer, and it
+    /// deadlocks <em>inside</em> the read, before <c>WaitForExit</c> is ever reached,
+    /// so no timeout bounds it. The runner is verbose on both streams - a failing
+    /// gate prints its own diagnostics to stderr while the run list streams to
+    /// stdout - which is exactly the case that reaches it.
+    /// </para>
+    /// </summary>
+    private static (int ExitCode, string StandardOutput, string StandardError) RunRunner(ProcessStartInfo psi)
+    {
+        using var process = Process.Start(psi)!;
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        return (
+            process.ExitCode,
+            stdoutTask.GetAwaiter().GetResult(),
+            stderrTask.GetAwaiter().GetResult());
     }
 
     private static string? FindShell()
@@ -285,15 +306,12 @@ public sealed class RepositoryWideGateRunnerTests
         psi.ArgumentList.Add(RunnerPath);
         psi.ArgumentList.Add("-Emit");
 
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var (exitCode, stdout, stderr) = RunRunner(psi);
 
         Assert.That(
-            process.ExitCode,
+            exitCode,
             Is.Zero,
-            $"{RunnerRelativePath} -Emit exited {process.ExitCode}.{Environment.NewLine}"
+            $"{RunnerRelativePath} -Emit exited {exitCode}.{Environment.NewLine}"
                 + $"stdout:{Environment.NewLine}{stdout}{Environment.NewLine}"
                 + $"stderr:{Environment.NewLine}{stderr}");
 
@@ -855,10 +873,7 @@ public sealed class RepositoryWideGateRunnerTests
         psi.ArgumentList.Add("-Fixture");
         psi.ArgumentList.Add(BogusFixtureName);
 
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var (exitCode, stdout, stderr) = RunRunner(psi);
 
         var detail = $"{Environment.NewLine}stdout:{Environment.NewLine}{stdout}"
             + $"{Environment.NewLine}stderr:{Environment.NewLine}{stderr}";
@@ -895,7 +910,7 @@ public sealed class RepositoryWideGateRunnerTests
                     + $"zero. The reader cannot represent the value it exists to read.{detail}");
 
             Assert.That(
-                process.ExitCode,
+                exitCode,
                 Is.Not.Zero,
                 $"A run in which nothing executed exited zero, which reads as a pass.{detail}");
 
