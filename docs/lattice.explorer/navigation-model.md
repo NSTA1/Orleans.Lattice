@@ -216,6 +216,18 @@ a pasted link) only establishes the tenant, so it announces nothing. A refused
 switch is still a warning toast, which stays until it is dismissed, because it
 left you somewhere you did not ask to be.
 
+**Before the page is interactive.** The tenant you last held is remembered in
+the browser's preference store, which the server prerender cannot read. So for a
+caller who can reach more than one tenant, the prerender of an address that names
+no tenant shows a neutral **Resolving your tenant** state instead of the page:
+no page content, no redirect, no tenant-rooted link and no tenant switcher under
+a tenant it could only guess. Once the page is interactive, the Explorer reads
+the preference store first, restores the remembered tenant (revalidated against
+the tenants you may reach), and only then redirects to the canonical `/t/{tenant}`
+address. An address that names a tenant still decides it during the prerender,
+and a caller with one reachable tenant is never held. If the reachable tenants
+cannot be read, the prerender fails closed to the neutral state.
+
 To re-root the current address, type `t/` in the address line. It completes the
 tenants you may reach, marking the active one. Choosing one keeps the rest of the
 address and replaces its tenant root; a cluster-wide address is unchanged.
@@ -229,12 +241,15 @@ tenancy model and the Tenancy area.
 
 A platform operator who can reach two or more tenants also gets a tenant switcher
 in the top bar. It is a button naming the active tenant; selecting it opens a
-panel with a type-ahead field of the tenants you can reach, which lists up to 20
-at once and narrows as you type. Down lists the tenants, Enter switches, and
-Escape closes the panel and returns focus to the button. The palette command
+panel and moves focus into a field that lists the tenants you can reach straight
+away, up to 20 at once, with the active tenant named under the field. Typing
+filters the list ("Type to filter"), Down and Up move through it, Enter switches,
+and one Escape closes the list and the panel together and returns focus to the
+button. Opening it closes any other header panel. The palette command
 `tenant.switch` ("Switch tenant") opens the same field, and the button carries
 that command id. At the compact width the switcher is the field itself, at the
-top of the **Directory** sheet above the spine.
+top of the **Directory** sheet above the spine, and focusing it lists the
+tenants in the same way.
 
 The switcher is absent, not disabled, unless every condition holds: you are
 signed in, tenancy is on for you, the operator-gated switcher proves you may
