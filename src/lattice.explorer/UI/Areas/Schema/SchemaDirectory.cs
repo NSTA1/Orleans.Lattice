@@ -14,9 +14,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// The facade answers per tree, so a listing asks each tree. It asks a bounded
 /// number of trees (<see cref="MaximumInspected"/>) at a bounded concurrency
 /// (<see cref="Concurrency"/>) and says so when a cluster holds more; any tree is
-/// still reachable by its address. Everything remembered is keyed on the tenant
-/// the circuit asserts, so a tenant switch reads again rather than listing one
-/// tenant's trees under another.
+/// still reachable by its address. Everything remembered is keyed on the caller
+/// (<see cref="SchemaFacades.Caller"/>: the sign-in, the endpoint and the asserted
+/// tenant), so a new caller or a tenant switch reads again rather than listing one
+/// caller's trees for another.
 /// </remarks>
 internal sealed class SchemaDirectory
 {
@@ -33,9 +34,9 @@ internal sealed class SchemaDirectory
     private readonly SchemaTreeCatalog _catalog;
     private readonly TimeProvider _time;
     private SchemaDirectoryRead? _read;
-    private string? _readTenant;
+    private ShellCallerKey _readCaller;
     private IReadOnlyDictionary<string, SchemaAppDeclaration>? _declarations;
-    private string? _declarationsTenant;
+    private ShellCallerKey _declarationsCaller;
 
     /// <summary>Creates the directory over the circuit's facades and tree catalogue.</summary>
     /// <param name="facades">The area's facades.</param>
@@ -52,11 +53,10 @@ internal sealed class SchemaDirectory
     }
 
     /// <summary>
-    /// The last listing read under the tenant the circuit asserts now, or
-    /// <see langword="null"/> before the first; a listing read under another tenant
-    /// is never returned.
+    /// The last listing read for the caller now, or <see langword="null"/> before the
+    /// first; a listing read for another caller is never returned.
     /// </summary>
-    public SchemaDirectoryRead? Last => SameTenant(_readTenant, _facades.AssertedTenant) ? _read : null;
+    public SchemaDirectoryRead? Last => _readCaller == _facades.Caller ? _read : null;
 
     /// <summary>Lists the trees and their schema state.</summary>
     /// <param name="refresh">Read again even when the remembered listing is fresh.</param>
@@ -66,10 +66,10 @@ internal sealed class SchemaDirectory
     /// <exception cref="NotSupportedException">The head serves no schema administration.</exception>
     public async Task<SchemaDirectoryRead> GetAsync(bool refresh, CancellationToken cancellationToken)
     {
-        var tenant = _facades.AssertedTenant;
+        var caller = _facades.Caller;
         if (!refresh
             && _read is { } remembered
-            && SameTenant(_readTenant, tenant)
+            && _readCaller == caller
             && _time.GetUtcNow() - remembered.ReadAt < Freshness)
         {
             return remembered;
@@ -98,10 +98,10 @@ internal sealed class SchemaDirectory
             trees.Count,
             inspected.Count < trees.Count || _catalog.Truncated,
             _time.GetUtcNow());
-        if (SameTenant(_facades.AssertedTenant, tenant))
+        if (_facades.Caller == caller)
         {
             _read = read;
-            _readTenant = tenant;
+            _readCaller = caller;
         }
 
         return read;
@@ -118,7 +118,7 @@ internal sealed class SchemaDirectory
         var schema = _facades.RequireSchema();
         var declarations = await GetDeclarationsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         var row = await ReadRowAsync(schema, treeId, declarations, cancellationToken).ConfigureAwait(false);
-        if (_read is { } read && SameTenant(_readTenant, _facades.AssertedTenant))
+        if (_read is { } read && _readCaller == _facades.Caller)
         {
             _read = read.Replace(row);
         }
@@ -214,8 +214,8 @@ internal sealed class SchemaDirectory
 
     private async Task<IReadOnlyDictionary<string, SchemaAppDeclaration>> GetDeclarationsAsync(bool refresh, CancellationToken cancellationToken)
     {
-        var tenant = _facades.AssertedTenant;
-        if (!refresh && _declarations is { } remembered && SameTenant(_declarationsTenant, tenant))
+        var caller = _facades.Caller;
+        if (!refresh && _declarations is { } remembered && _declarationsCaller == caller)
         {
             return remembered;
         }
@@ -263,14 +263,12 @@ internal sealed class SchemaDirectory
             }
         }
 
-        if (SameTenant(_facades.AssertedTenant, tenant))
+        if (_facades.Caller == caller)
         {
             _declarations = declarations;
-            _declarationsTenant = tenant;
+            _declarationsCaller = caller;
         }
 
         return declarations;
     }
-
-    private static bool SameTenant(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
 }

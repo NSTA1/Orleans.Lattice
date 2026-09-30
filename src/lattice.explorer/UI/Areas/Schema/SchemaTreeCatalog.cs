@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -12,7 +13,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// from the catalogue. Physical trees are filtered out: a resize or restore
 /// shadow appears in the registry beside the logical tree that aliases it, and the
 /// Schema area never shows a physical id. The remembered list is keyed on the
-/// tenant the circuit asserts, so a tenant switch reads the catalogue again.
+/// caller (<see cref="SchemaFacades.Caller"/>), so a sign-in, a sign-out, a new
+/// connection or a tenant switch reads the catalogue again.
 /// </remarks>
 /// <param name="facades">The area's facades.</param>
 /// <param name="time">The clock the freshness window is measured on.</param>
@@ -39,10 +41,10 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
     /// <exception cref="InvalidOperationException">No cluster connection is configured.</exception>
     public async Task<IReadOnlyList<string>> GetAsync(bool refresh, CancellationToken cancellationToken)
     {
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         if (!refresh
             && _remembered is { } remembered
-            && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal)
+            && remembered.Caller == caller
             && time.GetUtcNow() - remembered.ReadAt < Freshness)
         {
             return remembered.Trees;
@@ -70,12 +72,11 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
         var trees = Project(entries);
         Truncated = token is not null;
 
-        // Remembered only for the tenant it was read under, and only while the
-        // circuit still asserts it, so one tenant's trees are never listed for
-        // another.
-        if (string.Equals(facades.AssertedTenant, tenant, StringComparison.Ordinal))
+        // Remembered only for the caller it was read for, and only while that is
+        // still the caller, so one caller's trees are never listed for another.
+        if (facades.Caller == caller)
         {
-            _remembered = new Remembered(trees, tenant, time.GetUtcNow());
+            _remembered = new Remembered(trees, caller, time.GetUtcNow());
         }
 
         return trees;
@@ -104,6 +105,6 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
             .ToArray();
     }
 
-    /// <summary>A read catalogue, the tenant it was read under, and when.</summary>
-    private sealed record Remembered(IReadOnlyList<string> Trees, string? Tenant, DateTimeOffset ReadAt);
+    /// <summary>A read catalogue, the caller it was read for, and when.</summary>
+    private sealed record Remembered(IReadOnlyList<string> Trees, ShellCallerKey Caller, DateTimeOffset ReadAt);
 }

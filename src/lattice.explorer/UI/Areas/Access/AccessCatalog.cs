@@ -16,13 +16,18 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// policy store keeps a bounded, cheap completion rather than a slow, exhaustive one.
 /// </remarks>
 /// <param name="admin">The auth facade.</param>
-/// <param name="tenant">The circuit's asserted tenant: everything memoised belongs to the tenant it was read under.</param>
-internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant? tenant = null)
+/// <param name="tenant">The circuit's asserted tenant, read when no <paramref name="caller"/> is given.</param>
+/// <param name="caller">
+/// The circuit's caller: everything memoised belongs to the sign-in, endpoint and
+/// tenant it was read for. When <see langword="null"/>, a caller over
+/// <paramref name="tenant"/> alone is used.
+/// </param>
+internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant? tenant = null, ShellCaller? caller = null)
 {
     private static readonly AuthPageRequest CompletionPage = new() { PageSize = AuthPageRequest.MaxPageSize };
 
-    private readonly ShellAssertedTenant _tenant = tenant ?? ShellAssertedTenant.None;
-    private string? _memoTenant;
+    private readonly ShellCaller _caller = caller ?? new ShellCaller(tenant: tenant);
+    private ShellCallerKey _memoCaller;
     private AccessModelDescriptor? _model;
     private IReadOnlyList<AuthGroup>? _groups;
     private IReadOnlyList<LatticeAuthorizationRule>? _rules;
@@ -37,7 +42,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// <param name="cancellationToken">Cancels the read.</param>
     public async Task<AccessModelDescriptor?> GetAccessModelAsync(CancellationToken cancellationToken)
     {
-        var tenant = ForgetIfTenantChanged();
+        var key = ForgetIfTheCallerChanged();
         if (_model is not null)
         {
             return _model;
@@ -53,7 +58,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
             return null;
         }
 
-        if (ShellAssertedTenant.Same(ForgetIfTenantChanged(), tenant))
+        if (ForgetIfTheCallerChanged() == key)
         {
             _model = model;
         }
@@ -65,7 +70,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// <param name="cancellationToken">Cancels the read.</param>
     public async Task<IReadOnlyList<AuthGroup>> GetGroupsAsync(CancellationToken cancellationToken)
     {
-        var tenant = ForgetIfTenantChanged();
+        var key = ForgetIfTheCallerChanged();
         if (_groups is { } remembered)
         {
             return remembered;
@@ -73,7 +78,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
 
         var page = await Admin.ListGroupsAsync(CompletionPage, cancellationToken).ConfigureAwait(true);
         IReadOnlyList<AuthGroup> groups = page?.Entries ?? [];
-        if (ShellAssertedTenant.Same(ForgetIfTenantChanged(), tenant))
+        if (ForgetIfTheCallerChanged() == key)
         {
             _groups = groups;
         }
@@ -85,7 +90,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// <param name="cancellationToken">Cancels the read.</param>
     public async Task<IReadOnlyList<LatticeAuthorizationRule>> GetRulesAsync(CancellationToken cancellationToken)
     {
-        var tenant = ForgetIfTenantChanged();
+        var key = ForgetIfTheCallerChanged();
         if (_rules is { } remembered)
         {
             return remembered;
@@ -93,7 +98,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
 
         var page = await Admin.ListRulesAsync(CompletionPage, cancellationToken).ConfigureAwait(true);
         IReadOnlyList<LatticeAuthorizationRule> rules = page?.Entries ?? [];
-        if (ShellAssertedTenant.Same(ForgetIfTenantChanged(), tenant))
+        if (ForgetIfTheCallerChanged() == key)
         {
             _rules = rules;
         }
@@ -108,18 +113,18 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
         _rules = null;
     }
 
-    /// <summary>Forgets everything read under another tenant, and returns the tenant asserted now.</summary>
-    private string? ForgetIfTenantChanged()
+    /// <summary>Forgets everything read for another caller, and returns the caller now.</summary>
+    private ShellCallerKey ForgetIfTheCallerChanged()
     {
-        var tenant = _tenant.AssertedTenant;
-        if (!ShellAssertedTenant.Same(_memoTenant, tenant))
+        var key = _caller.Current;
+        if (_memoCaller != key)
         {
-            _memoTenant = tenant;
+            _memoCaller = key;
             _model = null;
             _groups = null;
             _rules = null;
         }
 
-        return tenant;
+        return key;
     }
 }

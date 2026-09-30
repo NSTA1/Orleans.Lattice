@@ -10,10 +10,10 @@ namespace Orleans.Lattice.Explorer.UI.Suggestions;
 /// </summary>
 /// <remarks>Without tenancy there is no tenant to choose, and the field says so.</remarks>
 /// <param name="tenancy">The caller's tenancy.</param>
-/// <param name="tenant">The circuit's asserted tenant.</param>
+/// <param name="caller">The circuit's caller.</param>
 /// <param name="time">The clock the freshness window is measured on.</param>
-internal sealed class TenantSuggestionSource(ExplorerTenancy tenancy, ShellAssertedTenant? tenant, TimeProvider? time)
-    : CachedSuggestionSource(tenant, time)
+internal sealed class TenantSuggestionSource(ExplorerTenancy tenancy, ShellCaller? caller, TimeProvider? time)
+    : CachedSuggestionSource(caller, time)
 {
     /// <summary>The detail beside the active tenant.</summary>
     public const string ActiveDetail = "Active tenant";

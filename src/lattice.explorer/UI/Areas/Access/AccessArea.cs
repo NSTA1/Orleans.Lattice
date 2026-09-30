@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
-using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Transport;
 
@@ -22,9 +21,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// the facade, no connection - hides the area.
 /// </para>
 /// <para>
-/// The verdict is memoised per circuit for the identity and the asserted tenant it
-/// was reached under, so the directory's per-navigation ask is free until either
-/// changes.
+/// The verdict is memoised per circuit for the caller it was reached for (the
+/// sign-in, the endpoint and the asserted tenant), so the directory's
+/// per-navigation ask is free until any of them changes.
 /// </para>
 /// </remarks>
 internal sealed class AccessArea : IExplorerArea
@@ -35,10 +34,10 @@ internal sealed class AccessArea : IExplorerArea
     private static readonly AuthPageRequest ProbePage = new() { PageSize = 1 };
 
     private readonly ILatticeAuthAdmin? _admin;
-    private readonly IExplorerAuthSession? _session;
     private readonly AccessCatalog? _catalog;
     private readonly ShellAssertedTenant _tenant;
-    private (bool Authenticated, string? User, string? Tenant, AreaAvailability Availability)? _verdict;
+    private readonly ShellCaller _caller;
+    private (ShellCallerKey Caller, AreaAvailability Availability)? _verdict;
 
     /// <summary>Creates the area over the circuit's services, any of which may be absent.</summary>
     /// <param name="services">The circuit's services.</param>
@@ -46,9 +45,9 @@ internal sealed class AccessArea : IExplorerArea
     {
         ArgumentNullException.ThrowIfNull(services);
         _admin = services.GetShellFacade<ILatticeAuthAdmin>();
-        _session = services.GetService<IExplorerAuthSession>();
         _tenant = services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None;
-        _catalog = _admin is null ? null : services.GetService<AccessCatalog>() ?? new AccessCatalog(_admin, _tenant);
+        _caller = ShellCaller.Of(services);
+        _catalog = _admin is null ? null : services.GetService<AccessCatalog>() ?? new AccessCatalog(_admin, _tenant, _caller);
         Completions = _catalog is null ? null : new AccessCompletionSource(_catalog);
         Commands =
         [
@@ -103,21 +102,16 @@ internal sealed class AccessArea : IExplorerArea
             return AreaAvailability.Hidden;
         }
 
-        var authenticated = _session?.IsAuthenticated == true;
-        var user = _session?.Username;
-        var tenant = _tenant.AssertedTenant;
-        if (_verdict is { } memo
-            && memo.Authenticated == authenticated
-            && string.Equals(memo.User, user, StringComparison.Ordinal)
-            && ShellAssertedTenant.Same(memo.Tenant, tenant))
+        var caller = _caller.Current;
+        if (_verdict is { } memo && memo.Caller == caller)
         {
             return memo.Availability;
         }
 
-        var availability = await ProbeAsync(authenticated, cancellationToken).ConfigureAwait(true);
-        if (ShellAssertedTenant.Same(_tenant.AssertedTenant, tenant))
+        var availability = await ProbeAsync(caller.Authenticated, cancellationToken).ConfigureAwait(true);
+        if (_caller.Current == caller)
         {
-            _verdict = (authenticated, user, tenant, availability);
+            _verdict = (caller, availability);
         }
 
         return availability;

@@ -10,15 +10,15 @@ namespace Orleans.Lattice.Explorer.UI.Suggestions;
 /// replication peer report names.
 /// </summary>
 /// <remarks>
-/// Read once per circuit and tenant, for at most the freshness window. A head
+/// Read once per caller (sign-in, endpoint and tenant), for at most the freshness window. A head
 /// that serves no replication report cannot name its regions; the field then
 /// accepts a typed region id and says why.
 /// </remarks>
 /// <param name="status">The replication peer report, or <see langword="null"/> when the head serves none.</param>
-/// <param name="tenant">The circuit's asserted tenant.</param>
+/// <param name="caller">The circuit's caller.</param>
 /// <param name="time">The clock the freshness window is measured on.</param>
-internal sealed class RegionSuggestionSource(ILatticeReplicationStatus? status, ShellAssertedTenant? tenant, TimeProvider? time)
-    : CachedSuggestionSource(tenant, time)
+internal sealed class RegionSuggestionSource(ILatticeReplicationStatus? status, ShellCaller? caller, TimeProvider? time)
+    : CachedSuggestionSource(caller, time)
 {
     /// <summary>The detail beside this cluster's own region.</summary>
     public const string LocalDetail = "This region";

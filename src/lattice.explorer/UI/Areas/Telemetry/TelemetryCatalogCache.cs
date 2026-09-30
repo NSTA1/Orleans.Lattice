@@ -22,27 +22,34 @@ internal sealed class TelemetryCatalogCache : IDisposable
     private readonly ILatticeTelemetry _telemetry;
     private readonly IExplorerAuthSession? _auth;
     private readonly IExplorerSession? _session;
-    private readonly ShellAssertedTenant _tenant;
+    private readonly ShellCaller _caller;
+    private readonly bool _ownsCaller;
     private readonly object _gate = new();
     private Task<TelemetryQueryCatalog>? _read;
-    private string? _readTenant;
+    private ShellCallerKey _readCaller;
 
     /// <summary>Creates the cache over the circuit's telemetry facade.</summary>
     /// <param name="telemetry">The telemetry facade.</param>
     /// <param name="auth">The circuit's sign-in session, whose changes invalidate the cache.</param>
     /// <param name="session">The circuit's connection session, whose changes invalidate the cache.</param>
-    /// <param name="tenant">The circuit's asserted tenant, which keys the cached answer.</param>
+    /// <param name="tenant">The circuit's asserted tenant, read when no <paramref name="caller"/> is given.</param>
+    /// <param name="caller">
+    /// The circuit's caller, which keys the cached answer; when <see langword="null"/>,
+    /// a caller over <paramref name="auth"/>, <paramref name="session"/> and <paramref name="tenant"/>.
+    /// </param>
     public TelemetryCatalogCache(
         [FromKeyedServices(ShellFacades.Key)] ILatticeTelemetry telemetry,
         IExplorerAuthSession? auth = null,
         IExplorerSession? session = null,
-        ShellAssertedTenant? tenant = null)
+        ShellAssertedTenant? tenant = null,
+        ShellCaller? caller = null)
     {
         ArgumentNullException.ThrowIfNull(telemetry);
         _telemetry = telemetry;
         _auth = auth;
         _session = session;
-        _tenant = tenant ?? ShellAssertedTenant.None;
+        _ownsCaller = caller is null;
+        _caller = caller ?? new ShellCaller(auth, session, tenant);
 
         if (_auth is not null)
         {
@@ -58,15 +65,15 @@ internal sealed class TelemetryCatalogCache : IDisposable
     /// <summary>Raised when the cached answer is dropped, so a page re-reads it.</summary>
     public event Action? Changed;
 
-    /// <summary>The catalogue, when it has been read successfully under the tenant asserted now; otherwise <see langword="null"/>.</summary>
+    /// <summary>The catalogue, when it has been read successfully for the caller now; otherwise <see langword="null"/>.</summary>
     public TelemetryQueryCatalog? Current
     {
         get
         {
-            var tenant = _tenant.AssertedTenant;
+            var caller = _caller.Current;
             lock (_gate)
             {
-                return _read is { IsCompletedSuccessfully: true } read && ShellAssertedTenant.Same(_readTenant, tenant) ? read.Result : null;
+                return _read is { IsCompletedSuccessfully: true } read && _readCaller == caller ? read.Result : null;
             }
         }
     }
@@ -76,14 +83,14 @@ internal sealed class TelemetryCatalogCache : IDisposable
     /// <returns>The catalogue.</returns>
     public Task<TelemetryQueryCatalog> GetAsync(CancellationToken cancellationToken = default)
     {
-        var tenant = _tenant.AssertedTenant;
+        var caller = _caller.Current;
         Task<TelemetryQueryCatalog> read;
         lock (_gate)
         {
-            if (_read is null || _read.IsCanceled || !ShellAssertedTenant.Same(_readTenant, tenant))
+            if (_read is null || _read.IsCanceled || _readCaller != caller)
             {
                 _read = ReadAsync();
-                _readTenant = tenant;
+                _readCaller = caller;
             }
 
             read = _read;
@@ -114,6 +121,11 @@ internal sealed class TelemetryCatalogCache : IDisposable
         if (_session is not null)
         {
             _session.ConfigurationChanged -= Invalidate;
+        }
+
+        if (_ownsCaller)
+        {
+            _caller.Dispose();
         }
     }
 

@@ -1,7 +1,5 @@
 using Orleans.Lattice.Api.TenantAdmin;
-using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
-using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
@@ -26,8 +24,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// <para>
 /// What is remembered belongs to one caller at one endpoint. The catalogue is
 /// filtered by the caller's own read rights and tenant scope, so the memo is keyed
-/// on the signed-in identity, the configured endpoint and the active tenant, and
-/// any change to one of them forgets it:
+/// on the caller (<see cref="ShellCaller"/>: the signed-in identity, the configured
+/// endpoint and the asserted tenant) and the active tenant, and any change to one
+/// of them forgets it:
 /// a catalogue read before sign-in never outlives the sign-in, and one identity's
 /// trees are never shown to the next after a sign-out.
 /// </para>
@@ -42,6 +41,7 @@ internal sealed class DataDirectory : IDisposable
 
     private readonly IServiceProvider _services;
     private readonly ExplorerTenancy _tenancy;
+    private readonly ShellCaller _callers;
     private readonly ComponentLifetime _lifetime = new();
     private readonly Lock _gate = new();
     private Task<IReadOnlyList<DataTreeEntry>>? _load;
@@ -50,7 +50,7 @@ internal sealed class DataDirectory : IDisposable
     private Dictionary<string, DataTreeEntry>? _byStateId;
     private string? _sharingNote;
     private int _generation;
-    private (bool Authenticated, string? User, string? Endpoint, string? Tenant) _caller;
+    private (ShellCallerKey Caller, string? Active) _caller;
 
     /// <summary>Creates the directory.</summary>
     /// <param name="services">The circuit's services, from which the catalogue reader is resolved lazily.</param>
@@ -61,6 +61,7 @@ internal sealed class DataDirectory : IDisposable
         ArgumentNullException.ThrowIfNull(tenancy);
         _services = services;
         _tenancy = tenancy;
+        _callers = ShellCaller.Of(services);
     }
 
     /// <summary>Raised when a refresh replaced the loaded entries.</summary>
@@ -280,12 +281,7 @@ internal sealed class DataDirectory : IDisposable
         }
     }
 
-    private (bool Authenticated, string? User, string? Endpoint, string? Tenant) CurrentCaller()
-    {
-        var auth = _services.GetService(typeof(IExplorerAuthSession)) as IExplorerAuthSession;
-        var session = _services.GetService(typeof(IExplorerSession)) as IExplorerSession;
-        return (auth?.IsAuthenticated == true, auth?.Username, session?.Current?.Endpoint, _tenancy.ActiveTenant);
-    }
+    private (ShellCallerKey Caller, string? Active) CurrentCaller() => (_callers.Current, _tenancy.ActiveTenant);
 
     private ICatalogReader? TryGetReader()
     {
@@ -334,7 +330,7 @@ internal sealed class DataDirectory : IDisposable
             var trees = await ReadAllAsync(reader, CatalogKind.Trees).ConfigureAwait(false);
             var views = await ReadViewsAsync(reader).ConfigureAwait(false);
             var owned = Build(trees, views);
-            var (shared, note) = await ReadSharedAsync(caller.Tenant, owned).ConfigureAwait(false);
+            var (shared, note) = await ReadSharedAsync(caller.Active, owned).ConfigureAwait(false);
             DataTreeEntry[] entries = shared.Count == 0 ? owned : [.. owned, .. shared];
             lock (_gate)
             {

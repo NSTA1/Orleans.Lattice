@@ -34,8 +34,9 @@ internal sealed class ReplicationDataSource : IDisposable
     private readonly IExplorerAuthSession? _auth;
     private readonly IExplorerSession? _session;
     private readonly ShellAssertedTenant _tenant;
+    private readonly ShellCaller _caller;
     private readonly object _gate = new();
-    private string? _memoTenant;
+    private ShellCallerKey _memoCaller;
     private (ReplicationRead<ReplicationEstate> Read, DateTimeOffset At)? _estate;
     private (ReplicationRead<ReplicationConfigReport> Read, DateTimeOffset At)? _config;
     private long _generation;
@@ -56,6 +57,7 @@ internal sealed class ReplicationDataSource : IDisposable
         _auth = services.GetService<IExplorerAuthSession>();
         _session = services.GetService<IExplorerSession>();
         _tenant = services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None;
+        _caller = ShellCaller.Of(services);
         if (_auth is not null)
         {
             _auth.AuthenticationChanged += Invalidate;
@@ -92,7 +94,7 @@ internal sealed class ReplicationDataSource : IDisposable
         long generation;
         lock (_gate)
         {
-            ForgetIfTenantChanged();
+            ForgetIfTheCallerChanged();
             if (!refresh && Fresh(_estate?.At))
             {
                 return _estate!.Value.Read;
@@ -104,7 +106,7 @@ internal sealed class ReplicationDataSource : IDisposable
         var read = await ReadLinksAsync(treeId: null, cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
-            ForgetIfTenantChanged();
+            ForgetIfTheCallerChanged();
             if (generation == _generation)
             {
                 _estate = (read, _time.GetUtcNow());
@@ -134,7 +136,7 @@ internal sealed class ReplicationDataSource : IDisposable
         long generation;
         lock (_gate)
         {
-            ForgetIfTenantChanged();
+            ForgetIfTheCallerChanged();
             if (!refresh && Fresh(_config?.At))
             {
                 return _config!.Value.Read;
@@ -164,7 +166,7 @@ internal sealed class ReplicationDataSource : IDisposable
 
         lock (_gate)
         {
-            ForgetIfTenantChanged();
+            ForgetIfTheCallerChanged();
             if (generation == _generation)
             {
                 _config = (read, _time.GetUtcNow());
@@ -249,15 +251,15 @@ internal sealed class ReplicationDataSource : IDisposable
 
     /// <summary>
     /// Forgets both reads, and moves the generation on so a read in flight is not
-    /// remembered, when the circuit asserts a different tenant from the one they
-    /// were read under. Call under the gate.
+    /// remembered, when the caller (sign-in, endpoint or asserted tenant) differs
+    /// from the one they were read for. Call under the gate.
     /// </summary>
-    private void ForgetIfTenantChanged()
+    private void ForgetIfTheCallerChanged()
     {
-        var tenant = _tenant.AssertedTenant;
-        if (!ShellAssertedTenant.Same(_memoTenant, tenant))
+        var caller = _caller.Current;
+        if (_memoCaller != caller)
         {
-            _memoTenant = tenant;
+            _memoCaller = caller;
             _estate = null;
             _config = null;
             _generation++;

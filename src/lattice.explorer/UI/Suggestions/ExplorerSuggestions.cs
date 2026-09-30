@@ -46,13 +46,13 @@ internal sealed class ExplorerSuggestions(IServiceProvider services)
     /// <summary>The cluster's own region and its peer regions.</summary>
     public ILtSuggestionSource Regions => _regions ??= Build(() => new RegionSuggestionSource(
         services.GetShellFacade<ILatticeReplicationStatus>(),
-        services.GetService<ShellAssertedTenant>(),
+        ShellCaller.Of(services),
         services.GetService<TimeProvider>()));
 
     /// <summary>The tenants the caller may reach.</summary>
     public ILtSuggestionSource Tenants => _tenants ??= Build(() => new TenantSuggestionSource(
         services.GetRequiredService<ExplorerTenancy>(),
-        services.GetService<ShellAssertedTenant>(),
+        ShellCaller.Of(services),
         services.GetService<TimeProvider>()));
 
     /// <summary>Users from the identity directory.</summary>

@@ -61,6 +61,7 @@ public partial class ShellLayout : IAsyncDisposable
     private bool _resolvedOnce;
     private string? _entriesTenant;
     private (bool Authenticated, string? User)? _tenantResolvedFor;
+    private object? _bodyKey;
 
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
@@ -97,6 +98,9 @@ public partial class ShellLayout : IAsyncDisposable
 
     [Inject]
     internal ShellAssertedTenant AssertedTenant { get; set; } = default!;
+
+    [Inject]
+    internal ShellCaller Caller { get; set; } = default!;
 
     [Inject]
     internal ExplorerTenantSwitch TenantSwitch { get; set; } = default!;
@@ -136,16 +140,28 @@ public partial class ShellLayout : IAsyncDisposable
         && Navigator.Current is { } current
         && !string.Equals(current.Tenant, _location.Address.Tenant, StringComparison.Ordinal);
 
-    // The page, keyed on the tenant the circuit asserts: a tenant switch disposes
-    // it and builds a fresh one, so nothing a page read under one tenant is shown
-    // under another even when only its route parameters changed.
+    // The page, keyed on the caller: a sign-in, a sign-out, a new connection or a
+    // tenant switch disposes it and builds a fresh one, so nothing a page read for
+    // one caller is shown to another even when only its route parameters changed.
     private RenderFragment TenantBody => builder =>
     {
         builder.OpenComponent<ShellTenantBoundary>(0);
-        builder.SetKey(AssertedTenant.AssertedTenant ?? string.Empty);
+        builder.SetKey(BodyKey());
         builder.AddComponentParameter(1, nameof(ShellTenantBoundary.ChildContent), Body);
         builder.CloseComponent();
     };
+
+    // The boxed key is reused while the caller holds, so a render allocates nothing for it.
+    private object BodyKey()
+    {
+        var caller = Caller.Current;
+        if (_bodyKey is not ShellCallerKey current || current != caller)
+        {
+            _bodyKey = caller;
+        }
+
+        return _bodyKey;
+    }
 
     private bool TenantUnresolved =>
         AuthSession.IsAuthenticated

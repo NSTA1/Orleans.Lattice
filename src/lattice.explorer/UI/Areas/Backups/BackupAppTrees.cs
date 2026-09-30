@@ -13,25 +13,26 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// tree id already carries.
 /// </summary>
 /// <remarks>
-/// A found app is remembered for the circuit, under the tenant the circuit
-/// asserted when it was read, so another tenant's app of the same slug is never
-/// described from it; a miss is not remembered, so a grant that arrives later is
+/// A found app is remembered for the circuit, under the caller it was read for
+/// (the sign-in, the endpoint and the asserted tenant), so another caller's or
+/// another tenant's app of the same slug is never described from it; a miss is not remembered, so a grant that arrives later is
 /// seen on the next page.
 /// </remarks>
 internal sealed class BackupAppTrees
 {
     private readonly IServiceProvider _services;
-    private readonly ShellAssertedTenant _tenant;
-    private readonly ConcurrentDictionary<(string? Tenant, string Slug), BackupAppInfo> _found = new();
+    private readonly ShellCaller _caller;
+    private readonly ConcurrentDictionary<(ShellCallerKey Caller, string Slug), BackupAppInfo> _found = new();
 
     /// <summary>Creates the lookup.</summary>
     /// <param name="services">The circuit's services, from which the apps facades are resolved when present.</param>
-    /// <param name="tenant">The circuit's asserted tenant, which keys what is remembered.</param>
-    public BackupAppTrees(IServiceProvider services, ShellAssertedTenant? tenant = null)
+    /// <param name="tenant">The circuit's asserted tenant, read when no <paramref name="caller"/> is given.</param>
+    /// <param name="caller">The circuit's caller, which keys what is remembered; when <see langword="null"/>, a caller over <paramref name="tenant"/> alone.</param>
+    public BackupAppTrees(IServiceProvider services, ShellAssertedTenant? tenant = null, ShellCaller? caller = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         _services = services;
-        _tenant = tenant ?? ShellAssertedTenant.None;
+        _caller = caller ?? new ShellCaller(tenant: tenant);
     }
 
     /// <summary>The app that owns <paramref name="tree"/>, or <see langword="null"/> when no app does or none can be read.</summary>
@@ -45,17 +46,17 @@ internal sealed class BackupAppTrees
             return null;
         }
 
-        var tenant = _tenant.AssertedTenant;
-        if (_found.TryGetValue((tenant, slug), out var known))
+        var key = _caller.Current;
+        if (_found.TryGetValue((key, slug), out var known))
         {
             return known;
         }
 
         var info = await FromControlAsync(slug, cancellationToken).ConfigureAwait(false)
             ?? await FromWorkspaceAsync(slug, cancellationToken).ConfigureAwait(false);
-        if (info is not null && ShellAssertedTenant.Same(_tenant.AssertedTenant, tenant))
+        if (info is not null && _caller.Current == key)
         {
-            _found[(tenant, slug)] = info;
+            _found[(key, slug)] = info;
         }
 
         return info;

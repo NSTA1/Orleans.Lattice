@@ -21,6 +21,7 @@ internal sealed class SchemaFacades(IServiceProvider services)
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
     private readonly Lazy<IExplorerAuthSession?> _auth = new(services.GetService<IExplorerAuthSession>);
     private readonly Lazy<ILatticeActiveTenantProvider?> _tenant = new(services.GetService<ILatticeActiveTenantProvider>);
+    private readonly Lazy<ShellCaller> _caller = new(() => ShellCaller.Of(services));
 
     /// <summary>
     /// The tenant the circuit's calls assert right now, or <see langword="null"/>
@@ -34,6 +35,13 @@ internal sealed class SchemaFacades(IServiceProvider services)
     /// off, otherwise the asserted tenant or the reserved default one.
     /// </summary>
     public string? ListingTenant => ShellAssertedTenant.ListingTenantOf(_tenant.Value);
+
+    /// <summary>
+    /// The caller now - sign-in, endpoint and asserted tenant - which everything the
+    /// area remembers is filed under, so an answer read for one caller is never
+    /// served to the next.
+    /// </summary>
+    public ShellCallerKey Caller => _caller.Value.Current;
 
     /// <summary>The schema control facade (T1's adapter), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeSchemaControl? Schema => _schema.Value;

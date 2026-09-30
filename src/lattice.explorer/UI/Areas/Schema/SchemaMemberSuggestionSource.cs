@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Suggestions;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -9,8 +10,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 /// <remarks>
 /// Suggestions only: a value's members are not known to the cluster until a rule
-/// names them, so any member path is accepted. Read once per tree and asserted
-/// tenant; a policy that cannot be read answers unavailable, with a note.
+/// names them, so any member path is accepted. Read once per tree and caller
+/// (sign-in, endpoint and asserted tenant); a policy that cannot be read answers unavailable, with a note.
 /// </remarks>
 /// <param name="facades">The Schema area's facades.</param>
 /// <param name="tree">The tree whose policy is read, read at query time.</param>
@@ -19,7 +20,7 @@ internal sealed class SchemaMemberSuggestionSource(SchemaFacades facades, Func<s
     /// <summary>The note shown when the policy cannot be read.</summary>
     public const string UnavailableReason = "The tree's policy could not be read, so no member is suggested.";
 
-    private (string Tree, string? Tenant, IReadOnlyList<LtSuggestion>? Members)? _remembered;
+    private (string Tree, ShellCallerKey Caller, IReadOnlyList<LtSuggestion>? Members)? _remembered;
 
     /// <inheritdoc />
     public async ValueTask<LtSuggestionSet> SuggestAsync(string text, int limit, CancellationToken cancellationToken)
@@ -31,10 +32,10 @@ internal sealed class SchemaMemberSuggestionSource(SchemaFacades facades, Func<s
             return LtSuggestionSet.Empty;
         }
 
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         if (_remembered is not { } remembered
             || !string.Equals(remembered.Tree, treeId, StringComparison.Ordinal)
-            || !string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal))
+            || remembered.Caller != caller)
         {
             IReadOnlyList<LtSuggestion>? members;
             try
@@ -51,8 +52,8 @@ internal sealed class SchemaMemberSuggestionSource(SchemaFacades facades, Func<s
                 members = null;
             }
 
-            remembered = (treeId, tenant, members);
-            if (string.Equals(facades.AssertedTenant, tenant, StringComparison.Ordinal))
+            remembered = (treeId, caller, members);
+            if (facades.Caller == caller)
             {
                 _remembered = remembered;
             }

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Suggestions;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
@@ -9,7 +10,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// silo knows, as the WAL placement audit of the named tree reports them.
 /// </summary>
 /// <remarks>
-/// Read once per tree and asserted tenant; the keys are a silo-wide catalogue, so
+/// Read once per tree and caller (sign-in, endpoint and asserted tenant); the keys are a silo-wide catalogue, so
 /// any tree the caller may read reports them. Without a tree to audit, or when the
 /// audit fails, the field accepts a typed key and says why.
 /// </remarks>
@@ -23,7 +24,7 @@ internal sealed class ClusterProviderKeySuggestionSource(ClusterFacades facades,
     /// <summary>The note shown when the audit fails.</summary>
     public const string UnavailableReason = "The provider keys could not be listed, so the key is used as typed.";
 
-    private (string Tree, string? Tenant, IReadOnlyList<LtSuggestion>? Keys)? _remembered;
+    private (string Tree, ShellCallerKey Caller, IReadOnlyList<LtSuggestion>? Keys)? _remembered;
 
     /// <inheritdoc />
     public async ValueTask<LtSuggestionSet> SuggestAsync(string text, int limit, CancellationToken cancellationToken)
@@ -35,10 +36,10 @@ internal sealed class ClusterProviderKeySuggestionSource(ClusterFacades facades,
             return LtSuggestionSet.Unavailable(NoTreeReason);
         }
 
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         if (_remembered is not { } remembered
             || !string.Equals(remembered.Tree, treeId, StringComparison.Ordinal)
-            || !string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal))
+            || remembered.Caller != caller)
         {
             IReadOnlyList<LtSuggestion>? keys;
             try
@@ -55,8 +56,8 @@ internal sealed class ClusterProviderKeySuggestionSource(ClusterFacades facades,
                 keys = null;
             }
 
-            remembered = (treeId, tenant, keys);
-            if (string.Equals(facades.AssertedTenant, tenant, StringComparison.Ordinal))
+            remembered = (treeId, caller, keys);
+            if (facades.Caller == caller)
             {
                 _remembered = remembered;
             }
