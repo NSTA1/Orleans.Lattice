@@ -46,7 +46,10 @@ public sealed class TenantUsageAccountingOptions
     /// 30 seconds. Set to <see cref="TimeSpan.Zero"/> (or a negative value) to
     /// disable metering entirely, which leaves quota admission permanently in its
     /// fail-open state - useful only for a deployment that deliberately runs
-    /// tenancy without resource governance.
+    /// tenancy without resource governance. The interval is re-read before every
+    /// cycle, so a reload to zero or a negative value stops a running loop, and a
+    /// value above the longest wait a timer accepts (<c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days) is clamped to that wait.
     /// </summary>
     /// <remarks>
     /// This cadence is what makes an authored quota bind. Metering is the input to

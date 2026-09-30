@@ -958,7 +958,7 @@ row notes its rule:
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. Must be positive. |
-| `CoalesceWindow` | 50 ms | Period of the background drain timer. Must be greater than zero. |
+| `CoalesceWindow` | 50 ms | Period of the background drain timer. Must be greater than zero and at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest period a grain timer accepts. |
 | `SourceIdentityBackstopInterval` | 30 s | Safety-net interval after which the maintainer re-resolves its source tree's physical identity from the registry when no alias-change notification has arrived. In steady state the source binding is event-driven (rebound the moment an alias swap commits), so this backstop only covers a missed push. See [Source-identity rebind](#source-identity-rebind). Must be greater than zero. |
 | `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. 1 is a single accumulator. Must be at least 1. |
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. Must not be negative. |

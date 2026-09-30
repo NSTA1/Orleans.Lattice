@@ -251,7 +251,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 
 ### Timeout and budget ceiling
 
-The timeout, budget and cadence options the runtime arms as timers - `ActivationReadyTimeout`, `DigestPublishTimeout`, `EmptyTreeProbeBudget`, `MaxScanPageStallDuration`, `SetManyFanOutBudget`, `ShardForwardTimeout`, `StarvationDriveBudget`, `WalAdmissionSaturationCallBudget`, `WalAdmissionSaturationWaitBudget`, `WalAppendDispatchTimeout`, `WalDrainBudget`, `WalFlushPreflightTimeout`, `WalFlushTimeout`, `WalSaturationSampleInterval` and `WalThrottledAdmissionPace` - must be at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest wait a .NET timer accepts. Options validation rejects a longer finite value such as `TimeSpan.MaxValue`, which would otherwise pass and then fail every operation that armed it. Where an option documents `Timeout.InfiniteTimeSpan`, use that to remove the bound instead.
+The timeout, budget and cadence options the runtime arms as timers - `ActivationReadyTimeout`, `DigestPublishTimeout`, `EmptyTreeProbeBudget`, `HotShardSampleInterval`, `MaxScanPageStallDuration`, `SetManyFanOutBudget`, `ShardForwardTimeout`, `ShardHealingInterval`, `StarvationDriveBudget`, `WalAdmissionSaturationCallBudget`, `WalAdmissionSaturationWaitBudget`, `WalAppendDispatchTimeout`, `WalDrainBudget`, `WalFlushPreflightTimeout`, `WalFlushTimeout`, `WalSaturationSampleInterval` and `WalThrottledAdmissionPace` - must be at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest wait a .NET timer accepts and the longest period an Orleans grain timer accepts (`HotShardSampleInterval` and `ShardHealingInterval` are grain-timer periods). Options validation rejects a longer finite value such as `TimeSpan.MaxValue`, which would otherwise pass and then fail every operation that armed it. Where an option documents `Timeout.InfiniteTimeSpan`, use that to remove the bound instead.
 
 ### Structural sizing (registry-pinned)
 
@@ -514,7 +514,7 @@ This option can be changed freely at any time.
 
 ### `HotShardSampleInterval`
 
-How often `HotShardMonitorGrain` polls every shard's hotness counters (default: 30 seconds). Shorter intervals increase detection responsiveness at the cost of more grain calls. A non-positive value falls back to the 30-second default.
+How often `HotShardMonitorGrain` polls every shard's hotness counters (default: 30 seconds). Shorter intervals increase detection responsiveness at the cost of more grain calls. A non-positive value falls back to the 30-second default. The value is the monitor's grain-timer period, so options validation rejects one above about 49.7 days; see [Timeout and budget ceiling](#timeout-and-budget-ceiling).
 
 This option can be changed freely at any time. The monitor arms its sampling timer with this value when it starts, so a new cadence takes effect when the monitor next activates.
 
@@ -1216,7 +1216,7 @@ siloBuilder.ConfigureLattice("hand-tuned-tree", o => o.MaxConcurrentShardConsoli
 
 ### `ShardHealingInterval`
 
-How often each tree's healing orchestrator observes the tree (default: 30 seconds).
+How often each tree's healing orchestrator observes the tree (default: 30 seconds). The value is the orchestrator's grain-timer period, so options validation rejects one above about 49.7 days; see [Timeout and budget ceiling](#timeout-and-budget-ceiling).
 
 **Cost:** one sweep per tree per interval. On a healthy tree that is a map read and a comparison, which is why the cadence can be this short.
 
@@ -1985,7 +1985,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. Must be positive. |
-| `CoalesceWindow` | 50 ms | Period of the background drain timer. Must be greater than zero. |
+| `CoalesceWindow` | 50 ms | Period of the background drain timer. Must be greater than zero and at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest period a grain timer accepts. |
 | `SourceIdentityBackstopInterval` | 30 s | Safety-net interval after which the maintainer re-resolves its source tree's physical identity from the registry when no alias-change notification has arrived. In steady state the source binding is event-driven, so this backstop only covers a missed push. Must be greater than zero. |
 | `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. Must be at least 1. |
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. Must not be negative. |

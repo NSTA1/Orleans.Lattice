@@ -116,12 +116,13 @@ public sealed class GrainIndexBuilder<TGrain, TState>
     /// Sets the pause between backfill passes, which paces the backfill against
     /// foreground traffic.
     /// </summary>
-    /// <param name="interval">The pause between passes. Must be greater than zero.</param>
+    /// <param name="interval">The pause between passes. Must be greater than zero and at most about 49.7 days (<c>0xFFFFFFFE</c> milliseconds), the longest period the pass timer accepts.</param>
     /// <returns>This builder, for chaining.</returns>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="interval"/> is not greater than zero.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="interval"/> is not greater than zero, or is longer than the pass timer accepts.</exception>
     public GrainIndexBuilder<TGrain, TState> WithBackfillInterval(TimeSpan interval)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(interval, GrainIndexOptions.MaxBackfillInterval);
         BackfillIntervalOverride = interval;
         return this;
     }
