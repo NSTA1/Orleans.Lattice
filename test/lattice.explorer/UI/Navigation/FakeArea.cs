@@ -48,6 +48,12 @@ internal sealed class FakeArea : IExplorerArea
     /// <summary>What the badge probe does.</summary>
     public Func<CancellationToken, ValueTask<string?>> Badge { get; set; } = _ => ValueTask.FromResult<string?>(null);
 
+    /// <summary>How the address line groups a path into chain nodes; <see langword="null"/> for one per segment.</summary>
+    public Func<Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress, IReadOnlyList<int>?> ChainSpans { get; set; } = _ => null;
+
+    /// <inheritdoc />
+    public IReadOnlyList<int>? GetChainSpans(Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress address) => ChainSpans(address);
+
     /// <summary>How many times availability was asked.</summary>
     public int AvailabilityCalls { get; private set; }
 

@@ -21,7 +21,7 @@
         break;
 
     case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Overview } tree:
-        <ClusterTreePage TreeId="@tree.TreeId" @key="tree.TreeId" />
+        <ClusterTreePage TreeId="@tree.TreeId" Tab="@Address.GetQuery(ClusterAddresses.TabQuery)" @key="tree.TreeId" />
         break;
 
     case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Tools } tree:

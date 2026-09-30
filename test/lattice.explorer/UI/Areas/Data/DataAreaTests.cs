@@ -23,6 +23,17 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 public sealed class DataAreaTests : DataTestContext
 {
     [Test]
+    public void A_tree_path_is_one_chain_node_whatever_its_slashes()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/t/acme/data/t/acme/a/task-board/tasks?tab=history")), Is.EqualTo(new[] { 5 }));
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/data/factory-floor?key=machine-003")), Is.EqualTo(new[] { 1 }));
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/data")), Is.Null);
+            Assert.That(() => Area.GetChainSpans(null!), Throws.ArgumentNullException);
+        });
+    }
+    [Test]
     public void The_area_is_data_first_in_the_directory_and_tenant_scoped()
     {
         var area = Area;

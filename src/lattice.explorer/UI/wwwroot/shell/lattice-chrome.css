@@ -192,6 +192,18 @@
   max-width: 16rem;
 }
 
+/* The toggle is a disclosure: the marker fill means "open" and nothing else, so
+   a pointer resting on it after the panel closes - or where the button lands on
+   a fresh page - shades it no further than the quiet hover every row uses. */
+.lt-shell-tenant__toggle:hover {
+  background: var(--lt-op-row-hover);
+}
+
+.lt-shell-tenant__toggle[aria-expanded="true"] {
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
+}
+
 .lt-shell-tenant__term {
   color: var(--lt-ink-2);
   font-size: var(--lt-text-sm);
@@ -397,7 +409,9 @@
   cursor: pointer;
 }
 
-.lt-shell-combobox__option:hover {
+/* The pointer shades an option only once it has moved over the list, so a list
+   opening under a resting pointer shows one highlight: the active option. */
+.lt-shell-combobox__popup--pointer .lt-shell-combobox__option:hover {
   background: var(--lt-op-row-hover);
   color: var(--lt-ink);
 }

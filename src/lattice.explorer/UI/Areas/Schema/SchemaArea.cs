@@ -66,6 +66,14 @@ internal sealed class SchemaArea : IExplorerArea
     public IReadOnlyList<ExplorerCommand> Commands { get; }
 
     /// <inheritdoc />
+    /// <remarks>Every path segment below <c>/schema</c> belongs to the logical tree id, so the path is one node.</remarks>
+    public IReadOnlyList<int>? GetChainSpans(Navigation.Address.ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return address.Path.Count == 0 ? null : [address.Path.Count];
+    }
+
+    /// <inheritdoc />
     public ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken) =>
         _access.GetAvailabilityAsync(cancellationToken);
 
