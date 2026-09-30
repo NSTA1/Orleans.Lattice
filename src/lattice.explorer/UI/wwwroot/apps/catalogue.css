@@ -60,6 +60,26 @@
   font-size: var(--lt-text-sm);
 }
 
+/* A source key is one token: it never breaks at its hyphen. */
+.lt-apps-source {
+  white-space: nowrap;
+}
+
+/* The source selector's description wraps under it rather than widening the toolbar (not in the compact form, where the toolbar stacks). */
+.lt-apps-source-field {
+  max-inline-size: 18rem;
+  min-inline-size: 0;
+}
+
+.lt-apps-source-field select {
+  inline-size: 100%;
+}
+
+/* A row's actions stay on one line; the app column gives way instead. */
+.lt-apps-actions.lt-apps-actions--row {
+  flex-wrap: nowrap;
+}
+
 .lt-apps-hint {
   margin: 0;
   color: var(--lt-ink-2);

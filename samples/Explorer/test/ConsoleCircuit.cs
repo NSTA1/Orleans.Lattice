@@ -40,6 +40,9 @@ internal sealed class ConsoleCircuit : IAsyncDisposable
     /// <summary>The Explorer's apps facade for this circuit.</summary>
     public ILatticeAppsControl Apps => Services.GetRequiredKeyedService<ILatticeAppsControl>(FacadeKey);
 
+    /// <summary>The Explorer's app catalogue facade for this circuit.</summary>
+    public ILatticeAppCatalog Catalog => Services.GetRequiredKeyedService<ILatticeAppCatalog>(FacadeKey);
+
     /// <summary>The Explorer's cross-tenant grant facade for this circuit.</summary>
     public ILatticeTenantGrantAdmin Grants => Services.GetRequiredKeyedService<ILatticeTenantGrantAdmin>(FacadeKey);
 

@@ -94,9 +94,20 @@ internal sealed partial class AppInstallFlow
     public IReadOnlyList<string> UnboundRoles =>
         Descriptor is null ? [] : [.. Descriptor.Roles.Select(role => role.Name).Where(role => !_bindings.ContainsKey(role))];
 
-    /// <summary>The activation failures the drafted consent would cause.</summary>
+    /// <summary>
+    /// Whether the reviewed version is the installed one, so the page manages an install rather
+    /// than offering one: its trees are already owned by that install, which activation re-verifies.
+    /// </summary>
+    public bool IsManaging => Mode == AppInstallMode.Reconsent;
+
+    /// <summary>
+    /// The activation failures the drafted consent would cause. Managing the installed version
+    /// claims no tree, so an ownership conflict is not one of them (as for <see cref="Drift"/>).
+    /// </summary>
     public IReadOnlyList<AppActivationIssue> Issues =>
-        Descriptor is null ? [] : AppConsentAnalysis.Preview(Descriptor, Draft);
+        Descriptor is null ? []
+        : IsManaging ? [.. AppConsentAnalysis.Preview(Descriptor, Draft).Where(issue => issue.Kind != AppActivationIssueKind.TreeOwnershipConflict)]
+        : AppConsentAnalysis.Preview(Descriptor, Draft);
 
     /// <summary>Whether the drafted consent is refused outright at install (a tree cannot be owned).</summary>
     public bool IsBlocked => Issues.Any(issue => issue.Kind == AppActivationIssueKind.TreeOwnershipConflict);

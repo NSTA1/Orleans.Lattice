@@ -121,9 +121,14 @@ public sealed partial class AppReviewPageTests
         Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] button"), Is.Empty);
     }
 
-    private IRenderedComponent<AppReviewPage> RenderInstalled(AppLifecycleState state, bool adopted = false)
+    private IRenderedComponent<AppReviewPage> RenderInstalled(AppLifecycleState state, bool adopted = false, string? conflict = null)
     {
         var app = AppsTestData.TaskBoard(adopted: adopted);
+        if (conflict is not null)
+        {
+            app = app with { Trees = [.. app.Trees.Select(tree => tree.Name == "tasks" ? tree with { OwnershipConflict = conflict } : tree)] };
+        }
+
         Offer(app);
         Control.Install(app, state, new AppConsentReport
         {

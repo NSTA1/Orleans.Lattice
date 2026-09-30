@@ -31,8 +31,13 @@ public sealed class AppsCataloguePageTests : AppsTestContext
             Assert.That(cut.FindAll(".lt-apps-tabs__link")[1].GetAttribute("aria-current"), Is.EqualTo("page"));
             Assert.That(cut.FindAll("select")[0].QuerySelectorAll("option").Select(option => option.TextContent),
                 Is.EqualTo(new[] { "All sources", "In-image apps (Static)" }));
-            Assert.That(cut.Find(".lt-toolbar").TextContent, Does.Contain("in-image: Static"));
-            Assert.That(cut.Find("input[type=search]").HasAttribute("disabled"), Is.True);
+            Assert.That(cut.Find(".lt-toolbar").TextContent, Does.Contain("In-image apps: shipped with the cluster, one version of each app"));
+            Assert.That(cut.Find(".lt-toolbar").TextContent, Does.Not.Contain("in-image: Static"));
+            var search = cut.Find("input[type=search]");
+            Assert.That(search.HasAttribute("disabled"), Is.True);
+            Assert.That(search.GetAttribute("placeholder"), Is.EqualTo("Search is not available"));
+            Assert.That(cut.Find("#" + search.GetAttribute("aria-describedby")).TextContent, Is.EqualTo("No configured source supports search."), "the reason is the field's hint");
+            Assert.That(cut.FindAll("td .lt-apps-source").Select(cell => cell.TextContent), Is.EqualTo(new[] { "in-image", "in-image" }), "a source key is one unbroken token");
             Assert.That(cut.Find("p.lt-apps-hint").TextContent, Is.EqualTo("No configured source supports search."));
             Assert.That(cut.Find(".lt-apps-count").TextContent, Is.EqualTo("1 source, 2 apps"));
             Assert.That(cut.FindAll("thead th").Select(header => header.TextContent.Trim()), Is.EqualTo(new[] { "App", "Source", "Version", "State", "Actions" }));
@@ -52,8 +57,9 @@ public sealed class AppsCataloguePageTests : AppsTestContext
         {
             Assert.That(cut.FindAll("select")[0].QuerySelectorAll("option").Select(option => option.TextContent),
                 Is.EqualTo(new[] { "All sources", "In-image apps (Static)", "Contoso feed (Dynamic)", "Ops blob store (Dynamic)" }));
-            Assert.That(cut.Find(".lt-toolbar").TextContent, Does.Contain("nuget-contoso: Dynamic - search, several versions, acquired on install"));
+            Assert.That(cut.Find(".lt-toolbar").TextContent, Does.Contain("Contoso feed: fetched from a live source; searchable, several versions of each app, downloaded and verified before review"));
             Assert.That(cut.Find("input[type=search]").HasAttribute("disabled"), Is.False);
+            Assert.That(cut.Find("input[type=search]").HasAttribute("aria-describedby"), Is.False);
             Assert.That(Catalog.Queries.Last().SourceKey, Is.EqualTo("nuget-contoso"));
         });
     }

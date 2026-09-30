@@ -161,9 +161,10 @@ internal sealed partial class LatticeAppCatalog : ILatticeAppCatalog
                 state = AppsControlMapping.ToWireState(matching.State, status);
             }
 
-            var conflicts = await _registry.GetTreeOwnershipConflictsAsync(tenant, manifest, provenance, cancellationToken)
-                .ConfigureAwait(false);
             var live = matching is { State: not AppRegistryLifecycleState.Uninstalled } ? matching : null;
+            var conflicts = await _registry.GetTreeOwnershipConflictsAsync(
+                    tenant, manifest, AppsControlMapping.OwnershipProbeProvenance(live, provenance), cancellationToken)
+                .ConfigureAwait(false);
             return AppsControlMapping.ToDescriptor(manifest, provenance, state, live, conflicts);
         }
         catch (Exception ex) when (AppsControlExceptionSanitizer.TryRewrite(ex, appSlug, out var sanitized))

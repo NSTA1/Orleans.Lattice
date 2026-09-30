@@ -64,10 +64,10 @@
                     <li class="lt-apps-chain__stop" @key="tree.Name">
                         <LtNode Kind="LtNodeKind.Hollow" />
                         <span class="lt-apps-chain__path">@AppsPresentation.TreePath(slug, tree.Name)</span>
-                        <span class="lt-apps-chain__detail">@TreeDetail(tree)</span>
+                        <span class="lt-apps-chain__detail">@TreeDetail(tree)@(Flow.IsManaging && string.IsNullOrWhiteSpace(tree.OwnershipConflict) ? ", owned by this install" : string.Empty)</span>
                         @if (!string.IsNullOrWhiteSpace(tree.OwnershipConflict))
                         {
-                            <span class="lt-apps-flag">Cannot be owned: install is refused</span>
+                            <span class="lt-apps-flag">@(Flow.IsManaging ? "Ownership not confirmed: activation checks it again" : "Cannot be owned: install is refused")</span>
                         }
                     </li>
                 }
@@ -132,7 +132,7 @@
         <h2 id="lt-apps-ui" class="lt-apps-section__title">UI</h2>
         @if (app.Ui is { } ui)
         {
-            <p>It ships a UI that runs in a sandboxed frame. It can reach the cluster only through these bridge operations, and never with your credentials. It asks to:</p>
+            <p>It ships a UI that runs in a sandboxed frame. It can reach the cluster only through the bridge operations it asks for, and never with your credentials:</p>
             @if (ui.Bridge.IsDefaultOrEmpty)
             {
                 <p class="lt-apps-hint">Nothing: it asks for no bridge operation.</p>
@@ -140,10 +140,10 @@
             else
             {
                 <ul class="lt-apps-list">
-                    @foreach (var grant in ui.Bridge)
+                    @foreach (var grant in AppsPresentation.OrderBridge(ui.Bridge))
                     {
                         <li>
-                            @AppsPresentation.BridgeText(grant)
+                            @AppsPresentation.BridgeLabel(grant)
                             @if (!AppsPresentation.IsKnownBridgeOperation(grant.Operation))
                             {
                                 <span class="lt-apps-flag"> not recognised by this Explorer</span>

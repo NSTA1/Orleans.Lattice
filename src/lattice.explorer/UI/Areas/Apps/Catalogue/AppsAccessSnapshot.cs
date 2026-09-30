@@ -33,6 +33,13 @@ internal sealed record AppsAccessSnapshot
     /// <summary>The installed apps in the active tenant; empty unless the caller may list them.</summary>
     public ImmutableArray<AppSummary> Installed { get; init; } = [];
 
+    /// <summary>
+    /// The installed apps still present in the tenant - every one but an uninstalled record - in
+    /// slug order: what an <c>AppInstall</c> holder's Apps page lists and the spine badge counts.
+    /// </summary>
+    public ImmutableArray<AppSummary> InTenant =>
+        [.. Installed.Where(app => app.State != AppLifecycleState.Uninstalled).OrderBy(app => app.Slug, StringComparer.Ordinal)];
+
     /// <summary>The installed apps a source offers a newer version of; empty unless the caller may browse the catalogue.</summary>
     public ImmutableArray<AvailableAppSummary> Updates { get; init; } = [];
 
