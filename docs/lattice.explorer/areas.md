@@ -329,7 +329,7 @@ region diagram.
 | Address | What it shows |
 | --- | --- |
 | `/cluster` | Estate overview: cluster id, service id, storage use, region diagram and links to Trees, WAL placement and Orphaned leaves. |
-| `/cluster/trees` | Every logical tree in the cluster, with owner, shard count, WAL partitions and lifecycle. |
+| `/cluster/trees` | Every logical tree in the cluster, with owner, shard count, WAL partitions and lifecycle. System trees are not listed, and the list says so; a tenant-scoped list also leaves out other tenants' trees. |
 | `/cluster/trees/{tree-path}` | One tree's summary, configuration, shards, storage and lifecycle tabs. |
 | `/cluster/trees/{tree-path}/tools` | Compaction, projection digest and bulk load tools. |
 | `/cluster/trees/{tree-path}/reshard` | Resumable online reshard status and staging. |
@@ -343,6 +343,12 @@ The Trees segment itself counts, so a tree id that is too deep is still listed
 but has no Cluster address. If a tree id's last segment is a view word such as
 `tools`, the overview link adds a trailing `overview` segment so the route is
 unambiguous.
+
+The directory badge counts the tree list, so the badge and the list agree. Home
+reads, for example, "12 trees, plus 5 system trees, 3.2 GiB stored.", or "4 trees of
+tenant acme, 1.1 GiB stored." at a tenant-rooted address. When the tree list cannot
+be read, Home falls back to the storage summary's own count ("N trees including
+system trees, ... stored.").
 
 The overview reads cluster identity and shallow storage usage in parallel. The
 storage card can refresh the shallow summary or open a destructive confirmation

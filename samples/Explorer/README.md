@@ -320,8 +320,8 @@ an unvalidated free-text id.
 With no configuration, an in-memory roster backs the directory: the users in
 [Sample identities](#sample-identities) and the groups `operators`,
 `task-editors`, `task-viewers`, `visitors`, `acme-editors` and `auditors` (the one
-group the sample does not create). In a create form
-or a rule's subject picker:
+group the sample does not create). In a rule's subject picker, or the member
+field on a group's page:
 
 - type `al` -> the picker lists `alice`;
 - choose **Group** as the kind and type `oper` -> it lists `operators`;

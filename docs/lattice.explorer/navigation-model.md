@@ -87,9 +87,11 @@ same page, so the Explorer never confirms that such an area exists (see
 
 When you are not typing, the address line shows the current address as a chain
 of nodes in a mono typeface. Each ancestor is a link and the current node is
-drawn as the marker, the order diagram's "you are here". A query is shown as one
-final node, such as `?tab=history`. With a tenant root, the tenant (`t/acme`) is
-the first node; otherwise the chain starts at `Home`.
+drawn as the marker, the order diagram's "you are here". The chain is the tenant
+root (`t/acme`) or `Home`, then the area, then the path grouped as the area says:
+a logical tree id such as `orders/eu` is one node, not one per `/`. A query, such
+as `?tab=history`, is state within the page rather than a place, so it is never a
+node.
 
 Press `/` (outside a text field) or `Ctrl+K` (`Cmd+K` on a Mac), or select the
 line, to turn it into an input. The input starts with the current address
