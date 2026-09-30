@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Explorer.UiTests.Apps;
 /// played by the harness. Between them they attempt <c>document.cookie</c>,
 /// <c>localStorage</c> and the other storages, <c>parent.document</c>, <c>fetch</c>, XHR and
 /// WebSocket, a popup, <c>top.location</c>, navigating the frame out of the bootstrap path
-/// and reloading it inside that path, forged handshake messages to the parent, a physical
+/// or to another origin with data in the URL, and reloading it inside that path, forged handshake messages to the parent, a physical
 /// and an undeclared tree, an operation outside the vocabulary, a flood, an entry fragment
 /// carrying a script, and a tampered asset. Each attempt must be denied.
 /// </para>
@@ -49,6 +49,9 @@ public sealed class AppFrameIsolationTests(string engine) : UiTestBase(engine)
     [TestCaseSource(nameof(HostileBundles))]
     public async Task A_hostile_bundle_is_contained(string name)
     {
+        // Hostile bundles provoke policy violations on purpose; the suite's no-violation
+        // guard is for the Explorer's own pages.
+        ExpectCspViolations();
         var hostile = await UiHosts.HostileAsync();
         var bundle = hostile.Bundles[name];
         hostile.Bridge.Clear();
@@ -59,6 +62,34 @@ public sealed class AppFrameIsolationTests(string engine) : UiTestBase(engine)
         var page = await OpenAsync(hostile.Head, $"/apps/{name}/open", WorldIdentities.Admin);
         await Expect(AppFrames.Host(page)).ToBeVisibleAsync();
         var explorerUrl = page.Url;
+
+        if (bundle.Expect.TryGetProperty("crossOriginNavigationBlocked", out _))
+        {
+            if (Engine == UiBrowsers.WebKit)
+            {
+                // Documented limitation (#4020): WebKit does not check the embedder's frame-src
+                // against a navigation the frame starts itself, so the request is sent, carrying
+                // whatever the app put in its URL - at most what its consented bridge let it read.
+                // The target's own framing policy still refuses to render the response.
+                Assert.That(await hostile.Escapes.WaitAsync(EscapeWait), Is.True,
+                    "WebKit now refuses a frame's own cross-origin navigation: update the documented limitation (#4020) and assert the block here as for the other engines.");
+                Assert.That(page.Url, Is.EqualTo(explorerUrl), "The app navigated the Explorer page.");
+                return;
+            }
+
+            // Self-navigation egress (#4020): the Explorer's own frame-src refused the frame's
+            // navigation to another origin before any request was sent, and reported it on the
+            // Explorer's document. Were it not refused, no violation would come and the request
+            // would reach the escape path under the other origin.
+            var directive = await page.EvaluateAsync<string>("() => window.__ltFrameBlocked").WaitAsync(EscapeWait);
+            Assert.Multiple(() =>
+            {
+                Assert.That(directive, Is.EqualTo("frame-src"));
+                Assert.That(hostile.Escapes.Wait(0), Is.False, $"The {name} bundle's frame reached another origin.");
+                Assert.That(page.Url, Is.EqualTo(explorerUrl), "The app navigated the Explorer page.");
+            });
+            return;
+        }
 
         if (bundle.ExpectedFailure is { } failure)
         {

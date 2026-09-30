@@ -28,6 +28,25 @@ public interface IExplorerAuthSession
     /// </summary>
     LatticeCallAuthentication? CurrentAuthentication { get; }
 
+    /// <summary>
+    /// Returns the credential to attach to a call to <paramref name="endpoint"/>: the
+    /// current sign-in's authentication when that sign-in was minted for
+    /// <paramref name="endpoint"/>, otherwise <see langword="null"/>. A client that
+    /// builds its own channel attaches this rather than
+    /// <see cref="CurrentAuthentication"/>, so a credential never reaches an endpoint it
+    /// was not minted for - including while the console is being repointed, before the
+    /// sign-in is dropped. The comparison ignores case and a trailing <c>/</c>; anything
+    /// else counts as a different endpoint.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation returns <see langword="null"/>: an implementation that
+    /// does not record which endpoint its sign-in was minted for fails closed and sends
+    /// no credential through a client that asks this way. Reading it has no side effects.
+    /// </remarks>
+    /// <param name="endpoint">The endpoint the caller is about to call.</param>
+    /// <returns>The credential minted for <paramref name="endpoint"/>, or <see langword="null"/>.</returns>
+    LatticeCallAuthentication? GetAuthenticationFor(string endpoint) => null;
+
     /// <summary>The scheme ids the registered auth-method providers can service.</summary>
     IReadOnlyCollection<string> AvailableSchemes { get; }
 

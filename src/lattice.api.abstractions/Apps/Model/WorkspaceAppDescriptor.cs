@@ -36,6 +36,11 @@ public sealed record WorkspaceAppDescriptor
     [Id(9)] public ImmutableArray<AppSubscriptionDescriptor> Subscriptions { get; init; } = [];
     /// <summary>The app's replication intent.</summary>
     [Id(10)] public ImmutableArray<AppReplicationDescriptor> Replication { get; init; } = [];
-    /// <summary>The installed version's UI bundle, or null when it ships none.</summary>
+    /// <summary>
+    /// The installed version's UI bundle, or null when it ships none. Its
+    /// <see cref="AppUiDescriptor.Bridge"/> carries only the grants the operator consented to
+    /// that the installed manifest still requests - what the bridge itself admits - never the
+    /// bare request.
+    /// </summary>
     [Id(11)] public AppUiDescriptor? Ui { get; init; }
 }

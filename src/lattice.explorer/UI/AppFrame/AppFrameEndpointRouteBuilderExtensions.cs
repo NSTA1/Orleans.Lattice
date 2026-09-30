@@ -109,6 +109,11 @@ internal static class AppFrameEndpointRouteBuilderExtensions
         headers.AccessControlAllowOrigin = AppFrameRoute.AllowOrigin;
         headers.CacheControl = AppFrameRoute.CacheControl;
 
+        // The web head's X-Frame-Options exemption (E4): its middleware sends DENY on
+        // every response, and only this endpoint - never a path match - lifts it, for a
+        // file it actually serves. The bootstrap carries frame-ancestors 'self' instead.
+        headers.Remove("X-Frame-Options");
+
         if (string.Equals(file, AppFrameRoute.BootstrapDocument, StringComparison.Ordinal))
         {
             // Overwrites the Explorer's own policy, which the web head's middleware set

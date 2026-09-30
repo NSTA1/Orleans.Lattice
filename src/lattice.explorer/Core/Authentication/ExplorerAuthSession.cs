@@ -19,6 +19,13 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// </remarks>
 public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 {
+    /// <summary>
+    /// The message a sign-in fails with when the console was repointed at another
+    /// endpoint while its challenge ran.
+    /// </summary>
+    internal const string EndpointChangedDuringSignInMessage =
+        "The endpoint changed while signing in, so the sign-in was not applied. Sign in to the new endpoint.";
+
     private readonly IExplorerSession _session;
     private readonly ICredentialStore _store;
     private readonly IExplorerCredentialSeed? _seed;
@@ -27,9 +34,11 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     private readonly IReadOnlyList<IExplorerAuthMethod> _methods;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    private ExplorerAuthSignIn? _signIn;
+    // The sign-in and the endpoint it was minted for, published together as one
+    // immutable pair, so a lock-free reader (GetAuthenticationFor, on every Shell
+    // call) can never pair a credential with another sign-in's endpoint.
+    private volatile MintedSignIn? _minted;
     private StoredCredential? _credential;
-    private string? _signInEndpoint;
     private ExplorerAuthSchemeAdvertisement _advertisement = ExplorerAuthSchemeAdvertisement.Empty;
     private bool _initialized;
     private IReauthRequiredSource? _reauthSource;
@@ -82,16 +91,23 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     }
 
     /// <inheritdoc />
-    public bool IsAuthenticated => _signIn is not null;
+    public bool IsAuthenticated => _minted is not null;
 
     /// <inheritdoc />
-    public string? Username => _signIn?.DisplayName;
+    public string? Username => _minted?.SignIn.DisplayName;
 
     /// <summary>The scheme id of the current sign-in, or <see langword="null"/> when anonymous.</summary>
-    public string? CurrentScheme => _signIn?.SchemeId;
+    public string? CurrentScheme => _minted?.SignIn.SchemeId;
 
     /// <inheritdoc />
-    public LatticeCallAuthentication? CurrentAuthentication => _signIn?.Authentication;
+    public LatticeCallAuthentication? CurrentAuthentication => _minted?.SignIn.Authentication;
+
+    /// <inheritdoc />
+    public LatticeCallAuthentication? GetAuthenticationFor(string endpoint)
+    {
+        var minted = _minted;
+        return minted is not null && IsSameEndpoint(minted.Endpoint, endpoint) ? minted.SignIn.Authentication : null;
+    }
 
     /// <summary>The scheme ids the registered auth-method providers can service.</summary>
     public IReadOnlyCollection<string> AvailableSchemes => _methods.Select(m => m.SchemeId).ToArray();
@@ -124,8 +140,20 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
             if (_credential is { } credential)
             {
-                _signIn = await ChallengeBasicAsync(credential, cancellationToken).ConfigureAwait(false);
-                _signInEndpoint = _session.Current?.Endpoint;
+                // The endpoint is read once: the challenge and the binding use the same
+                // value, so the sign-in is never recorded against an endpoint it was not
+                // minted for.
+                var endpoint = _session.Current?.Endpoint;
+                var signIn = await ChallengeBasicAsync(credential, endpoint, cancellationToken).ConfigureAwait(false);
+                if (EndpointMoved(endpoint, _session.Current?.Endpoint))
+                {
+                    // Repointed while the stored credential was being replayed: never
+                    // carry it to the new endpoint; stay anonymous there.
+                    DisposeProvider(signIn);
+                    return;
+                }
+
+                _minted = new MintedSignIn(signIn, endpoint);
                 HookReauthSource();
                 await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
                 changed = true;
@@ -173,12 +201,14 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(schemeId);
         var method = SelectMethod(schemeId);
 
+        // Read once: the challenge, the check below and the binding all use this value.
+        var endpoint = _session.Current?.Endpoint;
         var context = new ExplorerAuthChallengeContext
         {
             SchemeId = schemeId,
             Parameters = ParametersFor(schemeId),
             Inputs = inputs ?? new Dictionary<string, string?>(StringComparer.Ordinal),
-            Endpoint = _session.Current?.Endpoint,
+            Endpoint = endpoint,
             TimeProvider = _timeProvider,
         };
 
@@ -190,6 +220,15 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (EndpointMoved(endpoint, _session.Current?.Endpoint))
+            {
+                // The console was repointed while the challenge ran. The credential was
+                // entered for (and, for a token scheme, issued to) the endpoint the
+                // challenge named, so it is neither applied to the new one nor persisted.
+                DisposeProvider(signIn);
+                throw new InvalidOperationException(EndpointChangedDuringSignInMessage);
+            }
+
             _initialized = true;
             DisposeCurrentProvider();
 
@@ -208,8 +247,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
                 _credential = null;
             }
 
-            _signIn = signIn;
-            _signInEndpoint = _session.Current?.Endpoint;
+            _minted = new MintedSignIn(signIn, endpoint);
             HookReauthSource();
             await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -277,8 +315,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             DisposeCurrentProvider();
             await _store.ClearAsync(cancellationToken).ConfigureAwait(false);
             _credential = null;
-            _signIn = null;
-            _signInEndpoint = null;
+            _minted = null;
             await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -289,7 +326,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         AuthenticationChanged?.Invoke();
     }
 
-    private async Task<ExplorerAuthSignIn> ChallengeBasicAsync(StoredCredential credential, CancellationToken cancellationToken)
+    private async Task<ExplorerAuthSignIn> ChallengeBasicAsync(StoredCredential credential, string? endpoint, CancellationToken cancellationToken)
     {
         var method = SelectMethod(ExplorerAuthSchemes.Basic);
         var context = new ExplorerAuthChallengeContext
@@ -300,7 +337,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
                 [ExplorerAuthSchemes.UsernameInput] = credential.Username,
                 [ExplorerAuthSchemes.PasswordInput] = credential.Password,
             },
-            Endpoint = _session.Current?.Endpoint,
+            Endpoint = endpoint,
             TimeProvider = _timeProvider,
         };
 
@@ -333,7 +370,9 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     /// <summary>
     /// Reconfigures the connection with the current endpoint and sign-in.
     /// Assumes the caller holds <see cref="_gate"/>. No-op when no endpoint is
-    /// configured yet.
+    /// configured yet. The credential is attached only when the sign-in was minted
+    /// for the configured endpoint; otherwise the connection is configured
+    /// anonymously.
     /// </summary>
     private Task ReconfigureAsync(CancellationToken cancellationToken)
     {
@@ -344,9 +383,9 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         }
 
         var settings = configuration.ToConnectionSettings();
-        if (_signIn is { } signIn)
+        if (GetAuthenticationFor(configuration.Endpoint) is { } authentication)
         {
-            settings = settings with { Authentication = signIn.Authentication };
+            settings = settings with { Authentication = authentication };
         }
 
         return _session.Connection.ConfigureAsync(settings, cancellationToken);
@@ -354,7 +393,8 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
     private void OnConfigurationChanged()
     {
-        if (_signIn is null)
+        var minted = _minted;
+        if (minted is null)
         {
             return;
         }
@@ -367,7 +407,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         // this endpoint's Basic password, or a silently-renewed bearer token
         // minted for its audience, to an operator who never held either. When
         // the endpoint moves, sign out instead of re-applying.
-        if (IsSameEndpoint(_signInEndpoint, _session.Current?.Endpoint))
+        if (IsSameEndpoint(minted.Endpoint, _session.Current?.Endpoint))
         {
             _ = ReapplySignInAsync();
             return;
@@ -377,10 +417,11 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     }
 
     /// <summary>
-    /// Compares the endpoint a sign-in was minted for against the newly applied
-    /// one. Deliberately conservative: anything that is not recognisably the same
+    /// Compares the endpoint a sign-in was minted for against another one.
+    /// Deliberately conservative: anything that is not recognisably the same
     /// endpoint is treated as a different one, so an unparseable or absent value
-    /// drops the credential rather than carrying it across.
+    /// drops the credential rather than carrying it across. Allocation-free, as it
+    /// runs on every Shell call.
     /// </summary>
     private static bool IsSameEndpoint(string? signInEndpoint, string? current)
     {
@@ -389,11 +430,17 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             return false;
         }
 
-        return string.Equals(
-            signInEndpoint.TrimEnd('/'),
-            current.TrimEnd('/'),
-            StringComparison.OrdinalIgnoreCase);
+        return signInEndpoint.AsSpan().TrimEnd('/').Equals(current.AsSpan().TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Whether the configured endpoint moved while a challenge ran. Unlike
+    /// <see cref="IsSameEndpoint"/>, two absent endpoints have not moved: a sign-in
+    /// taken before any endpoint is configured is bound to none, and is attached
+    /// nowhere until one is.
+    /// </summary>
+    private static bool EndpointMoved(string? challenged, string? current) =>
+        (challenged is not null || current is not null) && !IsSameEndpoint(challenged, current);
 
     /// <summary>
     /// Drops the sign-in when the console is repointed at a different endpoint,
@@ -408,7 +455,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_signIn is null || IsSameEndpoint(_signInEndpoint, _session.Current?.Endpoint))
+            if (_minted is not { } minted || IsSameEndpoint(minted.Endpoint, _session.Current?.Endpoint))
             {
                 return;
             }
@@ -416,8 +463,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             DisposeCurrentProvider();
             await _store.ClearAsync(CancellationToken.None).ConfigureAwait(false);
             _credential = null;
-            _signIn = null;
-            _signInEndpoint = null;
+            _minted = null;
             changed = true;
             await ReconfigureAsync(CancellationToken.None).ConfigureAwait(false);
         }
@@ -458,7 +504,15 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     private void DisposeCurrentProvider()
     {
         UnhookReauthSource();
-        if (_signIn?.Authentication.CredentialProvider is IDisposable disposable)
+        if (_minted is { } minted)
+        {
+            DisposeProvider(minted.SignIn);
+        }
+    }
+
+    private static void DisposeProvider(ExplorerAuthSignIn signIn)
+    {
+        if (signIn.Authentication.CredentialProvider is IDisposable disposable)
         {
             disposable.Dispose();
         }
@@ -472,7 +526,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     /// </summary>
     private void HookReauthSource()
     {
-        if (_signIn?.Authentication.CredentialProvider is IReauthRequiredSource source)
+        if (_minted?.SignIn.Authentication.CredentialProvider is IReauthRequiredSource source)
         {
             _reauthSource = source;
             source.ReauthRequired += OnReauthRequired;
@@ -490,6 +544,11 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     }
 
     private void OnReauthRequired() => ReauthRequired?.Invoke();
+
+    /// <summary>A sign-in and the endpoint it was minted for; <see langword="null"/> when none was configured.</summary>
+    /// <param name="SignIn">The sign-in.</param>
+    /// <param name="Endpoint">The endpoint its challenge named.</param>
+    private sealed record MintedSignIn(ExplorerAuthSignIn SignIn, string? Endpoint);
 
     /// <inheritdoc />
     public void Dispose()

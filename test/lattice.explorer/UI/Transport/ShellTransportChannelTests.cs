@@ -113,6 +113,81 @@ public sealed class ShellTransportChannelTests
     }
 
     [Test]
+    public async Task While_the_console_is_repointed_the_old_sign_in_never_reaches_the_new_endpoint()
+    {
+        // #4020: ApplyAsync publishes the new endpoint, then awaits the connection's
+        // reconfiguration - which the new endpoint can stall - and only then raises
+        // ConfigurationChanged, which is what drops the old sign-in. A call made in that
+        // window must not carry the credential minted for the old endpoint.
+        const string Moved = "http://localhost:2";
+        var configStore = Substitute.For<IExplorerConfigStore>();
+        configStore.LoadAsync(Arg.Any<CancellationToken>()).Returns(ShellTransportCircuit.PlaintextConfiguration());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connection = Substitute.For<ILatticeStateConnection>();
+        connection.ConfigureAsync(Arg.Any<LatticeConnectionSettings>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            if (call.Arg<LatticeConnectionSettings>().Address != Moved)
+            {
+                return Task.CompletedTask;
+            }
+
+            entered.TrySetResult();
+            return stall.Task;
+        });
+
+        var explorer = new ExplorerSession(configStore, connection);
+        await explorer.InitializeAsync();
+        using var auth = new ExplorerAuthSession(explorer, new InMemoryCredentialStore());
+        await auth.LoginAsync("alice", "pw");
+
+        using var circuit = new ShellTransportCircuit(services =>
+        {
+            services.AddScoped<IExplorerSession>(_ => explorer);
+            services.AddScoped<IExplorerAuthSession>(_ => auth);
+        });
+        var self = circuit.Resolve<ILatticeTenantSelfService>();
+        circuit.Peer.AnswerWithSuccess();
+        await self.GetCurrentTenantAsync();
+
+        var moved = ShellTransportCircuit.PlaintextConfiguration() with { Endpoint = Moved };
+        var apply = explorer.ApplyAsync(moved);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var inWindow = (explorer.Current?.Endpoint, auth.IsAuthenticated);
+        await self.GetCurrentTenantAsync();
+        stall.SetResult();
+        await apply;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inWindow, Is.EqualTo((Moved, true)), "the premise: the new endpoint is current and the old sign-in not yet dropped");
+            Assert.That(circuit.Peer.Requests[0].Authorization, Does.StartWith("Basic "), "the premise: the sign-in reaches its own endpoint");
+            Assert.That(circuit.Peer.Requests[1].Authorization, Is.Null, "the old endpoint's credential was sent to the new endpoint");
+            Assert.That(circuit.ChannelFactory.Settings[^1].Address, Is.EqualTo(Moved));
+        });
+    }
+
+    [Test]
+    public async Task A_credential_minted_for_another_endpoint_is_not_attached()
+    {
+        using var circuit = new ShellTransportCircuit
+        {
+            Authentication = LatticeCallAuthentication.Basic("alice", "pw"),
+            AuthenticationEndpoint = "http://localhost:2",
+        };
+        var self = circuit.Resolve<ILatticeTenantSelfService>();
+        circuit.Peer.AnswerWithSuccess();
+
+        await self.GetCurrentTenantAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(circuit.Peer.Requests.Single().Authorization, Is.Null);
+            Assert.That(circuit.ChannelFactory.Settings.Single().Authentication, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task A_token_provider_is_asked_for_a_fresh_header_on_every_call()
     {
         using var circuit = new ShellTransportCircuit();

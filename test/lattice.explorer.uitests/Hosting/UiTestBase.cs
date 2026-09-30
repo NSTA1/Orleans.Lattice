@@ -27,7 +27,9 @@ public abstract class UiTestBase
     private readonly List<IBrowserContext> _contexts = [];
     private readonly List<IPage> _pages = [];
     private readonly List<string> _clientFaults = [];
+    private readonly List<string> _policyViolations = [];
     private readonly HashSet<ExplorerHead> _heads = [];
+    private bool _policyViolationsExpected;
 
     /// <summary>Runs the fixture in Chromium.</summary>
     protected UiTestBase()
@@ -103,6 +105,11 @@ public abstract class UiTestBase
             {
                 _clientFaults.Add($"  [console.{message.Type}] {message.Text}");
             }
+
+            if (IsExplorerPolicyViolation(message.Text, LocationOf(message)))
+            {
+                _policyViolations.Add($"  [{LocationOf(message)}] {message.Text}");
+            }
         };
         page.PageError += (_, error) => _clientFaults.Add($"  [pageerror] {error}");
 
@@ -158,7 +165,58 @@ public abstract class UiTestBase
         _pages.Clear();
         _clientFaults.Clear();
         _heads.Clear();
+
+        var violations = _policyViolations.ToArray();
+        var expected = _policyViolationsExpected;
+        _policyViolations.Clear();
+        _policyViolationsExpected = false;
+
+        // A test that already failed keeps its own failure; one that passed while the
+        // Explorer's own document broke its Content-Security-Policy did not pass. The
+        // policy runs no inline script (#4020), so this is how the suite proves nothing the
+        // Explorer serves still needs one.
+        if (!failed && !expected && violations.Length > 0)
+        {
+            Assert.Fail("The Explorer's own document reported Content-Security-Policy violations:"
+                + Environment.NewLine + string.Join(Environment.NewLine, violations));
+        }
     }
+
+    /// <summary>
+    /// Opts the running test out of the Content-Security-Policy violation guard, for a test that
+    /// provokes violations on purpose (a hostile app bundle).
+    /// </summary>
+    private protected void ExpectCspViolations() => _policyViolationsExpected = true;
+
+    /// <summary>
+    /// A console message's source location, or empty when the engine gave none. Read defensively:
+    /// this runs inside a Playwright event callback, where an exception ends the test host.
+    /// </summary>
+    private static string LocationOf(IConsoleMessage message)
+    {
+        try
+        {
+            return message.Location ?? string.Empty;
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Whether a console message is a Content-Security-Policy violation reported by one of the
+    /// Explorer's own documents - not by an app's frame (the bootstrap document, or a script it
+    /// loaded from a <c>blob:</c> URL), whose own policy is the app's business, and not a notice
+    /// that an engine does not recognise a directive (the bootstrap's <c>webrtc</c>), which is
+    /// how a policy is parsed, not something it refused.
+    /// </summary>
+    private static bool IsExplorerPolicyViolation(string? text, string? location) =>
+        text is not null
+        && Regex.IsMatch(text, "Content[- ]Security[- ]Policy", RegexOptions.IgnoreCase)
+        && !Regex.IsMatch(text, "Unrecognized|unknown directive|Couldn.t process|not supported", RegexOptions.IgnoreCase)
+        && !(location ?? string.Empty).Contains("/_apps/frame/", StringComparison.OrdinalIgnoreCase)
+        && !(location ?? string.Empty).StartsWith("blob:", StringComparison.OrdinalIgnoreCase);
 
     private BrowserNewContextOptions ContextOptions(ExplorerHead head, int width) => new()
     {

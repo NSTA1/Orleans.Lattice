@@ -35,13 +35,29 @@ internal static class AppsPresentationMapping
     /// <summary>Maps a manifest's UI section, with its normalised bridge request, to the wire form.</summary>
     /// <param name="manifest">The manifest.</param>
     /// <returns>The wire UI descriptor, or null when the manifest ships no UI.</returns>
-    public static AppUiDescriptor? ToWireUi(AppManifest manifest)
+    public static AppUiDescriptor? ToWireUi(AppManifest manifest) =>
+        ToWireUi(manifest, consented: null, narrowToConsent: false);
+
+    /// <summary>
+    /// Maps an installed manifest's UI section to the wire form a launch is authorised against: its bridge
+    /// carries only the grants both the operator consented to and the manifest still requests - exactly what
+    /// the bridge itself admits - never the bare request. A grant the operator has not consented to is
+    /// therefore never offered to a frame, whatever the activation state the answering silo has recorded.
+    /// </summary>
+    /// <param name="manifest">The installed manifest.</param>
+    /// <param name="consented">The consented bridge set, or null when none was recorded (which grants nothing).</param>
+    /// <returns>The wire UI descriptor, or null when the manifest ships no UI.</returns>
+    public static AppUiDescriptor? ToWireUi(AppManifest manifest, AppUiBridgeRequest? consented) =>
+        ToWireUi(manifest, consented, narrowToConsent: true);
+
+    private static AppUiDescriptor? ToWireUi(AppManifest manifest, AppUiBridgeRequest? consented, bool narrowToConsent)
     {
         if (manifest.Ui is not { } ui)
         {
             return null;
         }
 
+        var requested = AppUiBridgeRequest.FromManifest(manifest);
         return new AppUiDescriptor
         {
             Entry = ui.Entry,
@@ -54,9 +70,42 @@ internal static class AppsPresentationMapping
                 Sha256 = a.Digest,
             }),
             BundleDigest = ui.BundleDigest,
-            Bridge = ToWireGrants(AppUiBridgeRequest.FromManifest(manifest)),
+            Bridge = ToWireGrants(narrowToConsent ? Intersect(requested, consented ?? AppUiBridgeRequest.Empty) : requested),
             MinProtocol = ui.MinProtocol,
         };
+    }
+
+    /// <summary>
+    /// The grants both sets cover, with the bridge's own coverage rule: a request grant the consent covers is
+    /// kept whole, and an every-tree data grant the consent covers only per tree is narrowed to those trees.
+    /// </summary>
+    private static AppUiBridgeRequest Intersect(AppUiBridgeRequest requested, AppUiBridgeRequest consented)
+    {
+        if (requested.IsEmpty || consented.IsEmpty)
+        {
+            return AppUiBridgeRequest.Empty;
+        }
+
+        List<AppUiBridgeGrant> kept = [];
+        foreach (var grant in requested.Grants)
+        {
+            if (consented.Covers(grant))
+            {
+                kept.Add(grant);
+            }
+            else if (grant.Tree is null)
+            {
+                foreach (var narrower in consented.Grants)
+                {
+                    if (narrower.Tree is not null && string.Equals(narrower.Operation, grant.Operation, StringComparison.Ordinal))
+                    {
+                        kept.Add(narrower);
+                    }
+                }
+            }
+        }
+
+        return AppUiBridgeRequest.Create(kept);
     }
 
     /// <summary>Maps a consented bridge set to its wire form.</summary>

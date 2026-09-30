@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.FileProviders;
 using Orleans.Lattice.Explorer.UI.Framing;
+using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Framing;
@@ -12,7 +13,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Framing;
 /// <summary>
 /// The bootstrap route served end to end: the exact header set on the bootstrap document and
 /// on every other file, the refusals, and the X-Frame-Options exemption applied the way the
-/// web head applies it - through <see cref="AppFrameRoute.IsFrameBootstrapPath"/> only.
+/// web head applies it: its middleware sends DENY on every response, and only the route's own
+/// endpoint lifts it, for a file it serves - never a path match (issue #4020).
 /// </summary>
 [TestFixture]
 [FastInProcessHostFixture("Builds a WebApplication on TestServer in-process over a temporary folder; measured at under 1 second for the fixture, below the 5-second threshold.")]
@@ -108,7 +110,7 @@ public sealed class AppFrameEndpointTests
     }
 
     [Test]
-    public async Task Only_the_route_is_exempted_from_x_frame_options_by_the_predicate()
+    public async Task Only_a_file_the_route_serves_is_exempted_from_x_frame_options()
     {
         await using var app = await StartAsync(withExplorerHeaders: true);
         var client = app.GetTestClient();
@@ -117,6 +119,7 @@ public sealed class AppFrameEndpointTests
         using var boot = await client.GetAsync("/_apps/frame/v1/boot.js");
         using var page = await client.GetAsync("/apps/taskboard/open");
         using var lookalike = await client.GetAsync("/_apps/frame/v2/frame.html");
+        using var missing = await client.GetAsync("/_apps/frame/v1/missing.js");
 
         Assert.Multiple(() =>
         {
@@ -124,23 +127,43 @@ public sealed class AppFrameEndpointTests
             Assert.That(boot.Headers.Contains("X-Frame-Options"), Is.False);
             Assert.That(Header(page, "X-Frame-Options"), Is.EqualTo("DENY"));
             Assert.That(Header(lookalike, "X-Frame-Options"), Is.EqualTo("DENY"));
+            Assert.That(missing.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+            Assert.That(Header(missing, "X-Frame-Options"), Is.EqualTo("DENY"), "a file the route refuses is not exempt");
 
             // The route replaces the Explorer's own policy on the bootstrap and drops it elsewhere.
             Assert.That(Header(frame, "Content-Security-Policy"), Is.EqualTo(AppFrameRoute.ContentSecurityPolicyText));
             Assert.That(boot.Headers.Contains("Content-Security-Policy"), Is.False);
-            Assert.That(Header(page, "Content-Security-Policy"), Is.EqualTo("default-src 'self'"));
+            Assert.That(Header(page, "Content-Security-Policy"), Is.EqualTo(ExplorerSecurityHeaders.ContentSecurityPolicyValue));
         });
     }
 
     [Test]
-    public async Task Under_a_mounted_branch_the_route_and_predicate_agree_on_the_relative_path()
+    public async Task A_co_hosted_route_answering_under_the_frame_prefix_keeps_x_frame_options_deny()
+    {
+        // #4020: a host route (or fallback) that answers under /_apps/frame/v1/ is not the
+        // frame route, so its response must not lose its clickjacking protection because of
+        // the path it answers on.
+        await using var app = await StartAsync(withExplorerHeaders: true);
+
+        using var cohosted = await app.GetTestClient().GetAsync("/_apps/frame/v1/host-page");
+        var body = await cohosted.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(body, Is.EqualTo("co-hosted"), "the premise: the host route answered, not the frame route");
+            Assert.That(Header(cohosted, "X-Frame-Options"), Is.EqualTo("DENY"));
+        });
+    }
+
+    [Test]
+    public async Task Under_a_mounted_branch_the_route_lifts_the_header_for_its_relative_path()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         await using var app = builder.Build();
         app.Map("/explorer", branch =>
         {
-            branch.Use(ExplorerHeaders);
+            branch.UseMiddleware<ExplorerSecurityHeadersMiddleware>();
             branch.UseRouting();
             branch.UseEndpoints(endpoints => endpoints.MapExplorerAppFrame(string.Empty, new PhysicalFileProvider(_root), string.Empty));
         });
@@ -232,29 +255,18 @@ public sealed class AppFrameEndpointTests
         var app = builder.Build();
         if (withExplorerHeaders)
         {
-            app.Use(ExplorerHeaders);
+            app.UseMiddleware<ExplorerSecurityHeadersMiddleware>();
         }
 
         app.MapExplorerAppFrame(basePath, new PhysicalFileProvider(_root), string.Empty);
         app.MapGet("/apps/{**rest}", () => Results.Text("page"));
         app.MapGet("/_apps/frame/v2/{**rest}", () => Results.Text("lookalike"));
+
+        // A host's own route under the frame prefix: a literal segment, so it outranks the
+        // route's catch-all and answers instead of it.
+        app.MapGet("/_apps/frame/v1/host-page", () => Results.Text("co-hosted"));
         await app.StartAsync();
         return app;
-    }
-
-    /// <summary>
-    /// The web head's baseline headers as K1 wires them: the Explorer policy and
-    /// X-Frame-Options DENY on every response, except where the route's predicate exempts it.
-    /// </summary>
-    private static Task ExplorerHeaders(HttpContext context, Func<Task> next)
-    {
-        context.Response.Headers.ContentSecurityPolicy = "default-src 'self'";
-        if (!AppFrameRoute.IsFrameBootstrapPath(context.Request.Path))
-        {
-            context.Response.Headers.XFrameOptions = "DENY";
-        }
-
-        return next();
     }
 
     private static IEnumerable<string> HeaderNames(HttpResponseMessage response) =>

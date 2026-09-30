@@ -19,8 +19,10 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// </para>
 /// <para>
 /// <b>The credential goes through the Core plumbing.</b> The settings come from
-/// <see cref="ExplorerConfiguration.ToConnectionSettings"/> with
-/// <see cref="IExplorerAuthSession.CurrentAuthentication"/> applied, and the call
+/// <see cref="ExplorerConfiguration.ToConnectionSettings"/> with the credential
+/// <see cref="IExplorerAuthSession.GetAuthenticationFor"/> returns for the configured
+/// endpoint applied - so a sign-in is only ever attached to the endpoint it was minted
+/// for - and the call
 /// invoker is built by <see cref="LatticeGrpcChannelFactory.CreateCallInvoker"/>,
 /// so the transport headers, the static-credential transport gate and the
 /// per-call token provider behave exactly as they do for the state connection.
@@ -110,7 +112,11 @@ internal sealed class ShellTransportChannel : IDisposable
     internal CallInvoker ResolveInvoker()
     {
         var configuration = _session.Current ?? throw new InvalidOperationException(NotConfiguredMessage);
-        var authentication = _auth.CurrentAuthentication;
+
+        // Asked for the endpoint this channel is about to dial, never the sign-in in
+        // general: a sign-in minted for another endpoint - the window while the console
+        // is repointed, before the old sign-in is dropped - is not attached here.
+        var authentication = _auth.GetAuthenticationFor(configuration.Endpoint);
 
         lock (_gate)
         {

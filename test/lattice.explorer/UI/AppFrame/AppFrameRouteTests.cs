@@ -1,48 +1,14 @@
-using Microsoft.AspNetCore.Http;
 using Orleans.Lattice.Explorer.UI.Framing;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Framing;
 
 /// <summary>
-/// The frame bootstrap route's path, base-path handling, CSP text and - above all - the
-/// X-Frame-Options exemption predicate, which must never be broader than the route.
+/// The frame bootstrap route's path, base-path handling and CSP text. Its X-Frame-Options
+/// exemption is proved end to end in <see cref="AppFrameEndpointTests"/>.
 /// </summary>
 [TestFixture]
 public sealed class AppFrameRouteTests
 {
-    [TestCase("/_apps/frame/v1/frame.html")]
-    [TestCase("/_apps/frame/v1/boot.js")]
-    [TestCase("/_apps/frame/v1/fonts/cascadia-mono.woff2")]
-    [TestCase("/_APPS/FRAME/V1/frame.html")]
-    public void IsFrameBootstrapPath_a_file_under_the_route_is_exempt(string path)
-    {
-        Assert.That(AppFrameRoute.IsFrameBootstrapPath(new PathString(path)), Is.True);
-    }
-
-    [TestCase("")]
-    [TestCase("/")]
-    [TestCase("/_apps/frame/v1")]
-    [TestCase("/_apps/frame/v1/")]
-    [TestCase("/_apps/frame/v2/frame.html")]
-    [TestCase("/_apps/frame/v1x/frame.html")]
-    [TestCase("/_apps/frame/frame.html")]
-    [TestCase("/_apps/frame.html")]
-    [TestCase("/apps/taskboard/open")]
-    [TestCase("/x/_apps/frame/v1/frame.html")]
-    [TestCase("/_content/Orleans.Lattice.Explorer.AppKit/appkit/v1/frame.html")]
-    [TestCase("/_blazor")]
-    [TestCase("/auth/login")]
-    public void IsFrameBootstrapPath_any_other_path_keeps_its_clickjacking_protection(string path)
-    {
-        Assert.That(AppFrameRoute.IsFrameBootstrapPath(new PathString(path.Length == 0 ? null : path)), Is.False);
-    }
-
-    [Test]
-    public void IsFrameBootstrapPath_an_empty_path_is_not_exempt()
-    {
-        Assert.That(AppFrameRoute.IsFrameBootstrapPath(PathString.Empty), Is.False);
-    }
-
     [TestCase("", "/_apps/frame/v1/{**file}")]
     [TestCase("/", "/_apps/frame/v1/{**file}")]
     [TestCase("/explorer", "/explorer/_apps/frame/v1/{**file}")]

@@ -1,0 +1,11 @@
+{
+  "name": "navigate-away",
+  "description": "The app navigates its own frame to another origin, carrying data in the URL (issue #4020).",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"context.read"}],
+  "expect": {"failure":null,"toast":null,"crossOriginNavigationBlocked":true}
+}

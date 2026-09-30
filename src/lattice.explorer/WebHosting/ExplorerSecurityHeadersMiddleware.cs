@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.UI.Framing;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -74,12 +73,12 @@ internal sealed class ExplorerSecurityHeadersMiddleware
             headers.ContentSecurityPolicy = _contentSecurityPolicy;
         }
 
-        // The app frame bootstrap route is the ONE response the Explorer lets itself
-        // frame (epic #3807, E4): it carries its own frame-ancestors 'self' policy.
-        // The predicate is never broader than that route, so every other response,
-        // including every page, asset and SignalR endpoint, keeps DENY.
-        if (!AppFrameRoute.IsFrameBootstrapPath(context.Request.Path)
-            && StringValues.IsNullOrEmpty(headers.XFrameOptions))
+        // Every response gets DENY here, the app frame bootstrap route included: the
+        // path alone is not trusted, because a co-hosted route or fallback could answer
+        // under it. The ONE exemption (epic #3807, E4) is lifted by the frame route's own
+        // endpoint when it serves a file, so it applies only to a response that endpoint
+        // produced (issue #4020).
+        if (StringValues.IsNullOrEmpty(headers.XFrameOptions))
         {
             headers.XFrameOptions = ExplorerSecurityHeaders.FrameOptions;
         }

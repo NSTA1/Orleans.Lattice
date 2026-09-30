@@ -54,7 +54,14 @@ internal sealed class WorkspaceHarness
         AppRegistryLifecycleState state = AppRegistryLifecycleState.Enabled,
         TenantId? tenant = null,
         string version = AppsControlHarness.Version) =>
-        AppsControlHarness.Record(state, version, tenant) with { Revision = 7 };
+        AppsControlHarness.Record(state, version, tenant) with
+        {
+            Revision = 7,
+
+            // An enabled install's recorded consent covers what its UI requests; the workspace
+            // describes only consented grants.
+            ConsentedBridge = AppUiBridgeRequest.FromManifest(Manifest(version)),
+        };
 
     public WorkspaceHarness Publish(params AppRegistryRecord[] records)
     {
