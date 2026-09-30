@@ -52,8 +52,31 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
         TenantId sourceTenant,
         TenantId targetTenant,
         string scope,
+        TenantGrantOperations operation) =>
+        ResolveCrossTenantGrant(maintainer.Current, sourceTenant, targetTenant, scope, operation);
+
+    /// <summary>
+    /// Resolves a cross-tenant grant against an explicit compiled
+    /// <paramref name="policy"/>. The single home of the grant decision: the
+    /// engine applies it to the maintainer's current snapshot, and the data-plane
+    /// gate applies it to a policy compiled from the authoritative registry record
+    /// while that snapshot is being rebuilt, so both answer by the same rule.
+    /// </summary>
+    /// <param name="policy">The compiled policy to resolve against. Must not be <c>null</c>.</param>
+    /// <param name="sourceTenant">The tenant requesting access.</param>
+    /// <param name="targetTenant">The tenant whose data is being accessed (the granting tenant).</param>
+    /// <param name="scope">The scope being accessed. Must not be <c>null</c>.</param>
+    /// <param name="operation">The operation being requested.</param>
+    /// <returns>An allow decision when a matching active grant exists, or a denial carrying the reason.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="policy"/> or <paramref name="scope"/> is <c>null</c>.</exception>
+    internal static TenantAccessDecision ResolveCrossTenantGrant(
+        CompiledTenantPolicy policy,
+        TenantId sourceTenant,
+        TenantId targetTenant,
+        string scope,
         TenantGrantOperations operation)
     {
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(scope);
 
         if (sourceTenant.Value is null)
@@ -66,7 +89,7 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
             return TenantAccessDecision.Deny("The target tenant is the uninitialised 'no tenant' value.");
         }
 
-        if (!maintainer.Current.TryGetTenant(targetTenant.Value, out var target) || target is null)
+        if (!policy.TryGetTenant(targetTenant.Value, out var target) || target is null)
         {
             return TenantAccessDecision.Deny($"Target tenant '{targetTenant}' is not registered.");
         }

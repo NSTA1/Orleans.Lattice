@@ -33,13 +33,15 @@ public sealed class LatticeSchemaVersionStoreTests
     }
 
     [Test]
-    public async Task GetConfigAsync_missing_tree_returns_default()
+    public async Task GetConfigAsync_missing_tree_returns_null()
     {
         var (store, _) = CreateStore();
 
-        // A missing key deserializes to the value-type default (the reserved
-        // "unversioned" sentinel: TargetVersion 0), not a null nullable.
-        Assert.That(await store.GetConfigAsync("orders"), Is.EqualTo(default(LatticeSchemaVersionConfig)));
+        // An absent config is a real null, never default(LatticeSchemaVersionConfig):
+        // the provider caches this answer and the write interceptor / value decoder
+        // treat any non-null config as versioned, so a (family 0, version 0) default
+        // would envelope every write to an unversioned tree (#3993).
+        Assert.That(await store.GetConfigAsync("orders"), Is.Null);
     }
 
     [Test]
@@ -79,7 +81,7 @@ public sealed class LatticeSchemaVersionStoreTests
         var cleared = await store.ClearConfigAsync("orders");
 
         Assert.That(cleared, Is.True);
-        Assert.That(await store.GetConfigAsync("orders"), Is.EqualTo(default(LatticeSchemaVersionConfig)));
+        Assert.That(await store.GetConfigAsync("orders"), Is.Null);
     }
 
     [Test]

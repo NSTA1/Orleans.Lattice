@@ -42,7 +42,11 @@ internal sealed class LatticeSchemaVersionStore(IGrainFactory grainFactory) : IL
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            return await Config.GetAsync<LatticeSchemaVersionConfig>(treeId, cancellationToken).ConfigureAwait(false);
+            // Read through the Nullable<T> type argument, not the bare struct: the typed
+            // GetAsync<T> answers default(T) for an absent key, which for the struct is a
+            // non-null (family 0, version 0) config that every `is { }` consumer would
+            // treat as versioned (#3993). With T = Nullable<...> absence is a real null.
+            return await Config.GetAsync<LatticeSchemaVersionConfig?>(treeId, cancellationToken).ConfigureAwait(false);
         }
     }
 
