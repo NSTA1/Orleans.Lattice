@@ -306,7 +306,12 @@ public sealed partial class DurableVectorIndex
         // governs waiting, and a source that answers without waiting never meets
         // it at all. See SliceDeadline.
         using var sliceDeadline = timeBounded
-            ? new SliceDeadline(timeProvider, sliceBudget, startedAt)
+            ? new SliceDeadline(
+                timeProvider,
+                sliceBudget,
+                startedAt,
+                _options.MaxIngestSliceExtensions,
+                () => consumed)
             : null;
         using var sliceCancellation = sliceDeadline is null
             ? null
@@ -680,8 +685,34 @@ public sealed partial class DurableVectorIndex
     /// removing it leaves the suite green. Worth knowing before it is tidied away
     /// on the strength of that green.
     /// </para>
+    /// <para>
+    /// <b>A spent period is not automatically the end of the slice (issue
+    /// #4071).</b> Everything above bounds a source that is slow, stuck, or
+    /// silent. It does not distinguish those from a source that is merely
+    /// QUEUED - one whose leaves must first take a per-silo WAL replay permit -
+    /// and for that case the elapsed-only bound is actively harmful: the slice
+    /// cannot complete even one item inside the budget, banks nothing, moves no
+    /// cursor, and the next slice re-reads the identical range. When
+    /// <see cref="DurableVectorIndexOptions.MaxIngestSliceExtensions"/> is
+    /// positive, a boundary reached with nothing banked grants a further period
+    /// instead of firing, exactly as issue #3284's open-slice deadline already
+    /// does one layer up. The default of zero leaves every existing host on the
+    /// elapsed-only bound unchanged.
+    /// </para>
+    /// <para>
+    /// <b>Progress is tested before the cap, and the order is load-bearing.</b> A
+    /// slice that banked something at the same boundary at which it exhausted its
+    /// last extension is a PRODUCTIVE slice and must end as one; testing the cap
+    /// first would attribute its cancellation to exhaustion and report it as
+    /// starved.
+    /// </para>
     /// </remarks>
-    private sealed class SliceDeadline(TimeProvider timeProvider, TimeSpan budget, long startedAt) : IDisposable
+    private sealed class SliceDeadline(
+        TimeProvider timeProvider,
+        TimeSpan budget,
+        long startedAt,
+        int maxExtensions,
+        Func<int> consumedProbe) : IDisposable
     {
         /// <summary>
         /// The longest due time a timer accepts: <c>0xFFFFFFFE</c> milliseconds,
@@ -693,14 +724,25 @@ public sealed partial class DurableVectorIndex
         internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
         private readonly CancellationTokenSource _cancellation = new();
+        private readonly int _maxExtensions = maxExtensions < 0 ? 0 : maxExtensions;
         private ITimer? _timer;
         private bool _armed;
+        private int _armedAtConsumed;
+        private int _extensions;
 
         /// <summary>The token that is cancelled once the deadline is spent.</summary>
         internal CancellationToken Token => _cancellation.Token;
 
         /// <summary>Whether the deadline has been spent.</summary>
         internal bool IsCancellationRequested => _cancellation.IsCancellationRequested;
+
+        /// <summary>
+        /// How many extra periods were granted because the slice had banked
+        /// nothing at a boundary. Exposed so a fixture can assert that an
+        /// extension happened at all rather than inferring it from a wall-clock
+        /// reading.
+        /// </summary>
+        internal int Extensions => Volatile.Read(ref _extensions);
 
         /// <summary>
         /// Starts the deadline, if it is not already running.
@@ -714,6 +756,10 @@ public sealed partial class DurableVectorIndex
             }
 
             _armed = true;
+
+            // The baseline every later boundary judges progress against. Written
+            // before the timer exists, so the callback cannot observe it unset.
+            _armedAtConsumed = consumed;
 
             // A slice with nothing banked is bounded from here by the whole
             // budget; one that has banked is bounded by what is left of it. See
@@ -730,11 +776,40 @@ public sealed partial class DurableVectorIndex
                 window = MaxTimerDuration;
             }
 
+            // Periodic ONLY when extensions are allowed. At the default of zero the
+            // timer stays one-shot and the first tick cancels unconditionally,
+            // which is byte-for-byte the historical behaviour.
             _timer = timeProvider.CreateTimer(
-                static state => ((CancellationTokenSource)state!).Cancel(),
-                _cancellation,
+                static state => ((SliceDeadline)state!).Tick(),
+                this,
                 window,
-                Timeout.InfiniteTimeSpan);
+                _maxExtensions > 0 ? window : Timeout.InfiniteTimeSpan);
+        }
+
+        /// <summary>
+        /// One budget boundary: end the slice, or grant it a further period
+        /// because it has banked nothing and may still be extended.
+        /// </summary>
+        private void Tick()
+        {
+            if (_maxExtensions == 0
+                || consumedProbe() > _armedAtConsumed
+                || Volatile.Read(ref _extensions) >= _maxExtensions)
+            {
+                // A disposed source is reached on the shutdown race, where the
+                // slice has already returned and there is nothing left to cancel.
+                try
+                {
+                    _cancellation.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                return;
+            }
+
+            Interlocked.Increment(ref _extensions);
         }
 
         public void Dispose()

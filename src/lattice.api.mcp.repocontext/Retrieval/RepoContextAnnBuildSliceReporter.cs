@@ -21,7 +21,21 @@ internal enum RepoContextAnnBuildSliceOutcome
     /// <summary>
     /// The step's ingest slice was stopped by its wall-clock budget having banked
     /// nothing, so the cursor did not move. The source did not deliver a single
-    /// item before the budget was spent, which no larger budget repairs.
+    /// item before the budget was spent.
+    /// <para>
+    /// <b>This was once documented as a condition "which no larger budget
+    /// repairs", and that is not true in general (issue #4071).</b> It holds for
+    /// the case the arm was written for - a source that is genuinely dead or
+    /// silent - and fails for a source that is merely QUEUED, whose leaves must
+    /// first take a per-silo WAL replay permit. There the slice is starved by a
+    /// wait it would have outlasted given more of one, and the measurement said
+    /// so: a 24.6 s mean permit queue wait against a 5 s slice budget, with 114
+    /// of 152 non-faulted ingest slices banking nothing. That case is now covered
+    /// by <see cref="DurableVectorIndexOptions.MaxIngestSliceExtensions"/>, which
+    /// grants a bounded number of further periods to a slice that has banked
+    /// nothing, so this arm once again means what it says: a source that answered
+    /// nothing even after the extensions were exhausted.
+    /// </para>
     /// </summary>
     Starved = 1,
 

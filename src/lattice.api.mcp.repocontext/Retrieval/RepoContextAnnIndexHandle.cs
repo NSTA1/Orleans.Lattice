@@ -320,6 +320,28 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         await _turn.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // CLASSIFIED BULK FOR THE WHOLE TICK (issues #3284 and #4071). Every
+            // phase below - the open walk, the ingest read, the persist, and the
+            // catch-up - is an O(corpus) fan-out that activates cold leaves in
+            // bulk, which is exactly the load that filled the replay permit queue
+            // measured on the incident. The class flows ambiently on
+            // RequestContext, so every leaf any of them reaches inherits it
+            // without knowing the seam exists, and a saturated gate turns this
+            // tick away one full ceiling's worth of queue before it starts
+            // refusing foreground reads. It can only ever make this caller MORE
+            // likely to be refused; it is never a priority boost.
+            //
+            // The scope was originally opened inside OpenAsync and so covered the
+            // open walk ALONE (issue #3284). That left the majority of the build's
+            // leaf activations - the ingest read in particular, which is the phase
+            // that walks the whole corpus - classified Interactive and taking the
+            // wider admission bound while competing with foreground reads. This is
+            // the outermost frame of one coordinator tick, and the whole tick is
+            // background build work by construction, so it is the correct owner.
+            // Nesting is explicitly safe, so a future scope re-opened on any inner
+            // path remains harmless.
+            using var admission = LatticeReplayAdmissionContext.BeginBulkScope();
+
             phase?.Enter(RepoContextAnnBuildStepPhase.Opening);
             var index = await OpenAsync(cancellationToken).ConfigureAwait(false);
             if (index is null)
@@ -757,15 +779,14 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
         try
         {
-            // CLASSIFIED BULK FOR THE WHOLE WALK (issue #3284). The key walk is an
-            // O(corpus) fan-out that activates cold leaves in bulk, which is exactly
-            // the load that filled the replay permit queue measured on the incident.
-            // The class flows ambiently on RequestContext, so every leaf the walk
-            // reaches inherits it without knowing the seam exists, and a saturated
-            // gate turns this walk away one full ceiling's worth of queue before it
-            // starts refusing foreground reads. It can only ever make this caller
-            // MORE likely to be refused; it is never a priority boost.
-            using var admission = LatticeReplayAdmissionContext.BeginBulkScope();
+            // The bulk admission class that used to be opened here now covers the
+            // WHOLE tick, and is taken by AdvanceAsync (issue #4071). This method
+            // is private and reachable only from there, so the scope is strictly
+            // wider than it was and this walk is classified exactly as before.
+            // Scoping it here alone left the ingest, training, persist and
+            // reconcile work of the same tick classified Interactive, so the build
+            // competed with foreground reads on the wider bound for every leaf it
+            // activated after the open had finished.
 
             // The deadline reaches the RESUMABLE key walk only; the caller's token
             // governs the load as a whole. Passing the deadline to both would bound

@@ -115,6 +115,37 @@ internal sealed class RepoContextAnnOptions
     public int MaxOpenSliceExtensions { get; init; } = 6;
 
     /// <summary>
+    /// How many further <see cref="IngestSliceBudget"/> periods an ingest slice
+    /// that has banked <b>nothing</b> may be granted before the budget fires
+    /// anyway. Zero reproduces the elapsed-only bound exactly.
+    /// <para>
+    /// <b>This is <see cref="MaxOpenSliceExtensions"/>'s defect, on the other
+    /// slice, found two issues later (issue #4071).</b> Everything the entry above
+    /// says about the open walk is true verbatim of the ingest read: it streams
+    /// over grain calls that activate cold leaves, those leaves queue for a
+    /// per-silo WAL replay permit, and a slice that cannot complete one item banks
+    /// nothing and moves no cursor. Only the open walk was fixed. Measured on the
+    /// same deployment two issues later: a 24.6 s mean permit queue wait against
+    /// this 5 s budget, and 114 of 152 non-faulted ingest slices reported
+    /// <c>progress=starved</c> against 38 that advanced.
+    /// </para>
+    /// <para>
+    /// The cap carries the same two-directional property. Without it the slice is
+    /// unbounded again, and bounding the slice is what returns the coordinator's
+    /// turn (issue #2483). With it, a source that genuinely answers nothing still
+    /// exhausts its extensions and is still reported starved, so the loud failure
+    /// stays reachable rather than being suppressed by the fix.
+    /// </para>
+    /// <para>
+    /// Defaults to six, matching <see cref="MaxOpenSliceExtensions"/>: the two
+    /// bounds face the same contended resource and there is no reason for them to
+    /// differ. The two cannot compound within one coordinator tick, because an
+    /// open that defers returns before the ingest is reached at all.
+    /// </para>
+    /// </summary>
+    public int MaxIngestSliceExtensions { get; init; } = 6;
+
+    /// <summary>
     /// How many <b>consecutive</b> admission refusals an open may take before the
     /// handle declares itself terminally saturated. Zero removes the count bound,
     /// leaving <see cref="OpenRefusalTerminalPeriod"/> as the only one.
@@ -183,6 +214,12 @@ internal sealed class RepoContextAnnOptions
         "LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_BUDGET_SECONDS";
 
     /// <summary>
+    /// Environment variable that overrides <see cref="MaxIngestSliceExtensions"/>.
+    /// </summary>
+    internal const string MaxIngestSliceExtensionsVariable =
+        "LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_MAX_EXTENSIONS";
+
+    /// <summary>
     /// Environment variable that overrides <see cref="MaxConsecutiveOpenRefusals"/>.
     /// Zero removes the count bound.
     /// </summary>
@@ -229,6 +266,8 @@ internal sealed class RepoContextAnnOptions
             IngestSliceBudget = ReadSeconds(IngestSliceBudgetSecondsVariable, defaults.IngestSliceBudget),
             MaxOpenSliceExtensions = ReadCount(
                 MaxOpenSliceExtensionsVariable, defaults.MaxOpenSliceExtensions),
+            MaxIngestSliceExtensions = ReadCount(
+                MaxIngestSliceExtensionsVariable, defaults.MaxIngestSliceExtensions),
             MaxConsecutiveOpenRefusals = ReadCount(
                 MaxConsecutiveOpenRefusalsVariable, defaults.MaxConsecutiveOpenRefusals),
             OpenRefusalTerminalPeriod = ReadSeconds(
@@ -346,6 +385,7 @@ internal sealed class RepoContextAnnOptions
             KeyPrefix = keyPrefix,
             IngestBatchSize = IngestBatchSize,
             IngestSliceBudget = IngestSliceBudget,
+            MaxIngestSliceExtensions = MaxIngestSliceExtensions,
             MaxItemsPerChunk = MaxItemsPerChunk,
             Index = new VectorIndexOptions
             {

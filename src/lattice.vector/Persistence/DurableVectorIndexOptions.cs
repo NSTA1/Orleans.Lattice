@@ -38,6 +38,7 @@ public sealed class DurableVectorIndexOptions
     private int _ingestBatchSize = 4_096;
     private int _keyReservationBlock = 1_024;
     private TimeSpan _ingestSliceBudget = DefaultIngestSliceBudget;
+    private int _maxIngestSliceExtensions;
     private TimeProvider _timeProvider = TimeProvider.System;
 
     /// <summary>
@@ -382,6 +383,65 @@ public sealed class DurableVectorIndexOptions
     }
 
     /// <summary>
+    /// How many further <see cref="IngestSliceBudget"/> periods a slice that has
+    /// banked <b>nothing</b> may be granted before the deadline fires anyway.
+    /// Defaults to <c>0</c>, which reproduces the elapsed-only bound above
+    /// exactly.
+    /// <para>
+    /// <b>This exists because the budget measures wall-clock that can include
+    /// time in which progress is impossible (issue #4071).</b> The budget is
+    /// armed at the first wait, which correctly bounds a source that is slow,
+    /// stuck, or silent. It does not distinguish those from a source that is
+    /// merely QUEUED: when the source streams over grain calls whose leaves must
+    /// first take a per-silo WAL replay permit, the slice can be unable to
+    /// complete even one item before the budget is spent. It then banks nothing,
+    /// moves no cursor, and the next slice re-reads the identical range - so the
+    /// build makes no progress at all while every component of it is behaving as
+    /// designed.
+    /// </para>
+    /// <para>
+    /// <b>The same defect was already measured and fixed one layer up.</b> Issue
+    /// #3284 found the index OPEN in exactly this position - a mean permit wait
+    /// above the slice budget, so every slice expired having banked zero - and
+    /// fixed it by arming that deadline on PROGRESS rather than on elapsed time
+    /// alone. This is that mechanism applied to the ingest slice, which was left
+    /// on the elapsed-only bound. Issue #4071 measured a 24.6 s mean permit queue
+    /// wait against this 5 s budget, and 114 of 152 non-faulted ingest slices
+    /// banking nothing.
+    /// </para>
+    /// <para>
+    /// <b>The cap is load-bearing in both directions.</b> Without one this would
+    /// be an unbounded slice again, and bounding the slice is what bounds the
+    /// host's turn (see above). With one, a source that genuinely answers nothing
+    /// still exhausts the extensions, still banks nothing, and is still reported
+    /// through <see cref="VectorIndexBuildProgress.SlicesDeadlinedWithoutProgress"/>,
+    /// so the starvation signal stays reachable rather than being suppressed by
+    /// the fix. The cap converts "expired having banked nothing" from the normal
+    /// outcome under permit contention back into the exceptional one it was meant
+    /// to be.
+    /// </para>
+    /// <para>
+    /// <b>Default <c>0</c> on purpose.</b> This type is consumed by hosts whose
+    /// sources are local and prompt, for which the elapsed-only bound is already
+    /// correct and an extension would only lengthen a turn. A host whose source
+    /// streams over a contended store opts in; see
+    /// <c>RepoContextAnnOptions.MaxIngestSliceExtensions</c>, which sets it to
+    /// match the open path's own cap. A negative value is rejected rather than
+    /// clamped, so a mis-set option is loud.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public int MaxIngestSliceExtensions
+    {
+        get => _maxIngestSliceExtensions;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            _maxIngestSliceExtensions = value;
+        }
+    }
+
+    /// <summary>
     /// The clock <see cref="IngestSliceBudget"/> is measured against. Defaults to
     /// <see cref="TimeProvider.System"/>; a test substitutes a fake so a step's
     /// bound is asserted deterministically rather than by waiting.
@@ -455,6 +515,7 @@ public sealed class DurableVectorIndexOptions
         _ingestBatchSize = _ingestBatchSize,
         _keyReservationBlock = _keyReservationBlock,
         _ingestSliceBudget = _ingestSliceBudget,
+        _maxIngestSliceExtensions = _maxIngestSliceExtensions,
         _timeProvider = _timeProvider,
         BuildObserver = BuildObserver,
     };

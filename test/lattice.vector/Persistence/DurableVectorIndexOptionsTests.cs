@@ -66,6 +66,7 @@ public sealed class DurableVectorIndexOptionsTests
             IngestBatchSize = 11,
             KeyReservationBlock = 13,
             IngestSliceBudget = TimeSpan.FromSeconds(17),
+            MaxIngestSliceExtensions = 3,
             TimeProvider = new SteppingTimeProvider(TimeSpan.Zero),
             Index = new VectorIndexOptions { Dimensions = 4, Probes = 2 },
         };
@@ -74,6 +75,7 @@ public sealed class DurableVectorIndexOptionsTests
         options.KeyPrefix = "b/";
         options.MaxItemsPerChunk = 99;
         options.IngestSliceBudget = TimeSpan.FromSeconds(99);
+        options.MaxIngestSliceExtensions = 99;
         options.TimeProvider = TimeProvider.System;
         options.Index.Probes = 9;
 
@@ -84,6 +86,9 @@ public sealed class DurableVectorIndexOptionsTests
             Assert.That(clone.IngestBatchSize, Is.EqualTo(11));
             Assert.That(clone.KeyReservationBlock, Is.EqualTo(13));
             Assert.That(clone.IngestSliceBudget, Is.EqualTo(TimeSpan.FromSeconds(17)));
+            Assert.That(clone.MaxIngestSliceExtensions, Is.EqualTo(3),
+                "A clone that dropped the extension cap would put an opted-in host back on the "
+                + "elapsed-only bound, which is the defect of issue #4071 restored silently.");
             Assert.That(clone.TimeProvider, Is.InstanceOf<SteppingTimeProvider>(),
                 "A clone that dropped the clock would silently put a fixture back on the wall clock.");
             Assert.That(clone.Index.Dimensions, Is.EqualTo(4));
@@ -106,6 +111,33 @@ public sealed class DurableVectorIndexOptionsTests
                 "A slice has to fit inside the call timeout a reminder tick is delivered under.");
             Assert.That(options.TimeProvider, Is.SameAs(TimeProvider.System));
         });
+    }
+
+    [Test]
+    public void The_extension_cap_defaults_to_off_so_an_existing_host_is_unchanged()
+    {
+        var options = new DurableVectorIndexOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.MaxIngestSliceExtensions, Is.Zero,
+                "This type is consumed by hosts whose sources are local and prompt, for which the "
+                + "elapsed-only bound is already correct. A host whose source streams over a "
+                + "contended store opts in; see RepoContextAnnOptions.MaxIngestSliceExtensions.");
+            Assert.DoesNotThrow(() => options.MaxIngestSliceExtensions = 0);
+            Assert.DoesNotThrow(() => options.MaxIngestSliceExtensions = 6);
+        });
+    }
+
+    [Test]
+    public void A_negative_extension_cap_is_refused_rather_than_clamped()
+    {
+        var options = new DurableVectorIndexOptions();
+
+        // Rejected rather than clamped so a mis-set option is loud. Clamping would
+        // leave a host believing it had opted in while it ran on the bound the
+        // opt-in exists to replace.
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxIngestSliceExtensions = -1);
     }
 
     [Test]

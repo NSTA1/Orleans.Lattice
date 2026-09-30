@@ -106,6 +106,7 @@ public static class RepoContextEnvironmentVariables
         RepoContextAnnOptions.OpenSliceBudgetSecondsVariable,
         RepoContextAnnOptions.MaxOpenSliceExtensionsVariable,
         RepoContextAnnOptions.IngestSliceBudgetSecondsVariable,
+        RepoContextAnnOptions.MaxIngestSliceExtensionsVariable,
         RepoContextAnnOptions.MaxConsecutiveOpenRefusalsVariable,
         RepoContextAnnOptions.OpenRefusalTerminalPeriodSecondsVariable,
     ];
@@ -283,6 +284,10 @@ public static class RepoContextEnvironmentVariables
                 RepoContextAnnOptions.IngestSliceBudgetSecondsVariable,
                 Seconds(annResolved.IngestSliceBudget),
                 Seconds(annDefaults.IngestSliceBudget)),
+            Snapshot(
+                RepoContextAnnOptions.MaxIngestSliceExtensionsVariable,
+                Extensions(annResolved.MaxIngestSliceExtensions),
+                Extensions(annDefaults.MaxIngestSliceExtensions)),
 
             // The refusal-run terminal bounds (issue #3286). Reported as a pair for
             // the same reason the budget and its extension cap are: either bound
