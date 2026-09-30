@@ -6,6 +6,7 @@ using Orleans.Lattice.Apps.Sources;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Samples.Explorer.TaskBoard;
+using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Samples.Explorer;
 
@@ -61,7 +62,7 @@ internal static class SampleSeeder
         }
 
         await SeedTenancyAsync(region, cancellationToken).ConfigureAwait(false);
-        log($"[{region.Id}] Tenancy: tenants '{SampleIdentities.AcmeTenant}' (admin '{SampleIdentities.AcmeAdmin}') and '{SampleIdentities.GlobexTenant}' (admin '{SampleIdentities.GlobexAdmin}'), both also administered by the operator and allowed in east and west, each with an '{SampleIdentities.TenantOrdersTree}' tree and quotas; '{SampleIdentities.AcmeTenant}' offers '{SampleIdentities.GlobexTenant}' Read on its orders.");
+        log($"[{region.Id}] Tenancy: tenants '{SampleIdentities.AcmeTenant}' (admin '{SampleIdentities.AcmeAdmin}') and '{SampleIdentities.GlobexTenant}' (admin '{SampleIdentities.GlobexAdmin}'), both also administered by the operator and allowed in east and west, each with an '{SampleIdentities.TenantOrdersTree}' tree and quotas; '{SampleIdentities.AcmeTenant}' is resident and Online in east and west, '{SampleIdentities.GlobexTenant}' has no residency and is served in every region; '{SampleIdentities.AcmeTenant}' offers '{SampleIdentities.GlobexTenant}' Read on its orders.");
     }
 
     /// <summary>
@@ -244,12 +245,12 @@ internal static class SampleSeeder
     {
         var services = region.Services;
 
-        // Each tenant may use both regions. Residency is deliberately left
-        // unconfigured, which reads as online everywhere: that is what lets
-        // acme's task-board tree replicate, because a receiver refuses a
-        // tenant's writes in a region where it is not online. Setting residency
-        // starts a region Provisioning, and only the backfill machinery - which
-        // this sample does not run - moves it on to Online.
+        // Each tenant may use both regions. acme is resident in both and Online
+        // in both, as a tenant served by the two regions it replicates between
+        // is: a receiver refuses a tenant's writes in a region where it is not
+        // Online, so acme's task board replicates only because both are. globex
+        // keeps no residency, which serves it in every region, so the sample
+        // shows both states.
         var allowed = new[] { SampleIdentities.EastRegion, SampleIdentities.WestRegion };
         var tenants = new[]
         {
@@ -276,6 +277,8 @@ internal static class SampleSeeder
                 await regions.AuthorizeAllowedRegionsAsync(tenant, allowed, cancellationToken).ConfigureAwait(false);
             }
 
+            await regions.SetResidencyAsync(SampleIdentities.AcmeTenant, allowed, cancellationToken).ConfigureAwait(false);
+
             var grants = services.GetRequiredService<ILatticeTenantGrantAdmin>();
 
             // A grant's scope is the granting tenant's full tree id: the tenant gate
@@ -286,6 +289,20 @@ internal static class SampleSeeder
                 OrdersTree(SampleIdentities.AcmeTenant),
                 TenantGrantAccess.Read,
                 cancellationToken).ConfigureAwait(false);
+        }
+
+        // SetResidencyAsync leaves each added region Provisioning, because nothing
+        // backfills it: an operator of the hosting deployment promotes it. acme's
+        // residency is set for the first time before any of its data is written,
+        // so there is no gap to recover and promoting both regions is enough.
+        using (LatticeSystemOrigin.Enter())
+        {
+            var registry = services.GetRequiredService<ITenantRegistry>();
+            var acme = TenantId.Parse(SampleIdentities.AcmeTenant);
+            foreach (var regionId in allowed)
+            {
+                await PromoteToOnlineAsync(registry, acme, regionId, region.Id, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         // Each tenant's orders, and the rule that lets its admin work with them:
@@ -329,6 +346,38 @@ internal static class SampleSeeder
                     operations: LatticeOperation.Read | LatticeOperation.RangeRead,
                     effect: LatticeEffect.Allow),
                 cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Promotes <paramref name="regionId"/> of <paramref name="tenant"/> one legal
+    /// lifecycle step at a time until it is Online, as an operator of the hosting
+    /// deployment does: Provisioning, then Backfilling, then Online.
+    /// </summary>
+    /// <param name="registry">The region's tenant registry.</param>
+    /// <param name="tenant">The tenant.</param>
+    /// <param name="regionId">The region to promote.</param>
+    /// <param name="writerId">The writer id stamped on each promotion: the promoting region's id.</param>
+    /// <param name="cancellationToken">Cancels the promotion.</param>
+    /// <returns>The region's committed status once no further step applies.</returns>
+    public static async Task<TenantRegionStatus> PromoteToOnlineAsync(
+        ITenantRegistry registry, TenantId tenant, string regionId, string writerId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+
+        while (true)
+        {
+            var record = await registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Tenant '{tenant}' is not registered.");
+            var status = record.GetRegionStatus(regionId);
+            if (status is not (TenantRegionStatus.Provisioning or TenantRegionStatus.Backfilling)
+                || !record.TryPromoteRegionStatus(regionId, writerId, out _))
+            {
+                return status;
+            }
+
+            await registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
         }
     }
 

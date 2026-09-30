@@ -35,8 +35,11 @@ internal sealed class TenancyResidencyPlan
     /// <summary>The regions the plan removes from the committed residency, in the cluster's order.</summary>
     public IReadOnlyList<string> Removed => [.. Rows.Where(row => !row.IsPlanned && row.IsResident).Select(row => row.RegionId)];
 
-    /// <summary>Whether the committed residency holds any region; with none set the tenant is served in every region.</summary>
-    public bool HasResidency => Rows.Any(row => row.IsResident);
+    /// <summary>Whether the tenant has residency set; with none set the tenant is served in every region.</summary>
+    public bool HasResidency => _regions.Any(region => region.Status != TenantRegionLifecycleStatus.None);
+
+    /// <summary>Whether any of the tenant's regions is Online now, so a plan can keep serving it by keeping that region.</summary>
+    public bool HasOnlineRegion => _regions.Any(region => region.Status == TenantRegionLifecycleStatus.Online);
 
     /// <summary>
     /// Whether applying the plan would leave the tenant with residency and no
@@ -48,6 +51,19 @@ internal sealed class TenancyResidencyPlan
     public bool LeavesNoOnlineRegion =>
         _planned.Count > 0
         && !_regions.Any(region => _planned.Contains(region.RegionId) && region.Status == TenantRegionLifecycleStatus.Online);
+
+    /// <summary>
+    /// What applying the plan changes for each region, one sentence each, in the
+    /// cluster's order: where the tenant stays served, joins or leaves the
+    /// residency, and stops being served. Empty while the plan is unchanged.
+    /// </summary>
+    public IReadOnlyList<string> Preview { get; private set; } = [];
+
+    /// <summary>
+    /// The planned regions that would not be Online once the plan is applied,
+    /// each with its state then, such as <c>east (added: starts Provisioning)</c>.
+    /// </summary>
+    public IReadOnlyList<string> NotOnlineAfter { get; private set; } = [];
 
     /// <summary>Replaces the plan with the cluster's reading, discarding any edit.</summary>
     /// <param name="regions">The per-region status.</param>
@@ -113,16 +129,57 @@ internal sealed class TenancyResidencyPlan
     private void Project()
     {
         var changed = false;
+        var hasResidency = HasResidency;
         var rows = new List<TenancyRegionRow>(_regions.Count);
         foreach (var region in _regions)
         {
             var resident = TenancyFormat.IsResident(region.Status);
             var planned = _planned.Contains(region.RegionId);
             changed |= resident != planned;
-            rows.Add(new TenancyRegionRow(region.RegionId, region.Status, region.IsAllowed, resident, planned, RefusalFor(region)));
+            rows.Add(new TenancyRegionRow(
+                region.RegionId, region.Status, region.IsAllowed, resident, planned, RefusalFor(region),
+                TenancyFormat.IsServedIn(region.Status, hasResidency)));
         }
 
         Rows = rows;
         IsChanged = changed;
+        Preview = changed ? [.. rows.Select(Describe).OfType<string>()] : [];
+        NotOnlineAfter = changed
+            ? [.. rows.Where(row => row.IsPlanned && !ServedAfter(row)).Select(row => row.IsResident
+                ? $"{row.RegionId} ({TenancyFormat.RegionStatusLabel(row.Status)})"
+                : $"{row.RegionId} (added: starts Provisioning)")]
+            : [];
+    }
+
+    // Once the plan is applied the tenant has residency, so a region serves it only
+    // where it is Online: a kept region keeps its status, an added one starts
+    // Provisioning, and a removed one starts Draining.
+    private static bool ServedAfter(TenancyRegionRow row) =>
+        row.IsPlanned && row.IsResident && row.Status == TenantRegionLifecycleStatus.Online;
+
+    private static string? Describe(TenancyRegionRow row)
+    {
+        var region = row.RegionId;
+        var servedAfter = ServedAfter(row);
+        if (row.IsPlanned && !row.IsResident)
+        {
+            return row.IsServed
+                ? $"{region} joins the residency as Provisioning, and stops being served there until a platform operator promotes it to Online."
+                : $"{region} joins the residency as Provisioning; it is served there once a platform operator promotes it to Online.";
+        }
+
+        if (!row.IsPlanned && row.IsResident)
+        {
+            return row.IsServed ? $"{region} starts draining, and stops being served there." : $"{region} starts draining.";
+        }
+
+        if (row.IsPlanned)
+        {
+            return servedAfter
+                ? $"{region} stays in the residency, and is still served there."
+                : $"{region} stays in the residency, and is not served there until it is Online.";
+        }
+
+        return row.IsServed ? $"{region} stops being served, because it is not in the residency." : null;
     }
 }

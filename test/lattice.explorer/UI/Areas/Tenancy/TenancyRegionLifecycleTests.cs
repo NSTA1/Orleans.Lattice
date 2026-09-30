@@ -23,9 +23,9 @@ public sealed class TenancyRegionLifecycleTests
         Assert.That(TenancyFormat.RegionStatusMeaning(status), Is.EqualTo(meaning));
 
     [Test]
-    public void A_region_outside_the_residency_has_no_meaning_beyond_its_label()
+    public void A_region_outside_a_set_residency_says_it_does_not_serve_the_tenant()
     {
-        Assert.That(TenancyFormat.RegionStatusMeaning(TenantRegionLifecycleStatus.None), Is.Null);
+        Assert.That(TenancyFormat.RegionStatusMeaning(TenantRegionLifecycleStatus.None), Is.EqualTo("Outside the tenant's residency, so it does not serve this tenant."));
         Assert.That(TenancyFormat.RegionStatusMeaning(TenantRegionLifecycleStatus.Provisioning), Is.EqualTo(TenancyFormat.ProvisioningMeaning));
     }
 
@@ -82,7 +82,7 @@ public sealed class TenancyRegionLifecycleTests
 
         plan.Toggle("eu-west");
 
-        Assert.That(plan.LeavesNoOnlineRegion, Is.True);
+        Assert.That((plan.LeavesNoOnlineRegion, plan.HasOnlineRegion), Is.EqualTo((true, false)));
     }
 
     [Test]
@@ -118,6 +118,56 @@ public sealed class TenancyRegionLifecycleTests
             Assert.That(narrowed.Items.Select(item => item.Value), Is.EqualTo(new[] { "us-east" }));
         });
         Assert.That(() => source.SuggestAsync(null!, 10, CancellationToken.None), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void A_region_with_no_status_reads_by_whether_the_tenant_has_residency()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyFormat.RegionStatusLabel(TenantRegionLifecycleStatus.None, hasResidency: false), Is.EqualTo("No residency set"));
+            Assert.That(TenancyFormat.RegionStatusMeaning(TenantRegionLifecycleStatus.None, hasResidency: false), Is.EqualTo(TenancyFormat.NoResidencyMeaning));
+            Assert.That(TenancyFormat.RegionStatusMeaning(TenantRegionLifecycleStatus.None), Is.EqualTo("Outside the tenant's residency, so it does not serve this tenant."));
+            Assert.That(TenancyFormat.RegionStatusMeaning(TenantRegionLifecycleStatus.Provisioning), Is.EqualTo(TenancyFormat.ProvisioningMeaning));
+        });
+    }
+
+    [Test]
+    public void Every_region_serves_a_tenant_with_no_residency_and_only_an_online_one_serves_a_tenant_with_residency()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyFormat.IsServedIn(TenantRegionLifecycleStatus.None, hasResidency: false), Is.True);
+            Assert.That(TenancyFormat.IsServedIn(TenantRegionLifecycleStatus.None, hasResidency: true), Is.False);
+            Assert.That(TenancyFormat.IsServedIn(TenantRegionLifecycleStatus.Provisioning, hasResidency: true), Is.False);
+            Assert.That(TenancyFormat.IsServedIn(TenantRegionLifecycleStatus.Online, hasResidency: true), Is.True);
+            Assert.That(TenancyFormat.HasResidency([Region("eu-west", TenantRegionLifecycleStatus.None)]), Is.False);
+            Assert.That(TenancyFormat.HasResidency([Region("eu-west", TenantRegionLifecycleStatus.Draining)]), Is.True, "a draining region still counts, as the tenancy engine counts it");
+            Assert.That(() => TenancyFormat.HasResidency(null!), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public void A_plan_previews_each_region_and_names_the_regions_not_online_after_it()
+    {
+        var plan = new TenancyResidencyPlan();
+        plan.Reset([Region("eu-west", TenantRegionLifecycleStatus.Online), Region("us-east", TenantRegionLifecycleStatus.None)]);
+        Assert.That((plan.Preview, plan.NotOnlineAfter), Is.EqualTo((Array.Empty<string>(), Array.Empty<string>())), "an unchanged plan previews nothing");
+
+        plan.Toggle("us-east");
+        plan.Toggle("eu-west");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Preview, Is.EqualTo(new[]
+            {
+                "eu-west starts draining, and stops being served there.",
+                "us-east joins the residency as Provisioning; it is served there once a platform operator promotes it to Online.",
+            }));
+            Assert.That(plan.NotOnlineAfter, Is.EqualTo(new[] { "us-east (added: starts Provisioning)" }));
+            Assert.That(plan.LeavesNoOnlineRegion, Is.True);
+            Assert.That(plan.HasOnlineRegion, Is.True, "eu-west is Online until the plan is applied");
+        });
     }
 
     [Test]

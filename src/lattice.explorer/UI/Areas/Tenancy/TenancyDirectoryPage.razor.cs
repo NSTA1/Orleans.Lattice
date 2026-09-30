@@ -183,7 +183,7 @@ public partial class TenancyDirectoryPage
     };
 
     private static string RegionsLabel(TenancyDirectoryRow row, IReadOnlyList<string> regions) => regions.Count == 0
-        ? $"{TenancyFormat.NoResidency}: no residency is set; open the regions of tenant {row.TenantId}"
+        ? $"{TenancyFormat.NoResidency}; open the regions of tenant {row.TenantId}"
         : $"Resident in {TenancyFormat.RegionList(regions)}; open the regions of tenant {row.TenantId}";
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
