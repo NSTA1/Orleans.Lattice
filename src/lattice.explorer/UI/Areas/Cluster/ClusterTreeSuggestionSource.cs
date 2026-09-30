@@ -13,7 +13,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// matches a ready list and allocates only the bounded answer.
 /// </remarks>
 /// <param name="catalog">The circuit's Cluster tree catalogue.</param>
-internal sealed class ClusterTreeSuggestionSource(ClusterTreeCatalog catalog) : ILtSuggestionSource
+/// <param name="scope">The tenant the page's address is rooted at, read at query time: only that tenant's own trees are offered. <see langword="null"/> offers every tree listed.</param>
+internal sealed class ClusterTreeSuggestionSource(ClusterTreeCatalog catalog, Func<string?>? scope = null) : ILtSuggestionSource
 {
     /// <summary>The note shown when the catalogue cannot be read.</summary>
     public const string UnavailableReason = "The cluster's trees could not be listed, so the id is used as typed.";
@@ -27,7 +28,7 @@ internal sealed class ClusterTreeSuggestionSource(ClusterTreeCatalog catalog) : 
         IReadOnlyList<ClusterTreeEntry> trees;
         try
         {
-            trees = await catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+            trees = ClusterTreeCatalog.InScope(await catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false), scope?.Invoke());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

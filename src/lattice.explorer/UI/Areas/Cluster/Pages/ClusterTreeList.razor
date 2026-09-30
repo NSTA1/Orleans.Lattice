@@ -1,7 +1,7 @@
 <PageTitle>Trees - Cluster - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Trees</h1>
-<p class="lt-shell-page-lede">Every tree in the cluster by its logical name. App trees name the app that owns them.</p>
+<p class="lt-shell-page-lede">@(Scope is { } tenant ? $"Every tree of tenant {tenant} by its logical name." : "Every tree in the cluster by its logical name.") App trees name the app that owns them.</p>
 
 <div class="lt-toolbar">
     <LtSearchInput Label="Filter trees" Placeholder="Filter by name, app or tenant" @bind-Value="_filter" />
@@ -15,7 +15,7 @@
 }
 else if (_trees.Value is { } trees)
 {
-    <p class="lt-cluster-note" data-lt-cluster-count>@CountLine(trees.Count, Facades.AssertedTenant)</p>
+    <p class="lt-cluster-note" data-lt-cluster-count>@CountLine(trees.Count, Facades.AssertedTenant, Scope)</p>
 
     <LtTable Items="Filtered(trees)"
              Caption="Trees"

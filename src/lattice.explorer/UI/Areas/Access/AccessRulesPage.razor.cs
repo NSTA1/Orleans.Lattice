@@ -30,6 +30,9 @@ public partial class AccessRulesPage
     private string _filter = AllFilter;
     private bool _editorOpen;
     private bool _loadingMore;
+    private bool _loaded;
+    private string? _loadedScope;
+    private (int Count, bool More)? _clusterWide;
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
@@ -96,30 +99,70 @@ public partial class AccessRulesPage
             var shown = Visible.Count;
             var loaded = _rules?.Count ?? 0;
             var more = _next is null ? string.Empty : ", more to load";
-            return shown == loaded ? $"{loaded} rules{more}" : $"{shown} of {loaded} rules{more}";
+            var of = Scope is { } tenant ? $" of tenant {tenant}" : string.Empty;
+            return shown == loaded ? $"{loaded} rules{of}{more}" : $"{shown} of {loaded} rules{of}{more}";
         }
     }
 
-    private string EmptyText => _rules is { Count: 0 } ? "No rules are defined on this cluster yet." : "No rule matches.";
+    private string EmptyText => _rules is { Count: 0 }
+        ? Scope is { } tenant ? $"No rules govern tenant {tenant}'s trees yet." : "No rules are defined on this cluster yet."
+        : "No rule matches.";
+
+    /// <summary>
+    /// The tenant the page's address is rooted at: the listing is that tenant's
+    /// rules only. <see langword="null"/> on the cluster-wide page.
+    /// </summary>
+    private string? Scope => Address.Tenant;
+
+    /// <summary>
+    /// The quiet line naming the cluster-wide rules that also apply to the scope
+    /// tenant's trees, or <see langword="null"/> when there are none or the page
+    /// is cluster-wide.
+    /// </summary>
+    private string? ClusterWideText => _clusterWide is { Count: > 0 } wide
+        ? $"{wide.Count}{(wide.More ? "+" : string.Empty)} cluster-wide {(wide.Count == 1 && !wide.More ? "rule also applies" : "rules also apply")}."
+        : null;
+
+    private string ClusterWideHref => Navigator.Canonicalize(AccessRoutes.Rules.WithTenant(null)).ToHref();
 
     /// <inheritdoc />
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        // The page is reused when only the tenant root changes (/access to
+        // /t/{tenant}/access), so the listing follows the address, not the instance.
+        if (_loaded && string.Equals(_loadedScope, Scope, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _loaded = true;
+        _loadedScope = Scope;
         _editorOpen = string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
-        _model = await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
+        _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         await LoadFirstPageAsync().ConfigureAwait(true);
     }
 
     private async Task LoadFirstPageAsync()
     {
+        var scope = Scope;
         _failure = null;
         _rules = null;
         _next = null;
+        _clusterWide = null;
         try
         {
-            var page = await Catalog.Admin.ListRulesAsync(new AuthPageRequest { PageSize = PageSize }).ConfigureAwait(true);
+            var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize }).ConfigureAwait(true);
+            if (!string.Equals(scope, Scope, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             _rules = [.. page.Entries];
             _next = page.NextPageToken;
+            if (scope is not null)
+            {
+                _clusterWide = await Catalog.CountClusterWideRulesAsync().ConfigureAwait(true);
+            }
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -134,12 +177,16 @@ public partial class AccessRulesPage
             return;
         }
 
+        var scope = Scope;
         _loadingMore = true;
         try
         {
-            var page = await Catalog.Admin.ListRulesAsync(new AuthPageRequest { PageSize = PageSize, PageToken = _next }).ConfigureAwait(true);
-            _rules = [.. _rules, .. page.Entries];
-            _next = page.NextPageToken;
+            var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize, PageToken = _next }).ConfigureAwait(true);
+            if (string.Equals(scope, Scope, StringComparison.Ordinal))
+            {
+                _rules = [.. _rules, .. page.Entries];
+                _next = page.NextPageToken;
+            }
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -158,7 +205,7 @@ public partial class AccessRulesPage
     private Task OnSavedAsync(LatticeAuthorizationRule rule)
     {
         _editorOpen = false;
-        if (_rules is not null)
+        if (_rules is not null && AccessCatalog.Lists(Scope, rule.Scope.TreeId))
         {
             _rules =
             [

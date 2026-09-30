@@ -15,7 +15,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// </remarks>
 /// <param name="catalog">The circuit's access catalogue.</param>
 /// <param name="tree">The tree the rule governs, read at query time, or <see langword="null"/> for every tree.</param>
-internal sealed class AccessRuleIdSuggestionSource(AccessCatalog catalog, Func<string?> tree) : ILtSuggestionSource
+/// <param name="scope">The tenant the editing page's address is rooted at, read at query time: only that tenant's rules are offered. <see langword="null"/> offers every rule.</param>
+internal sealed class AccessRuleIdSuggestionSource(AccessCatalog catalog, Func<string?> tree, Func<string?>? scope = null) : ILtSuggestionSource
 {
     /// <summary>The note shown when the rules cannot be read.</summary>
     public const string UnavailableReason = "The existing rules could not be listed, so a clashing id is not flagged.";
@@ -29,7 +30,7 @@ internal sealed class AccessRuleIdSuggestionSource(AccessCatalog catalog, Func<s
         IReadOnlyList<Orleans.Lattice.Auth.LatticeAuthorizationRule> rules;
         try
         {
-            rules = await catalog.GetRulesAsync(cancellationToken).ConfigureAwait(true);
+            rules = await catalog.GetRulesAsync(scope?.Invoke(), cancellationToken).ConfigureAwait(true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

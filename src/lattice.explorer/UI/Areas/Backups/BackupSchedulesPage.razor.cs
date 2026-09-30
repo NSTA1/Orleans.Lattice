@@ -137,6 +137,13 @@ public partial class BackupSchedulesPage : IDisposable
         }
 
         var scope = BackupScopeSelector.WholeTree(tree);
+        if (!ShellAssertedTenant.Names(Access.ListingTenant, tree))
+        {
+            // Another tenant's tree is not this page's to read.
+            _statusError = $"Tenant {Access.ListingTenant} has no tree named {tree}.";
+            return;
+        }
+
         try
         {
             _capabilities = await Access.ProbeAsync(scope, cancellationToken);

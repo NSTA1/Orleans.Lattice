@@ -10,9 +10,15 @@
 
 <h1 class="lt-shell-page-title">Access</h1>
 <p class="lt-shell-page-lede">Groups collect users and other groups, so a rule can name them once.</p>
-<AccessNav Current="@AccessRoutes.GroupsSegment" />
+<AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Scope" />
 <AccessPostureBanner Model="_model" />
 
+@if (Scope is { } tenant)
+{
+    <p class="lt-access-caveat" data-lt-cluster-wide-groups="true">Groups belong to the whole cluster, not to tenant @tenant, so none is listed here. <a href="@ClusterWideHref">See the cluster's groups</a>.</p>
+}
+else
+{
 <div class="lt-toolbar">
     <LtSearchInput Label="Search groups" Placeholder="Group id or name" Value="@_search" ValueChanged="@(value => _search = value)" />
     <LtButton OnClick="OpenCreate" Disabled="@(_failure is not null || !MembershipEditable)" data-lt-command="@AccessArea.CreateGroupCommandId">New group</LtButton>
@@ -61,6 +67,8 @@ else
             <LtButton OnClick="LoadMoreAsync" Disabled="_loadingMore">Load more groups</LtButton>
         </div>
     }
+}
+
 }
 
 <LtDialog Open="_createOpen" OpenChanged="@(open => _createOpen = open)" Title="New group" Placement="DialogPlacement">

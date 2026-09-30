@@ -12,7 +12,7 @@
 
 <h1 class="lt-shell-page-title">Access</h1>
 <p class="lt-shell-page-lede">Ask why a user or group is allowed or denied an operation, or list every rule that applies to them.</p>
-<AccessNav Current="@AccessRoutes.ExplainSegment" />
+<AccessNav Current="@AccessRoutes.ExplainSegment" Tenant="@Address.Tenant" />
 
 <form class="lt-access-form" @onsubmit="ExplainAsync" novalidate>
     <AccessSubjectPicker @ref="_subjectPicker"
@@ -74,7 +74,7 @@ else if (_explanation is { } explanation)
         <h3 class="lt-access-section__title">Groups</h3>
         @GroupLinks(explanation.GroupIds)
         <p class="lt-access-caveat">Groups are resolved from the membership directory alone. Groups a live caller's token asserts are not included, so a real caller's decision can differ.</p>
-        <AccessRuleTable Rules="_matched" Caption="Matched rules, in precedence order" EmptyText="No rule matched; the default applied." />
+        <AccessRuleTable Rules="_matched" Caption="Matched rules, in precedence order" EmptyText="No rule matched; the default applied." Tenant="@Address.Tenant" />
     </section>
 }
 else if (_permissions is { } permissions)
@@ -83,7 +83,11 @@ else if (_permissions is { } permissions)
         <h2 id="lt-access-permissions" class="lt-access-section__title">Effective permissions for <span class="lt-access-mono">@permissions.SubjectId</span></h2>
         <h3 class="lt-access-section__title">Groups</h3>
         @GroupLinks(permissions.GroupIds)
-        <AccessRuleTable Rules="_matched" Caption="Rules that apply, in precedence order" EmptyText="No rule applies to this subject." />
+        <AccessRuleTable Rules="_matched" Caption="Rules that apply, in precedence order" EmptyText="No rule applies to this subject." Tenant="@Address.Tenant" />
+        @if (_outOfScope > 0)
+        {
+            <p class="lt-access-caveat" data-lt-cluster-wide-rules="true">@OutOfScopeText <a href="@ClusterWidePermissionsHref">See them on the cluster-wide page</a>.</p>
+        }
     </section>
 }
 

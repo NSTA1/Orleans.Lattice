@@ -43,6 +43,7 @@ internal sealed class BackupsAccess
 
     private readonly ILatticeBackupControl _control;
     private readonly ShellCaller _caller;
+    private readonly ShellAssertedTenant _tenant;
     private readonly object _gate = new();
     private ShellCallerKey _memoCaller;
     private AreaAvailability? _availability;
@@ -60,6 +61,7 @@ internal sealed class BackupsAccess
     {
         ArgumentNullException.ThrowIfNull(control);
         _control = control;
+        _tenant = tenant ?? ShellAssertedTenant.None;
         _caller = caller ?? new ShellCaller(tenant: tenant);
     }
 
@@ -219,6 +221,55 @@ internal sealed class BackupsAccess
 
             return null;
         }
+    }
+
+    /// <summary>
+    /// Reads one page of the backups the area lists: only the backups of the
+    /// listing tenant's own trees when tenancy is on. The cluster narrows the page
+    /// itself (<see cref="BackupCatalogRequest.ActiveTenantOnly"/>) - which matters
+    /// above all for the reserved default tenant, which is otherwise handed every
+    /// tenant's backups - and every row is checked again here, so a cluster that
+    /// predates the narrowing still shows nothing of another tenant's.
+    /// </summary>
+    /// <param name="request">The page asked for.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public async Task<BackupCatalogPage> ListBackupsAsync(BackupCatalogRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var listing = _tenant.ListingTenant;
+        var page = await _control.ListBackupsAsync(Narrow(request, listing), cancellationToken).ConfigureAwait(false);
+        return page.Entries.All(manifest => Lists(listing, manifest))
+            ? page
+            : page with { Entries = [.. page.Entries.Where(manifest => Lists(listing, manifest))] };
+    }
+
+    /// <summary>The tenant the area's listings are for, or <see langword="null"/> with tenancy off.</summary>
+    public string? ListingTenant => _tenant.ListingTenant;
+
+    /// <summary>
+    /// <paramref name="request"/> narrowed to the caller's active tenant when there
+    /// is a listing tenant (tenancy on); unchanged with tenancy off.
+    /// </summary>
+    /// <param name="request">The request.</param>
+    /// <param name="listingTenant">The listing tenant, or <see langword="null"/>.</param>
+    public static BackupCatalogRequest Narrow(BackupCatalogRequest request, string? listingTenant)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return listingTenant is null || request.ActiveTenantOnly ? request : request with { ActiveTenantOnly = true };
+    }
+
+    /// <summary>
+    /// Whether a listing for <paramref name="listingTenant"/> shows
+    /// <paramref name="manifest"/>: every backup with tenancy off, otherwise only a
+    /// backup of one of that tenant's own trees.
+    /// </summary>
+    /// <param name="listingTenant">The listing tenant, or <see langword="null"/>.</param>
+    /// <param name="manifest">The backup.</param>
+    public static bool Lists(string? listingTenant, BackupManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return listingTenant is null
+            || (manifest.Scope?.TreeId is { Length: > 0 } tree && ShellAssertedTenant.Lists(listingTenant, tree));
     }
 
     /// <summary>Whether the catalogue extensions are served, asking once when it is not yet known.</summary>

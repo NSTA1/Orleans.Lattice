@@ -8,7 +8,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// <summary>
 /// The Cluster area (A10, issue #3828): the estate and its regions, every tree's
 /// topology, shards, storage and WAL placement, and tree administration. It is
-/// cluster-wide, so its addresses never carry a tenant.
+/// cluster-wide at its plain addresses; a tenant-rooted address (<c>/t/{tenant}/cluster</c>)
+/// shows only that tenant's own trees and storage.
 /// </summary>
 /// <remarks>
 /// Visibility fails closed on the cluster-wide storage summary, the cheapest read
@@ -79,6 +80,18 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
 
     /// <inheritdoc />
     public bool IsTenantScoped => false;
+
+    /// <summary>
+    /// Whether <paramref name="address"/> follows the active tenant: it does when
+    /// it carries a tenant root, and then shows only that tenant's own trees. The
+    /// plain <c>/cluster</c> addresses stay cluster-wide.
+    /// </summary>
+    /// <param name="address">An address in this area.</param>
+    public bool IsTenantScopedAt(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return address.Tenant is not null;
+    }
 
     /// <inheritdoc />
     public IAddressCompletionSource? Completions { get; }
@@ -170,9 +183,19 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             return $"{ClusterFormat.Plural(usage.TreeCount, "tree")} including system trees, {stored} stored.";
         }
 
-        if (ClusterTreeCatalog.NarrowingTenant(_facades.AssertedTenant) is { } tenant)
+        if (_facades.ListingTenant is { } tenant)
         {
-            return $"{ClusterFormat.Plural(count, "tree")} of tenant {tenant}, {ClusterFormat.Count(usage.TreeCount)} in the cluster, {stored} stored.";
+            // Home is tenant-rooted: the tenant's own trees and what they store.
+            var owned = 0L;
+            foreach (var tree in usage.Trees)
+            {
+                if (ShellAssertedTenant.Lists(tenant, tree.TreeId))
+                {
+                    owned += tree.TotalBytes;
+                }
+            }
+
+            return $"{ClusterFormat.Plural(count, "tree")} of tenant {tenant}, {ClusterFormat.Bytes(owned)} stored.";
         }
 
         var unlisted = usage.TreeCount - count;
@@ -207,7 +230,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         try
         {
             var trees = await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
-            return trees.Count;
+            return ClusterTreeCatalog.InScope(trees, _facades.ListingTenant).Count;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

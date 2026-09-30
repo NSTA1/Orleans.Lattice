@@ -69,8 +69,9 @@ public partial class AccessGroupPage
         _group = null;
         _members = null;
         var groupId = GroupId;
-        if (string.IsNullOrEmpty(groupId))
+        if (string.IsNullOrEmpty(groupId) || Address.Tenant is not null)
         {
+            // A group belongs to no tenant, so no tenant-rooted address names one.
             Navigation.NotFound();
             return;
         }

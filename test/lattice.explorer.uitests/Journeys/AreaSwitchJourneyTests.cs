@@ -38,16 +38,16 @@ public sealed class AreaSwitchJourneyTests : UiTestBase
             await Expect(page).ToHaveURLAsync(world.Head.Url($"/t/default/schema/{ExplorerWorld.DemoTree}"));
             await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerWorld.DemoTree);
 
-            await LandsOnAsync("access", "/access", "Access");
+            await LandsOnAsync("access", "/t/default/access", "Access");
 
             // From Home, the tenant root.
             await Shell.Stop(page, "home").ClickAsync();
             await Expect(page).ToHaveURLAsync(world.Head.Url("/t/default"));
-            await LandsOnAsync("access", "/access", "Access");
+            await LandsOnAsync("access", "/t/default/access", "Access");
 
-            // From a tenant-rooted area page to another cluster-wide area.
+            // From a tenant-rooted area page to the Cluster area, which keeps the tenant (#4025).
             await LandsOnAsync("data", "/t/default/data", "Data");
-            await LandsOnAsync("cluster", "/cluster", "Cluster");
+            await LandsOnAsync("cluster", "/t/default/cluster", "Cluster");
         }
 
         async Task LandsOnAsync(string area, string path, string heading)

@@ -60,6 +60,10 @@ public partial class ClusterWalPage : IDisposable
     [Parameter]
     public string? Target { get; set; }
 
+    /// <summary>The tenant a tenant-rooted address names, or <see langword="null"/> on a cluster-wide address; links keep it.</summary>
+    [CascadingParameter(Name = ClusterScope.CascadeName)]
+    internal string? Scope { get; set; }
+
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
 
@@ -161,7 +165,7 @@ public partial class ClusterWalPage : IDisposable
             return;
         }
 
-        Navigator.NavigateTo(ClusterAddresses.Wal(tree));
+        Navigator.NavigateTo(ClusterAddresses.Wal(tree).WithTenant(Scope));
     }
 
     private void OnCommand(string commandId)
@@ -198,7 +202,7 @@ public partial class ClusterWalPage : IDisposable
         if (_planTreeError is null && _planPartitionError is null && _planTargetError is null && await ConfirmPlanAsync().ConfigureAwait(true) && !_load.IsLeft)
         {
             _planOpen = false;
-            Navigator.NavigateTo(ClusterAddresses.Wal(tree, partition, target));
+            Navigator.NavigateTo(ClusterAddresses.Wal(tree, partition, target).WithTenant(Scope));
         }
     }
 

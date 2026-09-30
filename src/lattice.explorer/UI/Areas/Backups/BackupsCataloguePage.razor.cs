@@ -186,7 +186,7 @@ public partial class BackupsCataloguePage : IDisposable
         BackupCatalogPage page;
         try
         {
-            page = await Control.ListBackupsAsync(
+            page = await Access.ListBackupsAsync(
                 new BackupCatalogRequest
                 {
                     PageSize = PageSize,

@@ -1,14 +1,16 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
 /// <summary>
 /// The Access area: rules, groups, and the explanation of an access decision,
-/// bound to <see cref="ILatticeAuthAdmin"/>. It is cluster-wide (the policy store
-/// is not per tenant), so its addresses are never tenant-rooted.
+/// bound to <see cref="ILatticeAuthAdmin"/>. The policy store is cluster-wide, so
+/// its plain addresses are too; a tenant-rooted address (<c>/t/{tenant}/access</c>)
+/// shows only the rules that govern that tenant's own trees.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -87,6 +89,18 @@ internal sealed class AccessArea : IExplorerArea
 
     /// <inheritdoc />
     public bool IsTenantScoped => false;
+
+    /// <summary>
+    /// Whether <paramref name="address"/> follows the active tenant: it does when
+    /// it carries a tenant root, and then shows only that tenant's rules. The
+    /// plain <c>/access</c> addresses stay cluster-wide, unchanged.
+    /// </summary>
+    /// <param name="address">An address in this area.</param>
+    public bool IsTenantScopedAt(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return address.Tenant is not null;
+    }
 
     /// <inheritdoc />
     public IAddressCompletionSource? Completions { get; }

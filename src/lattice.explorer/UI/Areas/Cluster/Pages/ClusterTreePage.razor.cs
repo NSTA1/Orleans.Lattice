@@ -31,6 +31,10 @@ public partial class ClusterTreePage : IDisposable
     [Parameter]
     public string? Tab { get; set; }
 
+    /// <summary>The tenant a tenant-rooted address names, or <see langword="null"/> on a cluster-wide address; links keep it.</summary>
+    [CascadingParameter(Name = ClusterScope.CascadeName)]
+    internal string? Scope { get; set; }
+
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
 
@@ -99,7 +103,7 @@ public partial class ClusterTreePage : IDisposable
         }
     }
 
-    private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
+    private string Href(ExplorerAddress address) => Navigator.Canonicalize(address.WithTenant(Scope)).ToHref();
 
     private string ActiveTab => string.IsNullOrEmpty(Tab) ? ClusterAddresses.SummaryTab : Tab;
 
@@ -109,7 +113,7 @@ public partial class ClusterTreePage : IDisposable
         if (!string.Equals(tab, ActiveTab, StringComparison.Ordinal)
             && ClusterAddresses.TryTree(TreeId, ClusterTreeView.Overview, out var address))
         {
-            Navigator.NavigateTo(address.WithQuery(
+            Navigator.NavigateTo(address.WithTenant(Scope).WithQuery(
                 ClusterAddresses.TabQuery,
                 string.Equals(tab, ClusterAddresses.SummaryTab, StringComparison.Ordinal) ? null : tab));
         }

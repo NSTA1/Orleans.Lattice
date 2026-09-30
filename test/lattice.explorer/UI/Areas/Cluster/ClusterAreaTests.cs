@@ -173,7 +173,17 @@ public sealed class ClusterAreaTests
     public async Task Under_a_tenant_the_status_says_whose_trees_it_counts()
     {
         _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>())
-            .Returns(new ClusterStorageUsageSummary { TreeCount = 23, TotalBytes = 2048 });
+            .Returns(new ClusterStorageUsageSummary
+            {
+                TreeCount = 23,
+                TotalBytes = 1 << 20,
+                Trees =
+                [
+                    new TreeStorageUsageSnapshot { TreeId = "t/globex/orders", TotalBytes = 2048 },
+                    new TreeStorageUsageSnapshot { TreeId = "t/acme/orders", TotalBytes = 4096 },
+                    new TreeStorageUsageSnapshot { TreeId = "orders", TotalBytes = 8192 },
+                ],
+            });
         UseTrees("t/globex/factory-floor", "t/globex/orders");
         var tenant = Substitute.For<ILatticeActiveTenantProvider>();
         tenant.AssertedTenant.Returns("globex");
@@ -187,7 +197,7 @@ public sealed class ClusterAreaTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(status, Is.EqualTo("2 trees of tenant globex, 23 in the cluster, 2.0 KiB stored."));
+            Assert.That(status, Is.EqualTo("2 trees of tenant globex, 2.0 KiB stored."), "only the tenant's own trees and storage (#4025)");
             Assert.That(badge, Is.EqualTo("2"));
         });
     }
@@ -369,6 +379,51 @@ public sealed class ClusterAreaTests
         });
     }
 
+    [Test]
+    public async Task At_the_default_tenant_the_status_and_badge_count_only_its_own_trees()
+    {
+        // #4025: the cluster hands the reserved default tenant every tenant's trees.
+        _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageSummary
+            {
+                TreeCount = 9,
+                TotalBytes = 1 << 20,
+                Trees =
+                [
+                    new TreeStorageUsageSnapshot { TreeId = "orders", TotalBytes = 2048 },
+                    new TreeStorageUsageSnapshot { TreeId = "t/acme/orders", TotalBytes = 4096 },
+                    new TreeStorageUsageSnapshot { TreeId = "sys-tenant-registry", TotalBytes = 8192 },
+                ],
+            });
+        UseTrees("orders", "invoices", "t/acme/orders", "t/globex/orders");
+        var tenant = Substitute.For<ILatticeActiveTenantProvider>();
+        tenant.AssertedTenant.Returns((string?)null);
+        var facades = Facades(tenant: new ShellAssertedTenant(tenant));
+        var area = new ClusterArea(facades, new ClusterTreeCatalog(facades, _time), new ClusterCommandSignals());
+
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        var status = await area.GetHomeStatusAsync(CancellationToken.None);
+        var badge = await area.GetDirectoryBadgeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo("2 trees of tenant default, 2.0 KiB stored."));
+            Assert.That(badge, Is.EqualTo("2"));
+        });
+    }
+
+    [Test]
+    public void It_follows_the_tenant_only_at_a_tenant_rooted_address()
+    {
+        var area = CreateArea();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(area.IsTenantScopedAt(ClusterAddresses.Trees.WithTenant("acme")), Is.True);
+            Assert.That(area.IsTenantScopedAt(ClusterAddresses.Trees), Is.False);
+        });
+    }
     private void UseTrees(params string[] ids) =>
         _session.Connection.ListTreesAsync(Arg.Any<CatalogRequest>(), Arg.Any<CancellationToken>())
             .Returns(new TreeCatalogPage { Entries = [.. ids.Select(id => ClusterTestContext.Tree(id))] });

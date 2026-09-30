@@ -319,7 +319,27 @@ internal sealed class ExplorerWorld : IAsyncDisposable
                 await admin.CreateTenantAsync(tenant, [WorldIdentities.Admin]);
             }
         }
+
+        // One rule per tenant, on that tenant's own tree, so a tenant-rooted Access
+        // listing has something of its own to show and another tenant's to leave out.
+        var policy = Head.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
+        using (LatticeSystemOrigin.Enter())
+        {
+            foreach (var tenant in Tenants)
+            {
+                await policy.PutRuleAsync(new LatticeAuthorizationRule(
+                    ruleId: TenantRuleId(tenant),
+                    subject: LatticeSubjectSelector.Group(WorldIdentities.OperatorsGroup),
+                    scope: LatticeScope.Tree($"t/{tenant}/{OrdersTree}"),
+                    operations: LatticeOperation.Read,
+                    effect: LatticeEffect.Allow));
+            }
+        }
     }
+
+    /// <summary>The id of the rule a tenancy world seeds on <paramref name="tenant"/>'s own orders tree.</summary>
+    /// <param name="tenant">One of <see cref="Tenants"/>.</param>
+    public static string TenantRuleId(string tenant) => tenant + "-operators-read-orders";
 
     private async Task SeedAsync()
     {

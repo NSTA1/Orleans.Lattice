@@ -105,12 +105,14 @@ public sealed class SchemaTenantCacheTests : SchemaTestContext
             });
 
         var listing = await Directory.GetAsync(refresh: false, CancellationToken.None);
-        var addressed = await Directory.ExistsAsync("t/acme/a/task-board/tasks", CancellationToken.None);
+        var foreign = await Directory.ExistsAsync("t/acme/a/task-board/tasks", CancellationToken.None);
+        var own = await Directory.ExistsAsync("factory-floor", CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(listing.Rows.Select(row => row.TreeId), Is.EqualTo(new[] { "factory-floor" }), "the cluster hands the default tenant every tenant's trees");
-            Assert.That(addressed, Is.True, "a tree addressed by its id is still reachable");
+            Assert.That(foreign, Is.False, "another tenant's tree is not found at the default tenant (#4025)");
+            Assert.That(own, Is.True, "the default tenant's own tree is found");
         });
     }
 

@@ -167,7 +167,8 @@ public partial class BackupPage : IDisposable
             return;
         }
 
-        if (description is null)
+        // Another tenant's backup is not found here, and never rendered.
+        if (description is null || !BackupsAccess.Lists(Access.ListingTenant, description.Manifest))
         {
             Navigation.NotFound();
             return;

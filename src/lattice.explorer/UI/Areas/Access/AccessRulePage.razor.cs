@@ -39,6 +39,9 @@ public partial class AccessRulePage
 
     private string? RuleId => Address.Path.Count > 1 ? Address.Path[1] : null;
 
+    /// <summary>The tenant the page's address is rooted at, or <see langword="null"/> on the cluster-wide page.</summary>
+    private string? Scope => Address.Tenant;
+
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
     /// <inheritdoc />
@@ -72,8 +75,12 @@ public partial class AccessRulePage
             var tree = Address.GetQuery(AccessRoutes.TreeQuery);
             if (!string.IsNullOrEmpty(tree))
             {
-                var rule = await Catalog.Admin.GetRuleAsync(tree, ruleId).ConfigureAwait(true);
-                Show(rule);
+                // At a tenant-rooted address only that tenant's rules exist: another
+                // tenant's rule, or a cluster-wide one, is not found and never read.
+                var rule = AccessCatalog.Lists(Scope, tree)
+                    ? await Catalog.Admin.GetRuleAsync(tree, ruleId).ConfigureAwait(true)
+                    : null;
+                Show(rule is not null && AccessCatalog.Lists(Scope, rule.Scope.TreeId) ? rule : null);
                 return;
             }
 
@@ -81,7 +88,7 @@ public partial class AccessRulePage
             var request = new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize };
             for (var page = 0; page < SearchPages; page++)
             {
-                var result = await Catalog.Admin.ListRulesAsync(request).ConfigureAwait(true);
+                var result = await Catalog.ListRulesAsync(Scope, request).ConfigureAwait(true);
                 matches.AddRange(result.Entries.Where(rule => string.Equals(rule.RuleId, ruleId, StringComparison.Ordinal)));
                 if (result.NextPageToken is null)
                 {
@@ -150,7 +157,7 @@ public partial class AccessRulePage
 
         Catalog.Invalidate();
         Toasts.Show($"Rule {rule.RuleId} deleted.", LtToastTone.Success);
-        Navigator.NavigateTo(Navigator.Canonicalize(AccessRoutes.Rules));
+        Navigator.NavigateTo(Navigator.Canonicalize(AccessRoutes.Rules.WithTenant(Scope)));
     }
 
     private string GroupHref(string groupId) => Navigator.Canonicalize(AccessRoutes.Group(groupId)).ToHref();
@@ -167,6 +174,6 @@ public partial class AccessRulePage
             address = address.WithQuery(AccessRoutes.TreeQuery, rule.Scope.TreeId);
         }
 
-        return Navigator.Canonicalize(address).ToHref();
+        return Navigator.Canonicalize(address.WithTenant(Scope)).ToHref();
     }
 }

@@ -3,8 +3,9 @@ using Orleans.Lattice.Explorer.UI.Navigation.Address;
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
 /// <summary>
-/// The Access area's addresses. The area is cluster-wide, so none of them is
-/// ever rooted at a tenant; the navigator strips a tenant node if one arrives.
+/// The Access area's addresses. They are the cluster-wide forms; a page at a
+/// tenant-rooted address roots the links it draws at its own tenant
+/// (<c>WithTenant</c>), so the listing a link leads to keeps the page's scope.
 /// </summary>
 internal static class AccessRoutes
 {

@@ -7,6 +7,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// and <c>rule:{id}</c>. Typing a <c>group:</c> or <c>rule:</c> prefix narrows to
 /// that kind; plain text matches both, prefix matches first. A raw
 /// <c>/access/groups/</c> or <c>/access/rules/</c> address completes the same way.
+/// From a tenant-rooted address only that tenant's rules complete, and no group.
 /// </summary>
 /// <param name="catalog">The circuit's memoised access catalogue.</param>
 internal sealed class AccessCompletionSource(AccessCatalog catalog) : IAddressCompletionSource
@@ -31,6 +32,10 @@ internal sealed class AccessCompletionSource(AccessCatalog catalog) : IAddressCo
             return [];
         }
 
+        // At a tenant-rooted address only that tenant's rules complete, rooted at
+        // it; groups belong to no tenant, so they complete only cluster-wide.
+        var scope = query.Current.Tenant;
+        wantGroups &= scope is null;
         var results = new List<AddressCompletion>(query.Limit);
         var later = new List<AddressCompletion>();
 
@@ -51,7 +56,7 @@ internal sealed class AccessCompletionSource(AccessCatalog catalog) : IAddressCo
 
         if (wantRules)
         {
-            foreach (var rule in await _catalog.GetRulesAsync(cancellationToken).ConfigureAwait(false))
+            foreach (var rule in await _catalog.GetRulesAsync(scope, cancellationToken).ConfigureAwait(false))
             {
                 var rank = Rank(term, rule.RuleId, null);
                 if (rank < 0)
@@ -63,7 +68,7 @@ internal sealed class AccessCompletionSource(AccessCatalog catalog) : IAddressCo
                     AccessRuleFormat.EffectLabel(rule.Effect), " ",
                     AccessRuleFormat.SubjectLabel(rule.Subject), " on ",
                     AccessRuleFormat.ScopeLabel(rule.Scope));
-                var completion = new AddressCompletion(RulePrefix + rule.RuleId, AccessRoutes.Rule(rule.RuleId, rule.Scope.TreeId), detail);
+                var completion = new AddressCompletion(RulePrefix + rule.RuleId, AccessRoutes.Rule(rule.RuleId, rule.Scope.TreeId).WithTenant(scope), detail);
                 (rank == 0 ? results : later).Add(completion);
             }
         }

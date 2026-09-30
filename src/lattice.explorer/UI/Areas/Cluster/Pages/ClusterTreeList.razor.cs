@@ -36,6 +36,10 @@ public partial class ClusterTreeList : IDisposable
     [Inject]
     private ExplorerNavigator Navigator { get; set; } = default!;
 
+    /// <summary>The tenant a tenant-rooted address names, whose own trees are all the list shows; <see langword="null"/> on the cluster-wide address.</summary>
+    [CascadingParameter(Name = ClusterScope.CascadeName)]
+    internal string? Scope { get; set; }
+
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
 
@@ -64,7 +68,7 @@ public partial class ClusterTreeList : IDisposable
     {
         _trees = ClusterLoad<IReadOnlyList<ClusterTreeEntry>>.Loading;
         _trees = await ClusterLoad<IReadOnlyList<ClusterTreeEntry>>.RunAsync(
-            async ct => await Catalog.GetAsync(refresh, ct),
+            async ct => ClusterTreeCatalog.InScope(await Catalog.GetAsync(refresh, ct), Scope),
             _lifetime.Token);
     }
 
@@ -113,7 +117,7 @@ public partial class ClusterTreeList : IDisposable
         }
 
         _reshardOpen = false;
-        Navigator.NavigateTo(address);
+        Navigator.NavigateTo(address.WithTenant(Scope));
     }
 
     internal static LtStateRole StateOf(ClusterTreeEntry tree) =>
@@ -136,8 +140,9 @@ public partial class ClusterTreeList : IDisposable
     /// <param name="count">The trees listed.</param>
     /// <param name="assertedTenant">The tenant the circuit asserts, or <see langword="null"/>.</param>
     /// <returns>The sentence.</returns>
-    internal static string CountLine(int count, string? assertedTenant) =>
-        ClusterTreeCatalog.NarrowingTenant(assertedTenant) is { } tenant
+    /// <param name="scope">The tenant a tenant-rooted address names, or <see langword="null"/> on the cluster-wide address.</param>
+    internal static string CountLine(int count, string? assertedTenant, string? scope = null) =>
+        (scope ?? ClusterTreeCatalog.NarrowingTenant(assertedTenant)) is { } tenant
             ? $"{ClusterFormat.Plural(count, "tree")} of tenant {tenant}. Other tenants' trees and system trees are not listed."
             : $"{ClusterFormat.Plural(count, "tree")}. System trees are not listed.";
 }

@@ -129,7 +129,7 @@ public partial class BackupHealthPage : IDisposable
         _read.Clear();
         try
         {
-            _page = await Control.ListBackupsAsync(
+            _page = await Access.ListBackupsAsync(
                 new BackupCatalogRequest { PageSize = PageSize, OrderByCreatedDescending = true },
                 cancellationToken);
         }
@@ -186,7 +186,7 @@ public partial class BackupHealthPage : IDisposable
         {
             var description = await Control.DescribeBackupAsync(backupId, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (description is null)
+            if (description is null || !BackupsAccess.Lists(Access.ListingTenant, description.Manifest))
             {
                 Navigation.NotFound();
                 return;

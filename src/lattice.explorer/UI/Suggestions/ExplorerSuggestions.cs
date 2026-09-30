@@ -39,9 +39,13 @@ internal sealed class ExplorerSuggestions(IServiceProvider services)
         services.GetRequiredService<DataDirectory>(),
         services.GetRequiredService<ExplorerTenancy>()));
 
-    /// <summary>The trees the Cluster area administers, by the logical id its facades take.</summary>
+    /// <summary>
+    /// The trees the Cluster area administers, by the logical id its facades take:
+    /// at a tenant-rooted address only that tenant's own.
+    /// </summary>
     public ILtSuggestionSource ClusterTrees => _clusterTrees ??= Build(() => new ClusterTreeSuggestionSource(
-        services.GetRequiredService<ClusterTreeCatalog>()));
+        services.GetRequiredService<ClusterTreeCatalog>(),
+        () => services.GetService<ExplorerNavigator>()?.Current?.Tenant));
 
     /// <summary>The cluster's own region and its peer regions.</summary>
     public ILtSuggestionSource Regions => _regions ??= Build(() => new RegionSuggestionSource(

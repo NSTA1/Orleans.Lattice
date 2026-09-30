@@ -20,4 +20,12 @@ public sealed record BackupCatalogPage
     /// when this is the last page.
     /// </summary>
     [Id(1)] public string? NextPageToken { get; init; }
+
+    /// <summary>
+    /// The tenant this page was narrowed to when the request asked for
+    /// <see cref="BackupCatalogRequest.ActiveTenantOnly"/>, or <see langword="null"/>
+    /// for an unnarrowed page. A caller that asked for a narrowed page and reads
+    /// <see langword="null"/> here was answered by a server that predates the narrowing.
+    /// </summary>
+    [Id(2)] public string? Tenant { get; init; }
 }

@@ -25,4 +25,13 @@ public sealed record AuthRulePage
     /// when this is the last page.
     /// </summary>
     [Id(1)] public string? NextPageToken { get; init; }
+
+    /// <summary>
+    /// The tenant this page was narrowed to when the request asked for
+    /// <see cref="AuthPageRequest.ActiveTenantOnly"/>, or <see langword="null"/>
+    /// for a page of the whole catalogue. A caller that asked for a narrowed page
+    /// and reads <see langword="null"/> here is talking to a server that predates
+    /// the narrowing, and was answered the whole catalogue.
+    /// </summary>
+    [Id(2)] public string? Tenant { get; init; }
 }

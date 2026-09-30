@@ -27,6 +27,9 @@ internal sealed class ClusterFacades(IServiceProvider services)
     /// </summary>
     public string? AssertedTenant => _tenant.Value.AssertedTenant;
 
+    /// <summary>The tenant a tenant-scoped listing read now is for: the asserted tenant, the reserved default when none is asserted, or <see langword="null"/> with tenancy off.</summary>
+    public string? ListingTenant => _tenant.Value.ListingTenant;
+
     /// <summary>
     /// The caller now - sign-in, endpoint and asserted tenant - which everything the
     /// area remembers is filed under, so an answer read for one caller is never

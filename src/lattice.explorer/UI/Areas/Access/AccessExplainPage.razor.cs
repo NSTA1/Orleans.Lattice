@@ -31,6 +31,7 @@ public partial class AccessExplainPage
     private AuthExplanation? _explanation;
     private AuthEffectivePermissions? _permissions;
     private IReadOnlyList<LatticeAuthorizationRule> _matched = [];
+    private int _outOfScope;
     private AccessModelDescriptor? _model;
     private LtComboBox? _treeBox;
     private AccessSubjectPicker? _subjectPicker;
@@ -138,7 +139,13 @@ public partial class AccessExplainPage
         {
             var permissions = await Catalog.Admin.EffectivePermissionsAsync(_subject.Trim(), _kind).ConfigureAwait(true);
             _permissions = permissions;
-            _matched = AccessRuleFormat.InPrecedenceOrder(permissions.Rules);
+
+            // At a tenant-rooted address only the tenant's own rules are listed; the
+            // cluster-wide ones that also apply are counted, and every other
+            // tenant's are left out.
+            var scope = Address.Tenant;
+            _matched = AccessRuleFormat.InPrecedenceOrder([.. permissions.Rules.Where(rule => AccessCatalog.Lists(scope, rule.Scope.TreeId))]);
+            _outOfScope = scope is null ? 0 : permissions.Rules.Count(rule => AccessRuleFormat.IsClusterWide(rule.Scope));
         }).ConfigureAwait(true);
 
         if (updateAddress)
@@ -161,6 +168,7 @@ public partial class AccessExplainPage
         _explanation = null;
         _permissions = null;
         _matched = [];
+        _outOfScope = 0;
         try
         {
             await ask().ConfigureAwait(true);
@@ -240,8 +248,12 @@ public partial class AccessExplainPage
             }
         }
 
-        Navigator.NavigateTo(Navigator.Canonicalize(address), replace: true);
+        Navigator.NavigateTo(Navigator.Canonicalize(address.WithTenant(Address.Tenant)), replace: true);
     }
+
+    private string OutOfScopeText => _outOfScope == 1 ? "1 cluster-wide rule also applies." : $"{_outOfScope} cluster-wide rules also apply.";
+
+    private string ClusterWidePermissionsHref => Navigator.Canonicalize(Address.WithTenant(null)).ToHref();
 
     private string GroupHref(string groupId) => Navigator.Canonicalize(AccessRoutes.Group(groupId)).ToHref();
 }

@@ -40,7 +40,9 @@ internal sealed class ClusterCompletionSource(ClusterTreeCatalog catalog) : IAdd
             return [];
         }
 
-        var trees = await catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+        // From a tenant-rooted address only that tenant's own trees complete, rooted at it.
+        var scope = query.Current.Tenant;
+        var trees = ClusterTreeCatalog.InScope(await catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false), scope);
         var matches = new List<AddressCompletion>(Math.Min(query.Limit, trees.Count));
         foreach (var tree in RankedMatches(trees, text, prefixOnly))
         {
@@ -49,7 +51,7 @@ internal sealed class ClusterCompletionSource(ClusterTreeCatalog catalog) : IAdd
                 continue;
             }
 
-            matches.Add(new AddressCompletion(tree.TreeId, target, Detail(tree)));
+            matches.Add(new AddressCompletion(tree.TreeId, target.WithTenant(scope), Detail(tree)));
             if (matches.Count == query.Limit)
             {
                 break;

@@ -27,6 +27,16 @@ public partial class ClusterPage
     protected override void OnParametersSet()
     {
         _location = ClusterAddresses.Parse(Address);
+
+        // A tenant-rooted address names only that tenant's own trees: another
+        // tenant's tree, or a system tree, is not found there and never read.
+        if (_location is { TreeId: { Length: > 0 } treeId } && !ClusterTreeCatalog.Names(Address.Tenant, treeId))
+        {
+            _location = null;
+            Navigation.NotFound();
+            return;
+        }
+
         if (_location is null && string.Equals(Address.Area, ClusterAddresses.AreaKey, StringComparison.Ordinal))
         {
             Navigation.NotFound();
