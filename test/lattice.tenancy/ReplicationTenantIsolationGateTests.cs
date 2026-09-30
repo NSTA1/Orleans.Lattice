@@ -38,8 +38,7 @@ public sealed class ReplicationTenantIsolationGateTests
     /// the shape the pre-existing cases below assume.
     /// </summary>
     private static CompiledTenantPolicySnapshotMaintainer EmptyPolicy() =>
-        new(Substitute.For<ITenantRegistry>(),
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        TenantPolicyEpochTestCluster.Unleased(Substitute.For<ITenantRegistry>());
 
     /// <summary>
     /// A maintainer compiled over a registry containing <paramref name="tenants"/>,
@@ -51,8 +50,7 @@ public sealed class ReplicationTenantIsolationGateTests
         var source = Substitute.For<ITenantRegistry>();
         source.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => ToAsync(tenants));
 
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            source, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = await TenantPolicyEpochTestCluster.LeasedAsync(source);
         await maintainer.RebuildNowAsync();
         return maintainer;
     }
@@ -103,8 +101,7 @@ public sealed class ReplicationTenantIsolationGateTests
         var source = Substitute.For<ITenantRegistry>();
         source.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => ToAsyncWithStatus(tenant, status));
 
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            source, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = await TenantPolicyEpochTestCluster.LeasedAsync(source);
         await maintainer.RebuildNowAsync();
         return maintainer;
     }
@@ -555,11 +552,9 @@ public sealed class ReplicationTenantIsolationGateTests
         source.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
             Interlocked.Increment(ref scans) == 1 ? ToAsync(tenants) : Throwing());
 
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            source, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
-
-        // First scan succeeds: the snapshot is populated and authoritative.
-        await maintainer.RebuildNowAsync();
+        // First scan (the build the lease schedules) succeeds: the snapshot is
+        // populated and authoritative.
+        var maintainer = await TenantPolicyEpochTestCluster.LeasedAsync(source);
 
         // A registry mutation schedules a rebuild; the second scan throws, so the
         // maintainer keeps the previous snapshot and records the failure.

@@ -44,11 +44,10 @@ public sealed class TenantGateEnforcerTests
     /// </summary>
     private static CompiledTenantPolicySnapshotMaintainer AuthoritativePolicy()
     {
-        var policy = new CompiledTenantPolicySnapshotMaintainer(
-            new TenantPolicyTestData.FakeTenantRegistry(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
-        policy.RebuildNowAsync().GetAwaiter().GetResult();
-        return policy;
+        return TenantPolicyEpochTestCluster
+            .LeasedAsync(new TenantPolicyTestData.FakeTenantRegistry())
+            .GetAwaiter()
+            .GetResult();
     }
 
     private static LatticeAccessRequest Request(

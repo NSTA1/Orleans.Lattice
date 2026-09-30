@@ -128,6 +128,17 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
 
+        // Cross-silo currency for that snapshot (issue #4030): the change-feed hook
+        // fires only on the silo that committed the registry write, so the
+        // committing silo publishes the change through the cluster-wide epoch grain,
+        // and every silo's subscription keeps its snapshot leased by, and
+        // subscribed to, that grain (and warms it at start-up). The maintainer
+        // reads TimeProvider, which is registered TryAdd here as well as below.
+        builder.Services.TryAddSingleton(TimeProvider.System);
+        builder.Services.TryAddSingleton<ITenantPolicyEpochPublisher, GrainTenantPolicyEpochPublisher>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenantPolicyEpochSubscription>());
+
         // The tenant-policy decision engine: the in-memory decision surface that
         // resolves a subject's allowed tenants, validates an active tenant, and
         // resolves cross-tenant grants against the compiled snapshot. Registering
