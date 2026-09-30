@@ -23,17 +23,35 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// principle take it in the moment between, which would fail the head's start with a
 /// clear bind error rather than a wrong result.
 /// </para>
+/// <para>
+/// Once released, a port is free again, so the operating system may hand the same one
+/// to the next reservation. A world reserves several ports before binding any of them,
+/// and the suite starts more than one world, so every port handed out is remembered
+/// for the life of the process and never handed out twice.
+/// </para>
 /// </remarks>
 internal static class LoopbackEndpoints
 {
-    /// <summary>A free loopback TCP port.</summary>
+    private static readonly HashSet<int> Issued = [];
+
+    /// <summary>A free loopback TCP port, never one this process has already been given.</summary>
     public static int ReservePort()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
+        while (true)
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+
+            lock (Issued)
+            {
+                if (Issued.Add(port))
+                {
+                    return port;
+                }
+            }
+        }
     }
 
     /// <summary>
