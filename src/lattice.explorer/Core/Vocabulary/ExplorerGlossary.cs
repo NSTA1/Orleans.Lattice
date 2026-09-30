@@ -164,7 +164,7 @@ public static class ExplorerGlossary
         {
             Id = ExplorerTermIds.Reshard,
             Label = "Reshard",
-            Explanation = "Changing how many shards a tree's keyspace is split across while it keeps serving reads and writes.",
+            Explanation = "Growing or shrinking how many shards a tree's keyspace is split across while it keeps serving reads and writes. More shards raise the write throughput ceiling; fewer make scans cheaper and keep fewer activations resident.",
             DocsLink = ExplorerDocsLinks.OnlineReshard,
         },
         new()

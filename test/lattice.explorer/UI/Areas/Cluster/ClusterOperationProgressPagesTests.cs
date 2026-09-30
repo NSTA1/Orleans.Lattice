@@ -204,7 +204,7 @@ public sealed class ClusterOperationProgressPagesTests : ClusterTestContext
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Markup, Does.Contain("Resharding to 8 physical shards."), "the target comes from the coordinator, not only from a trigger's echo");
-            Assert.That(ProgressValue(cut), Is.EqualTo("50"));
+            Assert.That(ProgressValue(cut), Is.EqualTo("42"), "three of six splits, then the step that completes it: 3 of 7");
             Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("5 of 8 physical shards."));
         });
     }
@@ -326,13 +326,42 @@ public sealed class ClusterOperationProgressPagesTests : ClusterTestContext
             Assert.That(cut.Markup, Does.Contain("In progress, to 8 physical shards."));
             Assert.That(cut.Markup, Does.Not.Contain("to  shards"));
             Assert.That(cut.FindAll("[role=progressbar]").Select(bar => bar.GetAttribute("aria-label")), Is.EqualTo(new[] { "Reshard progress", "Resize progress" }));
-            Assert.That(cut.FindAll("[role=progressbar]").Select(bar => bar.GetAttribute("aria-valuenow")), Is.EqualTo(new[] { "16", "90" }));
+            Assert.That(cut.FindAll("[role=progressbar]").Select(bar => bar.GetAttribute("aria-valuenow")), Is.EqualTo(new[] { "14", "90" }));
             Assert.That(Time.ArmedTimers, Is.EqualTo(1));
         });
 
         cut.InvokeAsync(() => Time.Advance(ClusterStatusPoller.Interval));
 
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=progressbar]").Select(bar => bar.GetAttribute("aria-label")), Is.EqualTo(new[] { "Resize progress" })));
+    }
+
+    [Test]
+    public void The_summary_keeps_following_a_shrink_that_reached_its_target_until_it_completes()
+    {
+        StubSummaryReads();
+        Admin.GetReshardStatusAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new TreeReshardStatus { TreeId = TreeId, InProgress = true, CurrentPhysicalShardCount = 4, TargetShardCount = 4, StartPhysicalShardCount = 8 },
+                     new TreeReshardStatus { TreeId = TreeId, CurrentPhysicalShardCount = 4 });
+        Admin.GetResizeStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(Resize(false));
+        Admin.GetSnapshotStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeSnapshotStatus { TreeId = TreeId });
+
+        var cut = RenderTab<ClusterTreeSummary>();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Markup, Does.Contain("In progress, to 4 physical shards."));
+            Assert.That(cut.Find(".lt-progress__phase").TextContent, Is.EqualTo("Releasing retired shards"));
+            Assert.That(ProgressValue(cut), Is.EqualTo("80"));
+            Assert.That(Time.ArmedTimers, Is.EqualTo(1), "at the target count the reshard is still followed");
+        });
+
+        cut.InvokeAsync(() => Time.Advance(ClusterStatusPoller.Interval));
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Markup, Does.Contain("None in progress."));
+            Assert.That(cut.FindAll("[role=progressbar]"), Is.Empty);
+        });
     }
 
     [Test]

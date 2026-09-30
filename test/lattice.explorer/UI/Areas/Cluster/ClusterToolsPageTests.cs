@@ -23,8 +23,9 @@ public sealed class ClusterToolsPageTests : ClusterTestContext
     private const string Address = "/cluster/trees/orders/tools";
 
     [SetUp]
-    public void Stats() =>
-        Admin.GetTreeStatsAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeStatsReport { TreeId = TreeId, ShardCount = 4 });
+    public void Shards() =>
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new ShardMapInspection { TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardCount = 4, VirtualShardCount = 8, PhysicalShardIndices = [0, 0, 1, 1, 2, 2, 3, 3] });
 
     [Test]
     public void Compaction_checks_the_shard_then_asks_for_the_trees_name()
@@ -42,6 +43,37 @@ public sealed class ClusterToolsPageTests : ClusterTestContext
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-result").TextContent, Is.EqualTo("Compaction accepted for shard 2.")));
+    }
+
+    [Test]
+    public void After_a_shrink_only_the_shards_in_the_map_are_accepted()
+    {
+        // A shrink folded shards 1 and 3 away; 5 was split off earlier. The
+        // shard count is 3, but the valid indices are not 0 to 2.
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new ShardMapInspection { TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardCount = 3, VirtualShardCount = 6, PhysicalShardIndices = [0, 0, 2, 2, 5, 5] });
+        Admin.TriggerShardCompactionAsync(TreeId, 5, Arg.Any<CancellationToken>())
+            .Returns(new TreeCompactionTriggerResult { TreeId = TreeId, ShardIndex = 5, Accepted = true });
+        var cut = RenderAt(Address);
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("One of this tree's shards: 0, 2 or 5.")));
+
+        Compaction(cut, "1");
+        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Shard 1 is not in this tree's shard map: enter 0, 2 or 5."));
+
+        Compaction(cut, "5");
+        ConfirmTyping(cut, TreeId);
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-result").TextContent, Is.EqualTo("Compaction accepted for shard 5.")));
+    }
+
+    [Test]
+    public void A_long_list_of_shards_is_named_by_its_first_few()
+    {
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new ShardMapInspection { TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardIndices = [.. Enumerable.Range(0, 20).Where(index => index != 4)] });
+        var cut = RenderAt(Address);
+
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("One of this tree's 19 shards, such as 0, 1, 2, 3, 5, 6 or 7.")));
     }
 
     [Test]

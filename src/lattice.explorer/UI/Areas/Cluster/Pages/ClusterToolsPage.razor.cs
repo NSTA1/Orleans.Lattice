@@ -19,10 +19,13 @@ public partial class ClusterToolsPage : IDisposable
     /// <summary>Entries sent per bulk-load chunk.</summary>
     internal const int ChunkSize = 256;
 
+    /// <summary>The most shards a field's hint or error names one by one.</summary>
+    private const int ShardsNamedInFull = 8;
+
     private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<LatticeTreeAdminCapabilities> _accessLoad = ClusterLoad<LatticeTreeAdminCapabilities>.Loading;
     private LatticeTreeAdminCapabilities _access = default!;
-    private int? _shardCount;
+    private IReadOnlyList<int>? _shards;
     private string? _compactionShard;
     private string? _compactionError;
     private int _compactionIndex;
@@ -62,9 +65,20 @@ public partial class ClusterToolsPage : IDisposable
 
     private int ChunkCount => (_entries.Count + ChunkSize - 1) / ChunkSize;
 
-    private string ShardHint => _shardCount is { } count
-        ? $"A shard index from 0 to {count - 1}."
-        : "A zero-based shard index.";
+    private string ShardHint
+    {
+        get
+        {
+            var shards = _shards;
+            return shards switch
+            {
+                null or [] => "A zero-based shard index.",
+                _ when IsContiguous(shards) => $"A shard index from 0 to {shards[^1]}.",
+                { Count: <= ShardsNamedInFull } => $"One of this tree's shards: {Listed(shards)}.",
+                _ => $"One of this tree's {ClusterFormat.Count(shards.Count)} shards, such as {Listed(shards.Take(ShardsNamedInFull - 1).ToArray())}.",
+            };
+        }
+    }
 
     /// <inheritdoc />
     public void Dispose()
@@ -83,10 +97,30 @@ public partial class ClusterToolsPage : IDisposable
 
         if (_access.CanViewDiagnostics)
         {
-            var stats = await ClusterLoad<TreeStatsReport>.RunAsync(ct => Facades.RequireTreeAdmin().GetTreeStatsAsync(TreeId, ct), _lifetime.Token);
-            _shardCount = stats.Value?.ShardCount;
+            // The shards are the ones the live shard map routes to. They are not
+            // 0 to the shard count less one: a shrink retires indices, and a
+            // grow after it allocates fresh ones above every retired index.
+            var map = await ClusterLoad<ShardMapInspection>.RunAsync(ct => Facades.RequireTreeAdmin().InspectShardMapAsync(TreeId, ct), _lifetime.Token);
+            _shards = map.Value is { } inspection ? ShardsOf(inspection) : null;
         }
     }
+
+    /// <summary>The distinct physical shards a live shard map routes to, in ascending order.</summary>
+    /// <param name="map">The live shard map.</param>
+    /// <returns>The shard indices.</returns>
+    internal static IReadOnlyList<int> ShardsOf(ShardMapInspection map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        var shards = new SortedSet<int>(map.PhysicalShardIndices);
+        return [.. shards];
+    }
+
+    private static bool IsContiguous(IReadOnlyList<int> shards) => shards[0] == 0 && shards[^1] == shards.Count - 1;
+
+    private static string Listed(IReadOnlyList<int> shards) =>
+        shards.Count == 1
+            ? shards[0].ToString(CultureInfo.InvariantCulture)
+            : string.Join(", ", shards.Take(shards.Count - 1).Select(shard => shard.ToString(CultureInfo.InvariantCulture))) + " or " + shards[^1].ToString(CultureInfo.InvariantCulture);
 
     private bool TryShard(string? text, out int shard, out string? error)
     {
@@ -97,9 +131,13 @@ public partial class ClusterToolsPage : IDisposable
             return false;
         }
 
-        if (_shardCount is { } count && shard >= count)
+        if (_shards is { Count: > 0 } shards && !shards.Contains(shard))
         {
-            error = $"The tree has {ClusterFormat.Plural(count, "shard")}: enter 0 to {count - 1}.";
+            error = IsContiguous(shards)
+                ? $"The tree has {ClusterFormat.Plural(shards.Count, "shard")}: enter 0 to {shards[^1]}."
+                : shards.Count <= ShardsNamedInFull
+                    ? $"Shard {shard} is not in this tree's shard map: enter {Listed(shards)}."
+                    : $"Shard {shard} is not in this tree's shard map. The Shards tab lists the {ClusterFormat.Plural(shards.Count, "shard")} it routes to.";
             return false;
         }
 

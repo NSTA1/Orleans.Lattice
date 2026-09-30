@@ -281,6 +281,7 @@ public sealed class ClusterAreaTests
         Assert.Multiple(() =>
         {
             Assert.That(reshard.Title, Is.EqualTo("Reshard tree..."));
+            Assert.That(reshard.Detail, Is.EqualTo("Grow or shrink a tree's physical shard count, online."), "a reshard is no longer grow-only (#4076)");
             Assert.That(plan.Title, Is.EqualTo("Plan WAL move..."));
             Assert.That(reshard.Target, Is.EqualTo(ClusterAddresses.Trees));
             Assert.That(plan.Target, Is.EqualTo(ClusterAddresses.Wal()));

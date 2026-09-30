@@ -91,7 +91,8 @@ public sealed class ClusterOperationProgressTests
     {
         var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 5, TargetShardCount = 8, StartPhysicalShardCount = 2 });
 
-        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Splitting shards", 3, 6, "5 of 8 physical shards.")));
+        // Six splits, then the step that completes it: a running reshard never reads as whole.
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Splitting shards", 3, 7, "5 of 8 physical shards.")));
     }
 
     [Test]
@@ -107,15 +108,66 @@ public sealed class ClusterOperationProgressTests
     {
         var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 5 });
 
-        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Splitting shards", 0, null, "5 physical shards so far.")));
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Resharding", 0, null, "5 physical shards so far.")));
     }
 
     [Test]
-    public void A_reshard_that_overshot_its_target_is_clamped()
+    public void A_reshard_that_overshot_its_target_is_clamped_short_of_done()
     {
         var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 9, TargetShardCount = 8, StartPhysicalShardCount = 2 });
 
-        Assert.That((progress?.Value, progress?.Maximum), Is.EqualTo(((long?)6, (long?)6)));
+        Assert.That((progress?.Value, progress?.Maximum), Is.EqualTo(((long?)6, (long?)7)));
+    }
+
+    [Test]
+    public void A_shrink_is_measured_as_the_distance_moved_down_from_where_it_started()
+    {
+        var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 6, TargetShardCount = 4, StartPhysicalShardCount = 8 });
+
+        // Four folds, then releasing the retired shards' storage.
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Folding shards together", 2, 5, "6 physical shards now, down to 4.")));
+    }
+
+    [Test]
+    public void A_shrink_at_its_target_but_still_running_is_releasing_retired_shards_not_done()
+    {
+        var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 4, TargetShardCount = 4, StartPhysicalShardCount = 8 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(progress?.Phase, Is.EqualTo("Releasing retired shards"));
+            Assert.That((progress?.Value, progress?.Maximum), Is.EqualTo(((long?)4, (long?)5)), "only InProgress = false completes a reshard");
+            Assert.That(progress?.Detail, Is.EqualTo("4 of 4 physical shards. The reshard completes once the retired shards' storage is released."));
+        });
+    }
+
+    [Test]
+    public void A_shrink_that_went_below_its_target_is_clamped_short_of_done()
+    {
+        var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 3, TargetShardCount = 4, StartPhysicalShardCount = 8 });
+
+        Assert.That((progress?.Phase, progress?.Value, progress?.Maximum), Is.EqualTo(("Releasing retired shards", (long?)4, (long?)5)));
+    }
+
+    [Test]
+    public void A_grow_at_its_target_but_still_running_is_finishing_not_done()
+    {
+        var progress = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 8, TargetShardCount = 8, StartPhysicalShardCount = 2 });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Finishing", 6, 7, "8 of 8 physical shards. The reshard completes once its last step finishes.")));
+    }
+
+    [Test]
+    public void A_shrink_without_a_recorded_start_is_indeterminate_and_reads_its_direction_from_the_count()
+    {
+        var folding = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 6, RequestedShardCount = 4 });
+        var atTarget = ClusterOperationProgress.Of(new TreeReshardStatus { TreeId = Tree, InProgress = true, CurrentPhysicalShardCount = 4, RequestedShardCount = 4 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(folding, Is.EqualTo(new ClusterOperationProgress("Reshard progress", "Folding shards together", 0, null, "6 physical shards now, down to 4.")));
+            Assert.That((atTarget?.Phase, atTarget?.Maximum), Is.EqualTo(("Finishing", (long?)null)), "at the target with no start the direction is unknown, and it is still not done");
+        });
     }
 
     [Test]
