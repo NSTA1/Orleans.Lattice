@@ -116,7 +116,7 @@ public sealed class TenantRegistrySnapshotCrossSiloTests
     {
         var registry = Substitute.For<ITenantRegistry>();
         registry.GetAsync(Acme, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("registry down"));
-        var enforcer = OwnedTreeEnforcer(new TenantResidencyResolver(TenantPolicyEpochTestCluster.UnleasedResidency(registry, Region), registry));
+        var enforcer = await OwnedTreeEnforcerAsync(new TenantResidencyResolver(TenantPolicyEpochTestCluster.UnleasedResidency(registry, Region), registry));
         LatticeActiveTenantContext.Current = Acme;
 
         var request = ResidencyWorld.Request();
@@ -127,13 +127,13 @@ public sealed class TenantRegistrySnapshotCrossSiloTests
     }
 
     [Test]
-    public void Residency_caller_cancellation_during_confirmation_propagates()
+    public async Task Residency_caller_cancellation_during_confirmation_propagates()
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var registry = Substitute.For<ITenantRegistry>();
         registry.GetAsync(Acme, Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException(cts.Token));
-        var enforcer = OwnedTreeEnforcer(new TenantResidencyResolver(TenantPolicyEpochTestCluster.UnleasedResidency(registry, Region), registry));
+        var enforcer = await OwnedTreeEnforcerAsync(new TenantResidencyResolver(TenantPolicyEpochTestCluster.UnleasedResidency(registry, Region), registry));
         LatticeActiveTenantContext.Current = Acme;
 
         Assert.That(
@@ -385,12 +385,15 @@ public sealed class TenantRegistrySnapshotCrossSiloTests
         Assert.That(placement.IsSnapshotAuthoritative, Is.True);
     }
 
-    private static TenantGateEnforcer OwnedTreeEnforcer(ITenantResidencyResolver residency)
+    /// <summary>
+    /// An enforcer whose compiled-policy snapshot is authoritative and admits
+    /// <c>alice</c> acting as <c>acme</c>, so the only stale view is the residency one.
+    /// </summary>
+    private static async Task<TenantGateEnforcer> OwnedTreeEnforcerAsync(ITenantResidencyResolver residency)
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
         engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
-        var policy = TenantPolicyEpochTestCluster.Unleased(new FakeTenantRegistry());
-        policy.RebuildNowAsync().GetAwaiter().GetResult();
+        var policy = await TenantPolicyEpochTestCluster.LeasedAsync(new FakeTenantRegistry());
         return new TenantGateEnforcer(engine, residency, policy, Substitute.For<ITenantRegistry>(), NullLogger<TenantGateEnforcer>.Instance);
     }
 
