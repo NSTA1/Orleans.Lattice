@@ -82,6 +82,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Config - Unrepresentable RepoContext durations.** A seconds variable too large for a `TimeSpan`, such as `1e20` or `Infinity`, stopped the host at startup instead of falling back to its default, and a memory archive cadence above about 49.7 days ended the archive loop. It now falls back or clamps. ([#3968](https://github.com/NSTA1/Orleans.Lattice/issues/3968)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **Config - Self-index tick above the timer ceiling.** A `LATTICE_SELFINDEX_TICK_SECONDS` longer than a grain timer can wait (about 49.7 days) failed repository onboarding and every keep-alive re-arm, and one just under it failed at random. The tick now runs at the ceiling. ([#3991](https://github.com/NSTA1/Orleans.Lattice/issues/3991)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Replication - The leaf snapshot feed lost expiry and saga state.** It rebuilt every exported row as a durable committed value, so a TTL row outlived its lease and an in-flight saga's prepared write or delete surfaced as committed. Rows now keep their expiry, and prepared rows stay prepared. ([#3989](https://github.com/NSTA1/Orleans.Lattice/issues/3989)) (`Orleans.Lattice.Replication`)
+
+- **Dashboards - Panels filtered on labels their series lack.** The Backup scope selector offered no values and blanked most panels, the CommitPath retry-attempts line drew a permanent zero, and the Replication fell-off-log panel never showed data. Each now filters on labels its instrument carries. ([#3990](https://github.com/NSTA1/Orleans.Lattice/issues/3990)) (`Orleans.Lattice.Dashboards`)
+
 - **Backup - Timings above the timer ceiling.** A `CrossTreeFencePollInterval` or `SinkSharingProbeTimeout` longer than a timer can wait (about 49.7 days) passed validation, then failed every cross-tree capture that had to wait, or blocked silo start. Validation now rejects it. ([#3967](https://github.com/NSTA1/Orleans.Lattice/issues/3967)) (`Orleans.Lattice.Backup`)
 
 - **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)

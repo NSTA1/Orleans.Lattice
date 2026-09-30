@@ -336,7 +336,12 @@ public sealed class MetricDocTenantDimensionTests
         return keys;
     }
 
-    private static IReadOnlyList<InstrumentRow> ScannedRows() => ScannedRowsLazy.Value;
+    /// <summary>
+    /// Every instrument row of the panel map, parsed once. Shared with
+    /// <see cref="DashboardSelectorLabelPresenceTests"/>, which reads the tag
+    /// column as the documented label set of each instrument.
+    /// </summary>
+    internal static IReadOnlyList<InstrumentRow> ScannedRows() => ScannedRowsLazy.Value;
 
     private static readonly Lazy<IReadOnlyList<InstrumentRow>> ScannedRowsLazy = new(ScanCore);
 
