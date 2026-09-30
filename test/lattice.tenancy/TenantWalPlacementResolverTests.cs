@@ -1,5 +1,5 @@
 using System.Runtime.CompilerServices;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Orleans.Lattice.Tenancy.Tests;
@@ -49,19 +49,19 @@ public sealed class TenantWalPlacementResolverTests
     {
         var registry = Substitute.For<ITenantRegistry>();
         registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => Stream(records));
-        var maintainer = new TenantPlacementSnapshotMaintainer(
-            registry, NullLogger<TenantPlacementSnapshotMaintainer>.Instance);
-        await maintainer.RebuildNowAsync();
-        return new TenantWalPlacementResolver(maintainer);
+        var maintainer = await TenantPolicyEpochTestCluster.LeasedPlacementAsync(registry);
+        return new TenantWalPlacementResolver(maintainer, DefaultOptions);
     }
 
+    /// <summary>A resolver over a placement snapshot that is never leased, so never authoritative.</summary>
     private static TenantWalPlacementResolver ColdResolver()
     {
         var registry = Substitute.For<ITenantRegistry>();
-        var maintainer = new TenantPlacementSnapshotMaintainer(
-            registry, NullLogger<TenantPlacementSnapshotMaintainer>.Instance);
-        return new TenantWalPlacementResolver(maintainer);
+        return new TenantWalPlacementResolver(TenantPolicyEpochTestCluster.UnleasedPlacement(registry), DefaultOptions);
     }
+
+    private static readonly IOptions<LatticeTenancyOptions> DefaultOptions =
+        Options.Create(new LatticeTenancyOptions());
 
     [Test]
     public void TryResolveForRegistration_resolves_a_non_tenant_tree_synchronously_to_default()
@@ -189,12 +189,12 @@ public sealed class TenantWalPlacementResolverTests
     }
 
     [Test]
-    public async Task ResolveForRegistrationAsync_tenant_absent_from_the_snapshot_returns_default()
+    public async Task ResolveForRegistrationAsync_tenant_absent_from_an_authoritative_snapshot_returns_default()
     {
-        // A tenant-scoped tree registered before its tenant record is observed
-        // resolves to the baseline placement - fail-safe, never a wrong provider.
+        // An authoritative snapshot without the tenant means it is not registered:
+        // its tree resolves to the baseline placement.
         var tenant = TenantId.Parse("acme");
-        var resolver = ColdResolver();
+        var resolver = await WarmResolverAsync();
 
         var placement = await resolver.ResolveForRegistrationAsync(
             LatticeTenantTrees.Compose(tenant, "orders"));

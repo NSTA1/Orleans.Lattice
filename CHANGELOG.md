@@ -86,13 +86,15 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## [2026-09-30]
 
-Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattice.Dashboards` advance to `9.8.2`. Every other package stays where the 9.8.1 wave left it. Packages that depend on a patched package still require its earlier version, so reference a patched package directly to pick up its fixes.
+Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattice.Dashboards` advance to `9.8.2`, and `Orleans.Lattice.Tenancy` and `Orleans.Lattice.Auth` to `9.8.1`. Every other package stays where the 9.8.1 wave left it. Packages that depend on a patched package still require its earlier version, so reference a patched package directly to pick up its fixes.
 
-**Upgrading from 9.8.1.** A rolling upgrade is supported: no wire format, persisted state layout or public API changes. The headline fix closes a durability hole in which a failed checkpoint persist left a leaf advertising a WAL trim entitlement it had never written, so the garbage collector could trim a prefix no snapshot covered and the next replay latched stale. A leaf already latched stale still needs an operator rebuild; this patch prevents new occurrences rather than repairing existing ones. Expected replay-permit refusals now log one summary warning a minute per silo instead of a stack trace each, so an alert matching that stack no longer fires.
+**Upgrading from 9.8.1.** A rolling upgrade is supported: no wire format or persisted state layout changes, and the public surface grows only additively: a new `LatticeTenancyOptions.PolicySnapshotLeaseDuration` option, and an `ITenantGateEnforcer.EnforceAsync` whose default implementation delegates to `Enforce`, so an existing enforcer is unaffected. The headline fix closes a durability hole in which a failed checkpoint persist left a leaf advertising a WAL trim entitlement it had never written, so the garbage collector could trim a prefix no snapshot covered and the next replay latched stale. A leaf already latched stale still needs an operator rebuild; this patch prevents new occurrences rather than repairing existing ones. Expected replay-permit refusals now log one summary warning a minute per silo instead of a stack trace each, so an alert matching that stack no longer fires. The tenancy and auth patches close four multi-silo authorization gaps: a registry write refreshed the policy, residency and placement views only on the committing silo, and the gate trusted a stale policy snapshot while a rebuild was pending, so a silo could keep admitting revoked grants and removed or suspended members. Both now confirm against the registry and fail closed.
 
 ### Added
 
 - **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Config - Tenant snapshot lease.** `LatticeTenancyOptions.PolicySnapshotLeaseDuration` (default 10 s) bounds how long a silo trusts its tenant snapshots without renewing its cluster-epoch lease; a longer lease delays a write that must wait out an unreachable silo. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030)) (`Orleans.Lattice.Tenancy`)
 
 ### Changed
 
@@ -107,6 +109,14 @@ Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattic
 - **Replay - Admission refusals logged a stack trace each.** An expected replay-permit refusal no longer logs its exception. Refusals are counted into at most one summary warning a minute per silo, which names the arm that fired and its remedy. ([#3906](https://github.com/NSTA1/Orleans.Lattice/issues/3906)) (`Orleans.Lattice`)
 
 - **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
+
+- **Config - Tenant usage metering above the timer ceiling.** A `MeterInterval` longer than a timer can wait (about 49.7 days) ended metering on its first cycle, leaving quotas unenforced, and a reload to zero re-metered with no pause. The interval now clamps, and a non-positive reload stops the loop. ([#4042](https://github.com/NSTA1/Orleans.Lattice/issues/4042)) (`Orleans.Lattice.Tenancy`)
+
+### Security
+
+- **Security - Tenant changes lagged on other silos.** A tenant-registry write refreshed the policy, residency and placement views only on the committing silo, so other silos kept admitting revoked access and placing trees by stale rules. Every silo now tracks a leased cluster epoch and fails closed. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030), [#4051](https://github.com/NSTA1/Orleans.Lattice/issues/4051), [#4052](https://github.com/NSTA1/Orleans.Lattice/issues/4052)) (`Orleans.Lattice.Tenancy`)
+
+- **Security - Stale tenant decisions during a snapshot rebuild.** A registry change only schedules a policy-snapshot rebuild, and the gate trusted the stale snapshot meanwhile, admitting revoked grants and removed or suspended members. It now confirms against the registry, or denies. ([#4001](https://github.com/NSTA1/Orleans.Lattice/issues/4001), [#4053](https://github.com/NSTA1/Orleans.Lattice/issues/4053)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Auth`)
 
 
 ## [2026-09-29]

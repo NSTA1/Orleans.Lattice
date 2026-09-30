@@ -24,6 +24,15 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
         {
             failures.Add($"{nameof(LatticeViewOptions.CoalesceWindow)} must be greater than zero (was {options.CoalesceWindow}).");
         }
+        else if (options.CoalesceWindow > LatticeOptionsValidator.MaxTimerDuration)
+        {
+            // The window is the maintainer's grain-timer period, and a grain timer
+            // refuses a longer one: the maintainer would throw on every arming and
+            // the view would never be maintained.
+            failures.Add(
+                $"{nameof(LatticeViewOptions.CoalesceWindow)} must be at most {LatticeOptionsValidator.MaxTimerDuration}, "
+                + $"the longest period the maintainer's timer accepts (was {options.CoalesceWindow}).");
+        }
 
         if (options.SourceIdentityBackstopInterval <= TimeSpan.Zero)
         {

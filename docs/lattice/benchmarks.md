@@ -279,6 +279,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `replicationapplytrims` | Three reductions on the replication batch-apply path. |
 | `authcompiletrims` | The authorization policy compile path: the whole-ruleset snapshot rebuild the warm decision reads. |
 | `tenancycompiletrims` | The tenancy snapshot rebuild over every tenant record. |
+| `tenantgatesnapshot` | The steady-state tenant gate paths that answer from the compiled tenant-policy snapshot (auth-gate owned-tree and cross-tenant decisions, the replication isolation gate snapshot hit, and the authority check itself). |
 | `ingestapplytrims` | Three reductions on the steady-state reconcile planning and sequential replication-apply paths. |
 | `crdtcoalescetrims` | Three allocation reductions on the replication shipper's pre-ship CRDT delta coalescing. |
 | `crdtrunfolds` | The complexity of folding a key's run of same-key deltas in the pre-ship CRDT coalescer; read it as a curve. |

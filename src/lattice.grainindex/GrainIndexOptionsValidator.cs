@@ -52,6 +52,14 @@ internal sealed class GrainIndexOptionsValidator : IValidateOptions<GrainIndexOp
                 + $"{options.BackfillInterval}; it must be greater than zero so the backfill is paced "
                 + "against foreground traffic.");
         }
+        else if (options.BackfillInterval > GrainIndexOptions.MaxBackfillInterval)
+        {
+            failures.Add(
+                $"Grain index '{name}' has {nameof(GrainIndexOptions.BackfillInterval)} "
+                + $"{options.BackfillInterval}; it must be at most {GrainIndexOptions.MaxBackfillInterval}, the "
+                + "longest period the backfill's pass timer accepts. A longer interval throws each time the "
+                + "timer is armed, so the backfill would never run.");
+        }
 
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }

@@ -31,45 +31,64 @@ namespace Orleans.Lattice.Tenancy;
 /// off the mutating grain's scheduler. Rebuilds are coalesced (a burst of writes
 /// collapses into at most one in-flight rebuild plus at most one queued follow-up)
 /// and serialized, so the snapshot always reflects a whole, self-consistent scan and
-/// the epoch never regresses. A tenant observed before this snapshot catches up
-/// simply resolves to admit-all until the rebuild lands, which is fail-open on
-/// residency grounds only (never a wrong deny), closed by the startup warm-up.
+/// the epoch never regresses.
+/// </para>
+/// <para>
+/// <b>Cross-silo currency (issue #4051).</b> The change-feed hook fires only on the
+/// silo that committed the registry write, so on its own it would leave every other
+/// silo's residency view stale indefinitely - a tenant drained or taken offline
+/// here through one silo would stay online on the rest. The snapshot is therefore
+/// kept current by the same cluster-wide tenant-policy epoch and lease as the
+/// compiled tenant-policy snapshot (<see cref="TenantSnapshotCurrency"/>, fed by
+/// <see cref="TenantPolicyEpochSubscription"/>), and is authoritative
+/// (<see cref="IsSnapshotAuthoritative"/>) only when it has been built, no rebuild
+/// is outstanding, it was built for the latest generation the silo has observed,
+/// and the lease is live. While it is not, <see cref="TenantResidencyResolver"/>
+/// does not answer from it: the gates confirm residency against the registry
+/// record, and the synchronous resolver denies.
 /// </para>
 /// </remarks>
-internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
+internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITenantEpochSubscriber
 {
     private readonly ITenantRegistry _registry;
     private readonly ILogger<TenantResidencySnapshotMaintainer> _logger;
     private readonly ITenantRegionStatusChangeListener[] _listeners;
     private readonly string _regionId;
+    private readonly TenantSnapshotCurrency _currency;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
 
     private TenantResidencySnapshot _current = TenantResidencySnapshot.Empty;
     private Dictionary<TenantId, TenantRegionStatus> _lastByTenant = new();
     private long _epoch;
+    private long _builtForGeneration;
 
     // Coalescing state for background rebuilds: 0 idle, 1 running, 2 running with
     // a queued follow-up.
     private int _rebuildState;
+    private Task _backgroundRebuild = Task.CompletedTask;
 
     /// <summary>Initializes a new <see cref="TenantResidencySnapshotMaintainer"/>.</summary>
     /// <param name="registry">The tenant registry scanned to build the snapshot.</param>
     /// <param name="clusterOptions">Supplies this silo's serving region id (the cluster id).</param>
     /// <param name="listeners">The registered region-status change listeners (may be empty).</param>
+    /// <param name="timeProvider">The clock the silo's lease is measured on.</param>
     /// <param name="logger">The logger for background-rebuild failures.</param>
     /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
     public TenantResidencySnapshotMaintainer(
         ITenantRegistry registry,
         IOptions<ClusterOptions> clusterOptions,
         IEnumerable<ITenantRegionStatusChangeListener> listeners,
+        TimeProvider timeProvider,
         ILogger<TenantResidencySnapshotMaintainer> logger)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(clusterOptions);
         ArgumentNullException.ThrowIfNull(listeners);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _registry = registry;
+        _currency = new TenantSnapshotCurrency(timeProvider);
         _logger = logger;
         _listeners = listeners as ITenantRegionStatusChangeListener[] ?? listeners.ToArray();
 
@@ -85,6 +104,27 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
 
     /// <summary>This silo's serving region id (the cluster id).</summary>
     public string LocalRegionId => _regionId;
+
+    /// <summary>
+    /// <c>true</c> when the current snapshot reflects every committed
+    /// tenant-registry write: it has been built, no rebuild is outstanding, it was
+    /// built for the latest cluster generation this silo has observed, and the
+    /// silo's lease from the tenant-policy epoch grain is live. A handful of field
+    /// reads and one clock read; allocates nothing.
+    /// </summary>
+    public bool IsSnapshotAuthoritative =>
+        Interlocked.Read(ref _epoch) > 0
+        && Volatile.Read(ref _rebuildState) == 0
+        && _currency.IsCurrent(Volatile.Read(ref _builtForGeneration));
+
+    /// <summary>
+    /// The most recently scheduled background rebuild loop, or a completed task when
+    /// none has been scheduled. Exposed so a test can await a rebuild deterministically.
+    /// </summary>
+    internal Task BackgroundRebuild => Volatile.Read(ref _backgroundRebuild);
+
+    /// <summary>Completes when the silo's first lease has been applied. Exposed for tests.</summary>
+    internal Task LeaseEstablished => _currency.LeaseEstablished;
 
     /// <summary>
     /// Ensures the snapshot has been built at least once, building it synchronously
@@ -104,14 +144,45 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// A write to the registry tree also marks the snapshot out of date, so it is not
+    /// authoritative until the rebuild it schedules succeeds. Publishing the change
+    /// to the other silos is the compiled tenant-policy maintainer's job; one advance
+    /// per write reaches every snapshot on every silo.
+    /// </remarks>
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
         if (string.Equals(mutation.TreeId, TenantTreeNames.RegistryTree, StringComparison.Ordinal))
         {
-            ScheduleRebuild();
+            InvalidateClusterView();
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public void ObserveEpoch(TenantPolicyEpoch epoch)
+    {
+        if (_currency.Observe(epoch))
+        {
+            ScheduleRebuild();
+        }
+    }
+
+    /// <inheritdoc />
+    public void ApplyLease(TenantPolicyEpochLease lease, long requestedAt)
+    {
+        if (_currency.ApplyLease(lease, requestedAt))
+        {
+            ScheduleRebuild();
+        }
+    }
+
+    /// <inheritdoc />
+    public void InvalidateClusterView()
+    {
+        _currency.Invalidate();
+        ScheduleRebuild();
     }
 
     /// <summary>
@@ -130,6 +201,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var generation = _currency.Generation;
             Dictionary<TenantId, TenantRegionStatus> byTenant;
             var attempt = 1;
             while (true)
@@ -145,7 +217,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
                 }
             }
 
-            var changes = SwapSnapshot(byTenant);
+            var changes = SwapSnapshot(byTenant, generation);
             await NotifyListenersAsync(changes, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -166,7 +238,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
                 case 0:
                     if (Interlocked.CompareExchange(ref _rebuildState, 1, 0) == 0)
                     {
-                        _ = Task.Run(RunRebuildLoopAsync);
+                        Volatile.Write(ref _backgroundRebuild, Task.Run(RunRebuildLoopAsync));
                         return;
                     }
 
@@ -211,8 +283,12 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Captured before the scan: a change observed while it runs bumps the
+            // generation past it, so the result is not authoritative and the rebuild
+            // that observation queued captures the change.
+            var generation = _currency.Generation;
             var byTenant = await ScanStatusesAsync(cancellationToken).ConfigureAwait(false);
-            var changes = SwapSnapshot(byTenant);
+            var changes = SwapSnapshot(byTenant, generation);
             await NotifyListenersAsync(changes, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -245,17 +321,21 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver
     /// <summary>
     /// Publishes a freshly scanned status map as the current snapshot: computes the
     /// local-region transition diff against the previous map (only when a listener is
-    /// registered), swaps the immutable snapshot in atomically, advances the epoch
-    /// exactly once, and records the new map as the diff baseline. Pure and
-    /// non-faulting - it never touches the registry.
+    /// registered), swaps the immutable snapshot in atomically, records the cluster
+    /// generation it was built for, advances the epoch exactly once, and records the
+    /// new map as the diff baseline. Pure and non-faulting - it never touches the
+    /// registry.
     /// </summary>
-    private IReadOnlyList<TenantRegionStatusChange> SwapSnapshot(Dictionary<TenantId, TenantRegionStatus> byTenant)
+    private IReadOnlyList<TenantRegionStatusChange> SwapSnapshot(
+        Dictionary<TenantId, TenantRegionStatus> byTenant,
+        long generation)
     {
         var changes = _listeners.Length == 0
             ? (IReadOnlyList<TenantRegionStatusChange>)Array.Empty<TenantRegionStatusChange>()
             : DiffChanges(byTenant);
 
         Volatile.Write(ref _current, TenantResidencySnapshot.Build(byTenant));
+        Volatile.Write(ref _builtForGeneration, generation);
         _lastByTenant = byTenant;
         Interlocked.Increment(ref _epoch);
         return changes;

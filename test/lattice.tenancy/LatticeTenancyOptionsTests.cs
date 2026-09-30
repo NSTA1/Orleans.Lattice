@@ -14,6 +14,7 @@ public sealed class LatticeTenancyOptionsTests
             Assert.That(options.HistoryRetentionWindow, Is.Null);
             Assert.That(options.EnableDurableHistoryView, Is.True);
             Assert.That(options.SeedDefaultTenant, Is.True);
+            Assert.That(options.PolicySnapshotLeaseDuration, Is.EqualTo(TimeSpan.FromSeconds(10)));
         });
     }
 
@@ -27,6 +28,7 @@ public sealed class LatticeTenancyOptionsTests
             HistoryRetentionWindow = window,
             EnableDurableHistoryView = false,
             SeedDefaultTenant = false,
+            PolicySnapshotLeaseDuration = TimeSpan.FromSeconds(3),
         };
 
         Assert.Multiple(() =>
@@ -35,6 +37,7 @@ public sealed class LatticeTenancyOptionsTests
             Assert.That(options.HistoryRetentionWindow, Is.EqualTo(window));
             Assert.That(options.EnableDurableHistoryView, Is.False);
             Assert.That(options.SeedDefaultTenant, Is.False);
+            Assert.That(options.PolicySnapshotLeaseDuration, Is.EqualTo(TimeSpan.FromSeconds(3)));
         });
     }
 }

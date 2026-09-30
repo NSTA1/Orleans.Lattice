@@ -589,12 +589,16 @@ return ValidateOptionsResult.Success;
     internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
     /// <summary>
-    /// Every duration option the runtime arms as a timer-backed wait. The checks
-    /// above admit any positive value (or <see cref="Timeout.InfiniteTimeSpan"/>), so
-    /// without this a value such as <see cref="TimeSpan.MaxValue"/> - the common
-    /// spelling of "no timeout" - passed validation and then failed every WAL flush,
-    /// append, forward or publish that armed it. <see cref="Timeout.InfiniteTimeSpan"/>
-    /// is skipped by the caller; the options that accept it bypass the timer for it.
+    /// Every duration option the runtime arms as a timer-backed wait or as a
+    /// grain-timer period. The checks above admit any positive value (or
+    /// <see cref="Timeout.InfiniteTimeSpan"/>), so without this a value such as
+    /// <see cref="TimeSpan.MaxValue"/> - the common spelling of "no timeout" -
+    /// passed validation and then failed every WAL flush, append, forward or
+    /// publish that armed it. A grain timer rejects the same range, so an
+    /// over-long hot-shard sampling or shard-healing interval threw each time the
+    /// monitor armed its timer, and the tree was never sampled or healed.
+    /// <see cref="Timeout.InfiniteTimeSpan"/> is skipped by the caller; the options
+    /// that accept it bypass the timer for it.
     /// </summary>
     private static (string Field, TimeSpan Value)[] TimerArmedDurations(LatticeOptions options) =>
     [
@@ -613,5 +617,7 @@ return ValidateOptionsResult.Success;
         (nameof(LatticeOptions.WalAdmissionSaturationCallBudget), options.WalAdmissionSaturationCallBudget),
         (nameof(LatticeOptions.WalThrottledAdmissionPace), options.WalThrottledAdmissionPace),
         (nameof(LatticeOptions.MaxScanPageStallDuration), options.MaxScanPageStallDuration ?? Timeout.InfiniteTimeSpan),
+        (nameof(LatticeOptions.HotShardSampleInterval), options.HotShardSampleInterval),
+        (nameof(LatticeOptions.ShardHealingInterval), options.ShardHealingInterval),
     ];
 }
