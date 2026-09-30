@@ -110,6 +110,32 @@ public class ExplorerAccessTokenSourceTests
     }
 
     [Test]
+    public async Task A_renewal_in_flight_when_the_source_is_disposed_completes_without_faulting()
+    {
+        // Issue #4093: Dispose disposed the gate while a renewal held it, so the renewal's
+        // finally { _gate.Release(); } threw ObjectDisposedException into its caller.
+        var time = new MutableTimeProvider(Origin);
+        var release = new TaskCompletionSource();
+        var source = new ExplorerAccessTokenSource(
+            Token(Origin.AddMinutes(10), "first"),
+            async _ =>
+            {
+                await release.Task;
+                return Token(time.GetUtcNow().AddMinutes(10), "renewed");
+            },
+            time);
+
+        var renewal = source.RefreshAsync().AsTask();
+        Assert.That(renewal.IsCompleted, Is.False, "the renewal holds the gate across the acquire");
+
+        source.Dispose();
+        release.SetResult();
+
+        Assert.That(await renewal, Is.True);
+        Assert.DoesNotThrow(source.Dispose, "disposing twice is harmless");
+    }
+
+    [Test]
     public async Task RefreshAsync_forced_acquiresFreshToken()
     {
         var time = new MutableTimeProvider(Origin);

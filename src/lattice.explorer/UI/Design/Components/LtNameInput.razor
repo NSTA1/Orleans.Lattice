@@ -1,0 +1,42 @@
+@*
+    A plain text box for the name of a new thing: no list and no arrow. Existing
+    names are read only to say, as the name is typed, that it is already taken;
+    a page's own check - such as the identity directory - runs when the field is
+    left and again at submit.
+*@
+<div class="lt-field">
+    <label class="lt-field__label" for="@_inputId">@Label</label>
+    <input @ref="_input"
+           @attributes="AdditionalAttributes"
+           id="@_inputId"
+           class="@InputClass"
+           type="text"
+           value="@_text"
+           placeholder="@Placeholder"
+           disabled="@Disabled"
+           readonly="@ReadOnly"
+           spellcheck="@(Mono ? "false" : null)"
+           autocomplete="off"
+           autocapitalize="off"
+           aria-invalid="@(EffectiveError is null ? null : "true")"
+           aria-describedby="@DescribedBy"
+           @oninput="OnInputAsync"
+           @onblur="OnBlurAsync" />
+    @if (Hint is not null)
+    {
+        <p id="@_hintId" class="lt-field__hint">@Hint</p>
+    }
+    @if (_note is not null)
+    {
+        <p id="@_noteId" class="lt-name-input__note">@_note</p>
+    }
+    @if (ShowsFlag)
+    {
+        <p id="@_flagId" class="lt-name-input__flag">@_flag</p>
+    }
+    @if (EffectiveError is not null)
+    {
+        <p id="@_errorId" class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @EffectiveError</p>
+    }
+    <p class="lt-visually-hidden" role="status" aria-live="polite">@_status</p>
+</div>

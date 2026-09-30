@@ -36,10 +36,22 @@ public sealed class AccessPrincipalValidationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(unresolved, Is.EqualTo("No principal with the id ghost exists in the identity directory."));
-            Assert.That(mismatch, Is.EqualTo("The id alice is a user in the identity directory, not a group."));
+            Assert.That(unresolved, Is.EqualTo("ghost is not a user in the identity directory (Microsoft Entra ID)."));
+            Assert.That(mismatch, Is.EqualTo("alice is a user in the identity directory (Microsoft Entra ID), not a group."));
             Assert.That(match, Is.Null);
         });
+    }
+
+    [Test]
+    [TestCase("static", "static roster")]
+    [TestCase("entra", "Microsoft Entra ID")]
+    [TestCase("ldap", "ldap")]
+    [TestCase("", "unnamed")]
+    public void A_refusal_names_the_directory_it_consulted(string provider, string expected)
+    {
+        var model = new FakeAuthAdmin().Model with { DirectoryAvailable = true, DirectoryProviderId = provider };
+
+        Assert.That(AccessPrincipalValidation.DirectoryName(model), Is.EqualTo(expected));
     }
 
     [Test]

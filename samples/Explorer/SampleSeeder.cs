@@ -220,6 +220,15 @@ internal static class SampleSeeder
     {
         using var _ = LatticeSystemOrigin.Enter();
         var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
+
+        // Each group gets a record as well as its members: a membership edge alone
+        // makes no group, so Access > Groups would list none and could not tell
+        // that a seeded id is already taken.
+        await membership.UpsertGroupAsync(new MembershipGroup(SampleIdentities.OperatorsGroup, "Floor Operators"), cancellationToken).ConfigureAwait(false);
+        await membership.UpsertGroupAsync(new MembershipGroup(SampleIdentities.TaskEditorsGroup, "Task board editors"), cancellationToken).ConfigureAwait(false);
+        await membership.UpsertGroupAsync(new MembershipGroup(SampleIdentities.TaskViewersGroup, "Task board viewers"), cancellationToken).ConfigureAwait(false);
+        await membership.UpsertGroupAsync(new MembershipGroup(SampleIdentities.VisitorsGroup, "Visitors"), cancellationToken).ConfigureAwait(false);
+        await membership.UpsertGroupAsync(new MembershipGroup(SampleIdentities.AcmeEditorsGroup, "Acme task board editors"), cancellationToken).ConfigureAwait(false);
         await membership.AddMemberAsync(SampleIdentities.OperatorsGroup, SampleIdentities.Alice, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // The task-board walkthrough's groups (Apps/TaskBoard/README.md): alice

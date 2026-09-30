@@ -63,6 +63,25 @@ public sealed partial class EstateSmokeTests
     }
 
     [Test]
+    public async Task Every_seeded_group_is_defined_and_one_roster_group_is_left_to_create()
+    {
+        var membership = _sample.East.Services.GetRequiredService<Orleans.Lattice.Membership.ILatticeMembershipDirectory>();
+        var seeded = new[]
+        {
+            SampleIdentities.OperatorsGroup, SampleIdentities.TaskEditorsGroup, SampleIdentities.TaskViewersGroup,
+            SampleIdentities.VisitorsGroup, SampleIdentities.AcmeEditorsGroup,
+        };
+
+        foreach (var group in seeded)
+        {
+            Assert.That(await membership.GetGroupAsync(group), Is.Not.Null, $"'{group}' has a group record, so Access lists it and refuses it as a new id");
+        }
+
+        Assert.That(await membership.GetGroupAsync(SampleIdentities.AuditorsGroup), Is.Null, "the roster keeps one group for New group to create");
+        Assert.That((await membership.GetGroupAsync(SampleIdentities.OperatorsGroup))!.DisplayName, Is.EqualTo("Floor Operators"));
+    }
+
+    [Test]
     public async Task Every_area_but_telemetry_is_visible_to_the_bootstrap_administrator()
     {
         var areas = DirectorySpine.ReadAreas(await SampleTestHost.GetHomeAsync(_sample));

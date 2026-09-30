@@ -257,11 +257,11 @@ public partial class AppPage : IDisposable
         }
 
         _load = load;
-        if (load.Kind == AppPageLoadKind.Loaded && Address.Path.Count == 1)
-        {
-            // The bare /apps/{slug} is the overview; name it, so the address chain ends at
-            // the section being shown.
-            Navigator.NavigateTo(AppPageAddresses.Page(Address.Tenant, key.Slug, AppPageTabs.Overview), replace: true);
-        }
+
+        // The bare /apps/{slug} shows the overview where it is, and is not renamed to
+        // /apps/{slug}/overview. A server-side rename raced the browser: when the load
+        // settled after the browser had already moved on, but before the server had heard
+        // of the move, the replace landed last and took the user back to this app
+        // (issue #4093). Tab already reads the bare address as the overview.
     }
 }

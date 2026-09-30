@@ -6,6 +6,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Design;
 /// <summary>
 /// The Explorer's lifetime gate (issue #4011): nothing under the Explorer UI disposes a
 /// <see cref="CancellationTokenSource"/> by hand, and no component declares one of its own.
+/// Nothing anywhere in the Explorer disposes a <see cref="SemaphoreSlim"/> that a late
+/// continuation can still release (issue #4093).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -25,20 +27,11 @@ public sealed class ComponentLifetimeHygieneTests
 {
     private const string ShellSourceRoot = "src/lattice.explorer/UI";
 
-    // A field, parameter or local declared with the source's type.
-    private static readonly Regex Declared = new(
-        @"\bCancellationTokenSource\??\s+(?<name>@?\w+)\s*(?:=|;|,|\))",
-        RegexOptions.Compiled);
+    private const string ExplorerSourceRoot = "src/lattice.explorer";
 
-    // A source created into a var local, possibly also assigned to a field.
-    private static readonly Regex Created = new(
-        @"\bvar\s+(?<name>\w+)\s*=\s*(?:\w+\s*=\s*)?(?:new\s+CancellationTokenSource\b|CancellationTokenSource\.CreateLinkedTokenSource\b)",
-        RegexOptions.Compiled);
+    private const string TokenSource = "CancellationTokenSource";
 
-    // A source whose disposal is the method's own scope.
-    private static readonly Regex Scoped = new(
-        @"\busing\s+var\s+(?<name>\w+)\s*=\s*(?:new\s+CancellationTokenSource\b|CancellationTokenSource\.CreateLinkedTokenSource\b)",
-        RegexOptions.Compiled);
+    private const string Semaphore = "SemaphoreSlim";
 
     // A component field of the source's type: components use ComponentLifetime.
     private static readonly Regex ComponentField = new(
@@ -50,7 +43,7 @@ public sealed class ComponentLifetimeHygieneTests
     {
         var violations = new List<string>();
         var scanned = 0;
-        foreach (var file in Sources())
+        foreach (var file in Sources(ShellSourceRoot))
         {
             scanned++;
             violations.AddRange(FindDisposals(File.ReadAllText(file)).Select(line => $"{Relative(file)}: {line}"));
@@ -65,11 +58,35 @@ public sealed class ComponentLifetimeHygieneTests
     }
 
     [Test]
+    public void Nothing_in_the_explorer_disposes_a_gate_that_a_late_continuation_can_release()
+    {
+        // Issue #4093: a scoped service disposed its SemaphoreSlim while a sign-in replay still
+        // held it across an await, so the replay's finally { _gate.Release(); } threw
+        // ObjectDisposedException out of a lifecycle method and ended the circuit. A gate that
+        // never allocates its AvailableWaitHandle holds nothing that needs disposing.
+        var violations = new List<string>();
+        var scanned = 0;
+        foreach (var file in Sources(ExplorerSourceRoot))
+        {
+            scanned++;
+            violations.AddRange(FindDisposals(File.ReadAllText(file), Semaphore).Select(line => $"{Relative(file)}: {line}"));
+        }
+
+        Assert.That(scanned, Is.GreaterThan(200), "the scan must reach every Explorer package's sources");
+        Assert.That(violations, Is.Empty,
+            "A SemaphoreSlim a continuation may still Release after its owner is disposed must not be disposed: "
+            + "the late Release throws ObjectDisposedException and, in a circuit, ends it. Leave it to the GC "
+            + "(it holds nothing unless AvailableWaitHandle is read), or scope it with using var inside a method "
+            + "that awaits every holder."
+            + Environment.NewLine + string.Join(Environment.NewLine, violations));
+    }
+
+    [Test]
     public void No_explorer_component_declares_its_own_cancellation_token_source()
     {
         var violations = new List<string>();
         var components = 0;
-        foreach (var file in Sources().Where(IsComponent))
+        foreach (var file in Sources(ShellSourceRoot).Where(IsComponent))
         {
             components++;
             foreach (Match match in ComponentField.Matches(File.ReadAllText(file)))
@@ -106,14 +123,29 @@ public sealed class ComponentLifetimeHygieneTests
             Assert.That(ComponentField.IsMatch("    private readonly CancellationTokenSource _lifetime = new();"), Is.True);
             Assert.That(ComponentField.IsMatch("    private CancellationTokenSource? _load;"), Is.True);
             Assert.That(ComponentField.IsMatch("    private readonly ComponentLifetime _lifetime = new();"), Is.False);
+
+            Assert.That(FindDisposals("private readonly SemaphoreSlim _gate = new(1, 1);\n_gate.Release();\n_gate.Dispose();", Semaphore), Has.Count.EqualTo(1));
+            Assert.That(FindDisposals("private SemaphoreSlim? _gate;\n_gate?.Dispose();", Semaphore), Has.Count.EqualTo(1));
+            Assert.That(FindDisposals("var gate = new SemaphoreSlim(4);\ngate.Dispose();", Semaphore), Has.Count.EqualTo(1));
+            Assert.That(FindDisposals("using var gate = new SemaphoreSlim(4);\nawait Task.WhenAll(reads);", Semaphore), Is.Empty);
+            Assert.That(FindDisposals("private readonly SemaphoreSlim _gate = new(1, 1);\npublic void Dispose() => _disposed = true;", Semaphore), Is.Empty);
+            Assert.That(FindDisposals("private readonly SemaphoreSlim _gate = new(1, 1);\n/// This used to call <c>_gate.Dispose()</c>.\n// _gate.Dispose();", Semaphore), Is.Empty, "a comment is not a disposal");
+            Assert.That(FindDisposals("private readonly SemaphoreSlim _gate = new(1, 1);\n_gate.Dispose();"), Is.Empty, "each scan looks for its own type");
         });
     }
 
-    private static List<string> FindDisposals(string source)
+    private static List<string> FindDisposals(string source, string type = TokenSource)
     {
-        var scoped = Scoped.Matches(source).Select(match => match.Groups["name"].Value).ToHashSet(StringComparer.Ordinal);
-        var names = Declared.Matches(source)
-            .Concat(Created.Matches(source))
+        // A field, parameter or local declared with the type; one created into a var local,
+        // possibly also assigned to a field; and one whose disposal is the method's own scope.
+        var creation = @"(?:new\s+" + type + @"\b|" + type + @"\.CreateLinkedTokenSource\b)";
+        var declared = new Regex(@"\b" + type + @"\??\s+(?<name>@?\w+)\s*(?:=|;|,|\))");
+        var created = new Regex(@"\bvar\s+(?<name>\w+)\s*=\s*(?:\w+\s*=\s*)?" + creation);
+        var scopedDeclaration = new Regex(@"\busing\s+var\s+(?<name>\w+)\s*=\s*" + creation);
+
+        var scoped = scopedDeclaration.Matches(source).Select(match => match.Groups["name"].Value).ToHashSet(StringComparer.Ordinal);
+        var names = declared.Matches(source)
+            .Concat(created.Matches(source))
             .Select(match => match.Groups["name"].Value.TrimStart('@'))
             .Where(name => !scoped.Contains(name))
             .ToHashSet(StringComparer.Ordinal);
@@ -141,6 +173,11 @@ public sealed class ComponentLifetimeHygieneTests
                 @"(?:\b" + Regex.Escape(name) + @"\??\.Dispose(?:Async)?\s*\()|(?:\busing\s*\(\s*" + Regex.Escape(name) + @"\s*\))");
             for (var i = 0; i < lines.Length; i++)
             {
+                if (IsComment(lines[i]))
+                {
+                    continue;
+                }
+
                 if (disposal.IsMatch(lines[i]))
                 {
                     found.Add($"{i + 1}: {lines[i].Trim()}");
@@ -151,9 +188,15 @@ public sealed class ComponentLifetimeHygieneTests
         return found;
     }
 
-    private static IEnumerable<string> Sources()
+    private static bool IsComment(string line)
     {
-        var root = Path.Combine(HygieneRepository.FindRepoRoot(), ShellSourceRoot.Replace('/', Path.DirectorySeparatorChar));
+        var text = line.TrimStart();
+        return text.StartsWith("//", StringComparison.Ordinal) || text.StartsWith('*') || text.StartsWith("/*", StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<string> Sources(string sourceRoot)
+    {
+        var root = Path.Combine(HygieneRepository.FindRepoRoot(), sourceRoot.Replace('/', Path.DirectorySeparatorChar));
         return HygieneRepository.EnumerateFiles(root, "*.cs").Concat(HygieneRepository.EnumerateFiles(root, "*.razor"));
     }
 

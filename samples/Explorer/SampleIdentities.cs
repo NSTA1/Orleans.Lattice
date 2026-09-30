@@ -43,6 +43,12 @@ internal static class SampleIdentities
     /// <summary>The group the task board's <c>editor</c> role is bound to in <see cref="AcmeTenant"/>.</summary>
     public const string AcmeEditorsGroup = "acme-editors";
 
+    /// <summary>
+    /// A group on the static roster that the sample does not create, so Access &gt;
+    /// Groups &gt; New group has an id it accepts.
+    /// </summary>
+    public const string AuditorsGroup = "auditors";
+
     /// <summary>The first seeded tenant; the task board is installed in it at startup.</summary>
     public const string AcmeTenant = "acme";
 

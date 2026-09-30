@@ -34,11 +34,35 @@ internal static class SuggestionFields
     public static IElement Box<TComponent>(IRenderedComponent<TComponent> cut, string label)
         where TComponent : IComponent
     {
-        var labels = cut.FindAll("label").Where(candidate => candidate.TextContent.Trim() == label).ToArray();
-        Assert.That(labels, Has.Length.EqualTo(1), $"expected one control labelled '{label}'");
-        var input = cut.Find("#" + labels[0].GetAttribute("for"));
+        var input = Field(cut, label);
         Assert.That(input.GetAttribute("role"), Is.EqualTo("combobox"), $"'{label}' is a type-ahead picker");
         return input;
+    }
+
+    /// <summary>
+    /// The input of the field labelled <paramref name="label"/> that names a new thing:
+    /// a plain text box, with no list to pick from and no arrow.
+    /// </summary>
+    public static IElement NameBox<TComponent>(IRenderedComponent<TComponent> cut, string label)
+        where TComponent : IComponent
+    {
+        var input = Field(cut, label);
+        Assert.Multiple(() =>
+        {
+            Assert.That(input.HasAttribute("role"), Is.False, $"'{label}' names a new thing, so it is a text box, not a picker");
+            Assert.That(input.HasAttribute("aria-controls"), Is.False, $"'{label}' owns no list");
+            Assert.That(input.Closest(".lt-field")!.QuerySelector(".lt-combobox__chevron"), Is.Null, $"'{label}' draws no arrow");
+        });
+        return input;
+    }
+
+    /// <summary>The input labelled <paramref name="label"/>, whatever kind of field it is.</summary>
+    public static IElement Field<TComponent>(IRenderedComponent<TComponent> cut, string label)
+        where TComponent : IComponent
+    {
+        var labels = cut.FindAll("label").Where(candidate => candidate.TextContent.Trim() == label).ToArray();
+        Assert.That(labels, Has.Length.EqualTo(1), $"expected one control labelled '{label}'");
+        return cut.Find("#" + labels[0].GetAttribute("for"));
     }
 
     /// <summary>Types <paramref name="text"/> into the picker labelled <paramref name="label"/> and waits for what it offers.</summary>
@@ -68,10 +92,10 @@ internal static class SuggestionFields
     /// <summary>The error the field labelled <paramref name="label"/> shows, or <see langword="null"/>.</summary>
     public static string? ErrorOf<TComponent>(IRenderedComponent<TComponent> cut, string label)
         where TComponent : IComponent =>
-        Box(cut, label).Closest(".lt-field")!.QuerySelector(".lt-field__error")?.TextContent.Replace("!", string.Empty, StringComparison.Ordinal).Trim();
+        Field(cut, label).Closest(".lt-field")!.QuerySelector(".lt-field__error")?.TextContent.Replace("!", string.Empty, StringComparison.Ordinal).Trim();
 
     /// <summary>The flag the field labelled <paramref name="label"/> shows, or <see langword="null"/>.</summary>
     public static string? FlagOf<TComponent>(IRenderedComponent<TComponent> cut, string label)
         where TComponent : IComponent =>
-        Box(cut, label).Closest(".lt-field")!.QuerySelector(".lt-combobox__flag")?.TextContent.Trim();
+        Field(cut, label).Closest(".lt-field")!.QuerySelector(".lt-combobox__flag, .lt-name-input__flag")?.TextContent.Trim();
 }

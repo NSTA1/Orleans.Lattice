@@ -90,8 +90,8 @@ else
     @if (_createOpen)
     {
         <form class="lt-tenancy-form" @onsubmit="CreateAsync" novalidate>
-            <LtComboBox Label="Tenant id" Value="@_newId" ValueChanged="@(value => _newId = value)" Error="@_idError"
-                        Source="@Suggestions.Tenants" Mode="LtComboBoxMode.Suggest" RejectExisting="true" Noun="tenant"
+            <LtNameInput @ref="_idBox" Label="Tenant id" Value="@_newId" ValueChanged="@(value => _newId = value)" Error="@_idError"
+                         Existing="@Suggestions.Tenants" Noun="tenant"
                         Hint="Lower-case letters, digits and hyphens. It names the tenant's trees, so it cannot change later." />
             <LtMultiComboBox @ref="_adminsBox" Label="Admin subjects (optional)" Values="@_newAdmins" ValuesChanged="@(values => _newAdmins = values)" Error="@_adminsError"
                              Source="@Suggestions.Principals" Noun="subject"

@@ -73,7 +73,7 @@ public sealed class AccessGroupPageTests : AccessTestContext
 
         cut.WaitUntil(() =>
         {
-            Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.EqualTo("No principal with the id mallory exists in the identity directory."));
+            Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.EqualTo("mallory is not a user in the identity directory (Microsoft Entra ID)."));
             Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.AddMemberAsync)));
         });
     }

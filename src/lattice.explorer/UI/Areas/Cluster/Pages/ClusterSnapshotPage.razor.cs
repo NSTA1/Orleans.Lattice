@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterSnapshotPage : IDisposable
 {
-    private LtComboBox? _destinationBox;
+    private LtNameInput? _destinationBox;
     private static readonly IReadOnlyList<LtSelectOption> Modes =
     [
         new(nameof(TreeSnapshotMode.Online), "Online"),

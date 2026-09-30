@@ -545,6 +545,21 @@
   font-weight: var(--lt-weight-label);
 }
 
+/* LtNameInput: a new thing's name. Its note and flag read as the combobox's do. */
+.lt-name-input__note {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-style: italic;
+}
+
+.lt-name-input__flag {
+  margin: 0;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
 .lt-combobox__chips {
   display: flex;
   flex-wrap: wrap;

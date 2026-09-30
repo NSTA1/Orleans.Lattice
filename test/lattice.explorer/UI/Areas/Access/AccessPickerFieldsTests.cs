@@ -61,12 +61,13 @@ public sealed class AccessPickerFieldsTests : AccessTestContext
     }
 
     [Test]
-    public void A_new_rule_id_already_used_under_the_tree_is_flagged_and_refused()
+    public void A_new_rule_id_already_used_under_the_tree_is_refused_in_a_plain_text_box()
     {
         Services.UseTreeCatalogue("orders");
         Admin.WithRule(Rule("readers", tree: "orders"));
         var cut = RenderEditor();
-        Assert.That(SuggestionFields.Offers(cut, "Rule id", "read"), Is.EqualTo(new[] { "readers" }));
+        SuggestionFields.NameBox(cut, "Rule id").Input("read");
+        Assert.That(cut.FindAll("[role=option]"), Is.Empty, "existing rule ids are not offered for a new one");
 
         AccessRuleEditorTests.Fill(cut, "readers", "ops", "orders");
         cut.Find("[data-lt-operation=\"read\"]").Change(true);

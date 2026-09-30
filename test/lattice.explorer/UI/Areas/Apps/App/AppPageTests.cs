@@ -93,18 +93,22 @@ public sealed partial class AppPageTests : AppPageTestContext
     }
 
     [Test]
-    public void The_bare_app_address_names_the_overview_by_replacing_history()
+    public void The_bare_app_address_shows_the_overview_where_it_is_and_never_navigates()
     {
+        // Issue #4093: the page used to rename the bare address to .../overview with a
+        // server-side replace once its load settled. When the browser had already moved on
+        // but the server had not yet heard, that replace landed last and dragged the user back.
         Workspace.Grant(Workspace());
 
         var cut = RenderAt("apps/crm");
         var navigation = Services.GetRequiredService<BunitNavigationManager>();
 
-        Assert.Multiple(() =>
+        cut.WaitUntil(() =>
         {
-            Assert.That(navigation.Uri, Is.EqualTo(navigation.BaseUri + "apps/crm/overview"));
-            Assert.That(navigation.History.First().Options.ReplaceHistoryEntry, Is.True);
             Assert.That(cut.Find("h1").TextContent, Is.EqualTo("CRM"));
+            Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent.Trim(), Is.EqualTo("Overview"));
+            Assert.That(navigation.Uri, Is.EqualTo(navigation.BaseUri + "apps/crm"));
+            Assert.That(navigation.History.Where(entry => entry.Uri.Contains("overview", StringComparison.Ordinal)), Is.Empty, "the page issued no navigation of its own");
         });
     }
 

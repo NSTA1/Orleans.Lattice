@@ -36,14 +36,32 @@ internal static class AccessPrincipalValidation
         }
 
         var principal = await admin.ResolveDirectoryPrincipalAsync(principalId, cancellationToken).ConfigureAwait(true);
+        var directory = DirectoryName(model);
         if (principal is null)
         {
-            return $"No principal with the id {principalId} exists in the identity directory.";
+            return $"{principalId} is not a {Word(expected)} in the identity directory ({directory}).";
         }
 
         return principal.Kind == expected
             ? null
-            : $"The id {principalId} is a {Word(principal.Kind)} in the identity directory, not a {Word(expected)}.";
+            : $"{principalId} is a {Word(principal.Kind)} in the identity directory ({directory}), not a {Word(expected)}.";
+    }
+
+    /// <summary>
+    /// The identity directory's name as a sentence shows it: <c>static roster</c>,
+    /// <c>Microsoft Entra ID</c>, or the provider's own id for any other directory.
+    /// </summary>
+    /// <param name="model">The access model.</param>
+    public static string DirectoryName(AccessModelDescriptor model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        return model.DirectoryProviderId switch
+        {
+            "static" => "static roster",
+            "entra" => "Microsoft Entra ID",
+            { Length: > 0 } provider => provider,
+            _ => "unnamed",
+        };
     }
 
     private static string Word(DirectoryPrincipalKind kind) => kind == DirectoryPrincipalKind.Group ? "group" : "user";

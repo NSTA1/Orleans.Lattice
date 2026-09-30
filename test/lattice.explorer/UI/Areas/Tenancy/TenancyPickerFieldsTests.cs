@@ -19,16 +19,17 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 public sealed class TenancyPickerFieldsTests : TenancyTestContext
 {
     [Test]
-    public void A_new_tenant_id_that_is_taken_is_flagged_as_it_is_typed()
+    public void A_new_tenant_id_that_is_taken_is_refused_as_it_is_typed_in_a_plain_text_box()
     {
         Cluster.WithTenant("globex");
         UseTenancyAs(isOperator: true);
         var cut = RenderAt<TenancyDirectoryPage>("tenancy?new=true");
         cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-tenancy-form"), Has.Count.EqualTo(1)));
 
-        Assert.That(SuggestionFields.Offers(cut, "Tenant id", "glob"), Is.EqualTo(new[] { "globex" }));
+        SuggestionFields.NameBox(cut, "Tenant id").Input("glob");
+        Assert.That(cut.FindAll("form.lt-tenancy-form [role=option]"), Is.Empty, "existing tenants are not offered for a new one");
 
-        SuggestionFields.Box(cut, "Tenant id").Input("globex");
+        SuggestionFields.NameBox(cut, "Tenant id").Input("globex");
         cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Tenant id"), Is.EqualTo("A tenant named globex already exists.")));
     }
 

@@ -15,7 +15,11 @@
 
 @if (Scope is { } tenant)
 {
-    <p class="lt-access-caveat" data-lt-cluster-wide-groups="true">Groups belong to the whole cluster, not to tenant @tenant, so none is listed here. <a href="@ClusterWideHref">See the cluster's groups</a>.</p>
+    <p class="lt-access-caveat" data-lt-cluster-wide-groups="true">Groups belong to the whole cluster, not to one tenant, so tenant @tenant's Access pages do not list them. The cluster's groups, and creating a group, are on <a href="@ClusterWideHref">the cluster's Groups page</a>.</p>
+    @if (CreateRequested && MembershipEditable)
+    {
+        <p class="lt-access-caveat" role="note" data-lt-create-group-elsewhere="true">A group is created for the whole cluster. <a href="@ClusterWideCreateHref">Create a group on the cluster's Groups page</a>.</p>
+    }
 }
 else
 {
@@ -75,15 +79,15 @@ else
     @if (_createOpen)
     {
         <form class="lt-access-form" @onsubmit="CreateAsync" novalidate>
-            <AccessSubjectPicker Label="Group id"
-                                 Kind="LatticeSubjectSelectorKind.Group"
-                                 AllowKindChange="false"
-                                 Id="@_newId"
-                                 IdChanged="@(value => _newId = value)"
-                                 Error="@_idError"
-                                 DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
-                                 DirectoryExplanation="@_model?.DirectoryExplanation"
-                                 OnPrincipalSelected="OnPrincipalSelected" />
+            <LtNameInput @ref="_idBox"
+                         Label="Group id"
+                         Value="@_newId"
+                         ValueChanged="@(value => _newId = value)"
+                         Existing="@_existingGroups"
+                         Noun="group"
+                         Validate="@ValidateInDirectoryAsync"
+                         Error="@_idError"
+                         Hint="@IdHint" />
             <LtTextInput Label="Display name (optional)" Value="@_newName" ValueChanged="@(value => _newName = value)" />
             @if (_formError is not null)
             {

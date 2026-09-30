@@ -32,4 +32,7 @@ internal static class WorldIdentities
 
     /// <summary>A group bound to no task-board role.</summary>
     public const string VisitorsGroup = "visitors";
+
+    /// <summary>A group on the roster the world does not create, for the New group journey.</summary>
+    public const string AuditorsGroup = "auditors";
 }
