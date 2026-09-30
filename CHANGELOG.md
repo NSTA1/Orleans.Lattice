@@ -92,7 +92,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Tenant residency reads as served, and a change is previewed.** Each region says whether it serves the tenant; no residency means every region. A change is previewed per region, and one leaving the tenant served nowhere turns Apply off, passing only on an explicit, confirmed path. ([#4078](https://github.com/NSTA1/Orleans.Lattice/issues/4078)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A late app-page load no longer pulls you back.** The bare `/apps/{slug}` shows the overview in place, and a sign-in or token renewal still running when the circuit ends no longer ends it. ([#4093](https://github.com/NSTA1/Orleans.Lattice/issues/4093)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A tenant-scoped address lists only that tenant's items.** `/t/{tenant}/access` and `/t/{tenant}/cluster` join the other areas; counts, badges, completions and pickers follow. Rule and backup listings take `ActiveTenantOnly`, narrowed to the caller's validated tenant. ([#4025](https://github.com/NSTA1/Orleans.Lattice/issues/4025)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Auth.Grpc`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Explorer.UI`)
 

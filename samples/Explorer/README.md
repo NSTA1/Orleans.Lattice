@@ -142,6 +142,14 @@ explains the install that is already in `acme`.
 between two tenants but never bypasses this policy, so that rule is what lets
 globex actually read the tree acme shares with it.
 
+**Groups** lists the seeded groups (`operators`, `task-editors`, `task-viewers`,
+`visitors` and `acme-editors`). Each is a real group record with its members, not
+only a membership edge, so the list shows them and **New group** knows their ids
+are taken: typing `operators` there says "A group named operators already
+exists." The roster group `auditors` is left uncreated, so **New group** with the
+id `auditors` creates it; an id the roster does not list, such as `nobody`, is
+refused when you leave the field.
+
 ### Schema
 
 `/t/acme/schema`. Schema enforcement and per-value versioning are on, with one
@@ -303,14 +311,16 @@ dotnet run --project samples/Explorer/Explorer.csproj
 The Access area's **subject picker** (a type-ahead field that searches the
 directory for users and groups as you type) and its **validated forms** run against
 an identity directory. When a directory is configured, entering a principal id that the
-directory does not know **fails closed** - the form refuses it ("No principal with the id ... exists in
-the identity directory.") instead of creating an unvalidated free-text id.
+directory does not know **fails closed** - the form refuses it, naming the directory
+("... is not a group in the identity directory (static roster).") - instead of creating
+an unvalidated free-text id.
 
 ### Static directory (default)
 
 With no configuration, an in-memory roster backs the directory: the users in
 [Sample identities](#sample-identities) and the groups `operators`,
-`task-editors`, `task-viewers`, `visitors` and `acme-editors`. In a create form
+`task-editors`, `task-viewers`, `visitors`, `acme-editors` and `auditors` (the one
+group the sample does not create). In a create form
 or a rule's subject picker:
 
 - type `al` -> the picker lists `alice`;

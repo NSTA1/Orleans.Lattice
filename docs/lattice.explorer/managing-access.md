@@ -66,7 +66,9 @@ The Rule details page shows effect, subject, scope, operations, condition, and o
 
 The Groups page lists groups 200 at a time and searches by group id or display name. **New group** opens a create dialog.
 
-The group id field uses the same subject picker used elsewhere in Access. When an identity directory is available, the group id must resolve as a group before the create is sent. Choosing a directory match fills the display name. When no directory is available, the field says so and accepts the typed id as it is.
+The group id is a plain text box for the new group's name, not a picker (see [Pickers](navigation-model.md#pickers)). As you type, it says "A group named {id} already exists." when the cluster already defines that group. When you leave the field, and again when you submit, an id the identity directory does not know as a group is refused with the directory named, for example "{id} is not a group in the identity directory (static roster)."; the hint states the directory's own explanation of a valid id. With no directory configured, the hint says the id is used as typed and must not name an existing group. A refused create keeps the dialog open with the id, and says why: "The group was not created: ...".
+
+A tenant-rooted groups page (`/t/{tenant}/access/groups`) lists no groups, because groups belong to the whole cluster, not to one tenant. It links to the cluster's Groups page, `/access/groups`, where groups are listed and created; asking for **New group** there with `?new=true` points you to it.
 
 The Group details page shows the display name, direct members, parent groups, and rules that apply to the group. Operators can rename the group, add a user or nested group as a direct member, remove a direct member, explain access for the group, or delete the group.
 
@@ -86,7 +88,7 @@ Every user or group field is a type-ahead picker (see [Pickers](navigation-model
 
 With a directory, only a listed principal is accepted, so an unknown id is refused inline before anything is sent, and the directory's own explanation of what a valid id looks like is shown as the hint. The same directory seam validates group creation and member additions when validation is required: unknown ids and wrong-kind ids fail before the membership write. With no configured directory, the picker says "No identity directory is configured, so the id is used as typed and is not validated." and accepts the typed id.
 
-Other Access fields are pickers too. The Tree field of a rule or an explanation offers the trees you can reach, and a new rule's id is checked as you type against the rule ids already in use under its tree. That check reads one page of rules, so it is a guide rather than a guarantee: the cluster still refuses a real collision when the rule is saved.
+Other Access fields that choose an existing thing are pickers too: the Tree field of a rule or an explanation offers the trees you can reach. A new rule's id is a plain name box, not a picker: it offers no existing ids, and refuses an id already in use under the rule's tree ("A rule with this id already governs this tree."). That check reads one page of rules, so it is a guide rather than a guarantee: the cluster still refuses a real collision when the rule is saved.
 
 ## Access posture banner
 

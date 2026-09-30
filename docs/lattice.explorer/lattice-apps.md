@@ -19,7 +19,7 @@ and re-consent it.
 | `/apps` | Your apps, plus the Catalogue tab for `AppInstall` holders. |
 | `/apps/catalogue?source={key\|all}&filter={all\|installed\|available\|updates}&q=` | The catalogue. The query string is the state, so every view can be linked. |
 | `/apps/catalogue/{source}/{slug}[@{version}]` | Review before install, or manage an install: consent, lifecycle, upgrade and re-consent. Without a version, the source's newest is reviewed. |
-| `/apps/{slug}/{tab}` | The app's own pages, built from its manifest: `overview`, `trees`, `roles`, `tools`, `subscriptions`, `replication`, and `consent` (`AppInstall` only). |
+| `/apps/{slug}/{tab}` | The app's own pages, built from its manifest: `overview`, `trees`, `roles`, `tools`, `subscriptions`, `replication`, and `consent` (`AppInstall` only). The bare `/apps/{slug}` shows the overview in place. |
 | `/apps/{slug}/open[/{path}]` | The app's UI, when it ships one and the caller holds a role. Up to four in-app path segments follow `open`; a deeper in-app path travels as `?path=`, and its query as `?query=`. |
 
 With tenancy on, each address is rooted at `/t/{tenant}`.
