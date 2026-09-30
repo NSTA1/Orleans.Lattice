@@ -72,7 +72,7 @@ public sealed class TenancyModelTests
     }
 
     [Test]
-    [TestCase(TenantRegionLifecycleStatus.None, "Not resident", LtStateRole.Disabled, false)]
+    [TestCase(TenantRegionLifecycleStatus.None, "Not in residency", LtStateRole.Disabled, false)]
     [TestCase(TenantRegionLifecycleStatus.Provisioning, "Provisioning", LtStateRole.Lagging, true)]
     [TestCase(TenantRegionLifecycleStatus.Backfilling, "Backfilling", LtStateRole.Lagging, true)]
     [TestCase(TenantRegionLifecycleStatus.Online, "Online", LtStateRole.Healthy, true)]

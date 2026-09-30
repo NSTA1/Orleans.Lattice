@@ -181,7 +181,7 @@ internal sealed class TenancyArea : IExplorerArea
         {
             var own = $"You administer tenant {standing.Workspace}.";
             return await _catalog.HasResidencySetAsync(standing.Workspace, cancellationToken).ConfigureAwait(true) == false
-                ? own + " It has no residency set."
+                ? own + " It has no residency set, so it is served in every region."
                 : own;
         }
 
@@ -197,7 +197,7 @@ internal sealed class TenancyArea : IExplorerArea
         var survey = await _catalog.GetResidencySurveyAsync(cancellationToken).ConfigureAwait(true);
         if (survey.Unset > 0)
         {
-            parts.Add($"{(survey.IsPartial ? "at least " : string.Empty)}{TenancyFormat.Count(survey.Unset)} with no residency set");
+            parts.Add($"{(survey.IsPartial ? "at least " : string.Empty)}{TenancyFormat.Count(survey.Unset)} with no residency set (served in every region)");
         }
 
         return string.Join(", ", parts) + ".";

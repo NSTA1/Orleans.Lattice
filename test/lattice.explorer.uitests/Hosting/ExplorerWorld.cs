@@ -198,6 +198,49 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// The region this world serves: its cluster id. A tenant with residency is
+    /// served here only while its status in this region is Online.
+    /// </summary>
+    public string ServingRegion =>
+        Head.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Orleans.Configuration.ClusterOptions>>().Value.ClusterId;
+
+    /// <summary>
+    /// Makes <paramref name="tenant"/> resident and Online in <paramref name="regions"/>,
+    /// the way the Explorer sample seeds acme in its two regions: as the operator it
+    /// allows them and sets them as the residency, which starts each Provisioning,
+    /// then promotes each to Online one step at a time, as an operator of the
+    /// hosting deployment does. Repeatable: a region drained by an earlier run is
+    /// added again and promoted.
+    /// </summary>
+    /// <param name="tenant">One of <see cref="Tenants"/>.</param>
+    /// <param name="regions">The regions; include <see cref="ServingRegion"/> to keep the tenant served in this world.</param>
+    public async Task MakeResidentAndOnlineAsync(string tenant, params string[] regions)
+    {
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(WorldIdentities.Admin + ":" + WorldIdentities.Password));
+        using (LatticeCredentialContext.Use(token, scheme: TrustedUserAuthenticator.Scheme))
+        {
+            var admin = Head.Services.GetRequiredService<ILatticeTenantRegionAdmin>();
+            await admin.AuthorizeAllowedRegionsAsync(tenant, regions);
+            await admin.SetResidencyAsync(tenant, regions);
+        }
+
+        var registry = Head.Services.GetRequiredService<ITenantRegistry>();
+        var id = TenantId.Parse(tenant);
+        using (LatticeSystemOrigin.Enter())
+        {
+            foreach (var region in regions)
+            {
+                while (await registry.GetAsync(id) is { } record
+                    && record.GetRegionStatus(region) is TenantRegionStatus.Provisioning or TenantRegionStatus.Backfilling
+                    && record.TryPromoteRegionStatus(region, ServingRegion, out _))
+                {
+                    await registry.PutAsync(record);
+                }
+            }
+        }
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {

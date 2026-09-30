@@ -29,7 +29,7 @@ public sealed partial class TenancyDirectoryPageTests
         {
             var link = cut.Find("tbody tr td a[href='tenancy/acme/regions']");
             Assert.That(link.TextContent.Trim(), Is.EqualTo(TenancyFormat.NoResidency));
-            Assert.That(link.GetAttribute("aria-label"), Is.EqualTo("Not set: no residency is set; open the regions of tenant acme"),
+            Assert.That(link.GetAttribute("aria-label"), Is.EqualTo("No residency set, so it is served in every region; open the regions of tenant acme"),
                 "the accessible name starts with the visible text (WCAG 2.5.3, axe label-content-name-mismatch)");
         });
     }

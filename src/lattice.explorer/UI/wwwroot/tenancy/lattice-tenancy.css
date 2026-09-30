@@ -201,6 +201,36 @@
   font-weight: var(--lt-weight-label);
 }
 
+.lt-tenancy-unset {
+  color: var(--lt-ink);
+}
+
+.lt-tenancy-preview {
+  max-width: 48rem;
+  margin: var(--lt-space-4) 0 0;
+}
+
+.lt-tenancy-preview__title {
+  margin: 0 0 var(--lt-space-2);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-tenancy-preview__list {
+  margin: 0 0 var(--lt-space-3);
+  padding-left: var(--lt-space-5);
+  color: var(--lt-ink-2);
+}
+
+.lt-tenancy-served-nowhere > p {
+  margin: 0 0 var(--lt-space-2);
+}
+
+.lt-tenancy-served-nowhere > p:last-child {
+  margin-bottom: 0;
+}
+
 .lt-tenancy-actions {
   display: flex;
   flex-wrap: wrap;

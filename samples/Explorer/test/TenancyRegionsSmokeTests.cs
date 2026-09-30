@@ -8,9 +8,11 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 /// <summary>
 /// The operator sets acme's allowed regions and residency from the Explorer's
 /// Regions section, rendered over a real console circuit of the two-region
-/// sample, and the cluster holds what the UI said. It runs its own sample,
-/// because setting acme's residency stops acme being served until a region is
-/// promoted to Online, which the shared estate's other checks must not see.
+/// sample, and the cluster holds what the UI said: acme starts Online in both
+/// regions, and narrowing its residency to east keeps it served there with no
+/// stop-serving confirmation (issue #4078). It runs its own sample, because it
+/// drains west from acme's residency, which the shared estate's other checks
+/// must not see.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -69,30 +71,51 @@ public sealed class TenancyRegionsSmokeTests
         Wait(cut, () => cut.FindAll("button").Any(button => button.TextContent.Trim() == "Save allowed regions" && !button.HasAttribute("disabled")));
         Assert.That(cut.Find(".lt-dl__value").TextContent.Trim(), Is.EqualTo($"{East}, {West}"));
 
-        // Make acme resident in east: with no Online region yet, the consequence is confirmed.
-        var resident = cut.FindAll("label").Single(label => label.TextContent.Trim() == $"Resident in {East}").GetAttribute("for");
-        cut.Find("#" + resident).Change(true);
-        Wait(cut, () => cut.Find("#" + resident).HasAttribute("checked"));
+        // acme starts resident and Online in both regions, so both serve it.
+        Wait(cut, () => cut.FindAll("tbody tr").Count == 2 && cut.FindAll("tbody tr").All(row => row.Children[2].TextContent.Trim() == "Served"));
+
+        // Make acme resident in east alone: east stays Online, so acme stays served and the change
+        // only drains west - no stop-serving dialog, and Apply is the primary button (issue #4078).
+        var resident = cut.FindAll("label").Single(label => label.TextContent.Trim() == $"Resident in {West}").GetAttribute("for");
+        cut.Find("#" + resident).Change(false);
+        Wait(cut, () => !cut.Find("#" + resident).HasAttribute("checked"));
+        Wait(cut, () => cut.FindAll(".lt-tenancy-preview__list li").Select(item => item.TextContent.Trim()).SequenceEqual(new[]
+        {
+            $"{East} stays in the residency, and is still served there.",
+            $"{West} starts draining, and stops being served there.",
+        }));
+        Assert.That(cut.FindAll(".lt-tenancy-served-nowhere"), Is.Empty);
         Button(cut, "Apply residency").Click();
         Wait(cut, () => cut.FindAll("[role=alertdialog] .lt-dialog__title").Count == 1);
-        Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo($"Stop serving tenant {Acme}?"));
-        Button(cut, "Apply and stop serving").Click();
+        Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo("Remove regions from the residency?"));
+        Button(cut, "Drain and apply").Click();
 
-        toasts.WaitForState(() => Toasts(toasts).Any(toast => toast.StartsWith($"Tenant {Acme} is adding {East}.", StringComparison.Ordinal)), Budget);
-        Wait(cut, () => cut.FindAll(".lt-tenancy-warning").Count == 1);
+        toasts.WaitForState(() => Toasts(toasts).Contains($"Tenant {Acme} is draining {West}."), Budget);
+        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West && row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim() == "Draining"));
         var eastRow = cut.FindAll("tbody tr").Single(row => row.Children[0].TextContent.Trim() == East);
-        Assert.That(eastRow.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim(), Is.EqualTo("Provisioning"));
-        Assert.That(eastRow.Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim(), Is.EqualTo("Waiting for a platform operator to promote it; this tenant is not served here until it is Online."));
-
-        using var _ = LatticeCredentialContext.Use(
-            SampleSeeder.BasicToken(SampleIdentities.Administrator),
-            scheme: DemoBasicAuthenticator.Scheme);
-        var report = await _sample.East.Services.GetRequiredService<ILatticeTenantRegionAdmin>().GetTenantRegionStatusAsync(Acme);
         Assert.Multiple(() =>
         {
-            Assert.That(report.Regions.Where(region => region.IsAllowed).Select(region => region.RegionId), Is.EqualTo(new[] { East, West }));
-            Assert.That(report.Regions.Single(region => region.RegionId == East).Status, Is.EqualTo(TenantRegionLifecycleStatus.Provisioning));
+            Assert.That(eastRow.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim(), Is.EqualTo("Online"));
+            Assert.That(eastRow.Children[2].TextContent.Trim(), Is.EqualTo("Served"));
+            Assert.That(cut.FindAll(".lt-tenancy-warning"), Is.Empty, "acme is not said to be served nowhere");
+            Assert.That(Toasts(toasts), Has.None.Contains("not served anywhere"));
         });
+
+        using (LatticeCredentialContext.Use(SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme))
+        {
+            var report = await _sample.East.Services.GetRequiredService<ILatticeTenantRegionAdmin>().GetTenantRegionStatusAsync(Acme);
+            Assert.Multiple(() =>
+            {
+                Assert.That(report.Regions.Where(region => region.IsAllowed).Select(region => region.RegionId), Is.EqualTo(new[] { East, West }));
+                Assert.That(report.Regions.Single(region => region.RegionId == East).Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
+                Assert.That(report.Regions.Single(region => region.RegionId == West).Status, Is.EqualTo(TenantRegionLifecycleStatus.Draining));
+            });
+        }
+
+        // And east still serves acme: its admin reads acme's orders there.
+        await using var acme = await ConsoleCircuit.OpenAsync(_sample, SampleIdentities.AcmeAdmin, Acme);
+        var read = await acme.ReadAsync(SampleSeeder.OrdersTree(Acme), "order-1001");
+        Assert.That(read.Status, Is.EqualTo(Orleans.Lattice.Api.State.StateQueryStatus.Found), "acme is still served in east");
     }
 
     private static string[] Chips(IRenderedComponent<TenancyRegions> cut) =>
