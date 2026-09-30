@@ -75,6 +75,14 @@ internal sealed record ClusterOperationProgress(string Label, string Phase, long
     /// <summary>A reshard's progress, or <see langword="null"/> when no reshard is running.</summary>
     /// <param name="status">The reshard status.</param>
     /// <returns>The progress.</returns>
+    /// <remarks>
+    /// A reshard grows or shrinks, so progress is the distance the physical shard
+    /// count has moved from where it started toward its target, in either
+    /// direction, plus one final unit for the step that completes it. The count
+    /// reaching the target is not completion: a shrink goes on releasing the
+    /// retired shards' storage, and only <see cref="TreeReshardStatus.InProgress"/>
+    /// turning false ends it, so a running reshard never reads as whole.
+    /// </remarks>
     public static ClusterOperationProgress? Of(TreeReshardStatus status)
     {
         ArgumentNullException.ThrowIfNull(status);
@@ -83,20 +91,42 @@ internal sealed record ClusterOperationProgress(string Label, string Phase, long
             return null;
         }
 
-        const string Phase = "Splitting shards";
+        const string Label = "Reshard progress";
         var current = status.CurrentPhysicalShardCount;
         if ((status.TargetShardCount ?? status.RequestedShardCount) is not { } target || target <= 0)
         {
-            return new ClusterOperationProgress("Reshard progress", Phase, 0, null, $"{ClusterFormat.Plural(current, "physical shard")} so far.");
+            return new ClusterOperationProgress(Label, "Resharding", 0, null, $"{ClusterFormat.Plural(current, "physical shard")} so far.");
         }
 
-        var detail = $"{ClusterFormat.Count(current)} of {ClusterFormat.Plural(target, "physical shard")}.";
-        if (status.StartPhysicalShardCount is not { } start || start >= target)
+        var start = status.StartPhysicalShardCount is { } recorded && recorded != target ? recorded : (int?)null;
+
+        // Without a recorded start the direction is read from where the count is
+        // now; at the target it cannot be told, and the reshard is finishing.
+        var direction = Math.Sign(target - (start ?? current));
+        var reached = direction == 0 || (current - target) * direction >= 0;
+        var phase = (reached, direction) switch
         {
-            return new ClusterOperationProgress("Reshard progress", Phase, 0, null, detail);
+            (true, < 0) => "Releasing retired shards",
+            (true, _) => "Finishing",
+            (false, < 0) => "Folding shards together",
+            _ => "Splitting shards",
+        };
+        var detail = (reached, direction) switch
+        {
+            (true, < 0) => $"{ClusterFormat.Count(current)} of {ClusterFormat.Plural(target, "physical shard")}. The reshard completes once the retired shards' storage is released.",
+            (true, _) => $"{ClusterFormat.Count(current)} of {ClusterFormat.Plural(target, "physical shard")}. The reshard completes once its last step finishes.",
+            (false, < 0) => $"{ClusterFormat.Plural(current, "physical shard")} now, down to {ClusterFormat.Count(target)}.",
+            _ => $"{ClusterFormat.Count(current)} of {ClusterFormat.Plural(target, "physical shard")}.",
+        };
+
+        if (start is not { } from)
+        {
+            return new ClusterOperationProgress(Label, phase, 0, null, detail);
         }
 
-        return new ClusterOperationProgress("Reshard progress", Phase, Math.Clamp(current - start, 0, target - start), target - start, detail);
+        var moves = Math.Abs(target - from);
+        var moved = Math.Clamp((current - from) * direction, 0, moves);
+        return new ClusterOperationProgress(Label, phase, moved, moves + 1, detail);
     }
 
     /// <summary>A purge's progress, or <see langword="null"/> when no purge is running or has finished.</summary>

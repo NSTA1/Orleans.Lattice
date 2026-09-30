@@ -1,6 +1,6 @@
 <PageTitle>Reshard @TreeId - Cluster - Orleans.Lattice Explorer</PageTitle>
 
-<ClusterTreeHeader TreeId="@TreeId" Heading="Reshard">Grow the tree to more physical shards, online: reads and writes continue throughout. Resharding only grows.</ClusterTreeHeader>
+<ClusterTreeHeader TreeId="@TreeId" Heading="Reshard">Change how many physical shards the tree is split across, online: reads and writes continue throughout. A larger count splits shards; a smaller one folds adjacent shards together.</ClusterTreeHeader>
 
 @if (_status.IsLoading)
 {
@@ -38,11 +38,20 @@ else
     }
     else if (!status.InProgress)
     {
-        @if (_reviewing is { } target)
+        @if (_reviewing is { } plan)
         {
             <section class="lt-cluster-section lt-cluster-review" aria-labelledby="lt-cluster-reshard-review">
                 <h2 class="lt-cluster-heading" id="lt-cluster-reshard-review">Review</h2>
-                <p>Grow <span class="lt-shell-mono">@TreeId</span> from @ClusterFormat.Plural(status.CurrentPhysicalShardCount, "physical shard") to @ClusterFormat.Plural(target, "physical shard"). The largest shards split one at a time and routing swaps per split. It cannot be reversed: resharding only grows.</p>
+                @if (plan.Shrinks)
+                {
+                    <p>Shrink <span class="lt-shell-mono">@TreeId</span> from @ClusterFormat.Plural(plan.From, "physical shard") to @ClusterFormat.Plural(plan.Target, "physical shard"). Adjacent shards fold together a few at a time, routing swaps per fold, and each retired shard's storage is released before the reshard completes.</p>
+                    <p>Fewer shards lower the tree's write and point-read throughput ceiling, and a hot key range saturates sooner. In return, scans, counts, snapshots and resizes fan out to fewer shards, and fewer activations stay resident.</p>
+                }
+                else
+                {
+                    <p>Grow <span class="lt-shell-mono">@TreeId</span> from @ClusterFormat.Plural(plan.From, "physical shard") to @ClusterFormat.Plural(plan.Target, "physical shard"). The largest shards split a few at a time and routing swaps per split.</p>
+                }
+                <p class="lt-cluster-note">A reshard runs to its target once started. To go back, reshard again to the previous count.</p>
                 <div class="lt-cluster-form__actions">
                     <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _reviewing = null">Back</LtButton>
                     <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = true" Disabled="@_busy">Reshard...</LtButton>
@@ -52,7 +61,7 @@ else
         else
         {
             <form class="lt-cluster-form" @onsubmit="() => Review(status)" aria-label="Stage a reshard">
-                <LtTextInput Label="Target physical shards" Mono="true" @bind-Value="_target" Error="@_error" Hint="@($"More than {status.CurrentPhysicalShardCount}, at most {MaximumShards}.")" inputmode="numeric" />
+                <LtTextInput Label="Target physical shards" Mono="true" @bind-Value="_target" Error="@_error" Hint="@Hint(status)" inputmode="numeric" />
                 <div class="lt-cluster-form__actions">
                     <LtButton Type="LtButtonType.Submit">Review</LtButton>
                 </div>
@@ -63,6 +72,13 @@ else
     <LtConfirmDestructive @bind-Open="_confirm"
                           Title="Reshard tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Reshard"
                           OnConfirm="StartAsync">
-        <p>Grows the tree to @(_reviewing ?? 0) physical shards. The migration survives silo restarts and cannot be undone.</p>
+        @if (_reviewing is { Shrinks: true } shrink)
+        {
+            <p>Shrinks the tree to @ClusterFormat.Plural(shrink.Target, "physical shard"), lowering its write throughput ceiling. The migration survives silo restarts and runs to its target once started.</p>
+        }
+        else
+        {
+            <p>Grows the tree to @ClusterFormat.Plural(_reviewing?.Target ?? 0, "physical shard"). The migration survives silo restarts and runs to its target once started.</p>
+        }
     </LtConfirmDestructive>
 }
