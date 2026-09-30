@@ -171,7 +171,53 @@ internal static class AggregationRowCodec
         return buffer;
     }
 
-    /// <summary>Decodes a membership row produced by <see cref="EncodeMembership"/>.</summary>
+    /// <summary>
+    /// Decodes only the fields of a membership row that the retraction path
+    /// consumes - the group the source key last belonged to and the numeric it
+    /// last contributed - stepping over the member string rather than
+    /// transcoding it.
+    /// <para>
+    /// Every contribute and every retract reads the source key's prior
+    /// membership row here to retract it, and each of those readers uses the row
+    /// for exactly two things: to find the group shard to decrement
+    /// (<c>GroupKey</c>) and to subtract the value it contributed
+    /// (<c>Numeric</c>). No caller reads the member. On a set-union view - the
+    /// one kind whose membership rows carry a member at all - decoding it
+    /// allocated a fresh string per membership read that was dropped
+    /// unexamined.
+    /// </para>
+    /// <para>
+    /// The bytes walked, and the order and strictness of the validation, are
+    /// identical to <see cref="DecodeMembership"/>: the member's length prefix
+    /// is still read and still bounded against the row, so a truncated or
+    /// corrupt row raises <see cref="InvalidDataException"/> at the same byte
+    /// whether or not the caller wanted the string.
+    /// </para>
+    /// </summary>
+    internal static MembershipHead DecodeMembershipHead(byte[] bytes)
+    {
+        var reader = new RowReader(bytes);
+        var groupKey = reader.ReadString();
+        var hasMember = reader.ReadBool();
+        var numeric = reader.ReadDouble();
+        if (hasMember)
+        {
+            reader.SkipString();
+        }
+
+        return new MembershipHead(groupKey, numeric);
+    }
+
+    /// <summary>
+    /// Decodes a membership row produced by <see cref="EncodeMembership"/>.
+    /// <para>
+    /// The applier reads membership rows through
+    /// <see cref="DecodeMembershipHead"/>, which skips the member no caller
+    /// reads. This full decode is retained as the round-trip inverse of
+    /// <see cref="EncodeMembership"/> and as the oracle the head read's parity
+    /// tests compare against; do not delete it as unused.
+    /// </para>
+    /// </summary>
     internal static MembershipRow DecodeMembership(byte[] bytes)
     {
         // Read directly from the row span via RowReader instead of a per-call
@@ -206,6 +252,16 @@ internal static class AggregationRowCodec
         var sum = System.Buffers.Binary.BinaryPrimitives.ReadDoubleBigEndian(bytes.AsSpan(sizeof(long)));
         return new AccumulatorRow(count, sum);
     }
+
+    /// <summary>
+    /// A zero-entry inverse / fold-inverse row: the four-byte little-endian
+    /// entry count and nothing else. A splice against an absent or
+    /// empty-sentinel shard starts here, so the "first entry in a new shard"
+    /// case goes through exactly the same encode as every other mutation
+    /// instead of needing a second, differently-tested path. Compiles to a
+    /// span over static data, so it costs no allocation.
+    /// </summary>
+    internal static ReadOnlySpan<byte> EmptyEntryRow => [0, 0, 0, 0];
 
     /// <summary>Encodes an inverse-contribution row (a source-key to contribution map).</summary>
     internal static byte[] EncodeInverse(IReadOnlyDictionary<string, MemberEntry> entries)
@@ -270,6 +326,14 @@ internal static class AggregationRowCodec
     /// <param name="Member">The member the source key last contributed (set-union), or <see langword="null"/>.</param>
     internal readonly record struct MembershipRow(string GroupKey, double Numeric, string? Member);
 
+    /// <summary>
+    /// The subset of a membership row the retraction path actually consumes.
+    /// See <see cref="DecodeMembershipHead"/> for why the member is absent.
+    /// </summary>
+    /// <param name="GroupKey">The group the source key last belonged to.</param>
+    /// <param name="Numeric">The numeric the source key last contributed (sum / min / max).</param>
+    internal readonly record struct MembershipHead(string GroupKey, double Numeric);
+
     /// <summary>A group shard's running count and sum.</summary>
     /// <param name="Count">The number of live source keys in the shard.</param>
     /// <param name="Sum">The running sum of the shard's numeric contributions.</param>
@@ -279,6 +343,159 @@ internal static class AggregationRowCodec
     /// <param name="Numeric">The numeric contributed (min / max).</param>
     /// <param name="Member">The member contributed (set-union), or <see langword="null"/>.</param>
     internal readonly record struct MemberEntry(double Numeric, string? Member);
+
+    /// <summary>
+    /// Rewrites an encoded inverse row so that <paramref name="sourceKey"/>'s
+    /// entry becomes <paramref name="add"/> - or disappears when
+    /// <paramref name="add"/> is <see langword="null"/> - copying every other
+    /// entry through as raw bytes. Returns <see langword="null"/> when no entry
+    /// would survive, which the caller turns into a delete.
+    /// <para>
+    /// This is the read-modify-write counterpart of <see cref="InverseRowScan"/>.
+    /// A min / max / set-union contribution mutates exactly one entry of one
+    /// shard row, but it did so by decoding the whole row into a
+    /// <see cref="Dictionary{TKey,TValue}"/> - a fresh source-key string and a
+    /// hash insert for every entry in the shard - assigning or removing one key,
+    /// and then re-encoding every entry, transcoding each of those same source
+    /// keys back to UTF-8. Both halves are proportional to the shard's size for a
+    /// change that is constant. The splice walks the encoded bytes twice (once to
+    /// size the result and once to fill it), transcodes only the key being
+    /// spliced, and copies the untouched entries verbatim, so nothing but the
+    /// changed entry is ever materialised.
+    /// </para>
+    /// <para>
+    /// <b>Equivalence.</b> For a row this codec produced - which cannot carry a
+    /// duplicate key, having been encoded from a dictionary - the output is
+    /// byte-for-byte what decode, mutate, re-encode produces, including entry
+    /// order: <see cref="Dictionary{TKey,TValue}"/> enumerates in entry-index
+    /// order, so assigning an existing key keeps its slot (the splice replaces in
+    /// place), assigning an absent key appends (the splice appends), and removing
+    /// leaves the rest in order (the splice elides the run). A hostile row
+    /// carrying the spliced key twice is handled the way the dictionary handles
+    /// it - the first occurrence is replaced and later ones elided, and a removal
+    /// elides them all - so the two agree there too. A hostile row carrying some
+    /// OTHER key twice is the one residual: the splice copies both occurrences
+    /// through where a re-encode would have collapsed them. That is inert,
+    /// because every reader of the row either decodes it (collapsing the pair
+    /// again, to the same last-wins value) or folds it into an extremum or a set,
+    /// which a repeat cannot change.
+    /// </para>
+    /// <para>
+    /// <b>Validation.</b> The sizing walk performs exactly the reads
+    /// <see cref="DecodeInverse"/> performs, in the same order, so a truncated or
+    /// corrupt row raises <see cref="InvalidDataException"/> at the same byte.
+    /// </para>
+    /// </summary>
+    /// <param name="row">A row produced by <see cref="EncodeInverse"/>.</param>
+    /// <param name="sourceKey">The source key whose entry is being spliced.</param>
+    /// <param name="add">The replacement entry, or <see langword="null"/> to remove.</param>
+    internal static byte[]? SpliceInverse(ReadOnlySpan<byte> row, string sourceKey, MemberEntry? add)
+    {
+        byte[]? rented = null;
+        var maxKeyBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
+        Span<byte> keyBuffer = maxKeyBytes <= 256
+            ? stackalloc byte[256]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxKeyBytes));
+        try
+        {
+            var key = keyBuffer[..Encoding.UTF8.GetBytes(sourceKey, keyBuffer)];
+
+            // Pass one: validate the row exactly as DecodeInverse would, and
+            // measure the spliced result without writing anything.
+            var reader = new RowReader(row);
+            var count = reader.ReadBoundedCount(MinimumInverseEntrySize);
+            var entriesStart = reader.Position;
+            var matchCount = 0;
+            var matchBytes = 0;
+            for (var i = 0; i < count; i++)
+            {
+                var start = reader.Position;
+                var matched = reader.ReadStringBytes().SequenceEqual(key);
+                var hasMember = reader.ReadBool();
+                reader.ReadDouble();
+                if (hasMember)
+                {
+                    reader.SkipString();
+                }
+
+                if (matched)
+                {
+                    matchCount++;
+                    matchBytes += reader.Position - start;
+                }
+            }
+
+            var entriesEnd = reader.Position;
+            var hasMember2 = add is { Member: not null };
+            var addedSize = add is { } entry
+                ? Utf8Size(sourceKey) + sizeof(bool) + sizeof(double) + (hasMember2 ? Utf8Size(entry.Member!) : 0)
+                : 0;
+            var newCount = count - matchCount + (add is null ? 0 : 1);
+            if (newCount == 0)
+            {
+                return null;
+            }
+
+            var buffer = new byte[sizeof(int) + (entriesEnd - entriesStart) - matchBytes + addedSize];
+            var writer = new RowWriter(buffer);
+            writer.WriteInt32(newCount);
+
+            // Pass two: copy every surviving entry through as raw bytes, writing
+            // the replacement in the first matched entry's place.
+            reader = new RowReader(row);
+            reader.ReadBoundedCount(MinimumInverseEntrySize);
+            var written = false;
+            for (var i = 0; i < count; i++)
+            {
+                var start = reader.Position;
+                var matched = reader.ReadStringBytes().SequenceEqual(key);
+                var hasMember = reader.ReadBool();
+                reader.ReadDouble();
+                if (hasMember)
+                {
+                    reader.SkipString();
+                }
+
+                if (!matched)
+                {
+                    writer.WriteRaw(row[start..reader.Position]);
+                    continue;
+                }
+
+                if (add is { } replacement && !written)
+                {
+                    WriteInverseEntry(ref writer, sourceKey, replacement);
+                    written = true;
+                }
+            }
+
+            if (add is { } appended && !written)
+            {
+                WriteInverseEntry(ref writer, sourceKey, appended);
+            }
+
+            return buffer;
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
+
+    private static void WriteInverseEntry(ref RowWriter writer, string sourceKey, in MemberEntry entry)
+    {
+        writer.WriteString(sourceKey);
+        var hasMember = entry.Member is not null;
+        writer.WriteBool(hasMember);
+        writer.WriteDouble(entry.Numeric);
+        if (hasMember)
+        {
+            writer.WriteString(entry.Member!);
+        }
+    }
 
     /// <summary>
     /// A forward-only, allocation-free cursor over an inverse row for a reader
@@ -375,7 +592,17 @@ internal static class AggregationRowCodec
         }
     }
 
-    /// <summary>Encodes a fold-contribution row (a source-key to member-value map for a custom fold group shard).</summary>
+    /// <summary>
+    /// Encodes a fold-contribution row (a source-key to member-value map for a
+    /// custom fold group shard).
+    /// <para>
+    /// The applier mutates these rows through <see cref="SpliceFoldInverse"/>
+    /// rather than re-encoding a whole map. This encoder, and the
+    /// <see cref="DecodeFoldInverse"/> below it, are retained as the pair the
+    /// splice's byte-for-byte parity tests and benchmark baselines are defined
+    /// against; do not delete them as unused.
+    /// </para>
+    /// </summary>
     internal static byte[] EncodeFoldInverse(IReadOnlyDictionary<string, FoldMember> entries)
     {
         // See EncodeMembership: a single sizing pass then a direct write into
@@ -432,6 +659,122 @@ internal static class AggregationRowCodec
     /// <param name="Value">The source value bytes the source key last contributed.</param>
     /// <param name="Timestamp">The source entry HLC, used to order the re-fold.</param>
     internal readonly record struct FoldMember(byte[] Value, HybridLogicalClock Timestamp);
+
+    /// <summary>
+    /// The fold-inverse counterpart of <see cref="SpliceInverse"/>: rewrites an
+    /// encoded fold-inverse row so that <paramref name="sourceKey"/>'s entry
+    /// becomes <paramref name="add"/>, or disappears when <paramref name="add"/>
+    /// is <see langword="null"/>. Returns <see langword="null"/> when no entry
+    /// would survive.
+    /// <para>
+    /// The waste removed here is strictly larger than on the inverse row,
+    /// because a fold entry carries an opaque value payload:
+    /// <see cref="DecodeFoldInverse"/> allocates a source-key string <i>and</i> a
+    /// fresh <see cref="byte"/> array copy of every member's value just to hand
+    /// the whole shard back for one key to be assigned or removed, after which
+    /// the re-encode copies each of those arrays back out again. The splice
+    /// copies the untouched entries' bytes straight from the old row to the new
+    /// one, so no member value is ever duplicated onto the heap.
+    /// </para>
+    /// <para>
+    /// The equivalence and validation guarantees are exactly those documented on
+    /// <see cref="SpliceInverse"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="row">A row produced by <see cref="EncodeFoldInverse"/>.</param>
+    /// <param name="sourceKey">The source key whose entry is being spliced.</param>
+    /// <param name="add">The replacement entry, or <see langword="null"/> to remove.</param>
+    internal static byte[]? SpliceFoldInverse(ReadOnlySpan<byte> row, string sourceKey, FoldMember? add)
+    {
+        byte[]? rented = null;
+        var maxKeyBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
+        Span<byte> keyBuffer = maxKeyBytes <= 256
+            ? stackalloc byte[256]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxKeyBytes));
+        try
+        {
+            var key = keyBuffer[..Encoding.UTF8.GetBytes(sourceKey, keyBuffer)];
+
+            var reader = new RowReader(row);
+            var count = reader.ReadBoundedCount(MinimumFoldInverseEntrySize);
+            var entriesStart = reader.Position;
+            var matchCount = 0;
+            var matchBytes = 0;
+            for (var i = 0; i < count; i++)
+            {
+                var start = reader.Position;
+                var matched = reader.ReadStringBytes().SequenceEqual(key);
+                reader.ReadInt64();
+                reader.ReadInt32();
+                reader.SkipBytes(reader.ReadInt32());
+                if (matched)
+                {
+                    matchCount++;
+                    matchBytes += reader.Position - start;
+                }
+            }
+
+            var entriesEnd = reader.Position;
+            var addedSize = add is { } entry
+                ? Utf8Size(sourceKey) + sizeof(long) + sizeof(int) + sizeof(int) + entry.Value.Length
+                : 0;
+            var newCount = count - matchCount + (add is null ? 0 : 1);
+            if (newCount == 0)
+            {
+                return null;
+            }
+
+            var buffer = new byte[sizeof(int) + (entriesEnd - entriesStart) - matchBytes + addedSize];
+            var writer = new RowWriter(buffer);
+            writer.WriteInt32(newCount);
+
+            reader = new RowReader(row);
+            reader.ReadBoundedCount(MinimumFoldInverseEntrySize);
+            var written = false;
+            for (var i = 0; i < count; i++)
+            {
+                var start = reader.Position;
+                var matched = reader.ReadStringBytes().SequenceEqual(key);
+                reader.ReadInt64();
+                reader.ReadInt32();
+                reader.SkipBytes(reader.ReadInt32());
+                if (!matched)
+                {
+                    writer.WriteRaw(row[start..reader.Position]);
+                    continue;
+                }
+
+                if (add is { } replacement && !written)
+                {
+                    WriteFoldInverseEntry(ref writer, sourceKey, replacement);
+                    written = true;
+                }
+            }
+
+            if (add is { } appended && !written)
+            {
+                WriteFoldInverseEntry(ref writer, sourceKey, appended);
+            }
+
+            return buffer;
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
+
+    private static void WriteFoldInverseEntry(ref RowWriter writer, string sourceKey, in FoldMember entry)
+    {
+        writer.WriteString(sourceKey);
+        writer.WriteInt64(entry.Timestamp.WallClockTicks);
+        writer.WriteInt32(entry.Timestamp.Counter);
+        writer.WriteInt32(entry.Value.Length);
+        writer.WriteRaw(entry.Value);
+    }
 
     /// <summary>
     /// A forward-only, allocation-free cursor over a fold-inverse row for a
@@ -640,6 +983,13 @@ internal static class AggregationRowCodec
         /// <summary>The number of bytes left to read, never negative.</summary>
         public readonly int Remaining => _buffer.Length - _pos;
 
+        /// <summary>
+        /// The cursor's current byte offset into the row. A splice takes it
+        /// either side of an entry to delimit that entry's raw bytes, so the
+        /// entry can be copied through without being materialised.
+        /// </summary>
+        public readonly int Position => _pos;
+
         public bool ReadBool()
         {
             Demand(sizeof(byte));
@@ -711,6 +1061,38 @@ internal static class AggregationRowCodec
             // parsing the following fields from inside the previous string.
             var byteCount = ReadStringLength();
             _pos += byteCount;
+        }
+
+        /// <summary>
+        /// Returns a length-prefixed UTF-8 string's raw bytes without
+        /// transcoding them, so a caller comparing against a known key can do so
+        /// on bytes rather than by decoding every candidate. Validates the prefix
+        /// exactly as <see cref="ReadString"/> does.
+        /// </summary>
+        public ReadOnlySpan<byte> ReadStringBytes()
+        {
+            var byteCount = ReadStringLength();
+            var value = _buffer.Slice(_pos, byteCount);
+
+            // See SkipString: the count lands in a local before the store.
+            _pos += byteCount;
+            return value;
+        }
+
+        /// <summary>
+        /// Steps over a raw byte run, bounding its declared length against the
+        /// row exactly as <see cref="ReadBytes"/> does, so a hostile length is
+        /// rejected identically whether the caller wanted the bytes or not.
+        /// </summary>
+        public void SkipBytes(int count)
+        {
+            if (count < 0 || count > Remaining)
+            {
+                throw new InvalidDataException(
+                    $"An aggregation row declares a {count}-byte value but only {Remaining} byte(s) remain; the row is truncated or corrupt.");
+            }
+
+            _pos += count;
         }
 
         /// <summary>

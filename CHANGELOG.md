@@ -42,6 +42,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Aggregation contribution row splice.** Changing one entry of a group shard decoded the whole row into a map and re-encoded it, and every membership read decoded a member no caller uses. Rows are spliced in place instead: up to 69% faster and 79% less allocated. ([#3981](https://github.com/NSTA1/Orleans.Lattice/pull/3981)) (`Orleans.Lattice`)
+
 - **Performance - Aggregation group re-materialise.** Re-folding a group decoded every shard into a keyed map, materialising a source-key string per entry that the fold never looks up. It now walks the row directly: the min/max gather allocates nothing at all, and the set-union gather 59% less. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation saga operation id.** Every numeric contribution and retraction interpolated a payload string purely to transcode it into the buffer that hashes it, then built the id from three more. It now composes those bytes in place and formats once, a third faster. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
