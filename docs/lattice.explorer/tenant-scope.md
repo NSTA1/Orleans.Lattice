@@ -41,6 +41,8 @@ The Explorer fails closed around it:
 
 - If a signed-in caller's tenant cannot be established, no tenant-scoped page is shown, so no call falls back to the `default` tenant.
 - While a switch is in flight the page is withheld. After it, every page is built afresh and every remembered answer is read again, so nothing read under one tenant is shown under another.
+- The same holds for a change of caller, not only of tenant. Every answer the Explorer remembers within a circuit is filed under the caller who read it: the sign-in, the endpoint and the asserted tenant. A sign-in, a sign-out or a connection change drops it, and the page is rebuilt, so an answer read for one identity is never served to the next, even when two identities share a name.
+- A new identity never inherits the previous identity's tenant. When a different user signs in to the same circuit, the tenant held for the previous user is cleared before the new user's own tenant is established, so not even the calls that establish it assert the previous user's tenant.
 - An open app is bound to the tenant it was opened in, and is closed once the Explorer is scoped to another tenant.
 - A staged backup operation finishes in the tenant it started in, and is listed only under that tenant.
 
