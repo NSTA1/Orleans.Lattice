@@ -15,6 +15,17 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 [TestFixture]
 public sealed class DataHelperTests
 {
+    [TestCase(true, "acme", true)]
+    [TestCase(true, "default", false)]
+    [TestCase(true, null, false)]
+    [TestCase(true, "", false)]
+    [TestCase(false, "acme", false)]
+    public void Sharing_applies_only_to_a_tenant_other_than_the_default_one(bool tenancy, string? tenant, bool applies)
+    {
+        // #3987: the default tenant takes no part in grants, so its listing offers no sharing.
+        Assert.That(DataDirectory.SharingAppliesTo(tenancy, tenant), Is.EqualTo(applies));
+    }
+
     [TestCase("orders", false, "orders", null)]
     [TestCase("a/crm/orders", false, "a/crm/orders", null)]
     [TestCase("t/acme/a/crm/orders", true, "a/crm/orders", "acme")]

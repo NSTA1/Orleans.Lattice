@@ -77,6 +77,22 @@ internal sealed class DataDirectory : IDisposable
     public string? SharingNote => _entries is null ? null : _sharingNote;
 
     /// <summary>
+    /// Whether another tenant can share a tree with the tenant being listed: only
+    /// with tenancy on and a tenant other than the reserved default one, which
+    /// takes no part in grants. Where it cannot, the listing offers no sharing
+    /// filter and no "Shared by" column.
+    /// </summary>
+    public bool SharingApplies => SharingAppliesTo(_tenancy.IsActive, _tenancy.ActiveTenant);
+
+    /// <summary>Whether a tree can be shared with <paramref name="tenant"/>.</summary>
+    /// <param name="tenancyActive">Whether tenancy is on.</param>
+    /// <param name="tenant">The tenant being listed, or <see langword="null"/>.</param>
+    internal static bool SharingAppliesTo(bool tenancyActive, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? tenant) =>
+        tenancyActive
+        && !string.IsNullOrEmpty(tenant)
+        && !string.Equals(tenant, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal);
+
+    /// <summary>
     /// Whether the caller can read the catalogue at all: resolves the reader and
     /// reads one entry. <see langword="false"/> means refused; any other failure
     /// throws, so the area can say it is unavailable rather than hide.
@@ -364,9 +380,7 @@ internal sealed class DataDirectory : IDisposable
     {
         // Grants are tenant to tenant, and the reserved default tenant takes no
         // part in them: without tenancy, or at the default tenant, nothing is shared.
-        if (!_tenancy.IsActive
-            || string.IsNullOrEmpty(tenant)
-            || string.Equals(tenant, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal))
+        if (!SharingAppliesTo(_tenancy.IsActive, tenant))
         {
             return ([], null);
         }

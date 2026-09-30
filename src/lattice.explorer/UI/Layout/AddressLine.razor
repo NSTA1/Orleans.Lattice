@@ -12,10 +12,10 @@
     <div class="lt-shell-address-line">
         @if (IsCompact && chain.Count > 2)
         {
+            @* Compact, the chain keeps its current node on one line; "..." stands for the nodes before it (an elision, not a node) and opens them as a list. *@
             <nav class="lt-chain-nav" aria-label="Address">
-                <ol class="lt-chain lt-chain--mono">
+                <ol class="lt-chain lt-chain--mono lt-shell-address-line__compact-chain">
                     <li class="lt-chain__link">
-                        <LtNode Kind="LtNodeKind.Filled" />
                         <button type="button"
                                 class="lt-chain__text lt-shell-address-line__more"
                                 aria-label="Show the full address"
@@ -23,22 +23,10 @@
                                 aria-controls="@_chainId"
                                 @onclick="ToggleChain">...</button>
                     </li>
-                    @for (var i = chain.Count - 2; i < chain.Count; i++)
-                    {
-                        var link = chain[i];
-                        var current = i == chain.Count - 1;
-                        <li class="lt-chain__link">
-                            <LtNode Kind="@(current ? LtNodeKind.Join : LtNodeKind.Filled)" />
-                            @if (current)
-                            {
-                                <span class="lt-chain__text lt-chain__text--current" aria-current="page">@link.Text</span>
-                            }
-                            else
-                            {
-                                <a class="lt-chain__text" href="@link.Href">@link.Text</a>
-                            }
-                        </li>
-                    }
+                    <li class="lt-chain__link">
+                        <LtNode Kind="LtNodeKind.Join" />
+                        <span class="lt-chain__text lt-chain__text--current" aria-current="page" title="@chain[^1].Text">@chain[^1].Text</span>
+                    </li>
                 </ol>
             </nav>
         }

@@ -153,7 +153,8 @@ public sealed class TenancyMembersTests : TenancyTestContext
 
     [Test]
     [TestCase(false, null, "Overview")]
-    [TestCase(false, "grants", "Grants")]
+    [TestCase(false, "sharing", "Sharing")]
+    [TestCase(false, "quota", "Quota")]
     [TestCase(true, null, "Overview")]
     [TestCase(true, "sharing", "Sharing")]
     public void The_navigation_marks_only_the_current_page(bool own, string? current, string expected)
@@ -167,6 +168,25 @@ public sealed class TenancyMembersTests : TenancyTestContext
         {
             Assert.That(cut.FindAll(".lt-tenancy-nav__link").Where(link => link.GetAttribute("aria-current") == "page").Select(link => link.TextContent), Is.EqualTo(new[] { expected }));
             Assert.That(cut.Find("nav").GetAttribute("aria-label"), Is.EqualTo(own ? "Tenant acme" : "Administration of tenant acme"));
+        });
+    }
+
+    [Test]
+    public void An_operator_and_a_tenant_admin_name_a_tenants_sections_with_the_same_words()
+    {
+        // #3987: the operator saw Grants and Admin subjects, and no Quota, where the tenant admin saw Members, Quota and Sharing.
+        var administration = Render<TenancyNav>(parameters => parameters.Add(nav => nav.Tenant, "acme"));
+        var own = Render<TenancyNav>(parameters => parameters.Add(nav => nav.Tenant, "acme").Add(nav => nav.Own, true));
+
+        string[] Tabs(IRenderedComponent<TenancyNav> nav) => [.. nav.FindAll(".lt-tenancy-nav__link").Select(link => link.TextContent)];
+        string[] Hrefs(IRenderedComponent<TenancyNav> nav) => [.. nav.FindAll(".lt-tenancy-nav__link").Select(link => link.GetAttribute("href")!)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Tabs(administration), Is.EqualTo(new[] { "Overview", "Members", "Quota", "Regions", "Sharing" }));
+            Assert.That(Tabs(own), Is.EqualTo(Tabs(administration)));
+            Assert.That(Hrefs(administration), Is.EqualTo(new[] { "tenancy/acme", "tenancy/acme/members", "tenancy/acme/quota", "tenancy/acme/regions", "tenancy/acme/sharing" }));
+            Assert.That(Hrefs(own).Select(href => href[href.IndexOf("tenancy", StringComparison.Ordinal)..]), Is.EqualTo(new[] { "tenancy", "tenancy/members", "tenancy/quota", "tenancy/regions", "tenancy/sharing" }), "the same section segments in both halves");
         });
     }
 

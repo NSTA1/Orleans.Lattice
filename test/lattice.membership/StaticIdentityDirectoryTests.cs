@@ -30,16 +30,26 @@ public class StaticIdentityDirectoryTests
     }
 
     [Test]
-    public void DescribeEntry_describes_the_deployment_provisioned_roster_for_every_kind()
+    public void DescribeEntry_describes_the_deployed_roster_for_every_kind_in_an_operators_words()
     {
         var directory = CreateDirectory(_ => { });
 
         foreach (var kind in new DirectoryPrincipalKind?[] { null, DirectoryPrincipalKind.User, DirectoryPrincipalKind.Group })
         {
             var guidance = directory.DescribeEntry(kind);
-            Assert.That(guidance, Does.Contain("deployment"));
-            Assert.That(guidance, Does.Contain("LATTICE_STATE_USER_"));
+            Assert.That(guidance, Does.Contain("roster deployed with this cluster"));
+            Assert.That(guidance, Does.Contain("rejected"));
             Assert.That(guidance, Does.Not.Contain("without validation"));
+            Assert.That(guidance, Does.Contain(kind switch
+            {
+                DirectoryPrincipalKind.User => "id of a user on",
+                DirectoryPrincipalKind.Group => "id of a group on",
+                _ => "id of a user or group on",
+            }));
+
+            // #3987: the hint is read by an operator in the Explorer, so it names
+            // no environment variable or credential scheme.
+            Assert.That(guidance, Does.Not.Contain("LATTICE_").And.Not.Contain("Basic credential"));
         }
     }
 

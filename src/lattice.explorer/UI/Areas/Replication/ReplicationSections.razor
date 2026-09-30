@@ -7,18 +7,28 @@
 *@
 
 <link rel="stylesheet" href="@ReplicationAssets.Stylesheet" />
-<nav class="lt-replication-sections" aria-label="Replication sections">
-    <ul class="lt-replication-sections__list">
-        <li>
-            <a class="lt-replication-sections__link"
-               href="@Href(ReplicationAddresses.Estate)"
-               aria-current="@(Section == SectionKind.Estate ? "page" : null)">Estate</a>
-        </li>
-        <li>
-            <a class="lt-replication-sections__link"
-               href="@Href(ReplicationAddresses.Trees)"
-               aria-current="@TreesCurrent"
-               data-lt-command="@ReplicationArea.TreesCommandId">Enrolled trees</a>
-        </li>
-    </ul>
-</nav>
+@if (Section == SectionKind.Tree)
+{
+    @* One tree is below both sections: it shows the way back to the list it came from, never a row whose marked tab is not this page. *@
+    <nav class="lt-replication-back" aria-label="Replication sections">
+        <a class="lt-replication-back__link" href="@Href(ReplicationAddresses.Trees)">@BackText</a>
+    </nav>
+}
+else
+{
+    <nav class="lt-replication-sections" aria-label="Replication sections">
+        <ul class="lt-replication-sections__list">
+            <li>
+                <a class="lt-replication-sections__link"
+                   href="@Href(ReplicationAddresses.Estate)"
+                   aria-current="@(Section == SectionKind.Estate ? "page" : null)">Estate</a>
+            </li>
+            <li>
+                <a class="lt-replication-sections__link"
+                   href="@Href(ReplicationAddresses.Trees)"
+                   aria-current="@(Section == SectionKind.Trees ? "page" : null)"
+                   data-lt-command="@ReplicationArea.TreesCommandId">Enrolled trees</a>
+            </li>
+        </ul>
+    </nav>
+}
