@@ -11,11 +11,16 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// labelled parts: the allowed set a platform operator sets (editable when
 /// <see cref="CanAuthorize"/>; revoking a region is confirmed), and the
 /// residency the tenant's admins choose within it, applied with
-/// <c>SetResidencyAsync</c>. Each region shows its lifecycle and what it means
-/// for the tenant. A change that removes a region (it drains the tenant's data
-/// there) or leaves the tenant with residency and no Online region (it is then
-/// served nowhere, because an added region stays Provisioning until an operator
-/// of the hosting deployment promotes it) is confirmed with that consequence.
+/// <c>SetResidencyAsync</c>. Each region shows its lifecycle, what it means for
+/// the tenant and whether the region serves it: every region does while no
+/// residency is set, and only an Online one once it is. A changed plan is
+/// previewed region by region before it is applied. A plan that removes a
+/// region (it drains the tenant's data there) is confirmed; one that would
+/// leave the tenant with residency and no Online region (an added region stays
+/// Provisioning until an operator of the hosting deployment promotes it) turns
+/// Apply off, says which regions are not Online and why, and can be applied
+/// only through an explicit secondary path whose confirmation keeps serving by
+/// default.
 /// </summary>
 public partial class TenancyRegions
 {
@@ -69,7 +74,11 @@ public partial class TenancyRegions
 
     private string ConfirmTitle => _plan.LeavesNoOnlineRegion ? $"Stop serving tenant {TenantId}?" : "Remove regions from the residency?";
 
-    private string ConfirmText => _plan.LeavesNoOnlineRegion ? "Apply and stop serving" : "Drain and apply";
+    private string StopServingOpenText => $"Apply anyway and stop serving {TenantId}...";
+
+    private string PreviewHeadingId => "tenancy-residency-preview-" + TenantId;
+
+    private static string ServedText(TenancyRegionRow row) => row.IsServed ? TenancyFormat.ServedLabel : TenancyFormat.NotServedLabel;
 
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
@@ -144,12 +153,14 @@ public partial class TenancyRegions
 
     private async Task ApplyResidency()
     {
-        if (!_plan.IsChanged)
+        // A plan that leaves the tenant served nowhere is applied only through the
+        // explicit "Apply anyway" path and its confirmation, never from Apply.
+        if (!_plan.IsChanged || _plan.LeavesNoOnlineRegion)
         {
             return;
         }
 
-        if (_plan.Removed.Count > 0 || _plan.LeavesNoOnlineRegion)
+        if (_plan.Removed.Count > 0)
         {
             _confirmResidency = true;
             return;

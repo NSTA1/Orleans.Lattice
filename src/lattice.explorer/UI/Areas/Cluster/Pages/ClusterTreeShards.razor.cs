@@ -67,7 +67,14 @@ public partial class ClusterTreeShards : IDisposable
     /// <param name="map">The live shard map, or <see langword="null"/>.</param>
     /// <param name="diagnostics">The diagnostics, or <see langword="null"/>.</param>
     /// <param name="hotness">The hotness sample, or <see langword="null"/>.</param>
-    /// <returns>One row per physical shard any read named, ordered by index.</returns>
+    /// <returns>
+    /// One row per physical shard the live shard map routes to, ordered by index.
+    /// A shard a shrink retired keeps its shard root as a routing tombstone and
+    /// can still be named by a cached diagnostics or hotness read, so those reads
+    /// only fill in rows; they never add one. Without the map, the rows are the
+    /// shards the diagnostics and hotness reports name, which the cluster
+    /// enumerates from the same map.
+    /// </returns>
     internal static IReadOnlyList<ClusterShardRow> Join(ShardMapInspection? map, TreeAdminDiagnosticReport? diagnostics, TreeHotnessReport? hotness)
     {
         var slots = map?.PhysicalShardIndices
@@ -77,9 +84,15 @@ public partial class ClusterTreeShards : IDisposable
         var heat = hotness?.Shards.ToDictionary(shard => shard.ShardIndex);
 
         var indices = new SortedSet<int>();
-        indices.UnionWith(slots?.Keys ?? Enumerable.Empty<int>());
-        indices.UnionWith(shards?.Keys ?? Enumerable.Empty<int>());
-        indices.UnionWith(heat?.Keys ?? Enumerable.Empty<int>());
+        if (slots is { Count: > 0 })
+        {
+            indices.UnionWith(slots.Keys);
+        }
+        else
+        {
+            indices.UnionWith(shards?.Keys ?? Enumerable.Empty<int>());
+            indices.UnionWith(heat?.Keys ?? Enumerable.Empty<int>());
+        }
 
         return
         [

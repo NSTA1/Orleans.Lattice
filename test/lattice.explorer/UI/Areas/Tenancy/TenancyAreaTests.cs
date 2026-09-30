@@ -406,7 +406,7 @@ public sealed class TenancyAreaTests : TenancyTestContext
         var area = CreateArea();
         await area.GetAvailabilityAsync(CancellationToken.None);
 
-        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("3 tenants, 1 suspended, 2 with no residency set."));
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("3 tenants, 1 suspended, 2 with no residency set (served in every region)."));
     }
 
     [Test]
@@ -426,7 +426,7 @@ public sealed class TenancyAreaTests : TenancyTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(status, Is.EqualTo("51 tenants, at least 1 with no residency set."));
+            Assert.That(status, Is.EqualTo("51 tenants, at least 1 with no residency set (served in every region)."));
             Assert.That(Cluster.Calls.Count(call => call == nameof(FakeTenancyCluster.GetTenantAsync)), Is.EqualTo(TenancyCatalog.ResidencySurveyLimit));
         });
     }
@@ -439,9 +439,9 @@ public sealed class TenancyAreaTests : TenancyTestContext
         var area = CreateArea();
         await area.GetAvailabilityAsync(CancellationToken.None);
 
-        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant, 1 with no residency set."));
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant, 1 with no residency set (served in every region)."));
         Cluster.Fail(nameof(FakeTenancyCluster.GetTenantAsync), new TimeoutException());
-        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant, 1 with no residency set."), "remembered");
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant, 1 with no residency set (served in every region)."), "remembered");
 
         Catalog.Invalidate();
 
@@ -456,7 +456,7 @@ public sealed class TenancyAreaTests : TenancyTestContext
         var area = CreateArea();
         await area.GetAvailabilityAsync(CancellationToken.None);
 
-        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("You administer tenant acme. It has no residency set."));
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("You administer tenant acme. It has no residency set, so it is served in every region."));
     }
 
     [Test]

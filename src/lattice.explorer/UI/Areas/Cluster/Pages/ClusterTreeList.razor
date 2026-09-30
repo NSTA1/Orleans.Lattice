@@ -61,7 +61,7 @@ else
     <p class="lt-cluster-error" role="alert">@_trees.Error</p>
 }
 
-<LtDialog @bind-Open="_reshardOpen" Title="Reshard a tree" Description="Name the tree to grow. The next page stages the reshard and follows it." Placement="@SheetPlacement">
+<LtDialog @bind-Open="_reshardOpen" Title="Reshard a tree" Description="Name the tree to grow or shrink. The next page stages the reshard and follows it." Placement="@SheetPlacement">
     <form class="lt-cluster-form" @onsubmit="ContinueReshard">
         <LtComboBox Label="Tree" @bind-Value="_reshardTree" Error="@_reshardError" Hint="The tree's logical name, such as a/crm/orders." Source="@Suggestions.ClusterTrees" Noun="tree" />
         <div class="lt-dialog__actions">

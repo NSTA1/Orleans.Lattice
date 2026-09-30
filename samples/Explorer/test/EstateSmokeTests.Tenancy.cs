@@ -13,6 +13,35 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 public sealed partial class EstateSmokeTests
 {
     [Test]
+    public async Task Acme_is_resident_and_online_in_both_regions_and_globex_has_no_residency_in_either()
+    {
+        // Each region keeps its own tenant registry, so each is asked for itself (issue #4078).
+        using var _ = LatticeCredentialContext.Use(SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme);
+        foreach (var region in new[] { _sample.East, _sample.West! })
+        {
+            var regions = region.Services.GetRequiredService<Orleans.Lattice.Api.TenantAdmin.ILatticeTenantRegionAdmin>();
+            var acme = await regions.GetTenantRegionStatusAsync(SampleIdentities.AcmeTenant);
+            var globex = await regions.GetTenantRegionStatusAsync(SampleIdentities.GlobexTenant);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    acme.Regions.Select(row => (row.RegionId, row.Status)),
+                    Is.EqualTo(new[]
+                    {
+                        (SampleIdentities.EastRegion, Orleans.Lattice.Api.TenantAdmin.TenantRegionLifecycleStatus.Online),
+                        (SampleIdentities.WestRegion, Orleans.Lattice.Api.TenantAdmin.TenantRegionLifecycleStatus.Online),
+                    }),
+                    $"acme in region {region.Id}");
+                Assert.That(
+                    globex.Regions.Select(row => row.Status),
+                    Is.All.EqualTo(Orleans.Lattice.Api.TenantAdmin.TenantRegionLifecycleStatus.None),
+                    $"globex in region {region.Id}");
+            });
+        }
+    }
+
+    [Test]
     public async Task The_operators_console_root_prerenders_the_neutral_state_and_never_the_default_tenant()
     {
         // The administrator can reach default, acme and globex, and the prerender cannot

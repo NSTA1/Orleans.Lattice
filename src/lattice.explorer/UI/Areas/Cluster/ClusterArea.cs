@@ -51,7 +51,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         [
             new ExplorerCommand(ReshardCommandId, "Reshard tree...")
             {
-                Detail = "Grow a tree to more physical shards, online.",
+                Detail = "Grow or shrink a tree's physical shard count, online.",
                 Target = ClusterAddresses.Trees,
                 InvokeAsync = _ => signals.RequestAsync(ReshardCommandId),
             },

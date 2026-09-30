@@ -234,6 +234,52 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
     }
 
     [Test]
+    public void Shards_are_enumerated_from_the_shard_map_so_a_retired_shard_is_not_listed()
+    {
+        // Shard 1 was folded into shard 0 by a shrink. Its shard root survives as
+        // a routing tombstone, and a cached diagnostics or hotness read can still
+        // name it, but the live map routes no slot to it.
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
+        {
+            TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardCount = 2, VirtualShardCount = 6, MapVersion = 9,
+            PhysicalShardIndices = [0, 0, 0, 2, 2, 5],
+        });
+        Admin.GetShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeShardMapView { TreeId = TreeId, HasCustomMap = true, MapVersion = 9 });
+        Admin.GetDiagnosticsAsync(TreeId, Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(new TreeAdminDiagnosticReport
+        {
+            TreeId = TreeId,
+            Shards = [new ShardDiagnosticSnapshot { ShardIndex = 0, LiveKeys = 10 }, new ShardDiagnosticSnapshot { ShardIndex = 1, LiveKeys = 0 }, new ShardDiagnosticSnapshot { ShardIndex = 2, LiveKeys = 5 }],
+        });
+        Admin.GetShardHotnessAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeHotnessReport
+        {
+            TreeId = TreeId, Shards = [new ShardHotnessSnapshot { ShardIndex = 1, OpsPerSecond = 1 }, new ShardHotnessSnapshot { ShardIndex = 7, OpsPerSecond = 1 }],
+        });
+
+        var cut = RenderTab<ClusterTreeShards>();
+
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll("tbody tr").Select(row => row.QuerySelector("th")!.TextContent.Trim()),
+            Is.EqualTo(new[] { "0", "2", "5" }),
+            "one row per physical shard the map routes to, never a retired index"));
+        Assert.That(cut.FindAll("tbody tr")[0].QuerySelectorAll("td")[0].TextContent.Trim(), Is.EqualTo("3"), "shard 0 now owns the folded slots");
+    }
+
+    [Test]
+    public void Without_the_shard_map_the_shards_come_from_the_clusters_own_reports()
+    {
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).ThrowsAsync(new TimeoutException());
+        Admin.GetDiagnosticsAsync(TreeId, Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(new TreeAdminDiagnosticReport
+        {
+            TreeId = TreeId, Shards = [new ShardDiagnosticSnapshot { ShardIndex = 0 }, new ShardDiagnosticSnapshot { ShardIndex = 3 }],
+        });
+        Admin.GetShardHotnessAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeHotnessReport { TreeId = TreeId });
+
+        var cut = RenderTab<ClusterTreeShards>();
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr").Select(row => row.QuerySelector("th")!.TextContent.Trim()), Is.EqualTo(new[] { "0", "3" })));
+    }
+
+    [Test]
     public void Storage_shows_bytes_by_surface_and_each_wal_partitions_provider()
     {
         Admin.GetTreeStatsAsync(TreeId, Arg.Any<CancellationToken>())

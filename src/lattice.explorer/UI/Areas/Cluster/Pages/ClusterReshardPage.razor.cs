@@ -7,14 +7,19 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
 /// <summary>
 /// <c>/cluster/trees/{tree-path}/reshard</c>: the resumable status page of an
-/// online reshard (E15). It stages a reshard - target, review, typed
-/// confirmation - for a caller holding the TreeLifecycle grant, and follows the
-/// cluster's status while one runs, so leaving and returning resumes it.
+/// online reshard (E15), which grows or shrinks a tree's physical shard count.
+/// It stages a reshard - target, review, typed confirmation - for a caller
+/// holding the TreeLifecycle grant, explains a shrink's throughput trade-off
+/// before it is submitted, and follows the cluster's status while one runs, so
+/// leaving and returning resumes it.
 /// </summary>
 public partial class ClusterReshardPage : IDisposable
 {
-    /// <summary>The largest shard count a reshard accepts.</summary>
+    /// <summary>The largest shard count a reshard accepts, whatever the tree's virtual slot count.</summary>
     internal const int MaximumShards = 4096;
+
+    /// <summary>The smallest shard count a reshard accepts.</summary>
+    internal const int MinimumShards = 2;
 
     private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeReshardStatus> _status = ClusterLoad<TreeReshardStatus>.Loading;
@@ -22,7 +27,7 @@ public partial class ClusterReshardPage : IDisposable
     private ClusterStatusPoller? _poller;
     private string? _target;
     private string? _error;
-    private int? _reviewing;
+    private ReshardPlan? _reviewing;
     private bool _confirm;
     private bool _busy;
 
@@ -98,34 +103,51 @@ public partial class ClusterReshardPage : IDisposable
     private void Review(TreeReshardStatus status)
     {
         _error = null;
+        var current = status.CurrentPhysicalShardCount;
+        var maximum = MaximumFor(status);
         if (!int.TryParse(_target?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var target))
         {
             _error = "Enter a whole number of shards.";
         }
-        else if (target <= status.CurrentPhysicalShardCount)
+        else if (target < MinimumShards)
         {
-            _error = $"Resharding only grows: enter more than {status.CurrentPhysicalShardCount}.";
+            _error = $"A tree needs at least {MinimumShards} physical shards.";
         }
-        else if (target > MaximumShards)
+        else if (target > maximum)
         {
-            _error = $"A tree can have at most {MaximumShards} physical shards.";
+            _error = maximum < MaximumShards
+                ? $"This tree can have at most {maximum} physical shards: one per virtual slot."
+                : $"A tree can have at most {MaximumShards} physical shards.";
+        }
+        else if (target == current)
+        {
+            _error = $"The tree already has {ClusterFormat.Plural(current, "physical shard")}: enter a larger count to split shards or a smaller one to fold them together.";
         }
         else
         {
-            _reviewing = target;
+            _reviewing = new ReshardPlan(current, target);
         }
     }
 
+    /// <summary>The largest target a tree accepts: its virtual slot count, and never more than <see cref="MaximumShards"/>.</summary>
+    /// <param name="status">The reshard status.</param>
+    /// <returns>The largest target.</returns>
+    internal static int MaximumFor(TreeReshardStatus status) =>
+        status.VirtualShardCount > 0 ? Math.Min(MaximumShards, status.VirtualShardCount) : MaximumShards;
+
+    private static string Hint(TreeReshardStatus status) =>
+        $"From {MinimumShards} to {MaximumFor(status)}. The tree has {status.CurrentPhysicalShardCount} now: a larger count splits shards, a smaller one folds adjacent shards together.";
+
     private async Task StartAsync()
     {
-        if (_reviewing is not { } target)
+        if (_reviewing is not { } plan)
         {
             return;
         }
 
         _busy = true;
         var started = await ClusterLoad<TreeReshardStatus>.RunAsync(
-            ct => Facades.RequireTreeAdmin().ReshardTreeAsync(TreeId, target, ct),
+            ct => Facades.RequireTreeAdmin().ReshardTreeAsync(TreeId, plan.Target, ct),
             _lifetime.Token);
         _busy = false;
 
@@ -148,4 +170,13 @@ public partial class ClusterReshardPage : IDisposable
             : (status.TargetShardCount ?? status.RequestedShardCount) is { } target
                 ? $"Resharding to {ClusterFormat.Plural(target, "physical shard")}."
                 : "A reshard is running.";
+
+    /// <summary>A reshard under review: the count it starts from and the count it goes to.</summary>
+    /// <param name="From">The physical shard count now.</param>
+    /// <param name="Target">The physical shard count asked for.</param>
+    private readonly record struct ReshardPlan(int From, int Target)
+    {
+        /// <summary>Whether the reshard folds shards together rather than splitting them.</summary>
+        public bool Shrinks => Target < From;
+    }
 }

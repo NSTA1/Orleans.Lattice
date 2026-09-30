@@ -75,7 +75,12 @@ internal static class TenancyFormat
 
     /// <summary>A region's residency lifecycle, in words.</summary>
     /// <param name="status">The region status.</param>
-    public static string RegionStatusLabel(TenantRegionLifecycleStatus status) => status switch
+    /// <param name="hasResidency">
+    /// Whether the tenant has residency set. A region with no status reads as
+    /// outside the residency when it has, and as serving the tenant, with every
+    /// other region, when it has not.
+    /// </param>
+    public static string RegionStatusLabel(TenantRegionLifecycleStatus status, bool hasResidency = true) => status switch
     {
         TenantRegionLifecycleStatus.Provisioning => "Provisioning",
         TenantRegionLifecycleStatus.Backfilling => "Backfilling",
@@ -83,25 +88,42 @@ internal static class TenancyFormat
         TenantRegionLifecycleStatus.Draining => "Draining",
         TenantRegionLifecycleStatus.Offline => "Offline",
         TenantRegionLifecycleStatus.Removed => "Removed",
-        _ => "Not resident",
+        _ => hasResidency ? "Not in residency" : "No residency set",
     };
 
     /// <summary>What a region in the Provisioning state is waiting for, and what it means for the tenant.</summary>
     public const string ProvisioningMeaning =
         "Waiting for a platform operator to promote it; this tenant is not served here until it is Online.";
 
-    /// <summary>How a tenant with no residency set is described.</summary>
-    public const string NoResidency = "Not set";
+    /// <summary>What a region means for a tenant with no residency set.</summary>
+    public const string NoResidencyMeaning = "No residency is set, so this region serves the tenant, as every region does.";
+
+    /// <summary>How a tenant with no residency set is described: it is served in every region.</summary>
+    public const string NoResidency = "Not set: served in every region";
+
+    /// <summary>Whether a region serves the tenant, in words.</summary>
+    public const string ServedLabel = "Served";
+
+    /// <summary>Whether a region does not serve the tenant, in words.</summary>
+    public const string NotServedLabel = "Not served";
+
+    /// <summary>
+    /// Where a platform operator of the hosting deployment learns how to promote a
+    /// tenant's region to Online. The facade has no promotion call, so the
+    /// Explorer cannot offer the action itself.
+    /// </summary>
+    public const string PromotionHelpUrl = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.tenancy/README.html#lifecycle-states";
 
     /// <summary>
     /// What a region's residency lifecycle means for the tenant, in one sentence,
     /// following <c>ILatticeTenantRegionAdmin</c>: an added region stays
     /// Provisioning until an operator of the hosting deployment promotes it, and
-    /// only an Online region serves the tenant. <see langword="null"/> for a region
-    /// outside the residency, whose status label already says so.
+    /// once a tenant has residency only an Online region serves it; with none set,
+    /// every region does.
     /// </summary>
     /// <param name="status">The region status.</param>
-    public static string? RegionStatusMeaning(TenantRegionLifecycleStatus status) => status switch
+    /// <param name="hasResidency">Whether the tenant has residency set.</param>
+    public static string RegionStatusMeaning(TenantRegionLifecycleStatus status, bool hasResidency = true) => status switch
     {
         TenantRegionLifecycleStatus.Provisioning => ProvisioningMeaning,
         TenantRegionLifecycleStatus.Backfilling => "The tenant's existing data is being copied in; it is not served here until it is Online.",
@@ -109,7 +131,7 @@ internal static class TenancyFormat
         TenantRegionLifecycleStatus.Draining => "Being removed: the tenant's data here is draining and the region no longer serves it.",
         TenantRegionLifecycleStatus.Offline => "Drained; no longer serves this tenant.",
         TenantRegionLifecycleStatus.Removed => "Removed from the tenant's residency.",
-        _ => null,
+        _ => hasResidency ? "Outside the tenant's residency, so it does not serve this tenant." : NoResidencyMeaning,
     };
 
     /// <summary>A tenant's resident regions as one line, or <see cref="NoResidency"/> when none is set.</summary>
@@ -118,17 +140,35 @@ internal static class TenancyFormat
         RegionList(ResidentRegions(regions), NoResidency);
 
     /// <summary>
+    /// Whether a tenant has residency set: any region carries a lifecycle status.
+    /// Without one the tenant is served in every region; with one it is served
+    /// only where it is Online.
+    /// </summary>
+    /// <param name="regions">The per-region status.</param>
+    public static bool HasResidency(IReadOnlyList<TenantRegionStatusDescriptor> regions)
+    {
+        ArgumentNullException.ThrowIfNull(regions);
+        return regions.Any(region => region.Status != TenantRegionLifecycleStatus.None);
+    }
+
+    /// <summary>
+    /// Whether a region in <paramref name="status"/> serves the tenant: every
+    /// region does while the tenant has no residency, and only an Online one once
+    /// it has.
+    /// </summary>
+    /// <param name="status">The region status.</param>
+    /// <param name="hasResidency">Whether the tenant has residency set.</param>
+    public static bool IsServedIn(TenantRegionLifecycleStatus status, bool hasResidency) =>
+        !hasResidency || status == TenantRegionLifecycleStatus.Online;
+
+    /// <summary>
     /// Whether a tenant has residency set yet none of its regions is Online, so it
     /// is served nowhere: once a tenant has any residency it is served only in a
     /// region that reports Online.
     /// </summary>
     /// <param name="regions">The per-region status.</param>
-    public static bool IsServedNowhere(IReadOnlyList<TenantRegionStatusDescriptor> regions)
-    {
-        ArgumentNullException.ThrowIfNull(regions);
-        return regions.Any(region => IsResident(region.Status))
-            && !regions.Any(region => region.Status == TenantRegionLifecycleStatus.Online);
-    }
+    public static bool IsServedNowhere(IReadOnlyList<TenantRegionStatusDescriptor> regions) =>
+        HasResidency(regions) && !regions.Any(region => region.Status == TenantRegionLifecycleStatus.Online);
 
     /// <summary>The state role a region's residency lifecycle is drawn with.</summary>
     /// <param name="status">The region status.</param>

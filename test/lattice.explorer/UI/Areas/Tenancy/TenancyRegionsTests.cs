@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class TenancyRegionsTests : TenancyTestContext
+public sealed partial class TenancyRegionsTests : TenancyTestContext
 {
     [Test]
     public void Regions_are_listed_with_their_lifecycle_and_the_invariants_at_each_control()
@@ -27,12 +27,13 @@ public sealed class TenancyRegionsTests : TenancyTestContext
                 row.Children[0].TextContent.Trim(),
                 row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim(),
                 row.Children[2].TextContent.Trim(),
+                row.Children[3].TextContent.Trim(),
             }).ToArray();
             Assert.That(rows, Is.EqualTo(new[]
             {
-                new[] { "ap-south", "Not resident", "Not allowed" },
-                new[] { "eu-west", "Online", "Allowed" },
-                new[] { "us-east", "Not resident", "Allowed" },
+                new[] { "ap-south", "Not in residency", "Not served", "Not allowed" },
+                new[] { "eu-west", "Online", "Served", "Allowed" },
+                new[] { "us-east", "Not in residency", "Not served", "Allowed" },
             }));
             Assert.That(Checkbox(cut, "ap-south").HasAttribute("disabled"), Is.True);
             Assert.That(Checkbox(cut, "eu-west").HasAttribute("disabled"), Is.True, "the last resident region");
@@ -279,11 +280,13 @@ public sealed class TenancyRegionsTests : TenancyTestContext
     }
 
     [Test]
-    public void A_region_outside_the_residency_shows_no_meaning_beside_its_status()
+    public void A_region_outside_the_residency_says_it_does_not_serve_the_tenant()
     {
         var cut = RenderRegions();
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr")[0].Children[1].QuerySelector(".lt-tenancy-meaning"), Is.Null));
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll("tbody tr")[0].Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim(),
+            Is.EqualTo("Outside the tenant's residency, so it does not serve this tenant.")));
     }
 
     [Test]
@@ -294,20 +297,21 @@ public sealed class TenancyRegionsTests : TenancyTestContext
         cut.WaitUntil(() =>
         {
             var residency = cut.FindAll("section.lt-tenancy-part")[1];
-            Assert.That(residency.QuerySelector(".lt-tenancy-note")!.TextContent, Does.Contain("No residency is set yet, so tenant acme is served in every region."));
-            Assert.That(residency.QuerySelector(".lt-dl__row dd")!.TextContent.Trim(), Is.EqualTo(TenancyFormat.NoResidency));
+            Assert.That(residency.QuerySelector(".lt-tenancy-unset")!.TextContent.Trim(), Is.EqualTo("No residency set: tenant acme is served in every region."));
+            Assert.That(residency.QuerySelector(".lt-dl__row dd")!.TextContent.Trim(), Is.EqualTo("Not set: served in every region"));
             Assert.That(cut.FindAll(".lt-tenancy-warning"), Is.Empty);
         });
     }
 
     [Test]
-    public void Setting_a_first_residency_is_confirmed_with_the_consequence_of_having_no_online_region()
+    public void A_first_residency_is_applied_only_through_the_secondary_path_and_its_confirmation()
     {
         var cut = RenderRegions(resident: []);
         cut.WaitUntil(() => Checkbox(cut, "us-east"));
 
         Checkbox(cut, "us-east").Change(true);
-        TenancyForms.Button(cut, "Apply residency").Click();
+        cut.WaitUntil(() => Assert.That(TenancyForms.Button(cut, "Apply residency").HasAttribute("disabled"), Is.True));
+        TenancyForms.Button(cut, "Apply anyway and stop serving acme...").Click();
 
         cut.WaitUntil(() =>
         {
@@ -317,7 +321,7 @@ public sealed class TenancyRegionsTests : TenancyTestContext
             Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.SetResidencyAsync)));
         });
 
-        TenancyForms.Button(cut, "Apply and stop serving").Click();
+        TenancyForms.Button(cut, "Stop serving acme").Click();
 
         cut.WaitUntil(() =>
         {
@@ -328,15 +332,16 @@ public sealed class TenancyRegionsTests : TenancyTestContext
     }
 
     [Test]
-    public void Cancelling_the_no_online_region_confirmation_keeps_the_plan_and_writes_nothing()
+    public void Keeping_service_in_the_no_online_region_confirmation_keeps_the_plan_and_writes_nothing()
     {
         var cut = RenderRegions(resident: []);
         cut.WaitUntil(() => Checkbox(cut, "us-east"));
         Checkbox(cut, "us-east").Change(true);
-        TenancyForms.Button(cut, "Apply residency").Click();
+        cut.WaitUntil(() => TenancyForms.Button(cut, "Apply anyway and stop serving acme..."));
+        TenancyForms.Button(cut, "Apply anyway and stop serving acme...").Click();
         cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
 
-        TenancyForms.Button(cut, "Cancel").Click();
+        TenancyForms.Button(cut, "Keep serving acme").Click();
 
         Assert.Multiple(() =>
         {
@@ -354,14 +359,15 @@ public sealed class TenancyRegionsTests : TenancyTestContext
         Checkbox(cut, "us-east").Change(true);
         Checkbox(cut, "eu-west").Change(false);
 
-        TenancyForms.Button(cut, "Apply residency").Click();
+        cut.WaitUntil(() => Assert.That(TenancyForms.Button(cut, "Apply residency").HasAttribute("disabled"), Is.True));
+        TenancyForms.Button(cut, "Apply anyway and stop serving acme...").Click();
 
         cut.WaitUntil(() =>
         {
             var dialog = cut.Find("[role=alertdialog]");
             Assert.That(dialog.QuerySelector(".lt-dialog__title")!.TextContent, Is.EqualTo("Stop serving tenant acme?"));
             Assert.That(dialog.TextContent, Does.Contain("will start draining").And.Contain("is not served anywhere"));
-            Assert.That(TenancyForms.HasButton(cut, "Apply and stop serving"), Is.True);
+            Assert.That(TenancyForms.HasButton(cut, "Stop serving acme"), Is.True);
         });
     }
 
