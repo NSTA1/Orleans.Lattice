@@ -284,6 +284,18 @@ public partial class ShardHealingOrchestratorGrainTests
     }
 
     [Test]
+    public async Task GetInFlightDonorShardIndices_reports_the_persisted_tracked_folds_as_a_copy()
+    {
+        var h = CreateGrain(existingState: new ShardHealingOrchestratorState { InFlightDonorShardIndices = [7, 5] });
+
+        var donors = await h.Grain.GetInFlightDonorShardIndicesAsync();
+        donors[0] = 99;
+
+        Assert.That(await h.Grain.GetInFlightDonorShardIndicesAsync(), Is.EqualTo(new[] { 7, 5 }),
+            "the reshard coordinator reads this set; handing out the live list would let a caller corrupt it");
+    }
+
+    [Test]
     public async Task EnsureRunning_registers_no_reminder_when_the_kill_switch_is_off()
     {
         var h = CreateGrain(options: new LatticeOptions { ShardHealingEnabled = false });

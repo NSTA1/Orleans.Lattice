@@ -258,7 +258,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
 | `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |
 | `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. Accept-then-poll: the shard walk runs in the background, and the call returns within a bounded wait - with `purgeInProgress` still `true` for a tree too large to purge in that time, which is not a failure; poll `lattice_treeadmin_tree_deletion_status`. A call while the purge runs or after it completed returns the status without error. |
-| `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
+| `lattice_treeadmin_tree_reshard` | manage | Start an online reshard that grows or shrinks a tree to a target physical shard count. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
 | `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. Accept-then-poll: admitted even while a resize phase runs, it returns within a bounded wait with `undoRequested` set if the unwind is still in progress. |
 | `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot. |

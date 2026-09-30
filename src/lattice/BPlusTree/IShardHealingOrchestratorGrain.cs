@@ -89,6 +89,28 @@ internal interface IShardHealingOrchestratorGrain : IGrainWithStringKey
     Task<ShardHealingReport> GetHealingReportAsync();
 
     /// <summary>
+    /// Returns the donor shard indices of the folds this orchestrator has
+    /// admitted and still tracks as in flight, read from its persisted state.
+    /// <para>
+    /// The set may over-count - intent is recorded before a fold is started and
+    /// a finished fold is only dropped on the next reconcile - so a caller that
+    /// needs to know whether a fold is really running polls each donor's
+    /// <see cref="ITreeShardConsolidationGrain"/> itself. The online reshard
+    /// coordinator uses it to wait out folds healing admitted before a shrink
+    /// began, so the two drivers never fold overlapping shard pairs.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because
+    /// the online reshard coordinator calls it from inside its own turn, while a
+    /// healing sweep may be holding this grain's turn and waiting on that very
+    /// coordinator through <c>ILattice.IsReshardCompleteAsync</c>. The method
+    /// only copies persisted state and has no await, so interleaving it is safe.
+    /// </remarks>
+    [AlwaysInterleave]
+    Task<int[]> GetInFlightDonorShardIndicesAsync();
+
+    /// <summary>
     /// Stops the orchestrator and unregisters its reminder. Used by tree
     /// deletion and tests. Idempotent.
     /// <para>

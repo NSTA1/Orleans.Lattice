@@ -40,6 +40,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Dashboards`)
 
+- **Shard - Online reshard shrinks.** `ReshardAsync` accepts a count below a populated tree's current one and folds adjacent shards together online, completing only once the retired shards' storage is released; the `shrink_unsupported` rejection reason is gone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
 ### Changed
 
 - **Performance - Aggregation inverse row splice.** The splice's second pass re-walked and re-parsed every entry purely to re-derive byte spans its first pass had already measured, then copied each entry one by one. It now block-copies the runs either side of the match: 42% faster on a 64-entry row. ([#4062](https://github.com/NSTA1/Orleans.Lattice/pull/4062)) (`Orleans.Lattice`)
@@ -69,6 +71,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Docs - Naming registry covers RepoContext.** The naming-conventions registry gains its missing `Orleans.Lattice.Api.Mcp.RepoContext` section, and a gate fails when that section drifts from the package's public types. ([#2494](https://github.com/NSTA1/Orleans.Lattice/issues/2494)) (`repository-wide`)
 
 - **Performance - Clean leaf deactivations skip an acknowledged pin flush.** The `frontier_pin` barrier is elided when this deactivation already acknowledged a dominating pin, counted by `orleans.lattice.leaf.deactivation.barrier.elided`; a faulted pin write no longer counts as acknowledged. ([#3643](https://github.com/NSTA1/Orleans.Lattice/issues/3643)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Shard - Folds release the retired donor's storage.** A committed shard consolidation, healing's included, clears the donor's leaves and internal nodes, retiring their WAL pins so the trim horizon can advance; the donor stays as a routing tombstone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`)
 
 ### Fixed
 

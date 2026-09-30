@@ -9,9 +9,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>orleans_lattice_shard_root_reshard_rejected_total</c> must be readable at
 /// zero, not only at the one value that has already fired.
 /// <para>
-/// <b>What was wrong.</b> The counter declares a bounded six-member <c>reason</c>
-/// domain and the only writes to it were the six increments. A cluster in which
-/// no reshard had ever been refused for <c>shrink_unsupported</c> published no
+/// <b>What was wrong.</b> The counter declares a bounded <c>reason</c> domain and
+/// the only writes to it were the increments. A cluster in which no reshard had
+/// ever been refused for <c>already_in_progress</c> published no
 /// such series at all, which scrapes identically to a build where that call site
 /// was deleted, and identically again to a build where the whole counter is
 /// unwired. So the reading an operator wants - "nothing has been refused for
@@ -29,12 +29,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// any of the three.
 /// </para>
 /// <para>
-/// <b>Why the prime sits where it does.</b> All six rejection sites are inside
+/// <b>Why the prime sits where it does.</b> All five rejection sites are inside
 /// <c>ReshardAsync</c>, each behind its own early return or throw. A prime below
 /// any one of them is unreachable on exactly the path whose absence it exists to
-/// make readable, so it goes above all six. It sits deliberately BELOW the
+/// make readable, so it goes above all five. It sits deliberately BELOW the
 /// internal-origin gate: a call refused for a non-internal origin never reaches
-/// any of the six and is not a reshard rejection in this taxonomy, so the
+/// any of the five and is not a reshard rejection in this taxonomy, so the
 /// population primed is exactly the population that can arm the counter.
 /// </para>
 /// </summary>
@@ -42,8 +42,9 @@ public partial class TreeReshardGrainTests
 {
     /// <summary>
     /// The rejection reasons the grain arms, in the order the source declares
-    /// them. Kept here rather than read by reflection because the values are
-    /// string literals at the emission sites; a seventh reason added without a
+    /// them. <c>shrink_unsupported</c> left the taxonomy when a populated tree
+    /// became shrinkable. Kept here rather than read by reflection because the
+    /// values are string literals at the emission sites; a new reason added without a
     /// matching prime is caught by
     /// <see cref="Every_armed_rejection_reason_is_also_primed"/>, which reads the
     /// source rather than this list.
@@ -53,7 +54,6 @@ public partial class TreeReshardGrainTests
         "argument_out_of_range_min",
         "argument_out_of_range_max",
         "already_in_progress",
-        "shrink_unsupported",
         "resize_in_flight",
         "state_write_failed",
     ];
@@ -95,17 +95,17 @@ public partial class TreeReshardGrainTests
     }
 
     /// <summary>
-    /// A reshard that is accepted must still leave all six rejection reasons
+    /// A reshard that is accepted must still leave every rejection reason
     /// published at zero.
     /// <para>
     /// The scenario is the idempotent re-pin - a caller asking for the count the
     /// tree is already at - because it is the ordinary accepted case, it arms
-    /// none of the six, and before this fix it therefore published nothing at
+    /// none of them, and before this fix it therefore published nothing at
     /// all. It is also the sharpest available demonstration of the
     /// prime-above-every-early-return rule: it returns before the resize
     /// interlock and before the state write, so <c>resize_in_flight</c> and
     /// <c>state_write_failed</c> can only be zero here if the prime sits above
-    /// both. Reverting the prime block reddens this, because all six arms become
+    /// both. Reverting the prime block reddens this, because every arm becomes
     /// absent rather than zero.
     /// </para>
     /// <para>
@@ -148,7 +148,7 @@ public partial class TreeReshardGrainTests
 
     /// <summary>
     /// The positive control. A rejected reshard must be reported as a one on its
-    /// own reason by this same listener, with the other five still at zero.
+    /// own reason by this same listener, with the others still at zero.
     /// <para>
     /// Without this, the test above is indistinguishable from a harness that
     /// observes nothing: a listener that enables no instrument, or a tag filter
@@ -158,7 +158,7 @@ public partial class TreeReshardGrainTests
     /// vacuous by construction.
     /// </para>
     /// <para>
-    /// That the other five stay at zero is the second half of the control: it
+    /// That the others stay at zero is the second half of the control: it
     /// shows the harness attributes a measurement to the arm that produced it
     /// rather than to every arm it is watching.
     /// </para>
@@ -167,12 +167,12 @@ public partial class TreeReshardGrainTests
     [NonParallelizable]
     public void A_rejected_reshard_is_reported_as_one_on_its_reason_by_this_same_harness()
     {
-        const string Rejected = "shrink_unsupported";
+        const string Rejected = "argument_out_of_range_max";
 
-        var (grain, _, _, _) = CreateGrain(physicalShardCount: 4);
+        var (grain, _, _, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 4);
         var (listener, totals) = ListenForRejectionReasons();
 
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(2));
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(17));
 
         listener.Dispose();
 
@@ -200,7 +200,7 @@ public partial class TreeReshardGrainTests
     /// value the grain arms with a one is also emitted with a zero somewhere in
     /// the same file.
     /// <para>
-    /// This is the arm that survives a seventh reason being added. The two tests
+    /// This is the arm that survives a new reason being added. The two tests
     /// above enumerate the taxonomy from a list in this file, so a new rejection
     /// site would leave them green while its arm went unprimed - which is the
     /// original defect, reintroduced one value at a time. Checking the source

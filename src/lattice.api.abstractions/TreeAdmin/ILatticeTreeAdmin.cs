@@ -507,17 +507,18 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Triggers an <b>online reshard</b> that grows <paramref name="treeId"/> to
+    /// Triggers an <b>online reshard</b> that grows or shrinks <paramref name="treeId"/> to
     /// <paramref name="targetShardCount"/> distinct physical shards, after authorizing
     /// the whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability
-    /// fail-closed. The tree keeps serving reads and writes throughout: the migration
-    /// iteratively splits the largest-slot-owning shards and atomically swaps
-    /// virtual-slot routing per split, anchored by reminders so it survives silo
-    /// restarts. Returns once the coordinator has accepted the intent; poll completion
-    /// with <see cref="GetReshardStatusAsync"/>. <b>Grow-only</b>: a target below the
-    /// current physical shard count is rejected (an empty tree may be re-pinned to any
-    /// count), and the target must be at least 2 and at most the virtual shard space
-    /// (4096). Idempotent: a request for the count the tree is already at, or a
+    /// fail-closed. The tree keeps serving reads and writes throughout: a grow
+    /// iteratively splits the largest-slot-owning shards and a shrink iteratively
+    /// folds adjacent shards together through online shard consolidation, each step
+    /// atomically swapping virtual-slot routing, anchored by reminders so it survives
+    /// silo restarts. A shrink finishes only once the retired shards' storage has been
+    /// released. Returns once the coordinator has accepted the intent; poll completion
+    /// with <see cref="GetReshardStatusAsync"/>. The target must be at least 2 and at
+    /// most the virtual shard space (4096); an empty tree is re-pinned directly.
+    /// Idempotent: a request for the count the tree is already at, or a
     /// matching in-flight target, is a no-op. Reserved system tree ids are rejected.
     /// </summary>
     /// <param name="treeId">The tree to reshard. Must not be <c>null</c>, empty, or reserved.</param>
@@ -525,7 +526,7 @@ public interface ILatticeTreeAdmin
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's reshard status after the trigger, echoing the requested target.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetShardCount"/> is out of range or would shrink the tree.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetShardCount"/> is out of range.</exception>
     /// <exception cref="InvalidOperationException">A reshard with a different target, or a resize, is already in progress.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
     Task<TreeReshardStatus> ReshardTreeAsync(

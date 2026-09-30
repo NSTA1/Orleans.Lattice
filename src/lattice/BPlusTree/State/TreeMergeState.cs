@@ -73,4 +73,16 @@ internal sealed class TreeMergeState
     /// </para>
     /// </summary>
     [Id(9)] public string? DrainCursorKey { get; set; }
+
+    /// <summary>
+    /// Position in <see cref="SourcePhysicalShards"/> where the most recently
+    /// resolved generation of source shards begins. Before completing, the merge
+    /// checks that every shard from here on is still in the source's routing
+    /// map; one that is not was retired by an online shard consolidation, which
+    /// releases its storage, so its slots are re-drained from their current
+    /// owners by appending the source's current shards as a new generation.
+    /// State persisted before the field existed deserializes to <c>0</c>, which
+    /// checks the whole list - the correct reading of a single generation.
+    /// </summary>
+    [Id(10)] public int SourceGenerationStart { get; set; }
 }

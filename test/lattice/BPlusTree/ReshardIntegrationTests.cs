@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
 [Category("Integration")]
-public class ReshardIntegrationTests
+public partial class ReshardIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
@@ -133,21 +133,6 @@ public class ReshardIntegrationTests
         }
 
         Assert.That(await tree.CountAsync(), Is.EqualTo(keyCount), "Count must match pre-reshard total.");
-    }
-
-    [Test]
-    public void ReshardAsync_throws_when_target_below_current()
-    {
-        var treeId = $"reshard-invalid-{Guid.NewGuid():N}";
-        RegisterTreeAsync(treeId).GetAwaiter().GetResult();
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
-
-        // Seed a key so the empty-tree fast-path (which allows any target) is
-        // bypassed and the grow-only validation below is actually exercised.
-        tree.SetAsync("seed", [1]).GetAwaiter().GetResult();
-
-        // Cluster is configured with 4 shards; a genuine shrink (<4) must throw.
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => tree.ReshardAsync(2));
     }
 
     [Test]

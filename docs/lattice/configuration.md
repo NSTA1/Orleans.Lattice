@@ -795,7 +795,7 @@ This option can be changed freely at any time.
 
 ### `MaxConcurrentMigrations`
 
-Maximum number of shard splits an online reshard (`ILattice.ReshardAsync`) may drive concurrently (default: 4). Each split drains one physical shard's upper-half virtual slots into a newly allocated target shard; running several in parallel shortens the reshard at the cost of proportionally more background drain I/O. Values below 1 are treated as 1. Splits driven by a reshard are independent of autonomic splits, so this cap and [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) compose additively.
+Maximum number of shard splits (grow) or shard consolidations (shrink) an online reshard (`ILattice.ReshardAsync`) may drive concurrently (default: 4). Each split drains one physical shard's upper-half virtual slots into a newly allocated target shard, and each fold drains one shard into an adjacent survivor; running several in parallel shortens the reshard at the cost of proportionally more background drain I/O. Values below 1 are treated as 1. Splits driven by a reshard are independent of autonomic splits, so this cap and [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) compose additively. A shrink's folds are bounded by this option, not by [`MaxConcurrentShardConsolidations`](#maxconcurrentshardconsolidations), which governs automatic healing only.
 
 This option can be changed freely at any time.
 

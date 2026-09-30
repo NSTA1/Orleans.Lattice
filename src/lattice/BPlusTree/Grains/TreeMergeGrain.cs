@@ -133,6 +133,7 @@ internal sealed class TreeMergeGrain(
         var prevSourcePhysicalShards = state.State.SourcePhysicalShards;
         var prevComplete = state.State.Complete;
         var prevDrainCursor = state.State.DrainCursorKey;
+        var prevGenerationStart = state.State.SourceGenerationStart;
 
         state.State.InProgress = true;
         state.State.NextShardIndex = 0;
@@ -143,6 +144,7 @@ internal sealed class TreeMergeGrain(
         state.State.SourcePhysicalTreeId = sourcePhysicalTreeId;
         state.State.TargetPhysicalTreeId = targetPhysicalTreeId;
         state.State.SourcePhysicalShards = [.. sourcePhysicalShards];
+        state.State.SourceGenerationStart = 0;
         state.State.Complete = false;
         try
         {
@@ -160,6 +162,7 @@ internal sealed class TreeMergeGrain(
             state.State.SourcePhysicalShards = prevSourcePhysicalShards;
             state.State.Complete = prevComplete;
             state.State.DrainCursorKey = prevDrainCursor;
+            state.State.SourceGenerationStart = prevGenerationStart;
             throw;
         }
     }
@@ -170,12 +173,83 @@ internal sealed class TreeMergeGrain(
 
         await EnsureTopologyResolvedAsync();
 
-        while (state.State.NextShardIndex < state.State.SourcePhysicalShards.Length)
+        do
         {
-            await ProcessCurrentShardAsync();
+            while (state.State.NextShardIndex < state.State.SourcePhysicalShards.Length)
+            {
+                await ProcessCurrentShardAsync();
+            }
         }
+        while (await AppendRetiredSourceGenerationAsync());
 
         await CompleteMergeAsync();
+    }
+
+    /// <summary>
+    /// Checks, before the merge completes, whether a source shard it recorded
+    /// has since been retired by an online shard consolidation, and if so
+    /// appends the source's current physical shards as a new generation to
+    /// drain. Returns <see langword="true"/> when a generation was appended.
+    /// <para>
+    /// A fold moves its donor's slots onto a survivor and then releases the
+    /// donor's storage, so a donor drained after it retired yields nothing, and
+    /// a survivor drained before it absorbed the donor lacks the donor's keys.
+    /// Re-draining every current shard covers both: each entry carries its
+    /// original HLC, so re-merging what was already merged is a fixed point.
+    /// A split never removes a shard, and its source keeps the moved entries
+    /// until a later fold retires it, so only a removed shard forces a pass.
+    /// Terminates because each appended generation answers a shard that left
+    /// the map, and a tree only has finitely many to lose.
+    /// </para>
+    /// </summary>
+    private async Task<bool> AppendRetiredSourceGenerationAsync()
+    {
+        var sourceTreeId = state.State.SourceTreeId!;
+        var registry = grainFactory.GetLatticeRegistry();
+        var sourceOptions = await optionsResolver.ResolveAsync(sourceTreeId);
+        var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, sourceOptions.ShardCount);
+        var current = sourceMap.GetPhysicalShardIndices();
+
+        var recorded = state.State.SourcePhysicalShards;
+        var generationStart = Math.Clamp(state.State.SourceGenerationStart, 0, recorded.Length);
+        var anyRetired = false;
+        for (var i = generationStart; i < recorded.Length; i++)
+        {
+            if (!current.Contains(recorded[i]))
+            {
+                anyRetired = true;
+                break;
+            }
+        }
+
+        if (!anyRetired) return false;
+
+        var prevShards = state.State.SourcePhysicalShards;
+        var prevGenerationStart = state.State.SourceGenerationStart;
+        var prevRetries = state.State.ShardRetries;
+        var prevCursor = state.State.DrainCursorKey;
+        state.State.SourceGenerationStart = recorded.Length;
+        state.State.SourcePhysicalShards = [.. recorded, .. current];
+        state.State.ShardRetries = 0;
+        state.State.DrainCursorKey = null;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.SourcePhysicalShards = prevShards;
+            state.State.SourceGenerationStart = prevGenerationStart;
+            state.State.ShardRetries = prevRetries;
+            state.State.DrainCursorKey = prevCursor;
+            throw;
+        }
+
+        logger.LogInformation(
+            "Merge of tree {SourceTreeId} into {TargetTreeId} re-drains {ShardCount} source shard(s): a shard it recorded was retired by a shard consolidation while it ran.",
+            sourceTreeId, TargetTreeId, current.Count);
+        return true;
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)
@@ -243,6 +317,7 @@ internal sealed class TreeMergeGrain(
 
         if (state.State.NextShardIndex >= state.State.SourcePhysicalShards.Length)
         {
+            if (await AppendRetiredSourceGenerationAsync()) return;
             await CompleteMergeAsync();
             return;
         }

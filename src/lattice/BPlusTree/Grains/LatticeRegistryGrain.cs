@@ -647,7 +647,20 @@ internal sealed class LatticeRegistryGrain(
             Slots = newSlots,
             Version = (existing.ShardMap?.Version ?? 0L) + 1,
         };
-        await UpdateAsync(treeId, existing with { ShardMap = reassigned });
+
+        // A reassignment can drop a physical index from the map - a fold
+        // retires its donor this way - and the split allocator derives the next
+        // index from the highest one the map still references. Raise the
+        // allocation high-water to cover every index this map referenced, so a
+        // retired shard, which keeps a routing tombstone, is never handed out
+        // again as a split target.
+        var highestReferenced = currentMap.GetPhysicalShardIndices() is { Count: > 0 } referenced
+            ? referenced[referenced.Count - 1]
+            : -1;
+        var highWater = Math.Max(existing.NextShardIndex ?? -1, highestReferenced);
+        int? nextShardIndex = highWater >= 0 ? highWater : existing.NextShardIndex;
+
+        await UpdateAsync(treeId, existing with { ShardMap = reassigned, NextShardIndex = nextShardIndex });
         return reassigned;
     }
 

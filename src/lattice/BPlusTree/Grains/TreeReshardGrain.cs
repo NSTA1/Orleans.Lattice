@@ -16,16 +16,20 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// target shard count and transition to
 /// <see cref="ReshardPhase.Migrating"/>.</description></item>
 /// <item><description><see cref="ReshardPhase.Migrating"/> - each tick
-/// inspects the current <see cref="ShardMap"/>, counts distinct physical
-/// shards, and - while below target - dispatches up to
+/// inspects the current <see cref="ShardMap"/> and moves it towards the target.
+/// A <b>grow</b> dispatches up to
 /// <see cref="LatticeOptions.MaxConcurrentMigrations"/> per-shard
 /// <see cref="ITreeShardSplitGrain.SplitAsync"/> calls against the
 /// largest-slot-owning eligible shards (those owning at least two virtual
-/// slots and not already splitting). Every completed split atomically
-/// grows the map by one distinct physical shard via its swap phase; the
-/// next tick simply re-evaluates.</description></item>
+/// slots and not already splitting); every completed split atomically
+/// grows the map by one distinct physical shard via its swap phase. A
+/// <b>shrink</b> (<see cref="TreeReshardState.Shrinking"/>) starts up to the
+/// same number of online shard consolidations
+/// (<see cref="ITreeShardConsolidationGrain"/>) against the cheapest adjacent
+/// shard pairs; every completed fold retires one physical shard from the map
+/// and releases its storage. The next tick simply re-evaluates.</description></item>
 /// <item><description><see cref="ReshardPhase.Complete"/> - target
-/// reached; coordinator re-pins the registry's <c>ShardCount</c> to the
+/// reached (and, for a shrink, every fold finished); coordinator re-pins the registry's <c>ShardCount</c> to the
 /// target, clears <see cref="TreeReshardState.InProgress"/>, records the
 /// completion metrics, publishes the reshard-completed event when event
 /// publishing is enabled, triggers a reconcile of any tag index covering the
@@ -71,20 +75,20 @@ internal sealed class TreeReshardGrain(
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId));
         var tenantTag = LatticeTenantLabel.ForTree(TreeId);
 
-        // Zero-prime every member of the rejection taxonomy before any of the six
+        // Zero-prime every member of the rejection taxonomy before any of the five
         // sites below can arm one (issue #2918). The counter carries a bounded
         // `reason` domain, and before this only the reason that had already fired
         // existed as a series - so "no reshard was ever rejected for
-        // shrink_unsupported" and "this build has no shrink_unsupported call site"
+        // already_in_progress" and "this build has no already_in_progress call site"
         // scraped identically, and neither could be told from "the rejection
         // counter is not wired at all". Adding zero to a counter is the identity,
         // so the arms below read exactly as they did.
         //
-        // Placed above all six rejection sites, which is the whole point: a prime
+        // Placed above all five rejection sites, which is the whole point: a prime
         // below any one of them is unreachable on precisely the path whose absence
         // it exists to make readable. It sits BELOW the origin gate deliberately -
         // a call refused for a non-internal origin is not a reshard rejection in
-        // this taxonomy and never reaches any of the six, so the population this
+        // this taxonomy and never reaches any of the five, so the population this
         // primes is exactly the population that can arm it.
         //
         // The issue filed this as unprimable because LatticeMetrics is a static
@@ -92,7 +96,7 @@ internal sealed class TreeReshardGrain(
         // instrument is EMITTED from a grain, and the emitting grain's own entry
         // point is a lifecycle seam with all the reachability the prime needs.
         //
-        // The six are written out rather than looped because the enrolment gate
+        // The five are written out rather than looped because the enrolment gate
         // in test/lattice/Hygiene reads zero-primed values by matching literal
         // `new KeyValuePair<string, object?>(...)` arguments on a zero-valued Add;
         // a foreach over a collection of tags is invisible to it, so a loop would
@@ -103,7 +107,6 @@ internal sealed class TreeReshardGrain(
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_min"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_max"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "already_in_progress"), tenantTag);
-        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "resize_in_flight"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"), tenantTag);
 
@@ -143,14 +146,13 @@ internal sealed class TreeReshardGrain(
                 $"A reshard is already in progress for tree '{TreeId}' (target={state.State.TargetShardCount}).");
         }
 
-        // Inspect the current map to validate grow-only semantics.
+        // Inspect the current map to pick the direction.
         var currentCount = currentMap.GetPhysicalShardIndices().Count;
 
         // Empty-tree fast-path: if the tree has no live entries yet,
         // repin ShardCount atomically and rebuild the default identity map
-        // without activating the coordinator machinery. This also relaxes
-        // the grow-only restriction so callers (including test fixtures)
-        // can set any desired shard count on a freshly-created tree.
+        // without activating the coordinator machinery. No data has to move,
+        // so a grow and a shrink are the same single registry write.
         if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap))
         {
             await ApplyEmptyTreeResharAsync(registry, newShardCount, virtualShardCount);
@@ -167,24 +169,10 @@ internal sealed class TreeReshardGrain(
             return;
         }
 
-        if (newShardCount < currentCount)
-        {
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"), tenantTag);
-#if LATTICE_DIAG
-            // DIAG-PATH1: diagnose why currentCount mis-tracks the pinned ShardCount.
-            var diagRegistry = grainFactory.GetLatticeRegistry();
-            var diagEntry = await diagRegistry.GetEntryAsync(TreeId);
-            var diagMap = await diagRegistry.GetShardMapAsync(TreeId);
-            var diagPhysical = diagMap?.GetPhysicalShardIndices()?.Count;
-            var diagVsc = diagMap?.Slots.Length;
-            throw new ArgumentOutOfRangeException(nameof(newShardCount),
-                $"Target shard count ({newShardCount}) must be greater than current count ({currentCount}). Shrink is not supported. " +
-                $"[DIAG-PATH1 resolved.ShardCount={resolved.ShardCount} entry.ShardCount={diagEntry?.ShardCount} entry.MaxLeafKeys={diagEntry?.MaxLeafKeys} entry.MaxInternalChildren={diagEntry?.MaxInternalChildren} map.VirtualShardCount={diagVsc} map.PhysicalCount={diagPhysical} map.Version={diagMap?.Version}]");
-#else
-            throw new ArgumentOutOfRangeException(nameof(newShardCount),
-                $"Target shard count ({newShardCount}) must be greater than current count ({currentCount}). Shrink is not supported.");
-#endif
-        }
+        // A populated tree below its current count shrinks by online shard
+        // consolidation - the inverse of the split a grow dispatches - folding
+        // adjacent shards together until the map holds the target count.
+        var shrinking = newShardCount < currentCount;
 
         // Interlock: refuse to start a reshard while a resize is in flight.
         // Resize crosses physical trees; concurrent ShardMap mutation on the
@@ -215,6 +203,8 @@ internal sealed class TreeReshardGrain(
         var prevOperationId = state.State.OperationId;
         var prevPhase = state.State.Phase;
         var prevTargetShardCount = state.State.TargetShardCount;
+        var prevShrinking = state.State.Shrinking;
+        var prevDonors = state.State.ConsolidationDonorShardIndices;
 
         if (state.State.Complete) state.State.Complete = false;
 
@@ -222,6 +212,8 @@ internal sealed class TreeReshardGrain(
         state.State.OperationId = Guid.NewGuid().ToString("N");
         state.State.Phase = ReshardPhase.Migrating;
         state.State.TargetShardCount = newShardCount;
+        state.State.Shrinking = shrinking;
+        state.State.ConsolidationDonorShardIndices = [];
         try
         {
             await state.WriteStateAsync();
@@ -233,6 +225,8 @@ internal sealed class TreeReshardGrain(
             state.State.OperationId = prevOperationId;
             state.State.Phase = prevPhase;
             state.State.TargetShardCount = prevTargetShardCount;
+            state.State.Shrinking = prevShrinking;
+            state.State.ConsolidationDonorShardIndices = prevDonors;
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"), tenantTag);
             throw;
         }
@@ -366,6 +360,12 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task MigrateAsync()
     {
+        if (state.State.Shrinking)
+        {
+            await ConsolidateAsync();
+            return;
+        }
+
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetLatticeRegistry();
         var currentMap = await registry.GetShardMapAsync(TreeId)
@@ -374,25 +374,7 @@ internal sealed class TreeReshardGrain(
         var physicalShards = currentMap.GetPhysicalShardIndices();
         if (physicalShards.Count >= state.State.TargetShardCount)
         {
-            // Snapshot Phase so a failing persist of the Migrating->Complete
-            // flip doesn't leak an in-memory Phase=Complete ahead of disk.
-            // Bundled with the high-priority guarded sites in ReshardAsync /
-            // FinaliseAsync per the same-grain Class B rule: a dirty
-            // in-memory Phase=Complete here would trigger RunReshardPassAsync's
-            // `if (Phase == Complete) await FinaliseAsync()` clause on the
-            // next tick (without a fresh reload), advancing the workflow
-            // past Migrating while disk still says we're mid-migration.
-            var prevPhase = state.State.Phase;
-            state.State.Phase = ReshardPhase.Complete;
-            try
-            {
-                await state.WriteStateAsync();
-            }
-            catch
-            {
-                state.State.Phase = prevPhase;
-                throw;
-            }
+            await EnterCompletePhaseAsync();
             return;
         }
 
@@ -453,6 +435,267 @@ internal sealed class TreeReshardGrain(
         }
         await Task.WhenAll(dispatches);
     }
+
+    /// <summary>
+    /// Flips the persisted phase from <see cref="ReshardPhase.Migrating"/> to
+    /// <see cref="ReshardPhase.Complete"/> once the target is reached.
+    /// </summary>
+    private async Task EnterCompletePhaseAsync()
+    {
+        // Snapshot Phase so a failing persist of the Migrating->Complete
+        // flip doesn't leak an in-memory Phase=Complete ahead of disk.
+        // Bundled with the high-priority guarded sites in ReshardAsync /
+        // FinaliseAsync per the same-grain Class B rule: a dirty
+        // in-memory Phase=Complete here would trigger RunReshardPassAsync's
+        // `if (Phase == Complete) await FinaliseAsync()` clause on the
+        // next tick (without a fresh reload), advancing the workflow
+        // past Migrating while disk still says we're mid-migration.
+        var prevPhase = state.State.Phase;
+        state.State.Phase = ReshardPhase.Complete;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// One shrink tick: reconciles the folds this reshard started, terminates
+    /// once the map holds at most the target number of physical shards with no
+    /// fold still running, and otherwise starts up to
+    /// <see cref="LatticeOptions.MaxConcurrentMigrations"/> new folds against
+    /// the cheapest adjacent pairs. Exposed as <c>internal</c> for unit testing.
+    /// <para>
+    /// Each fold is an <see cref="ITreeShardConsolidationGrain"/> - the online,
+    /// crash-safe inverse of the split a grow dispatches - which also releases
+    /// the retired donor's storage when it commits. Waiting for every started
+    /// fold to finish, not merely for the map to reach the target, is what
+    /// makes a completed shrink mean the old shards have been cleaned up.
+    /// </para>
+    /// <para>
+    /// Pair selection mirrors the healing orchestrator's: plan against the map
+    /// the in-flight folds will leave, never fold a shard that is concurrently
+    /// absorbing another, and record intent before starting a fold so the
+    /// tracked set can over-count but never under-count.
+    /// </para>
+    /// </summary>
+    internal async Task ConsolidateAsync()
+    {
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var registry = grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(TreeId);
+
+        // Reconcile: drop folds that finished or were abandoned, and learn the
+        // survivor of each one still running.
+        var tracked = state.State.ConsolidationDonorShardIndices;
+        var survivors = new List<int>(tracked.Count);
+        var trackedChanged = false;
+        for (var i = tracked.Count - 1; i >= 0; i--)
+        {
+            ShardConsolidationProgress progress;
+            try
+            {
+                progress = await ConsolidationGrain(tracked[i]).GetProgressAsync();
+            }
+            catch (Exception ex)
+            {
+                // Unreachable this tick is not evidence the fold finished; keep
+                // tracking it and plan nothing against an unknown survivor.
+                Logger.LogDebug(ex,
+                    "Could not read consolidation progress for donor shard {DonorShardIndex} during reshard of tree {TreeId}",
+                    tracked[i], TreeId);
+                survivors.Add(UnknownSurvivor);
+                continue;
+            }
+
+            if (progress.InProgress)
+            {
+                survivors.Add(progress.SurvivorShardIndex);
+                continue;
+            }
+
+            tracked.RemoveAt(i);
+            trackedChanged = true;
+            Logger.LogInformation(
+                "Reshard of tree {TreeId} observed consolidation of shard {DonorShardIndex} into shard {SurvivorShardIndex} finish (complete={Complete}, cancelled={Cancelled})",
+                TreeId, progress.DonorShardIndex, progress.SurvivorShardIndex, progress.Complete, progress.Cancelled);
+        }
+
+        // The reverse walk collected survivors in reverse tracked order.
+        survivors.Reverse();
+        if (trackedChanged) await PersistTrackedFoldsAsync();
+
+        // Running folds are not driven from here: each fold's reminder-anchored
+        // timer is its motor, and a fold's swap and finalise steps - including
+        // the release of its donor's storage - are deliberately unbounded, so
+        // driving them inline would hold this coordinator's turn, and with it
+        // every IsReshardCompleteAsync poll, for as long as they take.
+
+        var map = await registry.GetShardMapAsync(TreeId)
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+        var physicalCount = map.GetPhysicalShardIndices().Count;
+
+        if (physicalCount <= state.State.TargetShardCount)
+        {
+            // Every fold that started must also have finished - including the
+            // release of its donor's storage - before the reshard reports done.
+            if (tracked.Count == 0) await EnterCompletePhaseAsync();
+            return;
+        }
+
+        var maxConcurrent = Math.Max(1, resolved.MaxConcurrentMigrations);
+
+        // A fold removes its donor from the map at its swap, well before it
+        // finishes, so only the tracked folds whose donor the map still
+        // references are reductions still to come.
+        var physicalShards = map.GetPhysicalShardIndices();
+        var pendingReductions = 0;
+        foreach (var donor in tracked)
+        {
+            if (IndexOfAscending(physicalShards, donor) >= 0) pendingReductions++;
+        }
+
+        var needed = physicalCount - state.State.TargetShardCount - pendingReductions;
+        var budget = Math.Min(maxConcurrent - tracked.Count, needed);
+        if (budget <= 0) return;
+
+        if (survivors.Contains(UnknownSurvivor)) return;
+
+        // Folds automatic healing admitted before this reshard began are still
+        // driven by their own coordinators. Wait them out rather than plan
+        // around pairs this coordinator cannot see.
+        if (await HasHealingFoldInFlightAsync(physicalTreeId)) return;
+
+        // A snapshot or merge reads the shards it recorded at its start, and a
+        // fold releases its donor's storage when it commits. Start no fold
+        // while one runs, as healing stands off them; a resize cannot run
+        // alongside a reshard at all.
+        if (await IsSnapshotOrMergeInFlightAsync()) return;
+
+        var reserved = new HashSet<int>(tracked);
+        foreach (var survivor in survivors) reserved.Add(survivor);
+        var planningMap = tracked.Count == 0 ? map : ProjectFolds(map, tracked, survivors);
+
+        for (var started = 0; started < budget; started++)
+        {
+            if (!ShardConsolidationPlanner.TryPlanNext(planningMap, out var plan)) return;
+
+            // The projection hides an in-flight fold's donor but not its
+            // survivor; a pair touching a shard already part of a fold waits for
+            // the next tick, when that fold has committed.
+            if (reserved.Contains(plan.DonorShardIndex) || reserved.Contains(plan.SurvivorShardIndex)) return;
+
+            tracked.Add(plan.DonorShardIndex);
+            await PersistTrackedFoldsAsync();
+
+            try
+            {
+                await ConsolidationGrain(plan.DonorShardIndex).StartAsync(plan.SurvivorShardIndex);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // A split or another fold holds one side of the pair. Transient;
+                // un-record the intent and re-plan next tick.
+                tracked.Remove(plan.DonorShardIndex);
+                await PersistTrackedFoldsAsync();
+                Logger.LogDebug(ex,
+                    "Could not start consolidation of shard {DonorShardIndex} into shard {SurvivorShardIndex} during reshard of tree {TreeId}",
+                    plan.DonorShardIndex, plan.SurvivorShardIndex, TreeId);
+                return;
+            }
+
+            Logger.LogInformation(
+                "Reshard of tree {TreeId} started consolidation of shard {DonorShardIndex} into shard {SurvivorShardIndex} ({SlotCount} virtual slots)",
+                TreeId, plan.DonorShardIndex, plan.SurvivorShardIndex, plan.DonorSlots.Length);
+
+            reserved.Add(plan.DonorShardIndex);
+            reserved.Add(plan.SurvivorShardIndex);
+            planningMap = ProjectFolds(planningMap, [plan.DonorShardIndex], [plan.SurvivorShardIndex]);
+        }
+    }
+
+    /// <summary>
+    /// Sentinel survivor for a tracked fold whose coordinator could not be read.
+    /// Distinct from every real physical shard index, which is non-negative.
+    /// </summary>
+    private const int UnknownSurvivor = -1;
+
+    /// <summary>
+    /// The consolidation coordinator for <paramref name="donorShardIndex"/>,
+    /// keyed by the logical tree id exactly as the grow path keys its split
+    /// coordinators, so it reads and reassigns the same routing map.
+    /// </summary>
+    private ITreeShardConsolidationGrain ConsolidationGrain(int donorShardIndex)
+        => grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{TreeId}/{donorShardIndex}");
+
+    /// <summary>
+    /// Whether automatic healing still has a fold running on this tree. Reads
+    /// the orchestrator's tracked donors and asks each donor's coordinator,
+    /// because the orchestrator's own record can over-count.
+    /// </summary>
+    private async Task<bool> HasHealingFoldInFlightAsync(string physicalTreeId)
+    {
+        var donors = await grainFactory.GetGrain<IShardHealingOrchestratorGrain>(TreeId)
+            .GetInFlightDonorShardIndicesAsync();
+        foreach (var donor in donors)
+        {
+            var fold = grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{physicalTreeId}/{donor}");
+            if (!await fold.IsIdleAsync()) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a snapshot of, or a merge into, this tree is running. Read through
+    /// the tree's own status verbs under a system-origin scope, as the healing
+    /// orchestrator's stand-off reads them. Deliberately never asks
+    /// <see cref="ILattice.IsReshardCompleteAsync"/>, which would call back into
+    /// this coordinator.
+    /// </summary>
+    private async Task<bool> IsSnapshotOrMergeInFlightAsync()
+    {
+        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return !await lattice.IsSnapshotCompleteAsync()
+                || !await lattice.IsMergeCompleteAsync();
+        }
+    }
+
+    /// <summary>
+    /// Builds the routing map the tree will have once each listed fold commits,
+    /// by re-pointing every donor's slots onto its survivor. Pairs whose
+    /// survivor is unknown are skipped.
+    /// </summary>
+    private static ShardMap ProjectFolds(ShardMap map, IReadOnlyList<int> donors, IReadOnlyList<int> survivors)
+    {
+        var projected = (int[])map.Slots.Clone();
+        var pairs = Math.Min(donors.Count, survivors.Count);
+        for (var i = 0; i < pairs; i++)
+        {
+            var donor = donors[i];
+            var survivor = survivors[i];
+            if (survivor == UnknownSurvivor) continue;
+            for (var slot = 0; slot < projected.Length; slot++)
+            {
+                if (projected[slot] == donor) projected[slot] = survivor;
+            }
+        }
+
+        return new ShardMap { Slots = projected, Version = map.Version };
+    }
+
+    /// <summary>
+    /// Persists the tracked fold set. A failure propagates: the intent record
+    /// is what bounds concurrency and holds the shrink open, so a fold must not
+    /// be started when its intent could not be written.
+    /// </summary>
+    private Task PersistTrackedFoldsAsync() => state.WriteStateAsync();
 
     /// <summary>
     /// Counts how many virtual slots each physical shard owns, returning the
@@ -643,13 +886,32 @@ internal sealed class TreeReshardGrain(
     /// live entries the reshard reduces to a single registry write that
     /// updates the <see cref="State.TreeRegistryEntry.ShardCount"/> pin and
     /// rebuilds the default identity <see cref="ShardMap"/> for the new
-    /// count over the tree's existing virtual slot count. The grow-only
-    /// restriction does not apply because no data has to be migrated.
+    /// count over the tree's existing virtual slot count. With no data to
+    /// move, a grow and a shrink are the same single registry write.
     /// </summary>
     private async Task ApplyEmptyTreeResharAsync(ILatticeRegistry registry, int newShardCount, int virtualShardCount)
     {
-        await UpdateShardCountPinAsync(newShardCount);
         var newMap = ShardMap.CreateDefault(virtualShardCount, newShardCount);
+
+        // The identity map routes to indices 0..n-1, which may include shards a
+        // shrink retired. Return them to service before any router can be
+        // handed the map, or every operation on their slots would be refused as
+        // stale routing. The tree is observably empty, so they hold nothing.
+        var physicalTreeId = await ResolvePhysicalTreeIdAsync();
+        var indices = newMap.GetPhysicalShardIndices();
+        var ownedSlots = new List<int>[indices.Count];
+        for (var i = 0; i < ownedSlots.Length; i++) ownedSlots[i] = [];
+        for (var slot = 0; slot < newMap.Slots.Length; slot++)
+        {
+            var ordinal = IndexOfAscending(indices, newMap.Slots[slot]);
+            if (ordinal >= 0) ownedSlots[ordinal].Add(slot);
+        }
+
+        await BoundedFanOut.RunAsync(indices.Count, BoundedFanOut.DefaultWidth, i =>
+            grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{indices[i]}")
+                .ReviveAsync([.. ownedSlots[i]], virtualShardCount));
+
+        await UpdateShardCountPinAsync(newShardCount);
         await registry.SetShardMapAsync(TreeId, newMap);
         // Snapshot the three fields the empty-tree fast-path mutates so a
         // failing persist doesn't leak Complete=true / Phase=None /

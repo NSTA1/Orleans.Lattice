@@ -5653,7 +5653,7 @@
         },
         {
           "error_id": "argument-out-of-range",
-          "condition": "newShardCount is outside 2..min(DefaultVirtualShardCount, the tree's ShardMap virtual slot count), or shrinks a populated tree below its current physical shard count."
+          "condition": "newShardCount is outside 2..min(DefaultVirtualShardCount, the tree's ShardMap virtual slot count)."
         },
         {
           "error_id": "invalid-operation",

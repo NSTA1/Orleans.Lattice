@@ -438,36 +438,41 @@ public partial class ShardConsolidationIntegrationTests
     // --- Durability coherence ---
 
     [Test]
-    public async Task A_fold_leaves_the_donor_state_and_wal_retention_intact()
+    public async Task A_fold_releases_the_donor_storage_only_after_the_survivor_has_absorbed_it()
     {
         // The highest-severity invariant: a retired donor must not license a
-        // WAL trim over data the survivor has not absorbed. Consolidation makes
-        // that structural by never deleting donor leaf state and never
-        // releasing a pin - the donor is retired from routing only.
+        // WAL trim over data the survivor has not absorbed. The survivor's merge
+        // path appends every drained entry to its own WAL before returning, so
+        // by the time the fold commits the donor's leaves hold nothing the tree
+        // still needs - and keeping them would pin the WAL trim floor forever.
+        // The fold therefore releases them, and the data must stay readable
+        // through a survivor reactivation that replays from the survivor's own
+        // durable state.
         var treeId = $"cons-durability-{Guid.NewGuid():N}";
         var tree = await _fixture.CreateTreeAsync(treeId);
         var expected = await PopulateAsync(tree, "dk", 200);
-
-        var walUsage = _cluster.GrainFactory.GetGrain<ILatticeWalUsage>(treeId);
-        var retainedBefore = (await walUsage.GetWalUsageAsync(CancellationToken.None)).WalRetainedBytes;
 
         var physicalTreeId = await _cluster.GrainFactory
             .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).ResolveAsync(treeId);
         var donor = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/3");
         var donorLeafBefore = await donor.GetLeftmostLeafIdAsync();
+        Assert.That(donorLeafBefore, Is.Not.Null, "precondition: the donor must hold a leaf chain");
 
         await RunFoldAsync(treeId, donor: 3, survivor: 2);
 
         Assert.That(await donor.IsDeletedAsync(), Is.False,
-            "A retired donor must never be soft-deleted; its leaves and their pins have to survive.");
-        Assert.That(await donor.GetLeftmostLeafIdAsync(), Is.EqualTo(donorLeafBefore),
-            "The donor's leaf chain must be intact after the fold, so its durable checkpoints stand.");
-
-        var retainedAfter = (await walUsage.GetWalUsageAsync(CancellationToken.None)).WalRetainedBytes;
-        Assert.That(retainedAfter, Is.GreaterThanOrEqualTo(retainedBefore),
-            "A fold must never make a WAL prefix trimmable that was not trimmable before it ran.");
+            "A retired donor is a routing tombstone, never a soft-deleted shard.");
+        Assert.That(await donor.IsRetiredAsync(), Is.True);
+        Assert.That(await donor.GetLeftmostLeafIdAsync(), Is.Null,
+            "The retired donor must hold no leaf chain once the fold has committed.");
+        Assert.That(await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(donorLeafBefore!.Value).CountAsync(), Is.Zero,
+            "The donor's leaf state must be cleared, which also retires its WAL materialiser pins.");
 
         await AssertAllReadableAsync(tree, expected, "after the fold");
+
+        await _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/2").ForceDeactivateAsync();
+        await AssertAllReadableAsync(tree, expected, "after reactivating the survivor");
+        Assert.That(await tree.CountAsync(), Is.EqualTo(expected.Count));
     }
 
     [Test]
