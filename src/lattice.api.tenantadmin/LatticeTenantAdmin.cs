@@ -223,9 +223,10 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false)
             ?? throw new TenantNotFoundException(tenant.Value);
 
-        // SetQuotas validates the burst percent (fail-closed on a negative value)
-        // and stamps the write through the registry's last-writer-wins merge, so a
-        // re-run of an interrupted author is a stamp-advancing idempotent write.
+        // SetQuotas validates the burst percent and every ceiling (fail-closed on a
+        // negative value) and stamps the write through the registry's
+        // last-writer-wins merge, so a re-run of an interrupted author is a
+        // stamp-advancing idempotent write.
         var applied = TenantQuotasMapping.ToQuotas(quotas);
         record.SetQuotas(applied, _clock.Next(), _writerId);
         await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);

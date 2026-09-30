@@ -511,6 +511,21 @@ public sealed partial class LatticeTenantAdminTests
     }
 
     [Test]
+    public void SetTenantQuotasAsync_rejects_a_negative_ceiling_without_writing()
+    {
+        // Regression for #4096: a negative MaxBytes was accepted and then refused
+        // every write the tenant made.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecord(Tenant));
+        var facade = Create(registry);
+
+        Assert.That(
+            async () => await facade.SetTenantQuotasAsync(Tenant, new TenantQuotasDescriptor { MaxBytes = -1 }),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(registry.Puts, Is.EqualTo(0), "A rejected quota author must not write.");
+    }
+
+    [Test]
     public void SetTenantQuotasAsync_rejects_a_null_or_empty_tenant_id()
     {
         var facade = Create(new FakeTenantRegistry());

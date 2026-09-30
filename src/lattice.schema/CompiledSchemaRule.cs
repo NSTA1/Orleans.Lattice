@@ -50,7 +50,9 @@ internal readonly struct CompiledSchemaRule
     /// <exception cref="ArgumentException">
     /// A <see cref="LatticeSchemaRuleKind.Regex"/> rule carries a pattern that
     /// cannot be compiled with <c>RegexOptions.NonBacktracking</c> (uncompilable
-    /// or non-linear), or a rule is structurally incomplete for its kind.
+    /// or non-linear), a rule is structurally incomplete for its kind, or a
+    /// <see cref="LatticeSchemaEncodingKind.MaxByteLength"/> rule carries a
+    /// negative <see cref="LatticeSchemaRule.MaxByteLength"/>.
     /// </exception>
     public static CompiledSchemaRule Compile(LatticeSchemaRule rule)
     {
@@ -82,10 +84,23 @@ internal readonly struct CompiledSchemaRule
                     default, maxByteLength: 0, reason);
 
             case LatticeSchemaRuleKind.Encoding:
-                if (rule.EncodingKind == LatticeSchemaEncodingKind.MaxByteLength && rule.MaxByteLength is not { } max)
+                if (rule.EncodingKind == LatticeSchemaEncodingKind.MaxByteLength)
                 {
-                    throw new ArgumentException(
-                        "A max-byte-length encoding rule must carry a MaxByteLength.", nameof(rule));
+                    if (rule.MaxByteLength is not { } max)
+                    {
+                        throw new ArgumentException(
+                            "A max-byte-length encoding rule must carry a MaxByteLength.", nameof(rule));
+                    }
+
+                    // The MaxLength factory rejects a negative limit, but a rule built
+                    // with an initializer or read off the wire bypasses it; a negative
+                    // limit would reject every value, so refuse it at policy-set time.
+                    if (max < 0)
+                    {
+                        throw new ArgumentException(
+                            $"A max-byte-length encoding rule's MaxByteLength must be non-negative, but was {max}.",
+                            nameof(rule));
+                    }
                 }
 
                 return new CompiledSchemaRule(

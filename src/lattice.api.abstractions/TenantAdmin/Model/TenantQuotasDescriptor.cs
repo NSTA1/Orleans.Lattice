@@ -7,7 +7,8 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// engine's quota model without taking a dependency on it, so the control-API
 /// contract stays engine-agnostic: each resource dimension is a nullable ceiling
 /// where <see langword="null"/> means <em>unbounded</em> (no limit on that
-/// dimension), and <see cref="BurstPercent"/> is the transient headroom, as a
+/// dimension) and a bounded ceiling must be non-negative, and
+/// <see cref="BurstPercent"/> is the transient headroom, as a
 /// percentage of the bounded ceilings, a tenant may momentarily exceed before
 /// admission control engages (<c>0</c> means no burst).
 /// </summary>

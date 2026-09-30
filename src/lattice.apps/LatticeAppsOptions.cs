@@ -22,13 +22,16 @@ public sealed class LatticeAppsOptions
     /// <summary>
     /// The initial delay before retrying the startup registry read while the silo is not yet
     /// ready to serve it; doubles on each retry up to <see cref="StartupRetryMaxDelay"/>.
-    /// Must be positive.
+    /// Must be positive. A delay longer than a timer can wait (<c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days) is held to that ceiling.
     /// </summary>
     public TimeSpan StartupRetryDelay { get; set; } = DefaultStartupRetryDelay;
 
     /// <summary>
     /// The upper bound on the startup retry delay. Must be positive and not less than
-    /// <see cref="StartupRetryDelay"/>.
+    /// <see cref="StartupRetryDelay"/>. <see cref="TimeSpan.MaxValue"/> leaves the doubling
+    /// uncapped up to the timer ceiling (<c>0xFFFFFFFE</c> milliseconds, about 49.7 days),
+    /// which is where every retry delay is held.
     /// </summary>
     public TimeSpan StartupRetryMaxDelay { get; set; } = DefaultStartupRetryMaxDelay;
 }
