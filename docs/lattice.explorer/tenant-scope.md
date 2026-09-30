@@ -58,19 +58,47 @@ The Tenancy area exists only when tenancy is active and the tenant self-service 
 
 The area's addresses and commands:
 
-- `/tenancy` is the operator directory. It lists every tenant the caller can reach, shows lifecycle state, quota use, resident regions, installed-app counts, and links to the tenant workspace or Apps area. The `tenancy.create-tenant` command opens this page with `?new=true`, the same form as the visible `New tenant` button.
+- `/tenancy` is the operator directory. It lists every tenant the caller can reach, shows lifecycle state, quota use, residency, installed-app counts, and links to the tenant workspace or Apps area. The `tenancy.create-tenant` command (**Create a tenant**) opens this page with `?new=true`, the same form as the visible `New tenant` button. The `tenancy.set-regions` command (**Set a tenant's regions**) opens it with `?set-regions=true`, the same picker as the visible `Set regions...` button; see [Regions and residency](#regions-and-residency).
 - `/tenancy/{tenant}` is the operator administration overview for one tenant. An operator and a tenant admin see the same tabs, with the same names: **Overview**, **Members**, **Quota**, **Regions** and **Sharing**. The operator's are `/tenancy/{tenant}`, `/tenancy/{tenant}/members`, `/tenancy/{tenant}/quota`, `/tenancy/{tenant}/regions` and `/tenancy/{tenant}/sharing`; the earlier `/tenancy/{tenant}/grants` and `/tenancy/{tenant}/access` still answer, as the Sharing and Members pages. The operator's Quota tab shows the tenant's use against each limit and sets the limits, except for the reserved `default` tenant, whose limits are not set there; the overview links to it. Non-operators who reach an administration address are redirected to the equivalent `/t/{tenant}/tenancy` workspace section.
 - `/t/{tenant}/tenancy` is My tenant (for the reserved `default` tenant, this root is the directory; see [The reserved default tenant](#the-reserved-default-tenant)). Its sections are `/t/{tenant}/tenancy/members`, `/t/{tenant}/tenancy/quota`, `/t/{tenant}/tenancy/regions`, and `/t/{tenant}/tenancy/sharing`. It shows the tenant's state, the caller's standing, quota, residency, installed apps, and reachable sibling tenants. Its Quota tab is read-only, even for an operator, who sets limits from the administration Quota tab.
+- `tenancy.change-residency` (**Change residency**) opens `/t/{tenant}/tenancy/regions` for whoever administers the scoped tenant; the Regions tab of My tenant is its visible control. It is not offered on the reserved `default` tenant.
 - `tenancy.offer-grant` opens `/t/{tenant}/tenancy/sharing?new=true`. The visible `Offer a grant` button uses the same command id. The reserved `default` tenant does not offer or receive cross-tenant grants.
 
 The area's forms use [pickers](navigation-model.md#pickers), and each one is tenant-scoped like every other:
 
-- **New tenant.** The tenant id suggests existing tenants and refuses one that already exists. The optional admin subjects are a multi-value picker over the identity directory.
+- **New tenant.** The tenant id suggests existing tenants and refuses one that already exists. The optional admin subjects are a multi-value picker over the identity directory. The optional allowed regions and initial residency are described in [Regions and residency](#regions-and-residency).
 - **Members.** The subject id is a picker over the identity directory's users and groups.
-- **Regions.** The allowed region ids are a multi-value picker over the regions this cluster knows, plus any region the tenant already lists, since a region can be allowed before this cluster replicates with it. When the cluster's regions cannot be listed, the field accepts what is typed.
+- **Regions.** The allowed region ids are a multi-value picker over the regions this cluster knows, plus any region the tenant already lists, since a region can be allowed before this cluster replicates with it. When the cluster's regions cannot be listed, the field accepts what is typed. A new tenant's initial residency suggests only the regions chosen as allowed.
 - **Grants.** The grantee tenant is a picker. For a platform operator, who can list every tenant, it accepts only a listed tenant; for anyone else it suggests the tenants they can reach and accepts any id. The scope suggests the tenant's trees and accepts a tree-name prefix too. A bare name or prefix is qualified into the granting tenant's namespace before the offer is sent, so `orders` is offered as `t/{tenant}/orders`: the cluster matches a grant's scope against the full tree id it reads, so a bare name would share nothing. Approving, rejecting or revoking a grant refreshes the Data listing in the same session.
 
 The Tenancy area supplies the reachable-tenant list used by the directory, by the `t/` completions in the address line, and by the tenant switcher. It is exactly the tenants the cluster names for the caller, plus `default` for a proven platform operator, and never a tenant the cluster did not name. The established tenant is listed first and suspended tenants are not offered, except that the established tenant remains available so the current scope never disappears under the caller.
+
+## Regions and residency
+
+A tenant's Regions page, `/tenancy/{tenant}/regions` for an operator or `/t/{tenant}/tenancy/regions` in My tenant, has two labelled parts:
+
+- **Allowed regions (set by a platform operator).** The regions the tenant may use at all. Only a platform operator can change the set: saving replaces the whole set, revoking a region is confirmed, and a region the tenant is resident in cannot be revoked. Anyone else sees the set read-only, with a note saying only a platform operator can change it.
+- **Residency (where the tenant's data is kept).** The regions the tenant's admins keep its data in, chosen from the allowed set. **Resident in** reads the current residency, or `Not set`. With no residency set, the tenant is served in every region, and the page says so. Once any residency is set, the tenant is served only in regions that are Online. Each allowed region is a row with its lifecycle status and its residency control, and **Apply residency** applies the plan; **Reset** discards it.
+
+Each status is drawn with a sentence saying what it means for the tenant:
+
+| Status | Meaning |
+| --- | --- |
+| Provisioning | The region has been added and waits for a platform operator of the hosting deployment to promote it. The tenant is not served there until it is Online. |
+| Backfilling | The tenant's existing data is being copied in. It is not served there until it is Online. |
+| Online | The region serves the tenant. |
+| Draining | The region is being removed: the tenant's data there is draining, and it no longer serves the tenant. |
+| Offline | Drained; the region no longer serves the tenant. |
+| Removed | Removed from the tenant's residency. |
+| Not resident | The region is allowed but not in the residency. |
+
+A residency change is confirmed when it removes a region, because removing one drains the tenant's data there. It is also confirmed when it would leave the tenant with residency and no Online region: an added region starts Provisioning, so such a change stops serving the tenant anywhere until an operator of the hosting deployment promotes one of its regions. That dialog is titled **Stop serving tenant {tenant}?**, names the regions, and applies with **Apply and stop serving**. While a tenant has residency and no Online region, its Regions page, its overview and My tenant each carry a warning that it is not served anywhere.
+
+**Creating a tenant with regions.** The directory's **New tenant** form can also set the new tenant's **Allowed regions** and its **Initial residency**, both optional. The residency is chosen from the allowed regions: it is disabled until one is chosen, and a region removed from the allowed set leaves the residency too. A tenant created with a residency is confirmed first, in a dialog titled **Create tenant {tenant} with no Online region?**, because each of its regions starts Provisioning and the tenant is served nowhere until one is promoted; **Back** returns to the form. The tenant is created, then its allowed regions are set, then its residency, and each step reports its own outcome, so a tenant can be created even when a region step fails. The form then opens the new tenant's Regions page, or its overview when no region was chosen.
+
+**Finding a tenant's regions.** The directory's **Resident in** column links each tenant to its Regions page, and so do the **Resident in** and **Allowed** lines of a tenant's overview and of My tenant. The directory's **Set regions...** button, and the **Set a tenant's regions** palette command, pick a tenant and open its Regions page. **Change residency** opens the scoped tenant's own Regions tab.
+
+**Home.** The Tenancy line on Home counts tenants with no residency set. For an operator it reads, for example, "12 tenants, 1 suspended, 3 with no residency set."; it reads the residency of at most 50 tenants, and with more than that the count is a lower bound, shown as "at least 3". The reserved `default` tenant has no residency and is not counted, and a tenant whose status cannot be read is skipped. A tenant admin's line adds "It has no residency set." when their tenant has none.
 
 ## Trees shared through a grant
 
