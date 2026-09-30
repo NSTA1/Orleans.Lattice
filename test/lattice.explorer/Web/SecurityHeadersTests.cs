@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.Web;
 
 namespace Orleans.Lattice.Explorer.Tests.Web;
@@ -144,6 +145,7 @@ public class SecurityHeadersTests
     [TestCase(null, "/_apps/frame/v1/")]
     [TestCase(null, "/_apps/frame/v2/frame.html")]
     [TestCase(null, "/_apps/frame.html")]
+    [TestCase(null, "/_apps/frame/v1/missing.js")]
     [TestCase("/explorer", "/explorer/")]
     [TestCase("/explorer", "/explorer/data")]
     [TestCase("/explorer", "/explorer/_framework/blazor.web.js")]
@@ -162,12 +164,30 @@ public class SecurityHeadersTests
     [TestCase("/explorer", "/explorer/_apps/frame/v1/frame.html")]
     public async Task The_frame_bootstrap_route_alone_omits_x_frame_options(string? basePath, string path)
     {
-        await using var app = await CreateHostAsync(basePath);
-        using var client = app.GetTestServer().CreateClient();
+        var webRoot = Path.Combine(Path.GetTempPath(), "explorer-webroot-" + Guid.NewGuid().ToString("N"));
+        var appKit = Path.Combine(webRoot, AppFrameRoute.AppKitContentPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(appKit);
+        File.WriteAllText(Path.Combine(appKit, "frame.html"), "<!doctype html>");
+        File.WriteAllText(Path.Combine(appKit, "boot.js"), "void 0;");
+        try
+        {
+            await using var app = await CreateHostAsync(basePath, webRoot: webRoot);
+            using var client = app.GetTestServer().CreateClient();
 
-        var response = await client.GetAsync(path);
+            var response = await client.GetAsync(path);
 
-        Assert.That(HasHeader(response, "X-Frame-Options"), Is.False, path);
+            // The exemption belongs to a file the route serves (#4020), so the premise is
+            // that the route served one: a 404 keeps DENY.
+            Assert.Multiple(() =>
+            {
+                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), path);
+                Assert.That(HasHeader(response, "X-Frame-Options"), Is.False, path);
+            });
+        }
+        finally
+        {
+            Directory.Delete(webRoot, recursive: true);
+        }
     }
 
     [Test]
@@ -278,9 +298,10 @@ public class SecurityHeadersTests
     private static async Task<WebApplication> CreateHostAsync(
         string? basePath,
         bool mapHostRoute = false,
-        string[]? extraFormActionSources = null)
+        string[]? extraFormActionSources = null,
+        string? webRoot = null)
     {
-        var builder = WebApplication.CreateBuilder();
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { WebRootPath = webRoot });
         builder.WebHost.UseTestServer();
         builder.Services.AddLatticeExplorerWeb(options =>
         {

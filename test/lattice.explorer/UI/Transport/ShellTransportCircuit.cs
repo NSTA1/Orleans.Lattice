@@ -38,6 +38,10 @@ internal sealed class ShellTransportCircuit : IDisposable
     {
         Session.Current.Returns(_ => Configuration);
         Auth.CurrentAuthentication.Returns(_ => Authentication);
+        Auth.GetAuthenticationFor(Arg.Any<string>()).Returns(call =>
+            string.Equals(call.Arg<string>()?.TrimEnd('/'), AuthenticationEndpoint?.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+                ? Authentication
+                : null);
         ChannelFactory = new ShellTransportPeerChannelFactory(Peer);
 
         var services = new ServiceCollection();
@@ -70,6 +74,9 @@ internal sealed class ShellTransportCircuit : IDisposable
 
     /// <summary>The sign-in the auth session reports; <see langword="null"/> is signed out.</summary>
     public LatticeCallAuthentication? Authentication { get; set; }
+
+    /// <summary>The endpoint <see cref="Authentication"/> was minted for; <see cref="Endpoint"/> unless a test repoints it.</summary>
+    public string? AuthenticationEndpoint { get; set; } = Endpoint;
 
     /// <summary>The circuit's scoped services.</summary>
     public IServiceProvider Services => _scope.ServiceProvider;

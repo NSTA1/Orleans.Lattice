@@ -52,7 +52,7 @@ internal static class AppsWorkspaceMapping
                 Tree = r.Tree,
                 MergeMode = r.MergeMode,
             }),
-            Ui = AppsPresentationMapping.ToWireUi(manifest),
+            Ui = AppsPresentationMapping.ToWireUi(manifest, record.ConsentedBridge),
         };
     }
 

@@ -4,10 +4,11 @@ using Orleans.Lattice.Explorer.Web;
 namespace Orleans.Lattice.Explorer.Tests.Web;
 
 /// <summary>
-/// The security-header middleware's single framing exemption (epic #3807, E4):
-/// only the app frame bootstrap route omits <c>X-Frame-Options</c>, and the
-/// Explorer's own policy admits same-origin frames and <c>data:</c> images and
-/// nothing broader.
+/// The security-header middleware sends <c>X-Frame-Options: DENY</c> on every path,
+/// the app frame bootstrap route's included: the one framing exemption (epic #3807,
+/// E4) is lifted only by that route's endpoint (issue #4020), which
+/// <see cref="Orleans.Lattice.Explorer.Tests.UI.Framing.AppFrameEndpointTests"/> proves. The
+/// Explorer's own policy admits same-origin frames and <c>data:</c> images and nothing broader.
 /// </summary>
 [TestFixture]
 public sealed class ExplorerFrameHeaderExemptionTests
@@ -27,25 +28,14 @@ public sealed class ExplorerFrameHeaderExemptionTests
     [TestCase("/_apps/frame/v1/")]
     [TestCase("/_apps/frame/v2/frame.html")]
     [TestCase("/x/_apps/frame/v1/frame.html")]
-    public async Task Every_other_path_is_sent_x_frame_options_deny(string path)
+    [TestCase("/_apps/frame/v1/frame.html")]
+    [TestCase("/_apps/frame/v1/boot.js")]
+    [TestCase("/_APPS/Frame/V1/frame.html")]
+    public async Task Every_path_is_sent_x_frame_options_deny_by_the_middleware(string path)
     {
         var context = await InvokeAsync(path);
 
         Assert.That(context.Response.Headers.XFrameOptions.ToString(), Is.EqualTo(ExplorerSecurityHeaders.FrameOptionsValue));
-    }
-
-    [TestCase("/_apps/frame/v1/frame.html")]
-    [TestCase("/_apps/frame/v1/boot.js")]
-    [TestCase("/_APPS/Frame/V1/frame.html")]
-    public async Task The_frame_bootstrap_route_is_not_sent_x_frame_options(string path)
-    {
-        var context = await InvokeAsync(path);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(context.Response.Headers.ContainsKey("X-Frame-Options"), Is.False);
-            Assert.That(context.Response.Headers.XContentTypeOptions.ToString(), Is.EqualTo(ExplorerSecurityHeaders.ContentTypeOptionsValue));
-        });
     }
 
     [Test]
@@ -60,6 +50,22 @@ public sealed class ExplorerFrameHeaderExemptionTests
             Assert.That(directives, Does.Contain("img-src 'self' data:"));
             Assert.That(directives, Does.Contain("frame-ancestors 'none'"));
             Assert.That(directives.Count(directive => directive.StartsWith("frame-src", StringComparison.Ordinal)), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void The_explorer_policy_runs_no_inline_script()
+    {
+        // #4020: nothing the console serves needs an inline script, so an injected one
+        // must not run. The browser suite proves the pages still work under it.
+        var directives = ExplorerSecurityHeaders.ContentSecurityPolicyValue
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(directives.Where(directive => directive.StartsWith("script-src", StringComparison.Ordinal)), Is.EqualTo(new[] { "script-src 'self'" }));
+            Assert.That(directives, Has.None.StartsWith("script-src-attr"));
+            Assert.That(directives, Has.None.StartsWith("script-src-elem"));
         });
     }
 

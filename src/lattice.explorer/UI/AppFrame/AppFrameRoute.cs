@@ -1,12 +1,12 @@
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Primitives;
 
 namespace Orleans.Lattice.Explorer.UI.Framing;
 
 /// <summary>
-/// The app frame bootstrap route (epic #3807, E4): its path, the one predicate the
-/// web head uses to exempt it from the global <c>X-Frame-Options: DENY</c>, and the
-/// static header values every response on it carries.
+/// The app frame bootstrap route (epic #3807, E4): its path and the static header values
+/// every response on it carries. It is the one response the web head lets itself be
+/// framed by: the head sends <c>X-Frame-Options: DENY</c> everywhere, and only this
+/// route's own endpoint lifts it, for a file it serves.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -82,27 +82,6 @@ internal static class AppFrameRoute
 
     /// <summary>The cached <c>Cache-Control</c> value.</summary>
     public static readonly StringValues CacheControl = new(CacheControlText);
-
-    /// <summary>
-    /// Returns whether <paramref name="path"/>, relative to the Explorer's mount, is on the
-    /// frame bootstrap route: the only path the web head exempts from
-    /// <c>X-Frame-Options: DENY</c>.
-    /// </summary>
-    /// <remarks>
-    /// The predicate is never broader than the route: it requires the full
-    /// <see cref="Prefix"/>, compared case-insensitively exactly as endpoint routing
-    /// matches literal segments, and at least one character after it. A path the route
-    /// would not serve is therefore never exempted, so no other response can lose its
-    /// clickjacking protection through this predicate. It allocates nothing.
-    /// </remarks>
-    /// <param name="path">The request path relative to the Explorer's mount (inside a mounted branch, <c>HttpRequest.Path</c>).</param>
-    /// <returns><see langword="true"/> only for a path under <see cref="Prefix"/>.</returns>
-    public static bool IsFrameBootstrapPath(PathString path)
-    {
-        var value = path.Value.AsSpan();
-        return value.Length > Prefix.Length
-            && value.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);
-    }
 
     /// <summary>Returns the route pattern for a base path.</summary>
     /// <param name="basePath">The Explorer's base path; empty or <c>/</c> for the root.</param>

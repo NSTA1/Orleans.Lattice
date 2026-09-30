@@ -34,7 +34,9 @@ internal static class Shell
     /// <list type="bullet">
     /// <item>when the interactive circuit has applied the operator's appearance, which the
     /// chrome does only once the circuit is live (the readiness signal);</item>
-    /// <item>every Content-Security-Policy violation the page reports, and every text message posted to it;</item>
+    /// <item>every Content-Security-Policy violation the page reports, and every text message posted to it,
+    /// and - as the promise <c>window.__ltFrameBlocked</c> - the first navigation of a frame the
+    /// document's own <c>frame-src</c> refused;</item>
     /// <item>inside an app frame, how many <c>lattice.hello</c> messages the frame was sent.</item>
     /// </list>
     /// It adds nothing a page could use: it only records.
@@ -54,12 +56,16 @@ internal static class Shell
             };
           } catch (e) { }
           window.__ltViolations = [];
+          let frameBlocked;
+          window.__ltFrameBlocked = new Promise((resolve) => { frameBlocked = resolve; });
           window.__ltMessages = [];
           window.addEventListener('message', (e) => {
             if (typeof e.data === 'string') { window.__ltMessages.push(e.data); }
           });
           document.addEventListener('securitypolicyviolation', (e) => {
-            window.__ltViolations.push({ directive: e.effectiveDirective || e.violatedDirective, blocked: String(e.blockedURI) });
+            const directive = e.effectiveDirective || e.violatedDirective;
+            window.__ltViolations.push({ directive: directive, blocked: String(e.blockedURI) });
+            if (directive === 'frame-src' || directive === 'child-src') { frameBlocked(directive); }
           });
           if (location.pathname.indexOf('/_apps/frame/') >= 0) {
             window.__ltHellos = 0;
