@@ -820,7 +820,7 @@
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
       },
       "concurrency": {
-        "rule": "Target version must be strictly greater than the current target; eager migration aborts without data cutover on the first value that cannot be upcast.",
+        "rule": "Target version must be strictly greater than the current target; eager migration aborts without data cutover on the first value that cannot be upcast, and the committed target advance is not rolled back.",
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
       },
       "sources": [

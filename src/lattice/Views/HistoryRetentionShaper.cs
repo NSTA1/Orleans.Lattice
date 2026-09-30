@@ -16,6 +16,18 @@ namespace Orleans.Lattice.Views;
 internal static class HistoryRetentionShaper
 {
     /// <summary>
+    /// Shapes <paramref name="row"/> without reporting whether shaping altered
+    /// it. Retained as the plain form the shaping contract is specified and
+    /// tested against, and as the oracle the change-detecting overload's parity
+    /// tests compare against; do not delete it as redundant.
+    /// </summary>
+    public static (HistoryRow Row, long ExpiresAtTicks) Shape(
+        HistoryRow row,
+        HistoryRetentionPolicy policy,
+        long drainNowTicks) =>
+        Shape(row, policy, drainNowTicks, out _);
+
+    /// <summary>
     /// Shapes <paramref name="row"/> for storage under <paramref name="policy"/>,
     /// returning the reshaped row and the absolute UTC tick at which the view
     /// entry should expire (<c>0</c> when the policy has no age bound).
@@ -26,10 +38,22 @@ internal static class HistoryRetentionShaper
     /// <see cref="DateTime.UtcNow"/> ticks captured once for the drain pass, used
     /// both as the expiry base and as the apply-time clock for the hybrid window.
     /// </param>
+    /// <param name="changed">
+    /// Whether shaping altered the row at all. The projection is a pure function
+    /// and never stamps <see cref="HistoryRow.RetentionShape"/>, so every row it
+    /// emits arrives carrying the enum default,
+    /// <see cref="HistoryRetentionMode.MetadataOnly"/> - which is also the default
+    /// policy. Under that policy a delete, a range-tombstone marker and a CRDT
+    /// delta are therefore already in their stored shape and reshaping them is a
+    /// no-op, yet the maintainer still re-serialised each one. The flag lets it
+    /// keep the bytes it already holds. The expiry is stamped on the
+    /// <em>view entry</em>, not inside the row, so it never forces a re-encode.
+    /// </param>
     public static (HistoryRow Row, long ExpiresAtTicks) Shape(
         HistoryRow row,
         HistoryRetentionPolicy policy,
-        long drainNowTicks)
+        long drainNowTicks,
+        out bool changed)
     {
         // Saturate rather than overflow: a window so large that the absolute
         // expiry would exceed DateTime.MaxValue is stamped at the maximum
@@ -51,6 +75,7 @@ internal static class HistoryRetentionShaper
         // payload verbatim and merely record the mode that was in effect.
         if (row.Kind != HistoryRowKind.Set)
         {
+            changed = row.RetentionShape != policy.Mode;
             return (row with { RetentionShape = policy.Mode }, expiresAtTicks);
         }
 
@@ -60,6 +85,7 @@ internal static class HistoryRetentionShaper
             ? row with { RetentionShape = policy.Mode }
             : row with { RetentionShape = policy.Mode, Value = null };
 
+        changed = row.RetentionShape != policy.Mode || (!keepBytes && row.Value is not null);
         return (shaped, expiresAtTicks);
     }
 

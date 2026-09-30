@@ -128,6 +128,54 @@ public sealed class RepoContextMemoryArchiveOptionsTests
             Is.EqualTo(TimeSpan.FromMinutes(10)));
     }
 
+    [Test]
+    public void An_interval_longer_than_a_timer_can_wait_is_lowered_to_the_ceiling()
+    {
+        // Sixty days: representable, but past the ~49.7 day ceiling of the Task.Delay the
+        // archive loop awaits its cadence with. Unclamped, the first periodic wait threw and
+        // ended the archive loop - and, by default, the host.
+        Environment.SetEnvironmentVariable(RepoContextMemoryArchiveOptions.IntervalSecondsKey, "5184000");
+
+        var options = RepoContextMemoryArchiveOptions.FromEnvironment();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Interval, Is.EqualTo(TimeSpan.FromDays(60)), "the declared value is preserved");
+            Assert.That(options.EffectiveInterval, Is.EqualTo(RepoContextMemoryArchiveOptions.MaximumInterval));
+        });
+    }
+
+    [Test]
+    public void The_interval_ceiling_is_the_longest_delay_a_timer_accepts()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var ceiling = RepoContextMemoryArchiveOptions.MaximumInterval;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => { _ = Task.Delay(ceiling, TimeProvider.System, cancelled.Token); },
+                Throws.Nothing,
+                "the clamped cadence must be one the archive loop's Task.Delay accepts");
+            Assert.That(
+                () => { _ = Task.Delay(ceiling + TimeSpan.FromMilliseconds(1), TimeProvider.System, cancelled.Token); },
+                Throws.InstanceOf<ArgumentOutOfRangeException>(),
+                "anti-vacuity: one millisecond more is refused, so the ceiling is not arbitrarily low");
+        });
+    }
+
+    [Test]
+    public void An_interval_at_the_ceiling_is_honoured_unchanged()
+    {
+        var options = new RepoContextMemoryArchiveOptions
+        {
+            Interval = RepoContextMemoryArchiveOptions.MaximumInterval,
+        };
+
+        Assert.That(options.EffectiveInterval, Is.EqualTo(RepoContextMemoryArchiveOptions.MaximumInterval));
+    }
+
     [TestCase("nonsense")]
     [TestCase("0")]
     [TestCase("-30")]

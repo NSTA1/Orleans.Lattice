@@ -5,11 +5,24 @@ namespace Orleans.Lattice.Backup;
 /// <summary>
 /// Validates <see cref="LatticeBackupOptions"/> when options are first resolved: rejects a
 /// non-positive history retention window, an undefined history retention mode,
-/// non-positive fence timings, and an undefined or non-positive sink-sharing
+/// non-positive fence timings, a fence poll interval or sink-sharing probe timeout
+/// longer than a timer can wait, and an undefined or non-positive sink-sharing
 /// probe configuration.
 /// </summary>
 internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBackupOptions>
 {
+    /// <summary>
+    /// The longest duration a timer-backed wait accepts: <c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days. <see cref="LatticeBackupOptions.CrossTreeFencePollInterval"/>
+    /// is awaited with <see cref="Task.Delay(TimeSpan, CancellationToken)"/> and
+    /// <see cref="LatticeBackupOptions.SinkSharingProbeTimeout"/> arms a
+    /// <see cref="CancellationTokenSource(TimeSpan)"/>, and both throw
+    /// <see cref="ArgumentOutOfRangeException"/> for anything longer - so a longer value
+    /// would pass validation and then fail every cross-tree capture that has to wait, or
+    /// the silo start the probe guards.
+    /// </summary>
+    internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <inheritdoc />
     public ValidateOptionsResult Validate(string? name, LatticeBackupOptions options)
     {
@@ -35,6 +48,12 @@ internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBa
         {
             failures.Add($"{nameof(LatticeBackupOptions.CrossTreeFencePollInterval)} must be strictly positive.");
         }
+        else if (options.CrossTreeFencePollInterval > MaxTimerDuration)
+        {
+            failures.Add(
+                $"{nameof(LatticeBackupOptions.CrossTreeFencePollInterval)} must be at most {MaxTimerDuration}, "
+                + "the longest delay a timer can wait.");
+        }
 
         if (options.MaxCrossTreeFenceAttempts < 1)
         {
@@ -49,6 +68,12 @@ internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBa
         if (options.SinkSharingProbeTimeout <= TimeSpan.Zero)
         {
             failures.Add($"{nameof(LatticeBackupOptions.SinkSharingProbeTimeout)} must be strictly positive.");
+        }
+        else if (options.SinkSharingProbeTimeout > MaxTimerDuration)
+        {
+            failures.Add(
+                $"{nameof(LatticeBackupOptions.SinkSharingProbeTimeout)} must be at most {MaxTimerDuration}, "
+                + "the longest timeout a timer can wait.");
         }
 
         return failures.Count > 0

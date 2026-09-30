@@ -358,6 +358,8 @@ capabilities:
     guarantees:
       - statement: "Full capture exports a scoped point-in-time snapshot into a self-describing manifest."
         source: "docs/lattice.backup/README.md"
+      - statement: "Backup topology snapshots use the tree routing map physical shard indices and virtual shard count instead of contiguous shard numbering."
+        source: "src/lattice.backup/LatticeBackupCaptureService.cs#LatticeBackupCaptureService.BuildTopologyAsync"
       - statement: "Incremental capture layers a forward WAL differential on a base backup and can fall back to full capture."
         source: "docs/lattice.backup/README.md"
       - statement: "Restore replays captured HLC, version vector, origin cluster id, expiry, and tombstone metadata."
@@ -564,6 +566,8 @@ capabilities:
         source: "docs/crdt/readme.md"
       - statement: "Typed ILattice accessors carry the selected merge mode and encode deltas."
         source: "docs/crdt/readme.md"
+      - statement: "The global CRDT shape registry pre-registers OrSet, PnCounter, VersionVector, MvRegister, Sequence, OrFlag, RwFlag, GCounter, GSet, RwSet, MaxRegister, and MinRegister; OrMap is registered per tree."
+        source: "src/lattice/CrdtShapeRegistry.cs#CrdtShapeRegistry"
       - statement: "A local tree can mix CRDT primitives and plain LWW values."
         source: "docs/crdt/readme.md"
       - statement: "LwwValue merge picks the higher HLC timestamp and deterministic tie-breaks."
@@ -628,7 +632,7 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "The default snapshot export carries each entry's ExpiresAtTicks on committed and prepared rows, so whole-tree bootstrap and the anti-entropy fallback install the same TTL the source recorded."
         source: "src/lattice.replication/SnapshotEntry.cs#SnapshotEntry.ExpiresAtTicks"
-      - statement: "Push, ExchangeContentManifest and GetPeerHighWaterMark refuse with PermissionDenied a body-declared OriginClusterId that differs from the transport-stamped origin, so a peer may only advance or read its own stream's high-water mark."
+      - statement: "Push, ExchangeContentManifest and GetPeerHighWaterMark refuse with PermissionDenied when the transport-stamped origin is missing or differs from the body-declared OriginClusterId."
         source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
     non_guarantees:
       - statement: "A host without the replication package runs the core library alone."
@@ -852,6 +856,8 @@ capabilities:
         source: "docs/lattice/events.md"
       - statement: "Events are not transactional and not totally ordered, even per key."
         source: "docs/lattice/events.md"
+      - statement: "Batch event publication keeps at most 32 per-entry publishes in flight."
+        source: "src/lattice/BPlusTree/Grains/LatticeEventPublisher.cs#PublishManyAsync"
     unsafe_sequences:
       - sequence:
           - "act on prepared Set events from an atomic write"
@@ -1275,7 +1281,7 @@ capabilities:
         source: "docs/lattice.explorer/managing-access.md"
       - statement: "The Entra Graph provider searches and resolves users and groups with app-only Microsoft Graph permissions."
         source: "docs/lattice.membership/identity-directory-providers.md"
-      - statement: "The tenant-administration facades validate each explicitly supplied or added admin-subject id through the identity directory before writing it."
+      - statement: "The tenant access-administration facade validates added admin-subject ids through the identity directory when validation is required and a real provider is active; the shipped tenant create registration does not validate seed admin subjects."
         source: "docs/lattice.membership/identity-directory-providers.md"
     non_guarantees:
       - statement: "A principal returned by the identity-directory provider is a searchable identity and never grants access on its own."
@@ -1403,6 +1409,8 @@ capabilities:
         source: "docs/lattice/materialised-views.md"
       - statement: "Aggregation views materialise one reduced value per group for count, sum, min, max, set-union, or fold."
         source: "docs/lattice/materialised-views.md"
+      - statement: "Count and sum aggregation views flip membership and accumulator rows in one deterministic SetManyAtomicAsync operation per contribution, so WAL replay cannot double-count."
+        source: "src/lattice/Views/AggregationApplier.cs#AggregationApplier"
       - statement: "AddLatticeViews registers the view catalog, factory, maintainer, and WAL cursor registry."
         source: "docs/lattice/materialised-views.md"
       - statement: "Runtime CreateAsync returns an ILatticeView after the runtime registration is durable."
@@ -1539,7 +1547,7 @@ capabilities:
         source: "docs/lattice.api.mcp.telemetry/README.md"
       - statement: "The telemetry proxy stamps the configured backend credential on backend calls and never forwards the caller's Lattice credential."
         source: "docs/lattice.api.mcp.telemetry/README.md"
-      - statement: "Metric access can be restricted to an explicit allow-list of exact names and wildcard patterns."
+      - statement: "Metric access can be restricted to an explicit allow-list of exact names and whole-name anchored wildcard patterns."
         source: "docs/lattice.api.mcp.telemetry/README.md"
       - statement: "Range queries are bounded by a configured maximum window and step."
         source: "docs/lattice.api.mcp.telemetry/README.md"
@@ -1962,7 +1970,7 @@ capabilities:
         hazard: "SetManyAsync decides each key independently; use SetManyAtomicAsync for all-or-nothing semantics."
         source: "docs/lattice/predicated-operations.md"
     concurrency_rules:
-      - statement: "A retry of predicated SetManyAtomicAsync with the same operation id reattaches to the original saga and returns its memoized outcome."
+      - statement: "A retry of predicated SetManyAtomicAsync with the same operation id can be refused by current entry-size or quota bounds before it reattaches; otherwise it returns the memoized outcome without re-evaluating the predicate."
         source: "docs/lattice/predicated-operations.md"
       - statement: "The guarded atomic batch evaluates its predicate against the pre-saga snapshot of every target key."
         source: "docs/lattice/predicated-operations.md"
@@ -3140,6 +3148,8 @@ capabilities:
         source: "docs/lattice.vector/api.md"
       - statement: "Lazy open walks the identifier mapping, reads each partition commit record and applies only centroid chunks; a query then fetches only the vector chunks of the partitions it probes."
         source: "docs/lattice.vector/architecture.md"
+      - statement: "A full durable load throws VectorIndexRecordUnavailableException and preserves the durable index when one read misses a committed record but an independent read returns it."
+        source: "src/lattice.vector/Persistence/VectorIndexRecordUnavailableException.cs#VectorIndexRecordUnavailableException"
       - statement: "DurableVectorIndexOptions.BuildObserver, null by default, receives per-slice build stage timings through IVectorIndexBuildObserver so a host can publish them on its own meter; the package declares no instruments of its own."
         source: "src/lattice.vector/Persistence/IVectorIndexBuildObserver.cs#IVectorIndexBuildObserver"
     non_guarantees:
@@ -3359,6 +3369,8 @@ capabilities:
         source: "docs/lattice/wal-saturation-signal.md"
       - statement: "Provider-failure saturation counts escaped outbound append exceptions except the writer's dispatch-deadline timeout, any cancellation, and LatticeShuttingDownException."
         source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "The WAL replay permit gate exports permit_hold as tree-tagged hold time and permits_served as the process-wide service-rate counter."
+        source: "src/lattice/LatticeMetrics.cs#WalReplayPermitHold"
     non_guarantees:
       - statement: "The signal is per-silo and does not compute cluster-wide aggregate health."
         source: "docs/lattice/wal-saturation-signal.md"

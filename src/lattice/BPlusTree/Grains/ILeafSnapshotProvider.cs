@@ -25,11 +25,15 @@ internal interface ILeafSnapshotProvider
     /// <summary>
     /// Streams every live entry of the tree whose key falls in the
     /// half-open range <c>[leafKeyRangeStart, leafKeyRangeEnd)</c>, in
-    /// implementation-defined order. Entries are translated to
-    /// <see cref="LatticeMutation"/> with <see cref="MutationKind.Set"/>
-    /// so a consumer can drive an <c>ILeafProjection.Apply</c> loop
-    /// uniformly against either the WAL feed
-    /// (<see cref="ICommitLogReader"/>) or this snapshot feed.
+    /// implementation-defined order. Entries are translated to the
+    /// <see cref="LatticeMutation"/> the WAL feed
+    /// (<see cref="ICommitLogReader"/>) would carry for them, so a consumer
+    /// can drive an <c>ILeafProjection.Apply</c> loop uniformly against
+    /// either feed: a committed row becomes a
+    /// <see cref="MutationKind.Set"/> carrying its absolute expiry, and a
+    /// row an in-flight saga prepared becomes a prepared
+    /// (<see cref="LatticeMutation.IsPrepared"/>) set or delete under that
+    /// saga's transaction id, never a committed value.
     /// </summary>
     /// <param name="treeId">The logical tree id. Must not be null or empty.</param>
     /// <param name="shardIndex">The WAL shard (partition) index whose backing snapshot is being drained. Must be non-negative.</param>

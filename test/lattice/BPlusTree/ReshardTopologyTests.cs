@@ -32,6 +32,14 @@ public class ReshardTopologyTests
     private const int ReshardTarget = 8;
     private static readonly TimeSpan PollCadence = TimeSpan.FromMilliseconds(10);
 
+    /// <summary>
+    /// Ceiling on the post-iteration drain. Generous enough that a healthy
+    /// reshard always quiesces well inside it, so it never reddens a passing
+    /// run; bounded so a wedged saga is reported as the named completion
+    /// assertion rather than as an indefinite hang.
+    /// </summary>
+    private static readonly TimeSpan DrainBudget = TimeSpan.FromSeconds(30);
+
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
@@ -210,8 +218,11 @@ public class ReshardTopologyTests
 
         // Drain any residual reshard work - both the coordinator itself
         // and any per-shard split it spawned - against a quiescent saga
-        // loop.
-        while (!await reshard.IsIdleAsync())
+        // loop. The drain is bounded so a saga that never quiesces fails the
+        // assertion below by name instead of spinning here until the run is
+        // killed - and so that assertion is reachable with a false subject.
+        using var drainCts = new CancellationTokenSource(DrainBudget);
+        while (!drainCts.IsCancellationRequested && !await reshard.IsIdleAsync())
         {
             await reshard.RunReshardPassAsync();
             var map = await registry.GetShardMapAsync(treeId)

@@ -62,23 +62,42 @@ internal sealed class LeafSnapshotProvider(
                 continue;
             }
 
-            yield return new LatticeMutation
-            {
-                TreeId = treeId,
-                Kind = MutationKind.Set,
-                Key = entry.Key,
-                EndExclusiveKey = null,
-                Value = entry.Value,
-                Timestamp = entry.Timestamp,
-                IsTombstone = false,
-                ExpiresAtTicks = 0,
-                OriginClusterId = null,
-                VectorClock = null,
-                TransactionId = Guid.Empty,
-                Category = MutationCategory.User,
-                Delta = null,
-            };
+            yield return ToMutation(treeId, entry);
         }
+    }
+
+    /// <summary>
+    /// Translates one exported row into the mutation the WAL feed would carry
+    /// for it. A committed row is a live <see cref="MutationKind.Set"/> that
+    /// keeps its absolute expiry. A prepared row is an in-flight saga's
+    /// prepare-phase write, not committed state: it keeps
+    /// <see cref="LatticeMutation.IsPrepared"/> and its saga identity so the
+    /// apply loop routes it into the pending-tx map, and a prepared delete
+    /// stays a tombstone rather than surfacing its ignored value slot.
+    /// </summary>
+    private static LatticeMutation ToMutation(string treeId, SnapshotEntry entry)
+    {
+        var isPreparedDelete = entry.IsPrepared && entry.IsTombstone;
+        return new LatticeMutation
+        {
+            TreeId = treeId,
+            Kind = isPreparedDelete ? MutationKind.Delete : MutationKind.Set,
+            Key = entry.Key,
+            EndExclusiveKey = null,
+            Value = isPreparedDelete ? null : entry.Value,
+            Timestamp = entry.Timestamp,
+            IsTombstone = isPreparedDelete,
+            ExpiresAtTicks = isPreparedDelete ? 0 : entry.ExpiresAtTicks,
+            OriginClusterId = null,
+            VectorClock = null,
+            TransactionId = entry.IsPrepared ? entry.TransactionId : Guid.Empty,
+            Category = MutationCategory.User,
+            Delta = entry.IsPrepared ? entry.Delta : null,
+            AtomicBatchSize = entry.IsPrepared ? entry.AtomicBatchSize : 0,
+            AtomicBatchIndex = entry.IsPrepared ? entry.AtomicBatchIndex : 0,
+            IsPrepared = entry.IsPrepared,
+            Mode = entry.IsPrepared ? entry.Mode : default,
+        };
     }
 
     /// <inheritdoc />

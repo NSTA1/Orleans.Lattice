@@ -526,7 +526,7 @@ invariants:
       - "docs/lattice.backup/architecture.md"
   - id: crdt-buffer-ownership
     name: "CRDT byte-buffer ownership"
-    description: "A CRDT stores caller-authored byte arrays by handoff, copies peer-folded winners, and copies every public egress projection."
+    description: "Registers and sequences store caller-authored byte arrays by handoff, set primitives encode them instead of retaining them, peer-folded winners are copied, and every public egress projection is copied."
     scope:
       packages:
         - "Orleans.Lattice"
@@ -665,6 +665,8 @@ invariants:
       - step: "Emit the Explorer security response headers through middleware on the Explorer branch."
         source: ".github/instructions/security.instructions.md"
       - step: "Revoke the presented cookie value in-process on every ClearAsync and refuse a revoked value in GetAsync, whether or not the delete header could be sent."
+      - step: "Bind each persisted cookie credential to the endpoint it was minted for and refuse it when the configured endpoint cannot be resolved or differs."
+        source: "src/lattice.explorer/WebHosting/CookieCredentialStore.cs#CookieCredentialStore.GetAsync"
         source: "src/lattice.explorer/WebHosting/CookieCredentialStore.cs#CookieCredentialStore"
     sources:
       - ".github/instructions/security.instructions.md"
@@ -1030,7 +1032,7 @@ invariants:
       - "docs/lattice.replication/replication-apply.md"
   - id: replication-peer-origin-binding
     name: "Replication peers act only on their own origin"
-    description: "Every replication receiver verb that keys the durable per-origin high-water mark by a body-declared OriginClusterId binds it to the transport-stamped origin, so a peer can neither advance nor read another cluster's stream cursor."
+    description: "Every replication receiver verb that keys the durable per-origin high-water mark by a body-declared OriginClusterId refuses a missing transport-stamped origin or a value that differs from the body, so the body origin is not a standalone authorization input."
     scope:
       packages:
         - "Orleans.Lattice.Replication.Grpc"
@@ -1353,7 +1355,7 @@ invariants:
       - "docs/lattice.tenancy/README.md"
   - id: tenant-region-residency
     name: "Tenant region residency invariants"
-    description: "A tenant's resident regions are non-empty, are a subset of allowed regions, and cannot be revoked while resident."
+    description: "A tenant's resident regions are non-empty, are a subset of allowed regions, and cannot be revoked while resident; an added region stays Provisioning and non-serving until promoted to Online, and a dropped region drains through Offline to Removed."
     scope:
       packages:
         - "Orleans.Lattice.Tenancy"

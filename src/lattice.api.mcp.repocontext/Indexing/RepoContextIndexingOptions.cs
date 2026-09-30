@@ -84,7 +84,11 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>The <see cref="TokenizerProfile"/> value selecting the OpenAI cl100k_base BPE encoding.</summary>
     public const string TokenizerProfileCl100k = "cl100k";
 
-    /// <summary>The self-index grain tick cadence; each tick does at most one unit of work.</summary>
+    /// <summary>
+    /// The self-index grain tick cadence; each tick does at most one unit of work. A
+    /// value longer than a grain timer can wait (<c>0xFFFFFFFE</c> milliseconds, about
+    /// 49.7 days) ticks at that ceiling.
+    /// </summary>
     public TimeSpan TickInterval { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
@@ -625,15 +629,5 @@ internal sealed class RepoContextIndexingOptions
     }
 
     private static TimeSpan ReadSeconds(string key, TimeSpan fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(key);
-        if (!string.IsNullOrWhiteSpace(raw)
-            && double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-            && seconds >= 0)
-        {
-            return TimeSpan.FromSeconds(seconds);
-        }
-
-        return fallback;
-    }
+        => RepoContextEnvironmentDurations.ReadSeconds(key, fallback, allowZero: true);
 }

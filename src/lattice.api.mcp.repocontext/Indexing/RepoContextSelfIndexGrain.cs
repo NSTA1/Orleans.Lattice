@@ -76,6 +76,14 @@ internal sealed class RepoContextSelfIndexGrain(
     private const int PageSize = 512;
 
     /// <summary>
+    /// The longest due time or period a grain timer accepts: <c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days. Orleans rejects anything longer with an
+    /// <see cref="ArgumentOutOfRangeException"/>, so the scan timer is armed with
+    /// its tick interval, and its jittered first tick, held to this ceiling.
+    /// </summary>
+    internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    /// <summary>
     /// The maximum number of uncovered file keys the digest-backed sweep collects in
     /// one pass. The back-fill selects its own repair set from the same digest and is
     /// not capped by this, so the bound only limits how much this grain holds and
@@ -200,11 +208,19 @@ internal sealed class RepoContextSelfIndexGrain(
         // Jitter the first tick within one interval so a fleet of repositories
         // reactivated together by their keep-alive reminders does not all fire
         // their first scan at the same instant. The fixed period then keeps them
-        // phase-shifted.
-        var jitterMs = Random.Shared.Next(0, (int)options.TickInterval.TotalMilliseconds);
-        var dueTime = options.TickInterval + TimeSpan.FromMilliseconds(jitterMs);
+        // phase-shifted. Both are held to the longest wait a grain timer accepts:
+        // Orleans refuses anything longer, which would fail onboarding and every
+        // keep-alive re-arm, so a longer tick runs at that ceiling instead.
+        var period = options.TickInterval < MaxTimerDuration ? options.TickInterval : MaxTimerDuration;
+        var jitter = TimeSpan.FromMilliseconds(Random.Shared.NextInt64(0, (long)period.TotalMilliseconds));
+        var dueTime = period + jitter;
+        if (dueTime > MaxTimerDuration)
+        {
+            dueTime = MaxTimerDuration;
+        }
+
         _timer = this.RegisterGrainTimer(
-            OnTickAsync, new GrainTimerCreationOptions(dueTime, options.TickInterval));
+            OnTickAsync, new GrainTimerCreationOptions(dueTime, period));
     }
 
     private async Task OnTickAsync(CancellationToken cancellationToken)

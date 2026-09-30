@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Api.State.Tests;
@@ -110,21 +111,19 @@ internal sealed class MetricsObservationClusterFixture
         return (pump, snapshots, cts);
     }
 
-    public static async Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (predicate())
-            {
-                return true;
-            }
-
-            await Task.Delay(25);
-        }
-
-        return predicate();
-    }
+    /// <summary>
+    /// Polls <paramref name="predicate"/> until it holds or <paramref name="timeout"/>
+    /// elapses, returning the last observation so the caller's own assertion
+    /// reports the outcome.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to the shared <see cref="TestPoll"/> barrier's negative form
+    /// rather than hand-rolling the loop, which matches this helper's contract:
+    /// every call site asserts on the returned value, so the barrier must report
+    /// rather than fail.
+    /// </remarks>
+    public static Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout) =>
+        TestPoll.TryUntilAsync(predicate, timeout, TimeSpan.FromMilliseconds(25));
 
     private sealed class SiloConfigurator : ISiloConfigurator
     {
