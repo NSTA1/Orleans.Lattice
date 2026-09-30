@@ -12,7 +12,16 @@ app UI.
 signed-in user holds at least one app role. A caller who holds `AppInstall` also sees
 the **Catalogue** view, an **Install app...** control (palette command `apps.install`),
 and a call-out for any installed app whose activation failed, with a link to review
-and re-consent it.
+and re-consent it. Such a caller also sees **Installed in tenant {tenant}** (or
+**Installed apps** without a tenant root): every install in the tenant with its
+version and state, and a **Manage** link plus **Disable** and **Uninstall** actions
+where the caller may take them. When apps are installed but the caller holds no role
+in any of them, Your apps reads "No role in an app" rather than "No apps yet".
+
+For an `AppInstall` holder, the directory badge counts the tenant's installs and Home
+reads, for example, "3 apps installed, 1 failed activation, 2 updates available". For
+anyone else, the badge counts the caller's own apps and Home reads "N apps available
+to you" or "No app is assigned to you yet".
 
 | Address | Page |
 |---|---|
@@ -28,9 +37,11 @@ With tenancy on, each address is rooted at `/t/{tenant}`.
 
 The catalogue lists what every configured [app source](../lattice.apps/README.md#app-sources)
 offers. The **source selector** has one entry per source plus "All sources". Each
-entry shows the source's kind (`Static` or `Dynamic`) and what it can do. Text search
-is enabled for a selected source only when it advertises `Search`, and for \"All sources\"
-when any source does. A slug offered by two sources appears as one row per source, and
+entry shows the source's name and kind (`Static` or `Dynamic`), and the selector's
+hint describes the source in plain language, for example "shipped with the cluster,
+one version of each app". Text search is enabled for a selected source only when it
+advertises `Search`, and for "All sources" when any source does; otherwise the search
+box reads "Search is not available" and says why. A slug offered by two sources appears as one row per source, and
 an install always records the source it came from.
 
 The in-image source (`in-image`) lists the apps the silo registered at start-up. A
@@ -60,6 +71,9 @@ the palette offers `apps.upgrade.{slug}` for an app with an update and
 `apps.disable.{slug}` for an enabled one.
 An upgrade shows what changed between the two versions. An install whose ceiling or
 bridge grants no longer cover its manifest is shown as needing re-consent.
+Reviewing the installed version manages that install rather than offering a new one:
+the install steps stay hidden until a change starts, and the trees the install
+already owns are not reported as ownership conflicts.
 
 Role bindings can be changed after install. On the manage page of an installed app,
 `/apps/catalogue/{source}/{slug}`, **Change role bindings...** lets you pick a
