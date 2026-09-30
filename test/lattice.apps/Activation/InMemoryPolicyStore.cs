@@ -13,6 +13,12 @@ internal sealed class InMemoryPolicyStore : ILatticeAuthorizationPolicyStore
 
     public Func<LatticeAuthorizationRule, Exception?>? FailPut { get; set; }
 
+    /// <summary>When set, <see cref="RemoveRuleAsync"/> throws instead of removing.</summary>
+    public Func<string, Exception?>? FailRemove { get; set; }
+
+    /// <summary>When set, enumerating the stored rules throws.</summary>
+    public Exception? FailList { get; set; }
+
     public int Puts { get; private set; }
 
     public int Removes { get; private set; }
@@ -37,6 +43,8 @@ internal sealed class InMemoryPolicyStore : ILatticeAuthorizationPolicyStore
     public Task<bool> RemoveRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default)
     {
         Guard(ruleId);
+        if (FailRemove?.Invoke(ruleId) is { } failure)
+            throw failure;
         Removes++;
         return Task.FromResult(_rules.Remove((treeId, ruleId)));
     }
@@ -50,6 +58,8 @@ internal sealed class InMemoryPolicyStore : ILatticeAuthorizationPolicyStore
 
     public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        if (FailList is { } listFailure)
+            throw listFailure;
         foreach (var rule in _rules.Values.ToArray())
             yield return rule;
         await Task.CompletedTask;
