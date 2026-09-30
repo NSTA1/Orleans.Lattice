@@ -45,7 +45,7 @@ endpoint mapping agree on the mount point.
 | `ConfigFilePath` | `string?` | `null` | Explicit path for the JSON configuration backing store. When `null`, the web head uses `LATTICE_EXPLORER_CONFIG`, then the per-user app-data default. |
 | `UseEnvironmentBootstrap` | `bool` | `true` | Registers the launcher-friendly environment bootstrap. When no configuration is persisted, it can seed the endpoint and optional sign-in credential from environment variables. |
 | `AllowEnvironmentCredentialSeed` | `bool` | `false` | Allows the environment bootstrap to seed `LATTICE_EXPLORER_USERNAME` and `LATTICE_EXPLORER_PASSWORD` into an empty browser credential store. Enable only for a single-operator deployment; otherwise every anonymous browser would inherit the seeded operator credential. Ignored when `UseEnvironmentBootstrap` is `false`. |
-| `AllowInteractiveEndpointConfiguration` | `bool` | `false` | Allows browser users to write the process-wide endpoint configuration through the connection dialog. The default wraps the store as read-only, so deploy the endpoint through `ConfigFilePath`, `LATTICE_EXPLORER_CONFIG`, or `LATTICE_EXPLORER_ENDPOINT`. |
+| `AllowInteractiveEndpointConfiguration` | `bool` | `false` | Allows browser users to edit, test and save the process-wide endpoint configuration: it gates the header's **Connection settings** entry, the editable connection dialog and its **Test connection**. The default wraps the store as read-only and shows the endpoint in a read-only **Cluster connection** dialog, so deploy the endpoint through `ConfigFilePath`, `LATTICE_EXPLORER_CONFIG`, or `LATTICE_EXPLORER_ENDPOINT`. See [The connection dialog](running-the-explorer.md#the-connection-dialog). |
 | `DataProtectionKeyRingBlobUri` | `Uri?` | `null` | Azure Blob Storage URI for a shared ASP.NET Data Protection key ring. Use this for multi-replica hosted-web sign-in so replicas can decrypt each other's cookies. `DataProtectionKeyRingCredential` is required when this is set. |
 | `DataProtectionKeyRingCredential` | `TokenCredential?` | `null` | Azure credential used to read and write the key-ring blob named by `DataProtectionKeyRingBlobUri`. Required when the blob URI is set; ignored otherwise. |
 | `DataProtectionApplicationName` | `string?` | `null` | Optional Data Protection application discriminator. Set the same stable value on every replica that must share cookies. |
@@ -122,8 +122,9 @@ The configuration store persists one `ExplorerConfiguration` record as JSON at
 `ExplorerConfigStoreOptions.FilePath`, using camelCase names and case-insensitive
 reading. A missing, corrupt, unreadable, or transport-invalid document leaves the
 Explorer unconfigured. Saves write a temporary file and then move it into place.
-On the web head, saves are refused unless `AllowInteractiveEndpointConfiguration`
-is `true`.
+On the web head, saves are refused, and the browser is offered neither the
+connection form nor its test, unless `AllowInteractiveEndpointConfiguration` is
+`true`.
 
 | Property | JSON name | Type | Default | Meaning |
 |---|---|---|---|---|

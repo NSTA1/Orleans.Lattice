@@ -58,8 +58,9 @@ endpoint.
 
 The header connection indicator shows connection state, exposes **Sign in** when
 the endpoint requires authentication, can reconnect a disconnected endpoint, and
-opens the connection settings dialog when endpoint editing is allowed by the web
-head.
+opens the connection settings dialog when the web head allows endpoint editing
+(`AllowInteractiveEndpointConfiguration`). Otherwise it has no **Connection
+settings** entry; see [The connection dialog](running-the-explorer.md#the-connection-dialog).
 
 ## Signing in with Basic
 

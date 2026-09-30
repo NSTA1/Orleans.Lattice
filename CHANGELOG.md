@@ -225,6 +225,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Explorer - The connection test no longer probes arbitrary hosts.** Connection settings, the editable dialog and its test need `AllowInteractiveEndpointConfiguration`, else the dialog is read-only. The anonymous probe reports fixed words and sends transport headers only to the configured endpoint. ([#4018](https://github.com/NSTA1/Orleans.Lattice/issues/4018)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
+
 - **Security - A metric allow-list admitted names it was not written for.** Wildcard entries anchored with `$` and matched with `Singleline`, so a caller-supplied name carrying a newline satisfied a deny-all pattern. Entries now anchor with `\z`, reject newlines, and match without backtracking. ([#3929](https://github.com/NSTA1/Orleans.Lattice/pull/3929)) (`Orleans.Lattice.Api.Telemetry`)
 
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)

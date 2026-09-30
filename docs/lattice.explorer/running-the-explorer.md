@@ -79,13 +79,51 @@ commonly set by a host are:
   refuses to apply `LATTICE_EXPLORER_USERNAME` and `LATTICE_EXPLORER_PASSWORD` to
   browser circuits. Enable it only for a single-operator deployment.
 - `AllowInteractiveEndpointConfiguration` - when `false` (the default), the
-  browser cannot write the process-wide endpoint configuration. Pre-provision the
-  JSON document or use the environment bootstrap instead.
+  browser cannot edit, test or save the process-wide endpoint configuration.
+  Pre-provision the JSON document or use the environment bootstrap instead. See
+  [The connection dialog](#the-connection-dialog).
 - The `DataProtection*` properties - optional shared ASP.NET Data Protection key
   ring configuration for multi-replica hosted-web sign-in.
 
 See [Configuration](configuration.md) for the complete option table, launcher
 environment variables, persisted document schema, and connection settings.
+
+### The connection dialog
+
+`AllowInteractiveEndpointConfiguration` decides what the browser may do with the
+cluster endpoint, because the connection dialog's **Test connection** dials, from
+the head, whatever address the visitor types. On a head anyone can reach, that
+would be a host and port probe into the head's own network.
+
+- **Not opted in (the default).** The header's connection indicator has no
+  **Connection settings** entry, and the connection dialog is read-only, titled
+  **Cluster connection**: it shows the configured endpoint and says it is set by
+  the deployment and cannot be changed from the browser. With no endpoint
+  configured, including on first run, it explains that the deployment sets one
+  through `LATTICE_EXPLORER_ENDPOINT` or a pre-provisioned configuration
+  document. There is no form, no test and no save, and the head refuses a
+  connection test even if one is asked for.
+- **Opted in.** **Connection settings** opens the editable **Connect to a
+  cluster** dialog: the endpoint, **Insecure loopback development mode**,
+  **Allow unencrypted HTTP/2 (h2c)**, **Test connection** and **Save and
+  connect**. On first run it has no Cancel or Close.
+
+A connection test reports one of three outcomes, in fixed words, never the
+endpoint's own status text or an exception message, which would describe
+whatever answered at an address the visitor chose:
+
+| Outcome | Hint |
+| --- | --- |
+| Reachable | None. |
+| Reachable - sign-in required | The endpoint answered and asks for a sign-in, which you can do after saving. |
+| Unreachable | No Lattice API answered at this address. Check the endpoint and its transport settings. |
+
+The probe is always anonymous: the circuit's credential and the configuration's
+metadata headers are never sent to an unconfirmed address, and an authentication
+refusal still counts as reachable. The configuration's transport headers, such as
+an origin-lock header for a fronting proxy, are sent only when the test targets
+the endpoint the head is configured for, and are dropped for any other. A probe
+that does not answer within 15 seconds is Unreachable.
 
 ## Mounting under a subpath
 

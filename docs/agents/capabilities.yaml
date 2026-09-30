@@ -911,6 +911,8 @@ capabilities:
         source: "docs/lattice.explorer/running-the-explorer.md"
       - statement: "Interactive endpoint configuration is disabled by default because the connection configuration is shared by every circuit."
         source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "Without AllowInteractiveEndpointConfiguration the Explorer offers no Connection settings entry and no connection test, and shows the endpoint in a read-only dialog; a test is anonymous, reports only fixed outcome words, and sends transport headers only to the configured endpoint."
+        source: "docs/lattice.explorer/running-the-explorer.md"
       - statement: "Environment credential seeding is disabled by default because the web head credential store is per browser."
         source: "docs/lattice.explorer/running-the-explorer.md"
     unsafe_sequences:
