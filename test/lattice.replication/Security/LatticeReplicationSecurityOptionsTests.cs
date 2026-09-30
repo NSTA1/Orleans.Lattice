@@ -21,17 +21,17 @@ public class LatticeReplicationSecurityOptionsTests
     }
 
     [Test]
-    public void BindCredentialToOriginCluster_defaults_to_off()
+    public void BindCredentialToOriginCluster_defaults_to_on()
     {
-        // Deliberately opt-in rather than secure-by-default: the binding
-        // re-resolves the per-peer outbound secret for the claimed origin, so
-        // it only discriminates under a symmetric per-peer scheme. Under a
-        // single cluster-wide secret every peer resolves the same value and the
-        // binding would add nothing; under an asymmetric scheme it would refuse
-        // legitimate peers. Defaulting it off also keeps the property additive
-        // on an already-released package.
+        // Secure by default, like its two siblings. Leaving it off made the
+        // claimed origin a self-assertion: the accepted-secret set carries no
+        // peer attribution, so a match proves only that the caller holds some
+        // accepted secret, and every downstream origin check then compared two
+        // caller-chosen values. Under a single cluster-wide secret every origin
+        // resolves the same value so the check passes and nothing changes; only
+        // an asymmetric per-peer scheme must opt out.
         var o = new LatticeReplicationSecurityOptions();
-        Assert.That(o.BindCredentialToOriginCluster, Is.False);
+        Assert.That(o.BindCredentialToOriginCluster, Is.True);
     }
 
     [Test]
@@ -42,11 +42,11 @@ public class LatticeReplicationSecurityOptionsTests
             RequireAuthentication = false,
             SecretRefreshInterval = TimeSpan.FromMinutes(5),
             ScanConfigurationForSecrets = false,
-            BindCredentialToOriginCluster = true,
+            BindCredentialToOriginCluster = false,
         };
         Assert.That(o.RequireAuthentication, Is.False);
         Assert.That(o.SecretRefreshInterval, Is.EqualTo(TimeSpan.FromMinutes(5)));
         Assert.That(o.ScanConfigurationForSecrets, Is.False);
-        Assert.That(o.BindCredentialToOriginCluster, Is.True);
+        Assert.That(o.BindCredentialToOriginCluster, Is.False);
     }
 }

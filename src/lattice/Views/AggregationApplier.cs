@@ -720,10 +720,28 @@ internal sealed class AggregationApplier(
             cancellationToken,
             moveToEnd: fused);
 
-        await store.SetAsync(
-            membershipKey,
-            EncodeMembership(new MembershipRow(contribution.GroupKey, 0, null)),
-            cancellationToken);
+        // The fold path's membership row is a pure back-pointer: it records the
+        // group a source key belongs to and never the contribution itself, so it
+        // is always encoded as (GroupKey, 0, null). When the key keeps its group
+        // and the stored row already holds exactly that, the write re-encodes and
+        // re-persists a row byte-identical to the one already there - a whole
+        // store round trip that cannot change any reader's answer.
+        //
+        // Byte identity, not value equality, is the bar. The group key is settled
+        // by the fusion test above; the numeric is compared on its bits, because
+        // -0.0 == 0.0 holds while the two encode to different bytes; and the
+        // member flag is read from the head, which carries it precisely so this
+        // decision needs no member decode. A row failing any of those is still
+        // rewritten, so a re-grouping or a numeric/set-union row is untouched.
+        if (!fused
+            || BitConverter.DoubleToInt64Bits(prior!.Value.Numeric) != 0
+            || prior.Value.HasMember)
+        {
+            await store.SetAsync(
+                membershipKey,
+                EncodeMembership(new MembershipRow(contribution.GroupKey, 0, null)),
+                cancellationToken);
+        }
 
         if (prior is { } o && !string.Equals(o.GroupKey, contribution.GroupKey, StringComparison.Ordinal))
         {

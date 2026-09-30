@@ -32,8 +32,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Schema rule builder.** The Schema area composes a policy from cards over the tree's inferred shape, previews it against up to 100 sampled values with the new public `LatticeSchemaPolicyValidator`, and warns before saving a policy they would break. An Advanced view keeps the JSON. ([#3963](https://github.com/NSTA1/Orleans.Lattice/issues/3963)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Explorer.UI`)
 
-- **Config - Tenant snapshot lease.** `LatticeTenancyOptions.PolicySnapshotLeaseDuration` (default 10 s) bounds how long a silo trusts its tenant snapshots without renewing its cluster-epoch lease; a longer lease delays a write that must wait out an unreachable silo. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030)) (`Orleans.Lattice.Tenancy`)
-
 - **Core - Ownership-bounded aliasing.** An optional `ITreeOwnershipGuard` can refuse an alias that would cross tree ownership, for every alias change including resize, restore and remediation; a refusal throws `LatticeTreeOwnershipDeniedException`. ([#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
@@ -59,6 +57,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Online reshard shrinks.** `ReshardAsync` accepts a count below a populated tree's current one and folds adjacent shards together online, completing only once the retired shards' storage is released; the `shrink_unsupported` rejection reason is gone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Changed
+
+- **Performance - Identity digest allocations.** Three SHA-256 identity paths staged input or digest bytes through throwaway arrays. They hash from stack or pooled buffers now: 72-88% less allocated on the credential metadata digest, 69-91% on the Explorer cookie digest, 16-27% on backup artifacts. ([#4094](https://github.com/NSTA1/Orleans.Lattice/pull/4094)) (`Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Backup`)
+
+- **Performance - Leaf snapshot vector clock decode.** Decoding a row's version vector read its exact entry count, then grew a default-sized dictionary into it one rehash at a time. It presizes from that count instead: 29% faster and 28% less allocated at four replicas, 40% and 38% at sixteen. ([#4079](https://github.com/NSTA1/Orleans.Lattice/pull/4079)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation splice key handling.** Splicing an entry into a group row transcoded its source key three times: once into a scratch buffer, once to size it and once to write it. It now reuses the first transcode, and sizes that buffer to the key: 44% to 57% faster on that work. ([#4079](https://github.com/NSTA1/Orleans.Lattice/pull/4079)) (`Orleans.Lattice`)
+
+- **Performance - Fold membership back-pointer write.** A custom-fold contribution that keeps its group rewrote its membership row every time, though that row is a pure back-pointer whose bytes cannot have changed. It skips the identical write: one store round trip saved, 20% faster. ([#4079](https://github.com/NSTA1/Orleans.Lattice/pull/4079)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation inverse row splice.** The splice's second pass re-walked and re-parsed every entry purely to re-derive byte spans its first pass had already measured, then copied each entry one by one. It now block-copies the runs either side of the match: 42% faster on a 64-entry row. ([#4062](https://github.com/NSTA1/Orleans.Lattice/pull/4062)) (`Orleans.Lattice`)
 
@@ -116,7 +122,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Schema - Unversioned trees were enveloped at version 0.** An absent version config read back as a zero-valued config, so writes to a tree with none were wrapped in a (0,0) envelope and the admin reported a phantom config. Absence now reads as null and writes pass through unchanged. ([#3993](https://github.com/NSTA1/Orleans.Lattice/issues/3993)) (`Orleans.Lattice.Schema`)
 - **Config - Core timer periods above the timer ceiling.** A `HotShardSampleInterval`, `ShardHealingInterval` or view `CoalesceWindow` over the grain-timer limit (about 49.7 days) passed validation, then threw at every arming, so sampling, healing or view upkeep never ran. Validation now rejects it. ([#4044](https://github.com/NSTA1/Orleans.Lattice/issues/4044)) (`Orleans.Lattice`)
 - **Config - Tenant lease cycle timeout above the timer ceiling.** With `LeaseInterval` and `LeaseCycleTimeout` both longer than a timer can wait (about 49.7 days), the rate-budget lease loop died on its first cycle and never apportioned a rate. The timeout now clamps to the ceiling. ([#4013](https://github.com/NSTA1/Orleans.Lattice/issues/4013)) (`Orleans.Lattice.Tenancy`)
-- **Config - Tenant usage metering above the timer ceiling.** A `MeterInterval` longer than a timer can wait (about 49.7 days) ended metering on its first cycle, leaving quotas unenforced, and a reload to zero re-metered with no pause. The interval now clamps, and a non-positive reload stops the loop. ([#4042](https://github.com/NSTA1/Orleans.Lattice/issues/4042)) (`Orleans.Lattice.Tenancy`)
 - **Config - Grain index backfill interval above the timer ceiling.** A `BackfillInterval` longer than a grain timer can wait (about 49.7 days) passed validation, then threw on every arming, so the crawl reported running and never advanced. Validation and `WithBackfillInterval` now reject it. ([#4043](https://github.com/NSTA1/Orleans.Lattice/issues/4043)) (`Orleans.Lattice.GrainIndex`)
 - **Config - ANN slice budgets above the timer ceiling.** An open or ingest slice budget longer than a timer can wait (about 49.7 days) faulted every open attempt and every build slice that waited, so the approximate index never opened or built. Both deadlines now clamp to the ceiling. ([#4014](https://github.com/NSTA1/Orleans.Lattice/issues/4014)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 - **CRDT - Counter component overflow.** A G-Counter or PN-Counter advance past `long.MaxValue` wrapped the component negative, so the pointwise-max merge discarded it and the write succeeded having counted nothing. It now throws `OverflowException` and writes nothing. ([#3926](https://github.com/NSTA1/Orleans.Lattice/issues/3926)) (`Orleans.Lattice`)
@@ -234,17 +239,23 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **WAL - An undone resize leaked its copy's WAL.** Undoing a resize now discards its destination, retiring its materialiser pins and trimming its WAL at once. The WAL GC no longer reactivates a deleted tree's leaves, and it heals copies an earlier undo left behind. ([#3930](https://github.com/NSTA1/Orleans.Lattice/issues/3930)) (`Orleans.Lattice`)
 - **Core - A purge stopped part-way and wedged its tree id.** A tree purge is accepted and walked in the background, with shard progress in deletion status, so the response timeout cannot stop it. A tree re-created under a purged id can again be resized, deleted and recovered. ([#3940](https://github.com/NSTA1/Orleans.Lattice/issues/3940), [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
 
+- **WAL - The file WAL acknowledged appends it later discarded.** An append that reused an offset at or below the trim watermark was accepted and readable, then dropped by the next recovery as already trimmed. The file provider now rejects it like any other overlap. ([#4073](https://github.com/NSTA1/Orleans.Lattice/issues/4073)) (`Orleans.Lattice.Storage.File`)
+
+- **Vector - A removed key mapping came back after a flush.** `VectorKeyDictionary.RemoveAsync` and `ClearAsync` left records buffered by `GetOrAddBufferedAsync`, so the next flush wrote them back and a reload mapped the removed ids again. Both now discard those records. ([#4074](https://github.com/NSTA1/Orleans.Lattice/issues/4074)) (`Orleans.Lattice.Vector`)
+
+- **Core - Tree admin acted on undefined modes.** An unknown `TreeSnapshotMode` ran an Offline snapshot that quiesced the source, and an unknown `TreeHistoryRetentionMode` cleared the retention override. Both are now rejected with `ArgumentOutOfRangeException` before any side effect. ([#4075](https://github.com/NSTA1/Orleans.Lattice/issues/4075)) (`Orleans.Lattice.Api.TreeAdmin`)
+
 ### Security
 
 - **Explorer - Hardened credential, frame and script policy.** A sign-in is sent only to the endpoint it was minted for (`IExplorerAuthSession.GetAuthenticationFor`); the CSP drops `'unsafe-inline'` scripts; only the frame endpoint lifts `X-Frame-Options`; a frame gets only consented bridge grants. ([#4020](https://github.com/NSTA1/Orleans.Lattice/issues/4020)) (`Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
 
 - **Explorer - The connection test no longer probes arbitrary hosts.** Connection settings, the editable dialog and its test need `AllowInteractiveEndpointConfiguration`, else the dialog is read-only. The anonymous probe reports fixed words and sends transport headers only to the configured endpoint. ([#4018](https://github.com/NSTA1/Orleans.Lattice/issues/4018)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
 
-- **Security - Tenant changes lagged on other silos.** A tenant-registry write refreshed the policy, residency and placement views only on the committing silo, so other silos kept admitting revoked access and placing trees by stale rules. Every silo now tracks a leased cluster epoch and fails closed. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030), [#4051](https://github.com/NSTA1/Orleans.Lattice/issues/4051), [#4052](https://github.com/NSTA1/Orleans.Lattice/issues/4052)) (`Orleans.Lattice.Tenancy`)
+- **Security - A replication mesh secret certified any origin it claimed.** Origin binding shipped off by default, so an accepted credential proved only that the caller held some mesh secret, leaving every origin check comparing caller-chosen values. It now defaults on. ([#4082](https://github.com/NSTA1/Orleans.Lattice/pull/4082)) (`Orleans.Lattice.Replication`)
+
+- **Security - MCP discovery advertised tools the gate would refuse.** A key- or prefix-scoped rule on the cluster-wide tree id was read as cluster-wide and carried a scopeless capability, and the per-tool operation filter was skipped absent operation detail. Both now fail closed. ([#4082](https://github.com/NSTA1/Orleans.Lattice/pull/4082)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - A rejected MCP call echoed the caller's key and scope.** Any client-error rejection reached the server log and the caller-facing text verbatim and unbounded, so a caller-chosen key could forge a log record with CR/LF. Rejection messages are now sanitized and truncated. ([#4056](https://github.com/NSTA1/Orleans.Lattice/pull/4056)) (`Orleans.Lattice.Api.Mcp`)
-
-- **Security - Stale tenant decisions during a snapshot rebuild.** A registry change only schedules a policy-snapshot rebuild, and the gate trusted the stale snapshot meanwhile, admitting revoked grants and removed or suspended members. It now confirms against the registry, or denies. ([#4001](https://github.com/NSTA1/Orleans.Lattice/issues/4001), [#4053](https://github.com/NSTA1/Orleans.Lattice/issues/4053)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Auth`)
 
 - **Security - Tenant create skipped identity-directory validation.** The registered tenant-admin facade was built without the directory, so seeded admin subjects were never checked even with validation required. Create now validates them as adding a subject does. ([#4003](https://github.com/NSTA1/Orleans.Lattice/issues/4003)) (`Orleans.Lattice.Api.TenantAdmin`)
 
@@ -270,13 +281,15 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## [2026-09-30]
 
-Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattice.Dashboards` advance to `9.8.2`. Every other package stays where the 9.8.1 wave left it. Packages that depend on a patched package still require its earlier version, so reference a patched package directly to pick up its fixes.
+Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattice.Dashboards` advance to `9.8.2`, and `Orleans.Lattice.Tenancy` and `Orleans.Lattice.Auth` to `9.8.1`. Every other package stays where the 9.8.1 wave left it. Packages that depend on a patched package still require its earlier version, so reference a patched package directly to pick up its fixes.
 
-**Upgrading from 9.8.1.** A rolling upgrade is supported: no wire format, persisted state layout or public API changes. The headline fix closes a durability hole in which a failed checkpoint persist left a leaf advertising a WAL trim entitlement it had never written, so the garbage collector could trim a prefix no snapshot covered and the next replay latched stale. A leaf already latched stale still needs an operator rebuild; this patch prevents new occurrences rather than repairing existing ones. Expected replay-permit refusals now log one summary warning a minute per silo instead of a stack trace each, so an alert matching that stack no longer fires.
+**Upgrading from 9.8.1.** A rolling upgrade is supported: no wire format or persisted state layout changes, and the public surface grows only additively: a new `LatticeTenancyOptions.PolicySnapshotLeaseDuration` option, and an `ITenantGateEnforcer.EnforceAsync` whose default implementation delegates to `Enforce`, so an existing enforcer is unaffected. The headline fix closes a durability hole in which a failed checkpoint persist left a leaf advertising a WAL trim entitlement it had never written, so the garbage collector could trim a prefix no snapshot covered and the next replay latched stale. A leaf already latched stale still needs an operator rebuild; this patch prevents new occurrences rather than repairing existing ones. Expected replay-permit refusals now log one summary warning a minute per silo instead of a stack trace each, so an alert matching that stack no longer fires. The tenancy and auth patches close four multi-silo authorization gaps: a registry write refreshed the policy, residency and placement views only on the committing silo, and the gate trusted a stale policy snapshot while a rebuild was pending, so a silo could keep admitting revoked grants and removed or suspended members. Both now confirm against the registry and fail closed.
 
 ### Added
 
 - **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Config - Tenant snapshot lease.** `LatticeTenancyOptions.PolicySnapshotLeaseDuration` (default 10 s) bounds how long a silo trusts its tenant snapshots without renewing its cluster-epoch lease; a longer lease delays a write that must wait out an unreachable silo. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030)) (`Orleans.Lattice.Tenancy`)
 
 ### Changed
 
@@ -299,6 +312,14 @@ Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattic
 - **Replay - Admission refusals logged a stack trace each.** An expected replay-permit refusal no longer logs its exception. Refusals are counted into at most one summary warning a minute per silo, which names the arm that fired and its remedy. ([#3906](https://github.com/NSTA1/Orleans.Lattice/issues/3906)) (`Orleans.Lattice`)
 
 - **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
+
+- **Config - Tenant usage metering above the timer ceiling.** A `MeterInterval` longer than a timer can wait (about 49.7 days) ended metering on its first cycle, leaving quotas unenforced, and a reload to zero re-metered with no pause. The interval now clamps, and a non-positive reload stops the loop. ([#4042](https://github.com/NSTA1/Orleans.Lattice/issues/4042)) (`Orleans.Lattice.Tenancy`)
+
+### Security
+
+- **Security - Tenant changes lagged on other silos.** A tenant-registry write refreshed the policy, residency and placement views only on the committing silo, so other silos kept admitting revoked access and placing trees by stale rules. Every silo now tracks a leased cluster epoch and fails closed. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030), [#4051](https://github.com/NSTA1/Orleans.Lattice/issues/4051), [#4052](https://github.com/NSTA1/Orleans.Lattice/issues/4052)) (`Orleans.Lattice.Tenancy`)
+
+- **Security - Stale tenant decisions during a snapshot rebuild.** A registry change only schedules a policy-snapshot rebuild, and the gate trusted the stale snapshot meanwhile, admitting revoked grants and removed or suspended members. It now confirms against the registry, or denies. ([#4001](https://github.com/NSTA1/Orleans.Lattice/issues/4001), [#4053](https://github.com/NSTA1/Orleans.Lattice/issues/4053)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Auth`)
 
 
 

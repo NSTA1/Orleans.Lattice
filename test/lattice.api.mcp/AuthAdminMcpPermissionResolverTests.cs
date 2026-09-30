@@ -471,6 +471,73 @@ public sealed class AuthAdminMcpPermissionResolverTests
         Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.AppInstall), Is.True);
     }
 
+    /// <summary>
+    /// Security regression. The cluster-wide predicate must test the scope's
+    /// <see cref="LatticeScopeKind"/> as well as its tree id. Only
+    /// <see cref="LatticeScope.ClusterWide"/> - a Tree-kind scope over the
+    /// sentinel - is authorizable cluster-wide, but the scope constructor also
+    /// admits a key- or prefix-kind scope on the same sentinel and nothing
+    /// rejects one at authoring time. Such a rule grants nothing at the gate,
+    /// because a scopeless capability is requested with no key and the evaluator
+    /// consults the tree tier only, so honouring it here advertised a facade the
+    /// caller could never invoke.
+    /// </summary>
+    [TestCase(LatticeOperation.Telemetry)]
+    [TestCase(LatticeOperation.AppInstall)]
+    public async Task A_key_scoped_wildcard_rule_does_not_confer_a_scopeless_capability(
+        LatticeOperation scopeless)
+    {
+        var resolver = CreateResolver(AdminReturning(new LatticeAuthorizationRule(
+            ruleId: "r-" + Guid.NewGuid().ToString("N"),
+            subject: LatticeSubjectSelector.User("alice"),
+            scope: LatticeScope.Key(LatticeScope.ClusterWideTreeId, "k"),
+            operations: scopeless,
+            effect: LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.GrantedOperations.HasFlag(scopeless), Is.False,
+            "A key-kind scope on the wildcard tree id is not a cluster-wide grant.");
+    }
+
+    [Test]
+    public async Task A_key_scoped_wildcard_telemetry_rule_does_not_advertise_the_telemetry_group()
+    {
+        // The group half of the same break: advertising it would put the telemetry
+        // tools in the session collection - and so within reach of tools/call -
+        // while the facade's own gate denies every invocation.
+        var resolver = CreateResolver(AdminReturning(new LatticeAuthorizationRule(
+            ruleId: "r-" + Guid.NewGuid().ToString("N"),
+            subject: LatticeSubjectSelector.User("alice"),
+            scope: LatticeScope.Key(LatticeScope.ClusterWideTreeId, "k"),
+            operations: LatticeOperation.Telemetry,
+            effect: LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False,
+            "Advertising the group would break lock-step with a gate that denies it.");
+    }
+
+    [Test]
+    public async Task A_prefix_scoped_wildcard_rule_does_not_confer_a_scopeless_capability()
+    {
+        var resolver = CreateResolver(AdminReturning(new LatticeAuthorizationRule(
+            ruleId: "r-" + Guid.NewGuid().ToString("N"),
+            subject: LatticeSubjectSelector.User("alice"),
+            scope: LatticeScope.Prefix(LatticeScope.ClusterWideTreeId, "p"),
+            operations: LatticeOperation.Telemetry,
+            effect: LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.Telemetry), Is.False);
+            Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False);
+        });
+    }
+
     [Test]
     public async Task A_tree_scoped_rule_still_grants_its_data_plane_groups()
     {

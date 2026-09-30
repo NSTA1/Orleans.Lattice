@@ -198,10 +198,10 @@ public sealed class RepoContextMcpHarness : IAsyncDisposable
             => (null, LatticeApiMcpAccessSet.None),
         RepoContextMcpAuthPosture.Reader
             => (new LatticeCredential("repocontext-reader"),
-                LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.RepoContext)),
+                RepoContextTestAccessSets.Granting(LatticeApiMcpGroup.RepoContext)),
         RepoContextMcpAuthPosture.Writer
             => (new LatticeCredential("repocontext-writer"),
-                LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.RepoContext)),
+                RepoContextTestAccessSets.Granting(LatticeApiMcpGroup.RepoContext)),
         _ => (null, LatticeApiMcpAccessSet.None),
     };
 

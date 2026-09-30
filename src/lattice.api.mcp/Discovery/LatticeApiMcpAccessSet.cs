@@ -35,10 +35,13 @@ internal readonly struct LatticeApiMcpAccessSet : IEquatable<LatticeApiMcpAccess
     public LatticeOperation GrantedOperations => _granted;
 
     /// <summary>
-    /// Whether the resolver populated <see cref="GrantedOperations"/>. A set that
-    /// carries no operation detail cannot support a per-tool minimum, so the
-    /// discovery core applies group-level filtering alone for it, exactly as
-    /// before this refinement existed.
+    /// Whether the resolver populated <see cref="GrantedOperations"/>. Purely
+    /// descriptive: it reports the shape of the set and must never be used to
+    /// decide whether to apply the per-tool minimum. Gating that filter on this
+    /// predicate treated absent evidence as permission, so a set admitting a group
+    /// while carrying no operations bypassed the filter and advertised the group's
+    /// mutating tools. The discovery core now applies the minimum unconditionally,
+    /// which denies such a set every tool.
     /// </summary>
     public bool CarriesOperationDetail => _granted != LatticeOperation.None;
 

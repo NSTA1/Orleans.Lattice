@@ -19,8 +19,12 @@ public static class BackupContentHash
     /// </summary>
     /// <param name="content">The bytes to address.</param>
     /// <returns>The 64-character lowercase hexadecimal digest.</returns>
-    public static string Compute(ReadOnlySpan<byte> content) =>
-        Convert.ToHexStringLower(SHA256.HashData(content));
+    public static string Compute(ReadOnlySpan<byte> content)
+    {
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(content, digest);
+        return Convert.ToHexStringLower(digest);
+    }
 
     /// <summary>
     /// Computes the lowercase hexadecimal SHA-256 content address of an ordered
@@ -39,6 +43,26 @@ public static class BackupContentHash
             hasher.AppendData(chunk.Span);
         }
 
-        return Convert.ToHexStringLower(hasher.GetHashAndReset());
+        return ToHexLowerAndReset(hasher);
+    }
+
+    /// <summary>
+    /// Formats the hash accumulated in <paramref name="hasher"/> as the lowercase
+    /// hexadecimal digest and resets it for reuse.
+    /// </summary>
+    /// <remarks>
+    /// The parameterless <see cref="IncrementalHash.GetHashAndReset()"/> returns a
+    /// freshly allocated 32-byte array that every caller here reads once, hands to
+    /// the hex formatter, and drops. Filling a stack span instead removes that
+    /// per-hash allocation from the capture, restore, and health-verification
+    /// paths, which hash once per artifact and so pay it per artifact.
+    /// </remarks>
+    /// <param name="hasher">The accumulating hasher. Must not be <c>null</c>.</param>
+    /// <returns>The 64-character lowercase hexadecimal digest.</returns>
+    internal static string ToHexLowerAndReset(IncrementalHash hasher)
+    {
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        hasher.GetHashAndReset(digest);
+        return Convert.ToHexStringLower(digest);
     }
 }

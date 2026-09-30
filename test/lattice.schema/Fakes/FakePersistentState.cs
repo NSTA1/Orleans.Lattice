@@ -18,10 +18,28 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     public int WriteCount { get; private set; }
 
     /// <summary>
-    /// When set, the next <see cref="WriteStateAsync"/> throws this exception
-    /// instead of persisting, then clears itself so the following write succeeds.
+    /// When set, a <see cref="WriteStateAsync"/> throws this exception instead of
+    /// persisting, then clears itself so the following write succeeds.
     /// </summary>
+    /// <remarks>
+    /// Pair it with <see cref="ThrowOnWriteNumber"/> when the write under test is
+    /// not the first one a call performs. Several coordinator entry points persist
+    /// an alias reservation before they reach the write whose rollback is being
+    /// exercised, so a one-shot fault that always fires first lands in the
+    /// reservation instead - and the test still passes, because the assertion it
+    /// makes is equally true of the earlier abort. That is a silent false green,
+    /// and the ordinal is what closes it.
+    /// </remarks>
     public Exception? ThrowOnWrite { get; set; }
+
+    /// <summary>
+    /// The 1-based ordinal of the <see cref="WriteStateAsync"/> call that
+    /// <see cref="ThrowOnWrite"/> fires on. Defaults to the first write.
+    /// </summary>
+    public int ThrowOnWriteNumber { get; set; } = 1;
+
+    /// <summary>Total <see cref="WriteStateAsync"/> attempts, successful or not.</summary>
+    public int WriteAttempts { get; private set; }
 
     public Task ClearStateAsync()
     {
@@ -34,7 +52,8 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
 
     public Task WriteStateAsync()
     {
-        if (ThrowOnWrite is { } ex)
+        WriteAttempts++;
+        if (ThrowOnWrite is { } ex && WriteAttempts == ThrowOnWriteNumber)
         {
             ThrowOnWrite = null;
             throw ex;

@@ -98,7 +98,7 @@ public sealed class DenyAllMcpAuthorizerEndToEndTests
         builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge>(
             new StubBridge(new LatticeCredential("agent")));
         builder.Services.AddSingleton<ILatticeApiMcpPermissionResolver>(
-            new StubResolver(LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data)));
+            new StubResolver(TestAccessSets.Granting(LatticeApiMcpGroup.Data)));
 
         // RequireAuthorization=false only relaxes the ASP.NET endpoint auth
         // requirement so the loopback client can reach the transport; the

@@ -995,7 +995,7 @@ internal static class LeafSnapshotCodec
 
             if (TMode.Materialize)
             {
-                vectorClock = new VersionVector();
+                vectorClock = VersionVector.WithCapacity(entryCount);
             }
 
             for (var i = 0; i < entryCount; i++)

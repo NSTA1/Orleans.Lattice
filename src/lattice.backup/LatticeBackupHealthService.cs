@@ -151,7 +151,7 @@ internal sealed class LatticeBackupHealthService(
             hasher.AppendData(chunk.Span);
         }
 
-        return Convert.ToHexStringLower(hasher.GetHashAndReset());
+        return BackupContentHash.ToHexLowerAndReset(hasher);
     }
 
     private static string BuildExplanation(

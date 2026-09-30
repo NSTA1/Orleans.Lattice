@@ -314,7 +314,7 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             }
         }
 
-        _contentHash = Convert.ToHexStringLower(_hasher.GetHashAndReset());
+        _contentHash = BackupContentHash.ToHexLowerAndReset(_hasher);
         _hasher.Dispose();
 
         // Fold the base backup id into the chained backup id so an empty delta off a
@@ -322,7 +322,7 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         // keeps the pure payload hash for the restore integrity gate.
         var idBytes = Encoding.UTF8.GetBytes(
             $"{_baseBackupId}{(char)BackupConstants.KeySeparator}{_contentHash}");
-        _backupId = Convert.ToHexStringLower(SHA256.HashData(idBytes));
+        _backupId = BackupContentHash.Compute(idBytes);
     }
 
     private bool RangeIntersectsScope(in LatticeMutation mutation)
