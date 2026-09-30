@@ -95,7 +95,16 @@ lifecycle, quota, and region-residency verbs (see the
   entry fails closed with an `ArgumentException`, and duplicates collapse. A
   caller that cannot be resolved to a subject (an anonymous or system-origin
   create) seeds nothing rather than inventing an owner; grant access explicitly
-  in that case. The seeded set is echoed back on
+  in that case. When a real identity directory provider is registered (anything
+  but the default `NullIdentityDirectory`) and
+  `LatticeIdentityDirectoryOptions.ValidationRequired` is set, every id in an
+  explicitly supplied set must resolve - checked after authorization and before
+  the write, exactly as `ILatticeTenantAccessAdmin.AddAdminSubjectAsync` checks an
+  added subject - and an id the directory resolves to nothing fails the whole
+  create with a `LatticeDirectoryValidationException` (an `ArgumentException`), so
+  create cannot be used to grant what add would refuse. The caller-seeded default
+  is not checked, since it is the authenticated caller's own resolved subject. The
+  seeded set is echoed back on
   `TenantCreationResult.AdminSubjects`.
 - **Authorize, then validate, then write.** Every `ILatticeTenantAdmin` lifecycle
   verb first parses the tenant id (a purely syntactic step over the caller's own
