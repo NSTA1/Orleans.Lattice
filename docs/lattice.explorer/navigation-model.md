@@ -304,8 +304,9 @@ refused or fails), the field says why and accepts what you type as free text.
 
 Suggestions are tenant-scoped. Tree suggestions come from the same catalogue the
 Data area reads, so with tenancy on only the active tenant's trees are offered;
-anything a picker remembers is keyed on the tenant the circuit asserts, so a value
-read under one tenant is never offered under another.
+anything a picker remembers is filed under the caller (the sign-in, the endpoint
+and the tenant the circuit asserts), so a value read under one tenant, or for one
+identity, is never offered under another.
 
 The picker is an ARIA 1.2 combobox with no focus trap. Down and Up open the list and
 move the highlighted value, Enter chooses it, Escape closes the list, Home and End

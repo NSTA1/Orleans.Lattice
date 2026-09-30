@@ -224,8 +224,10 @@ the enrolment report nor the status links name the tree, it navigates to not
 found.
 
 Reads of the estate and enrolment are cached per circuit for 15 seconds for
-directory, Home, completion and non-refresh page reads. Sign-in and connection
-changes invalidate both caches. Peer-status reads ask for pages of 1000 links
+directory, Home, completion and non-refresh page reads, filed under the caller
+(sign-in, endpoint and asserted tenant). Sign-in and connection changes
+invalidate both caches, and a read for a different caller is never served from
+them. Peer-status reads ask for pages of 1000 links
 and follow at most 50 pages; repeated continuation tokens also stop the read, so
 a broken server cannot loop the UI forever.
 

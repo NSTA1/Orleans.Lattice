@@ -56,6 +56,12 @@ transitively.
 - **One credential per circuit.** Every facade rides one channel for the browser
   circuit, built from the configured endpoint and the signed-in credential. It is
   rebuilt when the connection settings or the sign-in change.
+- **Answers never outlive their caller.** Everything the console remembers from
+  the cluster within a circuit is filed under the caller who read it: the
+  sign-in, the endpoint and the asserted tenant. A sign-in, a sign-out or a
+  connection change drops it, and the page is built afresh, so an answer read for
+  one caller is never shown to the next. See
+  [Tenant scope](tenant-scope.md#every-call-carries-the-tenant).
 - **No extension points but apps.** There is no plugin model and no public API to
   register an area. The only way a third party puts UI into the console is a
   [Lattice App](lattice-apps.md), and an app's UI never sees a credential.
