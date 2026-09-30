@@ -228,6 +228,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Explorer - Hardened credential, frame and script policy.** A sign-in is sent only to the endpoint it was minted for (`IExplorerAuthSession.GetAuthenticationFor`); the CSP drops `'unsafe-inline'` scripts; only the frame endpoint lifts `X-Frame-Options`; a frame gets only consented bridge grants. ([#4020](https://github.com/NSTA1/Orleans.Lattice/issues/4020)) (`Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
+
 - **Explorer - The connection test no longer probes arbitrary hosts.** Connection settings, the editable dialog and its test need `AllowInteractiveEndpointConfiguration`, else the dialog is read-only. The anonymous probe reports fixed words and sends transport headers only to the configured endpoint. ([#4018](https://github.com/NSTA1/Orleans.Lattice/issues/4018)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
 
 - **Security - Tenant changes lagged on other silos.** A tenant-registry write refreshed the policy, residency and placement views only on the committing silo, so other silos kept admitting revoked access and placing trees by stale rules. Every silo now tracks a leased cluster epoch and fails closed. ([#4030](https://github.com/NSTA1/Orleans.Lattice/issues/4030), [#4051](https://github.com/NSTA1/Orleans.Lattice/issues/4051), [#4052](https://github.com/NSTA1/Orleans.Lattice/issues/4052)) (`Orleans.Lattice.Tenancy`)

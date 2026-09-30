@@ -161,7 +161,11 @@ LATTICE_EXPLORER_TRANSPORT_HEADERS=X-Azure-FDID=<front-door-id>
 
 - `IExplorerAuthMethod` - sign-in provider contract.
 - `IExplorerAuthSession` - discovers schemes, drives sign-in and sign-out, and
-  applies credentials to the connection.
+  applies credentials to the connection. A client that builds its own channel
+  attaches `GetAuthenticationFor(endpoint)`, never `CurrentAuthentication`: it
+  returns the sign-in only for the endpoint the sign-in was minted for (compared
+  ignoring case and a trailing `/`), and `null` for any other. See
+  [Adding a custom auth method](adding-a-custom-auth-method.md#security-notes).
 - `ExplorerAuthChallengeContext` - selected scheme, advertised parameters,
   interactive inputs, endpoint and `TimeProvider`.
 - `ExplorerAccessTokenSource` - proactive, single-flight token refresh.
