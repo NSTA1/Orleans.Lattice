@@ -81,6 +81,28 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
     }
 
     [Test]
+    public void AddLatticeTenancy_wires_the_cross_silo_tenant_policy_epoch_once()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        builder.AddLatticeTenancy();
+        builder.AddLatticeTenancy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                builder.Services.Single(d => d.ServiceType == typeof(ITenantPolicyEpochPublisher)).ImplementationType,
+                Is.EqualTo(typeof(GrainTenantPolicyEpochPublisher)));
+            Assert.That(
+                builder.Services.Count(d =>
+                    d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService)
+                    && d.ImplementationType == typeof(TenantPolicyEpochSubscription)),
+                Is.EqualTo(1),
+                "every silo subscribes its snapshot to the epoch exactly once");
+        });
+    }
+
+    [Test]
     public void AddLatticeTenancy_repeat_call_wires_structure_only_once()
     {
         var builder = NewBuilderWithDependencies();
