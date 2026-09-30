@@ -78,6 +78,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Schema - Unversioned trees were enveloped at version 0.** An absent version config read back as a zero-valued config, so writes to a tree with none were wrapped in a (0,0) envelope and the admin reported a phantom config. Absence now reads as null and writes pass through unchanged. ([#3993](https://github.com/NSTA1/Orleans.Lattice/issues/3993)) (`Orleans.Lattice.Schema`)
 - **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
 - **Config - Tenant lease cycle timeout above the timer ceiling.** With `LeaseInterval` and `LeaseCycleTimeout` both longer than a timer can wait (about 49.7 days), the rate-budget lease loop died on its first cycle and never apportioned a rate. The timeout now clamps to the ceiling. ([#4013](https://github.com/NSTA1/Orleans.Lattice/issues/4013)) (`Orleans.Lattice.Tenancy`)
 - **Config - ANN slice budgets above the timer ceiling.** An open or ingest slice budget longer than a timer can wait (about 49.7 days) faulted every open attempt and every build slice that waited, so the approximate index never opened or built. Both deadlines now clamp to the ceiling. ([#4014](https://github.com/NSTA1/Orleans.Lattice/issues/4014)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
@@ -200,6 +201,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Core - A purge stopped part-way and wedged its tree id.** A tree purge is accepted and walked in the background, with shard progress in deletion status, so the response timeout cannot stop it. A tree re-created under a purged id can again be resized, deleted and recovered. ([#3940](https://github.com/NSTA1/Orleans.Lattice/issues/3940), [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
 
 ### Security
+
+- **Security - A revoked cross-tenant grant kept admitting reads.** A registry change only schedules a policy-snapshot rebuild, and the data-plane gate trusted the stale snapshot meanwhile. While it rebuilds, a crossing is now confirmed against the registry and denied if it cannot be. ([#4001](https://github.com/NSTA1/Orleans.Lattice/issues/4001)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Auth`)
+
+- **Security - Tenant create skipped identity-directory validation.** The registered tenant-admin facade was built without the directory, so seeded admin subjects were never checked even with validation required. Create now validates them as adding a subject does. ([#4003](https://github.com/NSTA1/Orleans.Lattice/issues/4003)) (`Orleans.Lattice.Api.TenantAdmin`)
 
 - **Security - A metric allow-list admitted names it was not written for.** Wildcard entries anchored with `$` and matched with `Singleline`, so a caller-supplied name carrying a newline satisfied a deny-all pattern. Entries now anchor with `\z`, reject newlines, and match without backtracking. ([#3929](https://github.com/NSTA1/Orleans.Lattice/pull/3929)) (`Orleans.Lattice.Api.Telemetry`)
 
