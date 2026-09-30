@@ -18,6 +18,9 @@ public partial class AppsCataloguePage : IDisposable
     /// <summary>Above this many loaded rows the table virtualises, so thousands of apps stay cheap to draw.</summary>
     internal const int VirtualizeThreshold = 100;
 
+    /// <summary>The id of the sentence that says why the search field is disabled, which that field is described by.</summary>
+    private const string SearchHintId = "apps-search-hint";
+
     private static readonly (AvailableAppFilter Filter, string Text)[] Filters =
     [
         (AvailableAppFilter.All, "All"),
@@ -73,8 +76,8 @@ public partial class AppsCataloguePage : IDisposable
         _view.SourceKey is { } key ? (_sources ?? []).FirstOrDefault(source => string.Equals(source.Key, key, StringComparison.Ordinal)) : null;
 
     private string SourceHint => SelectedSource is { } source
-        ? $"{source.Key}: {AppsPresentation.SourceHints(source)}"
-        : string.Join("; ", (_sources ?? []).Select(source => $"{source.Key}: {AppsPresentation.SourceHints(source)}"));
+        ? AppsPresentation.SourceDescription(source)
+        : string.Join(". ", (_sources ?? []).Select(AppsPresentation.SourceDescription));
 
     private bool TextEnabled => SelectedSource is { } selected
         ? selected.Capabilities.HasFlag(AppSourceSummaryCapabilities.Search)

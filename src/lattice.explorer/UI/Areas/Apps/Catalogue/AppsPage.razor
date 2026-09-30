@@ -93,10 +93,83 @@ else
             </CompactRow>
             <DetailActions>@AppActions(context)</DetailActions>
             <EmptyContent>
-                <LtEmptyState Title="No apps yet" HeadingLevel="2">
-                    No enabled app grants you a role@(TenantPhrase). An administrator binds app roles to your groups when an app is installed.
-                </LtEmptyState>
+                @if (_snapshot.Control.CanList)
+                {
+                    <LtEmptyState Title="@(_installed.IsEmpty ? "No apps yet" : "No role in an app")" HeadingLevel="2">
+                        @if (_installed.IsEmpty)
+                        {
+                            @($"No app is installed{TenantPhrase} yet. Install one from the catalogue.")
+                        }
+                        else
+                        {
+                            @($"You hold no role in an app{TenantPhrase}. The apps installed here are listed below.")
+                        }
+                    </LtEmptyState>
+                }
+                else
+                {
+                    <LtEmptyState Title="No apps yet" HeadingLevel="2">
+                        No enabled app grants you a role@(TenantPhrase). An administrator binds app roles to your groups when an app is installed.
+                    </LtEmptyState>
+                }
             </EmptyContent>
         </LtTable>
     }
+
+    @if (_snapshot.Control.CanList && !_installed.IsEmpty)
+    {
+        <section class="lt-apps-section" aria-labelledby="lt-apps-installed">
+            <h2 id="lt-apps-installed" class="lt-apps-section__title">@(Address.Tenant is { } tenant ? $"Installed in tenant {tenant}" : "Installed apps")</h2>
+            <LtTable TItem="AppSummary"
+                     Items="_installed"
+                     Caption="@(Address.Tenant is { } captionTenant ? $"Apps installed in tenant {captionTenant}" : "Installed apps")"
+                     CaptionHidden="true"
+                     RowKey="app => app.Slug"
+                     DetailTitle="InstalledName">
+                <ChildContent>
+                    <LtColumn TItem="AppSummary" Title="App" RowHeader="true" SortBy="InstalledName">
+                        <div class="lt-apps-app">
+                            <AppIcon Slug="@context.Slug" DataUrl="@InstalledIconOf(context)" />
+                            <span class="lt-apps-app__text">
+                                <span class="lt-apps-app__name" data-lt-installed-app="@context.Slug">@InstalledName(context)</span>
+                                @if (InstalledPresentation(context)?.Summary is { Length: > 0 } summary)
+                                {
+                                    <span class="lt-apps-app__summary">@summary</span>
+                                }
+                            </span>
+                        </div>
+                    </LtColumn>
+                    <LtColumn TItem="AppSummary" Title="Version" Mono="true" Value="app => app.Version" />
+                    <LtColumn TItem="AppSummary" Title="State">
+                        <LtStatusPill State="@AppsPresentation.LifecycleState(context.State, context.Version).Role" Text="@AppsPresentation.LifecycleState(context.State, context.Version).Text" />
+                    </LtColumn>
+                    <LtColumn TItem="AppSummary" Title="Actions">
+                        <span class="lt-apps-actions lt-apps-actions--row">@InstalledActions(context)</span>
+                    </LtColumn>
+                </ChildContent>
+                <CompactRow>
+                    <LtCompactRow>
+                        <Primary>@InstalledName(context)</Primary>
+                        <Secondary>v@(context.Version) - @AppsPresentation.LifecycleState(context.State, context.Version).Text</Secondary>
+                    </LtCompactRow>
+                </CompactRow>
+                <DetailActions>@InstalledActions(context)</DetailActions>
+            </LtTable>
+        </section>
+    }
+}
+
+@code {
+    private RenderFragment InstalledActions(AppSummary app) =>
+        @<text>
+            <a class="lt-btn lt-btn--quiet" href="@ManageHref(app)" aria-label="@($"Manage {InstalledName(app)}")">Manage</a>
+            @if (CanDisable(app))
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => Manage(app, AppLifecycleVerb.Disable)" aria-label="@($"Disable {InstalledName(app)}")">Disable</LtButton>
+            }
+            @if (CanUninstall(app))
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => Manage(app, AppLifecycleVerb.Uninstall)" aria-label="@($"Uninstall {InstalledName(app)}")">Uninstall</LtButton>
+            }
+        </text>;
 }

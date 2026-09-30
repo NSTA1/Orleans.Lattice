@@ -70,8 +70,11 @@ public sealed class AppsPresentationTests
     }
 
     [TestCase("data.read", null, "read its own trees")]
-    [TestCase("data.write", "tasks", "write its tree tasks")]
+    [TestCase("data.read", "tasks", "read the tasks tree")]
+    [TestCase("data.write", "tasks", "write to the tasks tree")]
+    [TestCase("data.write", null, "write to its own trees")]
     [TestCase("data.delete", null, "delete keys in its own trees")]
+    [TestCase("data.delete", "tasks", "delete keys in the tasks tree")]
     [TestCase("context.user", null, "see your display name")]
     [TestCase("context.read", null, "know its version, the theme and your tenant's display name")]
     [TestCase("nav.sync", null, "keep its page in the address line")]
@@ -79,11 +82,45 @@ public sealed class AppsPresentationTests
     [TestCase("net.fetch", null, "use the unrecognised operation \"net.fetch\"")]
     public void Bridge_grants_read_in_plain_language(string operation, string? tree, string text)
     {
+        var grant = new AppUiBridgeGrantDescriptor { Operation = operation, Tree = tree };
         Assert.Multiple(() =>
         {
-            Assert.That(AppsPresentation.BridgeText(new AppUiBridgeGrantDescriptor { Operation = operation, Tree = tree }), Is.EqualTo(text));
+            Assert.That(AppsPresentation.BridgeText(grant), Is.EqualTo(text));
+            Assert.That(AppsPresentation.BridgeLabel(grant), Is.EqualTo(char.ToUpperInvariant(text[0]) + text[1..]));
             Assert.That(AppsPresentation.IsKnownBridgeOperation(operation), Is.EqualTo(operation != "net.fetch"));
         });
+    }
+
+    [Test]
+    public void Bridge_grants_are_ordered_context_then_read_write_delete_then_navigation_and_notices()
+    {
+        AppUiBridgeGrantDescriptor[] grants =
+        [
+            new() { Operation = "net.fetch" },
+            new() { Operation = "ui.notify" },
+            new() { Operation = "data.delete", Tree = "tasks" },
+            new() { Operation = "data.write", Tree = "tasks" },
+            new() { Operation = "nav.sync" },
+            new() { Operation = "data.read", Tree = "tasks" },
+            new() { Operation = "data.read", Tree = "archive" },
+            new() { Operation = "context.user" },
+            new() { Operation = "context.read" },
+        ];
+
+        Assert.That(
+            AppsPresentation.OrderBridge(grants).Select(grant => AppsPresentation.BridgeText(grant)),
+            Is.EqualTo(new[]
+            {
+                "know its version, the theme and your tenant's display name",
+                "see your display name",
+                "read the archive tree",
+                "read the tasks tree",
+                "write to the tasks tree",
+                "delete keys in the tasks tree",
+                "keep its page in the address line",
+                "show you short notifications",
+                "use the unrecognised operation \"net.fetch\"",
+            }));
     }
 
     [Test]
@@ -102,6 +139,19 @@ public sealed class AppsPresentationTests
         {
             Assert.That(AppsPresentation.SourceHints(AppsTestData.InImage), Is.EqualTo("Static"));
             Assert.That(AppsPresentation.SourceHints(AppsTestData.Feed), Is.EqualTo("Dynamic - search, several versions, acquired on install"));
+        });
+    }
+
+    [Test]
+    public void A_source_is_described_in_plain_language()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppsPresentation.SourceDescription(AppsTestData.InImage), Is.EqualTo("In-image apps: shipped with the cluster, one version of each app"));
+            Assert.That(AppsPresentation.SourceDescription(AppsTestData.Blob), Is.EqualTo("Ops blob store: fetched from a live source; searchable, one version of each app"));
+            Assert.That(AppsPresentation.SourceDescription(AppsTestData.Feed),
+                Is.EqualTo("Contoso feed: fetched from a live source; searchable, several versions of each app, downloaded and verified before review"));
+            Assert.That(() => AppsPresentation.SourceDescription(null!), Throws.ArgumentNullException);
         });
     }
 

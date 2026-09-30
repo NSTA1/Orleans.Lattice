@@ -42,16 +42,27 @@ internal sealed class AppPageLoader
 
     private readonly ILatticeAppWorkspace? _workspace;
     private readonly ILatticeAppsControl? _control;
+    private readonly ILatticeAppCatalog? _catalog;
     private readonly ILogger _logger;
 
     /// <summary>Creates the loader over whichever read paths the host registered.</summary>
     /// <param name="workspace">The caller's workspace, or <see langword="null"/> when not registered.</param>
     /// <param name="control">The app control, or <see langword="null"/> when not registered.</param>
     /// <param name="logger">Where a failing read path is reported, without any slug or presentation text.</param>
-    public AppPageLoader(ILatticeAppWorkspace? workspace, ILatticeAppsControl? control, ILogger<AppPageLoader>? logger = null)
+    /// <param name="catalog">
+    /// The app catalogue, which draws the installed version's icon for an <c>AppInstall</c> holder
+    /// who holds no role (the workspace, which draws it for a role holder, does not answer them),
+    /// or <see langword="null"/> when not registered.
+    /// </param>
+    public AppPageLoader(
+        ILatticeAppWorkspace? workspace,
+        ILatticeAppsControl? control,
+        ILogger<AppPageLoader>? logger = null,
+        ILatticeAppCatalog? catalog = null)
     {
         _workspace = workspace;
         _control = control;
+        _catalog = catalog;
         _logger = logger ?? NullLogger<AppPageLoader>.Instance;
     }
 
@@ -82,7 +93,9 @@ internal sealed class AppPageLoader
         var presentation = described?.Presentation ?? admin?.Presentation;
         var icon = described?.Presentation?.Icon is not null
             ? await ReadIconAsync(slug, cancellationToken).ConfigureAwait(false)
-            : null;
+            : described is null && admin?.Presentation?.Icon is not null
+                ? await ReadCatalogueIconAsync(admin, cancellationToken).ConfigureAwait(false)
+                : null;
 
         var callerRoles = described?.Roles ?? [];
         var model = new AppPageModel
@@ -218,6 +231,24 @@ internal sealed class AppPageLoader
         {
             _logger.LogInformation(exception, "The app control did not return an app's consent.");
             return (admin, null, false);
+        }
+    }
+
+    private async Task<string?> ReadCatalogueIconAsync(AppDescriptor admin, CancellationToken cancellationToken)
+    {
+        if (_catalog is null || (admin.SourceKey ?? admin.Provenance.Source) is not { Length: > 0 } source)
+        {
+            return null;
+        }
+
+        try
+        {
+            return ToDataUri(await _catalog.GetIconAsync(source, admin.Slug, admin.Version, cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogInformation(exception, "The app catalogue did not return an installed app's icon.");
+            return null;
         }
     }
 

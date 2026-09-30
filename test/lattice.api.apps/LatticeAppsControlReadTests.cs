@@ -192,6 +192,39 @@ public sealed class LatticeAppsControlReadTests
     }
 
     [Test]
+    public async Task DescribeAsync_probes_the_installed_versions_trees_as_the_install_that_owns_them()
+    {
+        _h.RegistryHas(AppsControlHarness.Record(AppRegistryLifecycleState.Enabled));
+        _h.SourceResolves();
+        _h.StatusIs(AppsControlHarness.Status(AppsControlHarness.Outcome(AppActivationOperation.Enable, AppRegistryLifecycleState.Enabled)));
+
+        var d = (await _h.Control.DescribeAsync(AppsControlHarness.Slug))!;
+
+        Assert.That(d.Provenance.Publisher, Is.EqualTo("contoso"), "the description still carries the source's provenance");
+        await _h.Registry.Received(1).GetTreeOwnershipConflictsAsync(
+            Arg.Any<TenantId>(),
+            Arg.Any<AppManifest>(),
+            Arg.Is<AppProvenance>(p => p.Publisher == "first-party"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [TestCase(AppRegistryLifecycleState.Uninstalled, null)]
+    [TestCase(AppRegistryLifecycleState.Enabled, AppsControlHarness.OtherVersion)]
+    public async Task DescribeAsync_probes_a_version_no_live_install_owns_as_the_sources_publisher(AppRegistryLifecycleState state, string? version)
+    {
+        _h.RegistryHas(AppsControlHarness.Record(state));
+        _h.SourceResolves(version is null ? null : AppsControlHarness.Manifest(version));
+
+        _ = await _h.Control.DescribeAsync(AppsControlHarness.Slug, version);
+
+        await _h.Registry.Received(1).GetTreeOwnershipConflictsAsync(
+            Arg.Any<TenantId>(),
+            Arg.Any<AppManifest>(),
+            Arg.Is<AppProvenance>(p => p.Publisher == "contoso"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task DescribeAsync_unknown_app_or_version_returns_null()
     {
         _h.RegistryHas(null);

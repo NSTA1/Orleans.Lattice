@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class AppsPageTests : AppsTestContext
+public sealed partial class AppsPageTests : AppsTestContext
 {
     [Test]
     public void A_restricted_identity_sees_its_apps_and_no_catalogue_and_no_error()

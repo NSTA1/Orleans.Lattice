@@ -90,7 +90,7 @@ public sealed partial class AppReviewPageTests
         var cut = AtCeiling();
 
         Checkbox(cut, "delete").Change(false);
-        Checkbox(cut, "see your display name").Change(false);
+        Checkbox(cut, "See your display name").Change(false);
 
         cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-activation]").GetAttribute("data-lt-activation"), Is.EqualTo("fails")));
         Assert.Multiple(() =>
@@ -262,7 +262,7 @@ public sealed partial class AppReviewPageTests
         {
             Assert.That(diff.QuerySelector("h2")!.TextContent, Is.EqualTo("What changes from v1.0.0 to v2.0.0"));
             Assert.That(diff.TextContent, Does.Contain("Its UI newly asks to show you short notifications").And.Contain("needs re-consent"));
-            Assert.That(diff.TextContent, Does.Contain("Its UI no longer asks to write its tree tasks"));
+            Assert.That(diff.TextContent, Does.Contain("Its UI no longer asks to write to the tasks tree"));
             Assert.That(diff.QuerySelector("[data-lt-reconsent]"), Is.Not.Null);
             Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Is.EqualTo("v1.0.0 is installed; In-image apps offers v2.0.0."));
             Assert.That(cut.FindAll(".lt-apps-steps__step").Select(step => step.TextContent.Trim()), Does.Contain("Upgrade"));

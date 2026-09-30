@@ -40,6 +40,15 @@ public partial class AppReviewPage : IDisposable
 
     private bool CanRebind => CanInstall && _flow?.CanRebind == true && Facades.RoleBindings is not null;
 
+    /// <summary>
+    /// Whether the staged-flow stops are drawn: not while the description is still being read
+    /// (it is not yet known whether this is an install or the installed version), and not on the
+    /// installed version's manage page until a change to it is started.
+    /// </summary>
+    private bool ShowsSteps => _flow is { } flow
+        && flow.Stage != AppInstallStage.Resolving
+        && !(flow.IsManaging && flow.Stage == AppInstallStage.Review);
+
     private string SourceName => _flow?.Source?.DisplayName ?? _flow?.Key.SourceKey ?? string.Empty;
 
     private string TenantPhrase => Address.Tenant is { } tenant ? $" in tenant {tenant}" : string.Empty;
