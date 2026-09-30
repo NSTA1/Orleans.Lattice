@@ -129,7 +129,9 @@ Typing `>` turns the address line into the command palette. The palette offers:
   contrast and density (`appearance.theme.system`, `appearance.theme.paper`,
   `appearance.theme.board`, `appearance.contrast.system`,
   `appearance.contrast.standard`, `appearance.contrast.more`,
-  `appearance.density.comfortable` and `appearance.density.compact`).
+  `appearance.density.comfortable` and `appearance.density.compact`). While the
+  [tenant switcher](#the-tenant-switcher) is offered, `tenant.switch` ("Switch
+  tenant") opens it.
 - **Area commands.** Each visible area contributes its own, such as
   `data.refresh` or `backups.capture`. They are listed with their areas in
   [The Explorer areas](areas.md).
@@ -170,9 +172,9 @@ own width and uses three bands:
 
 | Band | Width | Spine | Header | Address line |
 |---|---|---|---|---|
-| Expanded | 1200px and up | A full spine with badges and reasons. | Connection, appearance and identity controls in a row. | The full chain. |
+| Expanded | 1200px and up | A full spine with badges and reasons. | Connection, appearance, tenant switcher and identity controls in a row. | The full chain. |
 | Medium | 768px to 1199px | A rail: every label, but no badges or reasons. | As expanded. | The full chain. |
-| Compact | Below 768px | A slide-in sheet opened from the **Directory** button, which returns focus when it closes. | The mark and name, with a **Menu** button holding the connection, identity and appearance controls. | The last two nodes after a `...` node that opens the full chain as a list. The command palette opens as a full-screen sheet. |
+| Compact | Below 768px | A slide-in sheet opened from the **Directory** button, which returns focus when it closes; for an operator it starts with the tenant switcher. | The mark and name, with a **Menu** button holding the connection, identity and appearance controls. | The last two nodes after a `...` node that opens the full chain as a list. The command palette opens as a full-screen sheet. |
 
 Until the width has been measured, the expanded layout renders, so nothing
 depends on script to be usable.
@@ -214,6 +216,32 @@ A caller scoped to the reserved `default` tenant who is not a platform operator
 sees no tenancy chrome: addresses stay plain, and `/t/default/...` is
 redirected to the plain form. See [Tenant scope](tenant-scope.md) for the full
 tenancy model and the Tenancy area.
+
+### The tenant switcher
+
+A platform operator who can reach two or more tenants also gets a tenant switcher
+in the top bar. It is a button naming the active tenant; selecting it opens a
+panel with a type-ahead field of the tenants you can reach, which lists up to 20
+at once and narrows as you type. Down lists the tenants, Enter switches, and
+Escape closes the panel and returns focus to the button. The palette command
+`tenant.switch` ("Switch tenant") opens the same field, and the button carries
+that command id. At the compact width the switcher is the field itself, at the
+top of the **Directory** sheet above the spine.
+
+The switcher is absent, not disabled, unless every condition holds: you are
+signed in, tenancy is on for you, the operator-gated switcher proves you may
+switch, and there are at least two tenants to choose between. Any fault reads as
+"not offered". Its list is the same reachable-tenant list as the `t/` completions
+and the Tenancy directory, so for an operator it includes the reserved `default`
+tenant. It is read again on every navigation, so a sign-in, a sign-out or a new
+identity never shows the previous caller's tenants.
+
+Choosing a tenant makes the same fail-closed switch as typing `t/{tenant}`. At a
+tenant-scoped address you go to the same address re-rooted at the chosen tenant,
+and a refusal redirects back with the usual warning. At a cluster-wide address,
+such as an Access page, you stay where you are while the tenant changes, and the
+Explorer says "Scoped to tenant {tenant}." or, on a refusal, that it can't scope
+to that tenant.
 
 ## Pickers
 
