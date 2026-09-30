@@ -160,4 +160,29 @@ public class ReplayPermitAdmissionBenchmarks
     public bool StarvationAdmissionBusy() =>
         BPlusLeafGrain.TryAcquireStarvationReplayPermit(
             _busyStarvationGate, BPlusLeafGrain.StarvationDriveOrigin.WalGcSweep);
+
+    /// <summary>
+    /// The per-refusal cost of the replay-admission refusal log aggregation
+    /// (issue #3906) on its common path, where a summary line was written
+    /// recently and this refusal is only counted. It runs once per refused
+    /// activation, so it must report <c>0 B</c>.
+    /// </summary>
+    [Benchmark(Description = "Replay admission refusal log - counted, line not due")]
+    public bool RefusalLogSuppressed() =>
+        BPlusLeafGrain.TryTakeReplayAdmissionRefusalLine(_refusalLineStamp + 1, out _, out _);
+
+    private long _refusalLineStamp;
+
+    /// <summary>
+    /// Writes a summary-line stamp so <see cref="RefusalLogSuppressed"/> measures
+    /// the counted-only path rather than the line-taking one.
+    /// </summary>
+    [GlobalSetup(Target = nameof(RefusalLogSuppressed))]
+    public void SetupRefusalLog()
+    {
+        Setup();
+        BPlusLeafGrain.ResetReplayAdmissionRefusalLogForTest();
+        _refusalLineStamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        BPlusLeafGrain.TryTakeReplayAdmissionRefusalLine(_refusalLineStamp, out _, out _);
+    }
 }

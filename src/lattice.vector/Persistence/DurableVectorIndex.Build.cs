@@ -604,6 +604,15 @@ public sealed partial class DurableVectorIndex
     /// </remarks>
     private sealed class SliceDeadline(TimeProvider timeProvider, TimeSpan budget, long startedAt) : IDisposable
     {
+        /// <summary>
+        /// The longest due time a timer accepts: <c>0xFFFFFFFE</c> milliseconds,
+        /// about 49.7 days. <see cref="DurableVectorIndexOptions.IngestSliceBudget"/>
+        /// has no upper bound, and the system timer throws
+        /// <see cref="ArgumentOutOfRangeException"/> above this, so a longer window
+        /// is held here instead of faulting every slice that has to wait.
+        /// </summary>
+        internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
         private readonly CancellationTokenSource _cancellation = new();
         private ITimer? _timer;
         private bool _armed;
@@ -635,6 +644,11 @@ public sealed partial class DurableVectorIndex
             {
                 _cancellation.Cancel();
                 return;
+            }
+
+            if (window > MaxTimerDuration)
+            {
+                window = MaxTimerDuration;
             }
 
             _timer = timeProvider.CreateTimer(

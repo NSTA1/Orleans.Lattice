@@ -576,6 +576,8 @@ internal sealed partial class BPlusLeafGrain
             Volatile.Write(ref _lastReplayPermitProgress, 0);
             Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
+
+        ResetReplayAdmissionRefusalLogForTest();
     }
 
     /// <summary>
@@ -3458,6 +3460,15 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>Last UTC tick a cursor-publish-failure warning was logged (silo-wide).</summary>
     private static long _lastCursorFailLogTicks;
+
+    /// <summary>
+    /// Clears the silo-wide token <see cref="ShouldLogCursorPublishFailure"/>
+    /// spends. Test-only: the token is a process-wide static on the real clock,
+    /// so a fixture asserting on a line it gates would otherwise depend on what
+    /// the previous test logged in the last second.
+    /// </summary>
+    internal static void ResetCursorPublishFailureLogTokenForTest()
+        => Volatile.Write(ref _lastCursorFailLogTicks, 0);
 
     /// <summary>
     /// Per-silo token check for the cursor-publish-failure warning: returns

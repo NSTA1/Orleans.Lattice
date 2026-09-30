@@ -538,4 +538,85 @@ public class OrSetProvenanceDecoderTests
             Is.EqualTo(AboveIndexThreshold + 2),
             "neither r2 tombstone is present in the r1 add list, so both synthesize an Added event");
     }
+
+    // ---- result capacity ----
+    //
+    // These two lanes pin the allocation shape of the decode buffer. They read
+    // Capacity rather than Count deliberately: the event CONTENT is already
+    // pinned by the synthesis tests above, and a capacity regression is exactly
+    // the kind of change those tests cannot see.
+
+    [Test]
+    public void DecodeState_presizes_an_uncompacted_set_exactly_and_never_widens_it()
+    {
+        // The common path. Every dot yields exactly one event, so the initial
+        // presize is already exact and the lazy widening must not fire - a
+        // change that reserved the worst case up front would show here as a
+        // capacity above the event count.
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= 64; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        var events = Decoder.DecodeState(set);
+
+        Assert.That(events, Is.InstanceOf<List<CrdtMemberChange>>());
+        var list = (List<CrdtMemberChange>)events;
+        Assert.That(list.Capacity, Is.EqualTo(list.Count),
+            "an uncompacted decode must keep its exact presize - no widening, no slack");
+    }
+
+    [Test]
+    public void DecodeState_widens_a_compacted_set_to_the_exact_ceiling_not_a_doubling()
+    {
+        // The compacted path. Synthesis overflows the presize, so the buffer
+        // must grow - but to total + tombstoneDots, the provable ceiling, and
+        // not to List<T>'s default 2 * total. With a mostly-add set the two
+        // differ by nearly the whole add-dot count, which is the saving.
+        const int addCount = 256;
+        const int tombCount = 8;
+
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        for (var i = 1; i <= addCount; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        // Tombstones from a different replica, so none of them is present in the
+        // r1 add list and every one synthesizes its Added half.
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= tombCount; i++)
+        {
+            tombs.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+        }
+
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        var events = Decoder.DecodeState(set);
+
+        const int total = addCount + tombCount;
+        const int ceiling = total + tombCount;
+
+        Assert.That(events, Is.InstanceOf<List<CrdtMemberChange>>());
+        var list = (List<CrdtMemberChange>)events;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(list.Count, Is.EqualTo(total + tombCount),
+                "every r2 tombstone contributes a synthesized Added plus its Removed");
+            Assert.That(list.Capacity, Is.EqualTo(ceiling),
+                "the widening must be an exact-size reallocation, not a doubling to 2 * total");
+            Assert.That(list.Capacity, Is.LessThan(2 * total),
+                "a doubling would reserve this much - that is the allocation being removed");
+        });
+    }
 }

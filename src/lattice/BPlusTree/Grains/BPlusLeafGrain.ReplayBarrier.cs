@@ -299,6 +299,16 @@ internal sealed partial class BPlusLeafGrain
         {
             RecordReplayBarrierOutcome(treeId, LatticeMetrics.ReplayBarrierFaulted);
 
+            // An admission refusal is expected backpressure, not a replay fault,
+            // so it is aggregated into a periodic summary with no exception
+            // attached rather than reported through the fault warning below
+            // (issue #3906). It still fails the request and is still rethrown.
+            if (IsOwnReplayAdmissionRefusal(ex))
+            {
+                ReportReplayAdmissionRefusal(treeId);
+                throw;
+            }
+
             // Rate-limited alongside the counter, reusing the activation path's
             // existing per-silo token so a reactivation storm cannot self-amplify
             // into a log flood.

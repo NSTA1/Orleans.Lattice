@@ -236,6 +236,11 @@ public sealed class DurableVectorIndexOptions
     /// <see cref="DefaultIngestSliceBudget"/>; a non-positive value removes the
     /// bound and leaves <see cref="IngestBatchSize"/> as the only one.
     /// <para>
+    /// The deadline described below is a timer, and a timer cannot wait longer
+    /// than <c>0xFFFFFFFE</c> milliseconds (about 49.7 days), so a longer budget
+    /// arms it at that ceiling rather than faulting the slice.
+    /// </para>
+    /// <para>
     /// The budget is checked only <i>after</i> an item has been consumed, so a
     /// step always makes progress. A budget too small for even one item degrades
     /// to one item per step, never to a step that consumes nothing and spins.

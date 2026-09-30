@@ -2276,10 +2276,8 @@ internal sealed partial class LatticeGrain(
             // identical for every entry in the batch, so they are resolved once
             // here rather than re-resolved per entry inside PublishEventAsync.
             var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
-            foreach (var entry in deltas)
-            {
-                await batch.PublishAsync(LatticeTreeEventKind.Set, entry.Key);
-            }
+            await LatticeEventPublisher.PublishManyAsync(
+                batch, LatticeTreeEventKind.Set, deltas, static entry => entry.Key);
         }
     }
 
@@ -2446,10 +2444,8 @@ internal sealed partial class LatticeGrain(
                     // See ApplyCrdtDeltaManyAsync: batch-invariant publication
                     // state is resolved once rather than once per entry.
                     var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
-                    foreach (var entry in entries)
-                    {
-                        await batch.PublishAsync(LatticeTreeEventKind.Set, entry.Key);
-                    }
+                    await LatticeEventPublisher.PublishManyAsync(
+                        batch, LatticeTreeEventKind.Set, entries, static entry => entry.Key);
                 }
             }
             finally
@@ -2748,10 +2744,8 @@ internal sealed partial class LatticeGrain(
                 // See ApplyCrdtDeltaManyAsync: batch-invariant publication state is
                 // resolved once rather than once per written key.
                 var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
-                for (int i = 0; i < written.Count; i++)
-                {
-                    await batch.PublishAsync(LatticeTreeEventKind.Set, written[i]);
-                }
+                await LatticeEventPublisher.PublishManyAsync(
+                    batch, LatticeTreeEventKind.Set, written, static key => key);
             }
 
             return written;

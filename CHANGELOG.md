@@ -84,6 +84,31 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## Released
 
+## [2026-09-30]
+
+Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattice.Dashboards` advance to `9.8.2`. Every other package stays where the 9.8.1 wave left it. Packages that depend on a patched package still require its earlier version, so reference a patched package directly to pick up its fixes.
+
+**Upgrading from 9.8.1.** A rolling upgrade is supported: no wire format, persisted state layout or public API changes. The headline fix closes a durability hole in which a failed checkpoint persist left a leaf advertising a WAL trim entitlement it had never written, so the garbage collector could trim a prefix no snapshot covered and the next replay latched stale. A leaf already latched stale still needs an operator rebuild; this patch prevents new occurrences rather than repairing existing ones. Expected replay-permit refusals now log one summary warning a minute per silo instead of a stack trace each, so an alert matching that stack no longer fires.
+
+### Added
+
+- **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+### Changed
+
+- **Performance - Event publish fan-out.** A multi-key set, conditional set or CRDT delta apply published its per-key stream events one await at a time. They now go out in bounded concurrent windows of 32, so a 500-key request costs 16 grain-call rounds instead of 500. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
+- **Performance - Leaf frame structural row walk.** The frame codec's row parser took its materialise-or-skip mode as a runtime flag, so the skipping walk behind frame validation still ran every branch of the materialising one. The mode is now a type argument the JIT specialises away, halving the walk. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
+### Fixed
+
+- **WAL - Trim could outrun a leaf's durable checkpoint.** A checkpoint persist that failed left the leaf advertising an advance it never wrote, so the GC could trim a prefix no snapshot covered and the next replay latched stale. The advance is now rolled back and retried. ([#4017](https://github.com/NSTA1/Orleans.Lattice/issues/4017)) (`Orleans.Lattice`)
+
+- **Replay - Admission refusals logged a stack trace each.** An expected replay-permit refusal no longer logs its exception. Refusals are counted into at most one summary warning a minute per silo, which names the arm that fired and its remedy. ([#3906](https://github.com/NSTA1/Orleans.Lattice/issues/3906)) (`Orleans.Lattice`)
+
+- **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
+
+
 ## [2026-09-29]
 
 Patch release: `Orleans.Lattice`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Data`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry.Azure`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Caching.AzureBlob`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.GrainIndex`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc` and `Orleans.Lattice.Scaling` advance to `9.8.1` from the `release/9.8` line. Every other package stays at `9.8.0`. Packages that depend on a patched package still require its `9.8.0`, so reference a patched package directly to pick up its fixes.

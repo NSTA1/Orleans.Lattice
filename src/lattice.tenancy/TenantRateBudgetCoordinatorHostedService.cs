@@ -174,7 +174,11 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
     /// <summary>
     /// The bound on one cycle: the configured timeout, falling back to the default
     /// when non-positive and clamped to at most one lease interval so a single cycle
-    /// can never consume more than one tick's worth of wall clock.
+    /// can never consume more than one tick's worth of wall clock. The result is
+    /// finally clamped to <see cref="MaxTimerPeriod"/>, the longest delay the
+    /// cycle's <see cref="CancellationTokenSource"/> deadline accepts: the lease
+    /// interval is not itself clamped, so an out-of-range interval would otherwise
+    /// let an out-of-range timeout through and throw out of the loop.
     /// </summary>
     internal TimeSpan ResolveCycleTimeout(TimeSpan interval)
     {
@@ -184,7 +188,7 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
             timeout = LatticeTenantRateLimiterOptions.DefaultLeaseCycleTimeout;
         }
 
-        return timeout > interval ? interval : timeout;
+        return ClampPeriod(timeout > interval ? interval : timeout);
     }
 
     private async Task<bool> RunCycleSafelyAsync(TimeSpan interval, CancellationToken cancellationToken)

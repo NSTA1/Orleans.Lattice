@@ -246,6 +246,10 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
+### Timeout and budget ceiling
+
+The timeout, budget and cadence options the runtime arms as timers - `ActivationReadyTimeout`, `DigestPublishTimeout`, `EmptyTreeProbeBudget`, `MaxScanPageStallDuration`, `SetManyFanOutBudget`, `ShardForwardTimeout`, `StarvationDriveBudget`, `WalAdmissionSaturationCallBudget`, `WalAdmissionSaturationWaitBudget`, `WalAppendDispatchTimeout`, `WalDrainBudget`, `WalFlushPreflightTimeout`, `WalFlushTimeout`, `WalSaturationSampleInterval` and `WalThrottledAdmissionPace` - must be at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest wait a .NET timer accepts. Options validation rejects a longer finite value such as `TimeSpan.MaxValue`, which would otherwise pass and then fail every operation that armed it. Where an option documents `Timeout.InfiniteTimeSpan`, use that to remove the bound instead.
+
 ### Structural sizing (registry-pinned)
 
 `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` used to live on `LatticeOptions` but are now pinned per-tree on the `TreeRegistryEntry`. They are seeded from `LatticeConstants` on first tree use (defaults 128 / 128 / 64) and can be changed through:
@@ -1796,7 +1800,7 @@ The narrowing reached only the **activation-time** replay when it was introduced
 
 ### `WalReplayPermitQueueDepthPerPermit`
 
-How many activations may queue for a WAL replay permit, per permit the replay gate was sized to (default: 4; `0` admits an unbounded queue, the historical shape). The admitted-waiter bound is this figure multiplied by the resolved ceiling (see [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays)), so it scales with the deployment's own CPU grant. An activation refused admission gets a fast, attributable [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) to retry after a backoff instead of a silent wait that would outlive its request deadline. Admission is refused only when this depth bound **and** [`WalReplayPermitMaxQueueWait`](#walreplaypermitmaxqueuewait) both say the queue is unhealthy. The validator rejects a negative value.
+How many activations may queue for a WAL replay permit, per permit the replay gate was sized to (default: 4; `0` admits an unbounded queue, the historical shape). The admitted-waiter bound is this figure multiplied by the resolved ceiling (see [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays)), so it scales with the deployment's own CPU grant. An activation refused admission gets a fast, attributable [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) to retry after a backoff instead of a silent wait that would outlive its request deadline. A refusal is expected backpressure rather than a fault, so it is not logged per occurrence and carries no stack trace: each silo writes at most one warning a minute stating how many replays it refused since the previous one, and the exact count is on `orleans.lattice.saturation.refusals` under the `replay_permit_admission` source (issue #3906). Admission is refused only when this depth bound **and** [`WalReplayPermitMaxQueueWait`](#walreplaypermitmaxqueuewait) both say the queue is unhealthy. The validator rejects a negative value.
 
 ### `WalReplayPermitMaxQueueWait`
 
