@@ -143,8 +143,10 @@ dashboards still populate when no such label exists. The `silo` selector on
 label Prometheus attaches to every scrape target. Every other selector (`tree`,
 `peer`, `scope`, `view`, `index`, `tenant`) reads an instrument tag, and a
 selector whose All value is `.+` also excludes every series that lacks that
-label, which is why a few bundled panels currently render no data - see the
-[metric-to-panel map](metrics-to-panel-map.md).
+label. A panel therefore applies a selector only to instruments that carry its
+label, so a selector does not narrow a panel over an instrument without it;
+`DashboardSelectorLabelPresenceTests` checks every matcher and every variable
+source against the tag sets in the [metric-to-panel map](metrics-to-panel-map.md).
 
 ## Reference
 

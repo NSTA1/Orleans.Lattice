@@ -100,6 +100,91 @@ public class LeafSnapshotProviderTests
     }
 
     [Test]
+    public async Task StreamAsync_carries_the_committed_row_expiry()
+    {
+        var expiring = Entry("b", 7) with { ExpiresAtTicks = 638_000_000_000_000_000 };
+        var adapter = new LeafSnapshotProvider(
+            SnapshotProviderYielding(expiring), Substitute.For<ICommitLogReader>());
+
+        var projected = await SingleAsync(adapter);
+
+        // A dropped expiry rebuilt a TTL row as durable, so it outlived its lease.
+        Assert.That(projected.ExpiresAtTicks, Is.EqualTo(expiring.ExpiresAtTicks));
+        Assert.That(projected.IsPrepared, Is.False);
+        Assert.That(projected.TransactionId, Is.EqualTo(Guid.Empty));
+    }
+
+    [Test]
+    public async Task StreamAsync_projects_a_prepared_set_as_a_prepared_mutation_not_a_committed_value()
+    {
+        var txId = Guid.NewGuid();
+        var prepared = Entry("b", 9) with
+        {
+            IsPrepared = true,
+            TransactionId = txId,
+            AtomicBatchSize = 3,
+            AtomicBatchIndex = 1,
+            ExpiresAtTicks = 42,
+            Delta = new byte[] { 5, 6 },
+            Mode = LatticeMergeMode.GCounter,
+        };
+        var adapter = new LeafSnapshotProvider(
+            SnapshotProviderYielding(prepared), Substitute.For<ICommitLogReader>());
+
+        var projected = await SingleAsync(adapter);
+
+        // Surfacing an in-flight saga's prepare as a plain Set would publish a
+        // value the saga may yet abort.
+        Assert.That(projected.IsPrepared, Is.True);
+        Assert.That(projected.Kind, Is.EqualTo(MutationKind.Set));
+        Assert.That(projected.TransactionId, Is.EqualTo(txId));
+        Assert.That(projected.AtomicBatchSize, Is.EqualTo(3));
+        Assert.That(projected.AtomicBatchIndex, Is.EqualTo(1));
+        Assert.That(projected.Value, Is.EqualTo(new byte[] { 9 }));
+        Assert.That(projected.ExpiresAtTicks, Is.EqualTo(42));
+        Assert.That(projected.Delta, Is.EqualTo(new byte[] { 5, 6 }));
+        Assert.That(projected.Mode, Is.EqualTo(LatticeMergeMode.GCounter));
+    }
+
+    [Test]
+    public async Task StreamAsync_projects_a_prepared_delete_as_a_prepared_tombstone()
+    {
+        var txId = Guid.NewGuid();
+        var prepared = Entry("b", 9) with
+        {
+            IsPrepared = true,
+            IsTombstone = true,
+            TransactionId = txId,
+            ExpiresAtTicks = 42,
+        };
+        var adapter = new LeafSnapshotProvider(
+            SnapshotProviderYielding(prepared), Substitute.For<ICommitLogReader>());
+
+        var projected = await SingleAsync(adapter);
+
+        // A prepared delete's value slot is ignored on the wire; projecting it as
+        // a Set resurrected that slot as a live value for a key being deleted.
+        Assert.That(projected.IsPrepared, Is.True);
+        Assert.That(projected.Kind, Is.EqualTo(MutationKind.Delete));
+        Assert.That(projected.IsTombstone, Is.True);
+        Assert.That(projected.Value, Is.Null);
+        Assert.That(projected.ExpiresAtTicks, Is.Zero);
+        Assert.That(projected.TransactionId, Is.EqualTo(txId));
+    }
+
+    private static async Task<LatticeMutation> SingleAsync(LeafSnapshotProvider adapter)
+    {
+        var projected = new List<LatticeMutation>();
+        await foreach (var mutation in adapter.StreamAsync("tree-1", 0, "a", null))
+        {
+            projected.Add(mutation);
+        }
+
+        Assert.That(projected, Has.Count.EqualTo(1));
+        return projected[0];
+    }
+
+    [Test]
     public void StreamAsync_throws_on_empty_treeId()
     {
         var adapter = new LeafSnapshotProvider(
