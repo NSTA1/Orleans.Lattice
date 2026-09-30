@@ -184,6 +184,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A rejected MCP call echoed the caller's key and scope.** Any client-error rejection reached the server log and the caller-facing text verbatim and unbounded, so a caller-chosen key could forge a log record with CR/LF. Rejection messages are now sanitized and truncated. ([#4056](https://github.com/NSTA1/Orleans.Lattice/pull/4056)) (`Orleans.Lattice.Api.Mcp`)
+
 - **Security - A revoked cross-tenant grant kept admitting reads.** A registry change only schedules a policy-snapshot rebuild, and the data-plane gate trusted the stale snapshot meanwhile. While it rebuilds, a crossing is now confirmed against the registry and denied if it cannot be. ([#4001](https://github.com/NSTA1/Orleans.Lattice/issues/4001)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Auth`)
 
 - **Security - Tenant create skipped identity-directory validation.** The registered tenant-admin facade was built without the directory, so seeded admin subjects were never checked even with validation required. Create now validates them as adding a subject does. ([#4003](https://github.com/NSTA1/Orleans.Lattice/issues/4003)) (`Orleans.Lattice.Api.TenantAdmin`)

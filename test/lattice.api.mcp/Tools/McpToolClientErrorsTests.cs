@@ -129,6 +129,114 @@ public sealed class McpToolClientErrorsTests
     public void ReasonTag_throws_for_an_unmapped_value()
         => Assert.Throws<ArgumentOutOfRangeException>(() => McpToolClientErrors.ReasonTag((McpToolClientErrorReason)99));
 
+    [Test]
+    public void SanitizeForEcho_returns_an_ordinary_message_unchanged()
+    {
+        const string message = "The 'scope' value 'Widgets' is not recognised.";
+
+        Assert.That(McpToolClientErrors.SanitizeForEcho(message), Is.SameAs(message),
+            "A message needing no repair must not be re-allocated.");
+    }
+
+    // Every character that ends or reframes a record in a line-oriented sink. A
+    // caller that lands one of these in a rejection message forges a whole extra
+    // log record beside the genuine one, and can hide the call that wrote it.
+    [TestCase("\r", TestName = "SanitizeForEcho_replaces_carriage_return")]
+    [TestCase("\n", TestName = "SanitizeForEcho_replaces_line_feed")]
+    [TestCase("\r\n", TestName = "SanitizeForEcho_replaces_a_crlf_pair")]
+    [TestCase("\u0000", TestName = "SanitizeForEcho_replaces_nul")]
+    [TestCase("\u001B", TestName = "SanitizeForEcho_replaces_the_escape_character")]
+    [TestCase("\u0085", TestName = "SanitizeForEcho_replaces_next_line")]
+    [TestCase("\u2028", TestName = "SanitizeForEcho_replaces_the_unicode_line_separator")]
+    [TestCase("\u2029", TestName = "SanitizeForEcho_replaces_the_unicode_paragraph_separator")]
+    public void SanitizeForEcho_replaces_a_record_breaking_character(string injected)
+    {
+        var sanitized = McpToolClientErrors.SanitizeForEcho($"No record exists at 'k{injected}FAKE'.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sanitized, Is.EqualTo($"No record exists at 'k{new string('?', injected.Length)}FAKE'."));
+
+            // Ordinal, deliberately: NUnit's Does.Not.Contain is culture-sensitive,
+            // and linguistic comparison gives NUL and ESC zero weight, so they are
+            // "found" in every string and the constraint would fail on a correct
+            // result.
+            Assert.That(sanitized.Contains(injected, StringComparison.Ordinal), Is.False);
+        });
+    }
+
+    [Test]
+    public void SanitizeForEcho_keeps_the_surrounding_text_intact()
+    {
+        // The message must stay actionable: only the offending characters change.
+        var sanitized = McpToolClientErrors.SanitizeForEcho("The key 'a\rb' is not well-formed.");
+
+        Assert.That(sanitized, Is.EqualTo("The key 'a?b' is not well-formed."));
+    }
+
+    [Test]
+    public void SanitizeForEcho_caps_a_message_whose_length_the_caller_chose()
+    {
+        var overlong = new string('a', McpToolClientErrors.MaxEchoedMessageLength * 4);
+
+        var sanitized = McpToolClientErrors.SanitizeForEcho(overlong);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sanitized, Has.Length.EqualTo(
+                McpToolClientErrors.MaxEchoedMessageLength + McpToolClientErrors.Ellipsis.Length));
+            Assert.That(sanitized, Does.EndWith(McpToolClientErrors.Ellipsis));
+            Assert.That(sanitized, Is.Not.EqualTo(overlong));
+        });
+    }
+
+    [Test]
+    public void SanitizeForEcho_keeps_a_message_exactly_at_the_cap()
+    {
+        var atCap = new string('a', McpToolClientErrors.MaxEchoedMessageLength);
+
+        Assert.That(McpToolClientErrors.SanitizeForEcho(atCap), Is.EqualTo(atCap),
+            "The cap is inclusive, so no ellipsis is appended to a message that fits.");
+    }
+
+    [Test]
+    public void SanitizeForEcho_repairs_a_message_that_is_both_overlong_and_injected()
+    {
+        // Truncation alone would not help: the injection sits inside the kept prefix.
+        var sanitized = McpToolClientErrors.SanitizeForEcho(
+            "k\r\nFAKE" + new string('a', McpToolClientErrors.MaxEchoedMessageLength * 2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sanitized, Does.StartWith("k??FAKE"));
+            Assert.That(sanitized, Does.Not.Contain("\r").And.Not.Contain("\n"));
+            Assert.That(sanitized, Has.Length.EqualTo(
+                McpToolClientErrors.MaxEchoedMessageLength + McpToolClientErrors.Ellipsis.Length));
+        });
+    }
+
+    [Test]
+    public void SanitizeForEcho_screens_every_character_its_rewrite_would_replace()
+    {
+        // The fast path returns the input unchanged when a SearchValues screen finds
+        // nothing to repair, so a character the rewrite rejects but the screen misses
+        // would be echoed raw. This walks the whole BMP to pin the two in agreement.
+        for (var c = '\u0000'; c < '\uFFFF'; c++)
+        {
+            var sanitized = McpToolClientErrors.SanitizeForEcho($"x{c}y");
+            var expected = char.IsControl(c) || c is '\u2028' or '\u2029' ? "x?y" : $"x{c}y";
+            Assert.That(sanitized, Is.EqualTo(expected), $"U+{(int)c:X4}");
+        }
+    }
+
+    [Test]
+    public void SanitizeForEcho_rejects_a_null_message()
+        => Assert.Throws<ArgumentNullException>(() => McpToolClientErrors.SanitizeForEcho(null!));
+
+    [Test]
+    public void SanitizeForEcho_accepts_an_empty_message()
+        => Assert.That(McpToolClientErrors.SanitizeForEcho(string.Empty), Is.Empty);
+
     private static void AssertMarked(McpException exception, McpToolClientErrorReason expected, string message)
     {
         Assert.Multiple(() =>

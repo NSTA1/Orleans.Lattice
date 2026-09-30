@@ -285,6 +285,12 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
     /// <see cref="McpException"/>, so the caller sees the same content, while
     /// logging it at Debug without a stack and counting it.
     /// </summary>
+    /// <remarks>
+    /// The message is sanitized here, at the single seam every client error passes
+    /// through on its way to both the caller and the log, because several of the
+    /// messages that reach it are composed by interpolating a caller-supplied key,
+    /// scope, kind, or path. See <see cref="McpToolClientErrors.SanitizeForEcho"/>.
+    /// </remarks>
     /// <param name="services">The request's service provider, for the logger.</param>
     /// <param name="toolName">The invoked tool.</param>
     /// <param name="message">The caller-facing message.</param>
@@ -296,14 +302,16 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         var reasonTag = McpToolClientErrors.ReasonTag(reason);
         LatticeApiMcpMetrics.RecordToolClientError(toolName, reason);
 
+        var safeMessage = McpToolClientErrors.SanitizeForEcho(message);
+
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger<CredentialStampingTool>()
             ?? NullLogger<CredentialStampingTool>.Instance;
-        LogClientError(logger, toolName, reasonTag, message, null);
+        LogClientError(logger, toolName, reasonTag, safeMessage, null);
 
         return new CallToolResult
         {
             IsError = true,
-            Content = [new TextContentBlock { Text = $"An error occurred invoking '{toolName}': {message}" }],
+            Content = [new TextContentBlock { Text = $"An error occurred invoking '{toolName}': {safeMessage}" }],
         };
     }
 
