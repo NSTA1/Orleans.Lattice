@@ -43,6 +43,15 @@ internal static class AggregationRowCodec
     /// </summary>
     private const int MinimumFoldInverseEntrySize = 1 + sizeof(long) + sizeof(int) + sizeof(int);
 
+    /// <summary>
+    /// The largest key-scratch buffer a splice will take on the stack before it
+    /// rents one instead. The splice sizes that buffer to the key it is about to
+    /// transcode rather than to this bound: a source key is tens of bytes, so a
+    /// fixed 256-byte block spent its whole width being zeroed on every call for
+    /// the sake of the handful of bytes actually written into it.
+    /// </summary>
+    private const int StackKeyBufferLimit = 256;
+
     /// <summary>The reserved NUL prefix every internal row key begins with.</summary>
     internal const string ReservedPrefix = "\u0000";
 
@@ -205,7 +214,7 @@ internal static class AggregationRowCodec
             reader.SkipString();
         }
 
-        return new MembershipHead(groupKey, numeric);
+        return new MembershipHead(groupKey, numeric, hasMember);
     }
 
     /// <summary>
@@ -332,7 +341,14 @@ internal static class AggregationRowCodec
     /// </summary>
     /// <param name="GroupKey">The group the source key last belonged to.</param>
     /// <param name="Numeric">The numeric the source key last contributed (sum / min / max).</param>
-    internal readonly record struct MembershipHead(string GroupKey, double Numeric);
+    /// <param name="HasMember">
+    /// Whether the row carried a set-union member. The member's <i>bytes</i> are
+    /// still skipped, but the flag that precedes them is free - it was already
+    /// read to decide whether to skip - and it is what lets a caller decide
+    /// whether a stored row is byte-identical to one it is about to write
+    /// without decoding the member it would have to compare against.
+    /// </param>
+    internal readonly record struct MembershipHead(string GroupKey, double Numeric, bool HasMember);
 
     /// <summary>A group shard's running count and sum.</summary>
     /// <param name="Count">The number of live source keys in the shard.</param>
@@ -406,8 +422,8 @@ internal static class AggregationRowCodec
     {
         byte[]? rented = null;
         var maxKeyBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
-        Span<byte> keyBuffer = maxKeyBytes <= 256
-            ? stackalloc byte[256]
+        Span<byte> keyBuffer = maxKeyBytes <= StackKeyBufferLimit
+            ? stackalloc byte[maxKeyBytes]
             : (rented = ArrayPool<byte>.Shared.Rent(maxKeyBytes));
         try
         {
@@ -448,7 +464,7 @@ internal static class AggregationRowCodec
             var entriesEnd = reader.Position;
             var hasMember2 = add is { Member: not null };
             var addedSize = add is { } entry
-                ? Utf8Size(sourceKey) + sizeof(bool) + sizeof(double) + (hasMember2 ? Utf8Size(entry.Member!) : 0)
+                ? SevenBitSize(key.Length) + key.Length + sizeof(bool) + sizeof(double) + (hasMember2 ? Utf8Size(entry.Member!) : 0)
                 : 0;
             var newCount = count - matchCount + (add is null ? 0 : 1);
             if (newCount == 0)
@@ -478,7 +494,7 @@ internal static class AggregationRowCodec
                     writer.WriteRaw(row[entriesStart..firstMatchStart]);
                     if (add is { } inPlace && !moveToEnd)
                     {
-                        WriteInverseEntry(ref writer, sourceKey, inPlace);
+                        WriteInverseEntry(ref writer, key, inPlace);
                     }
 
                     writer.WriteRaw(row[firstMatchEnd..entriesEnd]);
@@ -486,7 +502,7 @@ internal static class AggregationRowCodec
 
                 if (add is { } tail && (matchCount == 0 || moveToEnd))
                 {
-                    WriteInverseEntry(ref writer, sourceKey, tail);
+                    WriteInverseEntry(ref writer, key, tail);
                 }
 
                 return buffer;
@@ -516,14 +532,14 @@ internal static class AggregationRowCodec
 
                 if (add is { } replacement && !written && !moveToEnd)
                 {
-                    WriteInverseEntry(ref writer, sourceKey, replacement);
+                    WriteInverseEntry(ref writer, key, replacement);
                     written = true;
                 }
             }
 
             if (add is { } appended && !written)
             {
-                WriteInverseEntry(ref writer, sourceKey, appended);
+                WriteInverseEntry(ref writer, key, appended);
             }
 
             return buffer;
@@ -537,9 +553,9 @@ internal static class AggregationRowCodec
         }
     }
 
-    private static void WriteInverseEntry(ref RowWriter writer, string sourceKey, in MemberEntry entry)
+    private static void WriteInverseEntry(ref RowWriter writer, scoped ReadOnlySpan<byte> sourceKeyUtf8, in MemberEntry entry)
     {
-        writer.WriteString(sourceKey);
+        writer.WriteStringBytes(sourceKeyUtf8);
         var hasMember = entry.Member is not null;
         writer.WriteBool(hasMember);
         writer.WriteDouble(entry.Numeric);
@@ -749,8 +765,8 @@ internal static class AggregationRowCodec
     {
         byte[]? rented = null;
         var maxKeyBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
-        Span<byte> keyBuffer = maxKeyBytes <= 256
-            ? stackalloc byte[256]
+        Span<byte> keyBuffer = maxKeyBytes <= StackKeyBufferLimit
+            ? stackalloc byte[maxKeyBytes]
             : (rented = ArrayPool<byte>.Shared.Rent(maxKeyBytes));
         try
         {
@@ -784,7 +800,7 @@ internal static class AggregationRowCodec
 
             var entriesEnd = reader.Position;
             var addedSize = add is { } entry
-                ? Utf8Size(sourceKey) + sizeof(long) + sizeof(int) + sizeof(int) + entry.Value.Length
+                ? SevenBitSize(key.Length) + key.Length + sizeof(long) + sizeof(int) + sizeof(int) + entry.Value.Length
                 : 0;
             var newCount = count - matchCount + (add is null ? 0 : 1);
             if (newCount == 0)
@@ -811,7 +827,7 @@ internal static class AggregationRowCodec
                     writer.WriteRaw(row[entriesStart..firstMatchStart]);
                     if (add is { } inPlace && !moveToEnd)
                     {
-                        WriteFoldInverseEntry(ref writer, sourceKey, inPlace);
+                        WriteFoldInverseEntry(ref writer, key, inPlace);
                     }
 
                     writer.WriteRaw(row[firstMatchEnd..entriesEnd]);
@@ -819,7 +835,7 @@ internal static class AggregationRowCodec
 
                 if (add is { } tail && (matchCount == 0 || moveToEnd))
                 {
-                    WriteFoldInverseEntry(ref writer, sourceKey, tail);
+                    WriteFoldInverseEntry(ref writer, key, tail);
                 }
 
                 return buffer;
@@ -843,14 +859,14 @@ internal static class AggregationRowCodec
 
                 if (add is { } replacement && !written && !moveToEnd)
                 {
-                    WriteFoldInverseEntry(ref writer, sourceKey, replacement);
+                    WriteFoldInverseEntry(ref writer, key, replacement);
                     written = true;
                 }
             }
 
             if (add is { } appended && !written)
             {
-                WriteFoldInverseEntry(ref writer, sourceKey, appended);
+                WriteFoldInverseEntry(ref writer, key, appended);
             }
 
             return buffer;
@@ -864,9 +880,9 @@ internal static class AggregationRowCodec
         }
     }
 
-    private static void WriteFoldInverseEntry(ref RowWriter writer, string sourceKey, in FoldMember entry)
+    private static void WriteFoldInverseEntry(ref RowWriter writer, scoped ReadOnlySpan<byte> sourceKeyUtf8, in FoldMember entry)
     {
-        writer.WriteString(sourceKey);
+        writer.WriteStringBytes(sourceKeyUtf8);
         writer.WriteInt64(entry.Timestamp.WallClockTicks);
         writer.WriteInt32(entry.Timestamp.Counter);
         writer.WriteInt32(entry.Value.Length);
@@ -1046,6 +1062,26 @@ internal static class AggregationRowCodec
             Write7BitEncodedInt(byteCount);
             Encoding.UTF8.GetBytes(value, _buffer[_pos..]);
             _pos += byteCount;
+        }
+
+        /// <summary>
+        /// Writes a 7-bit-encoded byte count followed by <paramref name="utf8"/>
+        /// verbatim, producing the identical layout <see cref="WriteString"/>
+        /// emits for the string those bytes decode to.
+        /// <para>
+        /// The splice paths transcode the source key once up front so they can
+        /// compare it against the row's stored keys without decoding each of
+        /// them. That transcoded span is the exact payload the appended entry
+        /// needs, so re-deriving it from the original string - a byte count for
+        /// the sizing pass and a second encode for the write - was measuring and
+        /// re-encoding a value already held in its final form.
+        /// </para>
+        /// </summary>
+        public void WriteStringBytes(scoped ReadOnlySpan<byte> utf8)
+        {
+            Write7BitEncodedInt(utf8.Length);
+            utf8.CopyTo(_buffer[_pos..]);
+            _pos += utf8.Length;
         }
 
         private void Write7BitEncodedInt(int value)

@@ -23,6 +23,8 @@ public sealed class AggregationApplierTests
 
         public int Count => _map.Count;
 
+        public void Seed(string key, byte[] value) => _map[key] = value;
+
         public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
             => Task.FromResult(_map.TryGetValue(key, out var v) ? v : null);
 
@@ -180,6 +182,15 @@ public sealed class AggregationApplierTests
 
         public int GetManyCalls { get; private set; }
 
+        /// <summary>
+        /// Writes landing on a membership row. The fold path's membership row is
+        /// a pure back-pointer, so a contribution that would rewrite it byte for
+        /// byte skips the write entirely; counting the writes is the only way to
+        /// assert that structurally rather than by end state, which is identical
+        /// either way.
+        /// </summary>
+        public int MembershipSetCalls { get; private set; }
+
         public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
         {
             GetCalls++;
@@ -193,7 +204,14 @@ public sealed class AggregationApplierTests
         }
 
         public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
-            => inner.SetAsync(key, value, cancellationToken);
+        {
+            if (key.StartsWith("\u0000m", StringComparison.Ordinal))
+            {
+                MembershipSetCalls++;
+            }
+
+            return inner.SetAsync(key, value, cancellationToken);
+        }
 
         public Task DeleteAsync(string key, CancellationToken cancellationToken = default)
             => inner.DeleteAsync(key, cancellationToken);
@@ -337,5 +355,112 @@ public sealed class AggregationApplierTests
                 Is.EqualTo(LatticeAggregationValue.DecodeDouble(shardedValue!)).Within(1e-9),
                 "the gather shape must not change the materialised total");
         });
+    }
+    // --- Fold membership write elision ---
+
+    private static ILatticeFoldProjection ConcatFold() =>
+        new LatticeFoldProjection(_ => "g", () => [], (acc, _, value, _) => [.. acc, .. value], "v1");
+
+    [Test]
+    public async Task Fold_contribution_skips_rewriting_an_identical_membership_row()
+    {
+        // The fold path's membership row carries only the group back-pointer, so
+        // a second contribution from the same source key to the same group would
+        // rewrite it byte for byte. That write is a pure round trip against
+        // persistent storage and is skipped.
+        var store = new CountingAggregationViewStore(new InMemoryAggregationViewStore());
+        var applier = new AggregationApplier(
+            store, AggregationKind.Fold, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1", fold: ConcatFold());
+
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [1, 2, 3], Hlc()));
+        var afterFirst = store.MembershipSetCalls;
+
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [4, 5, 6], Hlc()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterFirst, Is.EqualTo(1),
+                "the first contribution has no stored membership row, so it must write one");
+            Assert.That(store.MembershipSetCalls, Is.EqualTo(afterFirst),
+                "a repeat contribution to the same group must not rewrite an identical membership row");
+        });
+    }
+
+    [Test]
+    public async Task Fold_contribution_still_writes_membership_when_the_group_changes()
+    {
+        // The elision is gated on the stored group matching, so a re-grouping
+        // contribution must still repoint the back-pointer - otherwise the old
+        // group would never be retracted.
+        var store = new CountingAggregationViewStore(new InMemoryAggregationViewStore());
+        var applier = new AggregationApplier(
+            store, AggregationKind.Fold, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1", fold: ConcatFold());
+
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [1, 2, 3], Hlc()));
+        var afterFirst = store.MembershipSetCalls;
+
+        await applier.ApplyAsync(AggregationContribution.Fold("h", "s1", [4, 5, 6], Hlc()));
+
+        Assert.That(store.MembershipSetCalls, Is.EqualTo(afterFirst + 1),
+            "a contribution that moves the source key to another group must rewrite the membership row");
+    }
+
+    [Test]
+    public async Task Fold_contribution_rewrites_a_membership_row_that_is_not_byte_identical()
+    {
+        // A stored row that names the same group but carries a set-union member
+        // does not encode identically to the member-free row the fold path
+        // writes, so the guard must decline to skip it.
+        var inner = new InMemoryAggregationViewStore();
+        inner.Seed(
+            AggregationRowCodec.MembershipKey("s1"),
+            AggregationRowCodec.EncodeMembership(new AggregationRowCodec.MembershipRow("g", 0, "member-x")));
+        var store = new CountingAggregationViewStore(inner);
+        var applier = new AggregationApplier(
+            store, AggregationKind.Fold, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1", fold: ConcatFold());
+
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [1, 2, 3], Hlc()));
+
+        Assert.That(store.MembershipSetCalls, Is.EqualTo(1),
+            "a stored row carrying a member is not byte-identical to the fold row, so it must be rewritten");
+    }
+
+    [Test]
+    public async Task Fold_contribution_rewrites_a_membership_row_holding_negative_zero()
+    {
+        // -0.0 == 0.0 is true but the two encode differently, so a value
+        // comparison would wrongly skip this write and leave the stored bytes
+        // diverged from what the fold path claims is there.
+        var inner = new InMemoryAggregationViewStore();
+        inner.Seed(
+            AggregationRowCodec.MembershipKey("s1"),
+            AggregationRowCodec.EncodeMembership(new AggregationRowCodec.MembershipRow("g", -0.0, null)));
+        var store = new CountingAggregationViewStore(inner);
+        var applier = new AggregationApplier(
+            store, AggregationKind.Fold, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1", fold: ConcatFold());
+
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [1, 2, 3], Hlc()));
+
+        Assert.That(store.MembershipSetCalls, Is.EqualTo(1),
+            "negative zero encodes differently from positive zero, so the row must be rewritten");
+    }
+
+    [Test]
+    public async Task Fold_membership_elision_leaves_the_stored_row_byte_identical()
+    {
+        // The elision is only sound if the skipped write would have been a no-op,
+        // so the end state must match a run that always writes.
+        var elided = new InMemoryAggregationViewStore();
+        var applier = new AggregationApplier(
+            elided, AggregationKind.Fold, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1", fold: ConcatFold());
+
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [1, 2, 3], Hlc()));
+        await applier.ApplyAsync(AggregationContribution.Fold("g", "s1", [4, 5, 6], Hlc()));
+
+        var stored = await elided.GetAsync(AggregationRowCodec.MembershipKey("s1"));
+        var expected = AggregationRowCodec.EncodeMembership(new AggregationRowCodec.MembershipRow("g", 0, null));
+
+        Assert.That(stored, Is.EqualTo(expected),
+            "the row left in place must equal the row the skipped write would have stored");
     }
 }

@@ -325,4 +325,62 @@ public class VersionVectorTests
         Assert.That(ticked, Is.Not.EqualTo(HybridLogicalClock.Zero),
             "no mutation API on the type can author a Zero slot");
     }
+    // --- Presized construction ---
+
+    [Test]
+    public void WithCapacity_starts_empty_and_bottom()
+    {
+        var v = VersionVector.WithCapacity(16);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(v.Entries, Is.Empty);
+            Assert.That(v.IsBottom, Is.True);
+            Assert.That(v.GetClock("r1"), Is.EqualTo(HybridLogicalClock.Zero));
+        });
+    }
+
+    [Test]
+    public void WithCapacity_uses_the_same_comparer_as_the_default_constructor()
+    {
+        // The default `Entries = []` takes the default ordinal comparer, so a
+        // presized vector must not silently become case-insensitive or
+        // culture-sensitive: decoded state would then collapse two distinct
+        // replica ids into one slot.
+        var presized = VersionVector.WithCapacity(8);
+        var plain = new VersionVector();
+
+        presized.Entries["R1"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        plain.Entries["R1"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(presized.Entries.Comparer, Is.EqualTo(plain.Entries.Comparer));
+            Assert.That(presized.Entries.ContainsKey("r1"), Is.False);
+            Assert.That(presized.GetClock("r1"), Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(presized.GetClock("R1"), Is.EqualTo(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(4)]
+    [TestCase(1024)]
+    public void WithCapacity_behaves_identically_to_the_default_constructor(int capacity)
+    {
+        var presized = VersionVector.WithCapacity(capacity);
+        var plain = new VersionVector();
+
+        foreach (var replica in new[] { "r1", "r2", "r3", "r4", "r5" })
+        {
+            presized.Tick(replica);
+            plain.Tick(replica);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(presized.Entries.Keys, Is.EquivalentTo(plain.Entries.Keys));
+            Assert.That(presized.IsBottom, Is.EqualTo(plain.IsBottom));
+        });
+    }
 }

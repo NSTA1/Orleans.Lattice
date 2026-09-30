@@ -26,6 +26,23 @@ public sealed class VersionVector : ICrdt<VersionVector>
     // initializer that an object initializer would immediately overwrite.
     private VersionVector(Dictionary<string, HybridLogicalClock> entries) => Entries = entries;
 
+    /// <summary>
+    /// Creates an empty version vector whose backing store is already sized for
+    /// <paramref name="capacity"/> entries.
+    /// <para>
+    /// The decode path reads and bounds-checks the entry count before it reads a
+    /// single entry, so the exact final size is known at construction; the
+    /// default-capacity vector it built instead rehashed its way up to that size
+    /// one growth step at a time (3 -> 7 -> 17), reinserting every entry already
+    /// placed on each step. Capacity is taken from a count the caller has already
+    /// bounded against the frame it is decoding, so it cannot be inflated by a
+    /// wire-supplied value.
+    /// </para>
+    /// </summary>
+    /// <param name="capacity">The number of entries the vector is about to receive.</param>
+    internal static VersionVector WithCapacity(int capacity) =>
+        new(new Dictionary<string, HybridLogicalClock>(capacity));
+
     /// <inheritdoc />
     /// <remarks>
     /// A <see cref="VersionVector"/> is bottom when no replica has
