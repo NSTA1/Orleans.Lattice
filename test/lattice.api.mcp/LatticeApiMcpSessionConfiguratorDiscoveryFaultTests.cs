@@ -79,7 +79,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
     public void A_transient_backend_fault_fails_the_whole_discovery_rather_than_advertising(Exception fault)
     {
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read"));
 
         var thrown = Assert.ThrowsAsync<LatticeApiMcpDiscoveryUnavailableException>(
@@ -117,7 +117,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
         // identity - a decorative field - is missing, and blank cannot be
         // misread as a narrower permission set.
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read"));
         var fault = new InvalidOperationException("cluster info projection is malformed");
 
@@ -143,7 +143,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
         // a backend outage, and swallowing it would hide a cancelled request
         // behind a plan nobody asked for.
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read"));
 
         Assert.ThrowsAsync<OperationCanceledException>(
@@ -162,7 +162,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
         query.GetClusterInfoAsync(Arg.Any<CancellationToken>())
             .Returns(new ClusterInfo { ClusterId = "cluster-a", ServiceId = "svc-a" });
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read"));
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(query), CancellationToken.None);
@@ -186,7 +186,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
         // registration authoritative and leaves a warning behind, which is the
         // only trace an operator gets of a packaging mistake.
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data).With(LatticeApiMcpGroup.Auth),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data, LatticeApiMcpGroup.Auth),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "shared_name"),
             new FakeToolGroup(LatticeApiMcpGroup.Auth, "shared_name", "auth_only"));
 
@@ -210,7 +210,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
         // every tool from the second group would also report exactly one
         // "shared_name".
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data).With(LatticeApiMcpGroup.Auth),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data, LatticeApiMcpGroup.Auth),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read"),
             new FakeToolGroup(LatticeApiMcpGroup.Auth, "auth_admin"));
 
@@ -233,7 +233,7 @@ public sealed class LatticeApiMcpSessionConfiguratorDiscoveryFaultTests
         // could drift.
         var services = new ServiceCollection().BuildServiceProvider();
         var configurator = CreateConfigurator(
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read"));
         var query = Substitute.For<ILatticeStateQuery>();
         query.GetClusterInfoAsync(Arg.Any<CancellationToken>())

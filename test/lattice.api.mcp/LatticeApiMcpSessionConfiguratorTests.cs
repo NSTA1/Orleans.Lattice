@@ -83,11 +83,11 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var dataCaller = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             dataGroup, authGroup);
         var authCaller = CreateConfigurator(
             new LatticeCredential("bob"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Auth),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Auth),
             dataGroup, authGroup);
 
         var dataPlan = await dataCaller.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -112,7 +112,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             dataGroup, authGroup);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -181,7 +181,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.State).With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.State, LatticeApiMcpGroup.Data),
             dataGroup);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -210,7 +210,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
             Microsoft.Extensions.Options.Options.Create(new LatticeApiMcpOptions()));
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.TreeAdmin),
+            TestAccessSets.Granting(LatticeApiMcpGroup.TreeAdmin),
             group);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -269,7 +269,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         // package registers its tool module.
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry));
+            TestAccessSets.Granting(LatticeApiMcpGroup.Telemetry));
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
@@ -282,7 +282,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var telemetryGroup = new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "telemetry_read");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Telemetry),
             telemetryGroup);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -299,7 +299,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     {
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data));
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data));
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
@@ -324,7 +324,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     {
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data));
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data));
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
@@ -407,7 +407,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             dataGroup);
         var options = new McpServerOptions();
 
@@ -461,7 +461,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             dataGroup);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -489,7 +489,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             dataGroup);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
@@ -528,7 +528,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeAuthorizer(context => context.ToolName != "lattice_list_regions"),
             dataGroup);
 
@@ -548,7 +548,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new DenyAllMcpAuthorizer(),
             dataGroup);
 
@@ -565,7 +565,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_get", "data_set");
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeAuthorizer(context => context.ToolName == "data_get"),
             dataGroup);
 
@@ -583,7 +583,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var seen = new List<(HttpContext Call, string? ToolName)>();
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Data),
             new FakeAuthorizer(context =>
             {
                 seen.Add((context.Call, context.ToolName));

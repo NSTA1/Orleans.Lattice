@@ -38,6 +38,13 @@ public sealed class LatticeReplicationGrpcAuthInterceptorStreamingTests
         options.CurrentValue.Returns(new LatticeReplicationSecurityOptions
         {
             RequireAuthentication = requireAuthentication,
+
+            // Origin binding is on by default and is exercised by
+            // LatticeReplicationGrpcAuthInterceptorOriginBindingTests. This fixture's
+            // subject is that every streaming call shape enforces the credential at
+            // all, so it is turned off here to keep the accepted-credential cases
+            // reaching the continuation on the shared-secret decision alone.
+            BindCredentialToOriginCluster = false,
         });
         return new LatticeReplicationGrpcAuthInterceptor(
             secrets,

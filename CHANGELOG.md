@@ -209,6 +209,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A replication mesh secret certified any origin it claimed.** Origin binding shipped off by default, so an accepted credential proved only that the caller held some mesh secret, leaving every origin check comparing caller-chosen values. It now defaults on. ([#4082](https://github.com/NSTA1/Orleans.Lattice/pull/4082)) (`Orleans.Lattice.Replication`)
+
+- **Security - MCP discovery advertised tools the gate would refuse.** A key- or prefix-scoped rule on the cluster-wide tree id was read as cluster-wide and carried a scopeless capability, and the per-tool operation filter was skipped absent operation detail. Both now fail closed. ([#4082](https://github.com/NSTA1/Orleans.Lattice/pull/4082)) (`Orleans.Lattice.Api.Mcp`)
+
 - **Security - A rejected MCP call echoed the caller's key and scope.** Any client-error rejection reached the server log and the caller-facing text verbatim and unbounded, so a caller-chosen key could forge a log record with CR/LF. Rejection messages are now sanitized and truncated. ([#4056](https://github.com/NSTA1/Orleans.Lattice/pull/4056)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - Tenant create skipped identity-directory validation.** The registered tenant-admin facade was built without the directory, so seeded admin subjects were never checked even with validation required. Create now validates them as adding a subject does. ([#4003](https://github.com/NSTA1/Orleans.Lattice/issues/4003)) (`Orleans.Lattice.Api.TenantAdmin`)

@@ -213,8 +213,23 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
             ? rule.Operations
             : rule.Operations & ~ClusterWideOnlyOperations;
 
+    /// <summary>
+    /// Whether <paramref name="rule"/> is written at cluster-wide scope, which is
+    /// the only shape that confers a scopeless capability.
+    /// </summary>
+    /// <remarks>
+    /// The kind is checked as well as the tree id. <see cref="LatticeScope.ClusterWide"/>
+    /// pins <see cref="LatticeScopeKind.Tree"/>, but the scope constructor also
+    /// admits a key- or prefix-kind scope on the <c>"*"</c> sentinel and nothing
+    /// rejects one at authoring time. Such a rule grants nothing at the gate -
+    /// a scopeless capability is requested with no key, so the evaluator consults
+    /// the tree tier only and never sees a rule filed under the exact or prefix
+    /// tier - so treating it as cluster-wide here would advertise a facade the
+    /// caller cannot invoke, breaking the advertisement/invocation lock-step.
+    /// </remarks>
     private static bool IsClusterWide(LatticeAuthorizationRule rule)
-        => string.Equals(rule.Scope?.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal);
+        => rule.Scope is { Kind: LatticeScopeKind.Tree } scope
+            && string.Equals(scope.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal);
 
     private static bool GroupIsGranted(
         IReadOnlyList<LatticeAuthorizationRule> rules,

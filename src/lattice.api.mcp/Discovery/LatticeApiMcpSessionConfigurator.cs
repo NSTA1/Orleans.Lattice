@@ -260,11 +260,16 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 // data-plane group a bare Read grant reaches the mutating tools
                 // too. Withhold those unless the caller actually holds a matching
                 // operation. Withheld here means unreachable at tools/call as
-                // well, because the session's tool collection serves both. A
-                // resolver that supplies no operation detail keeps the historical
-                // group-level-only filtering.
-                if (access.CarriesOperationDetail
-                    && (access.GrantedOperations & group.RequiredOperationsFor(toolName)) == LatticeOperation.None)
+                // well, because the session's tool collection serves both.
+                //
+                // The minimum applies unconditionally. Gating it on the resolver
+                // having supplied operation detail treated absent evidence as
+                // permission: a resolver that admitted a group while carrying no
+                // operations skipped the filter entirely and advertised the whole
+                // group, mutating tools included. A security filter denies when
+                // the evidence it needs is missing, so an access set carrying no
+                // operations now reaches no tool.
+                if ((access.GrantedOperations & group.RequiredOperationsFor(toolName)) == LatticeOperation.None)
                 {
                     continue;
                 }

@@ -21,12 +21,14 @@ namespace Orleans.Lattice.Replication.Grpc.Tests.Security;
 /// accepted secret can set to the same arbitrary cluster id.
 /// </para>
 /// <para>
-/// The opt-in binding closes that by re-resolving the secret this cluster
+/// The binding closes that by re-resolving the secret this cluster
 /// would use to call the claimed origin and requiring the presented
 /// credential to equal it, which turns the origin into an authenticated fact.
-/// It is off by default because it only binds under a symmetric per-peer
-/// secret scheme; a single cluster-wide secret resolves the same value for
-/// every peer and so binds nothing.
+/// It is on by default: a single cluster-wide secret resolves the same value
+/// for every peer so the check passes and costs only a resolution, while a
+/// symmetric per-peer scheme gets real isolation. Only an asymmetric scheme,
+/// where the secret a peer presents is deliberately not the one this cluster
+/// would send it, must turn it off.
 /// </para>
 /// </remarks>
 [TestFixture]
@@ -201,9 +203,49 @@ public class LatticeReplicationGrpcAuthInterceptorOriginBindingTests
     }
 
     [Test]
-    public void Binding_defaults_to_off_so_the_option_is_additive()
+    public void Binding_defaults_to_on_so_a_claimed_origin_is_an_authenticated_fact()
     {
-        Assert.That(new LatticeReplicationSecurityOptions().BindCredentialToOriginCluster, Is.False);
+        Assert.That(new LatticeReplicationSecurityOptions().BindCredentialToOriginCluster, Is.True);
+    }
+
+    [Test]
+    public void Default_options_refuse_an_accepted_credential_claiming_another_cluster()
+    {
+        // The regression that matters: the fix is the default, so the impersonation
+        // must be refused by an interceptor nobody configured. Building the options
+        // with only RequireAuthentication set - as a host that never heard of the
+        // binding would - must still close the hole.
+        var interceptor = new LatticeReplicationGrpcAuthInterceptor(
+            PerPeerSecrets(),
+            OptionsFor(new LatticeReplicationSecurityOptions()),
+            NullLogger<LatticeReplicationGrpcAuthInterceptor>.Instance);
+        var ctx = ContextWith(SiteBSecret, origin: "site-a");
+
+        var rpc = Assert.ThrowsAsync<RpcException>(async () => await InvokeAsync(interceptor, ctx));
+
+        Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public async Task Default_options_admit_a_shared_secret_estate_unchanged()
+    {
+        // The common estate: one cluster-wide secret, so every origin resolves the
+        // same value and the binding passes. Pins that defaulting the flag on does
+        // not cost a standard deployment its replication traffic.
+        var shared = Substitute.For<IReplicationSecretProvider>();
+        shared.IsAcceptedAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(ci => new ValueTask<bool>(ci.ArgAt<string?>(0) == SiteASecret));
+        shared.GetOutboundSecretAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<string?>(SiteASecret));
+
+        var interceptor = new LatticeReplicationGrpcAuthInterceptor(
+            shared,
+            OptionsFor(new LatticeReplicationSecurityOptions()),
+            NullLogger<LatticeReplicationGrpcAuthInterceptor>.Instance);
+
+        var result = await InvokeAsync(interceptor, ContextWith(SiteASecret, origin: "any-peer"));
+
+        Assert.That(result, Is.EqualTo("ok"));
     }
 
     private static ServerCallContext ContextWith(string? secret, string? origin)

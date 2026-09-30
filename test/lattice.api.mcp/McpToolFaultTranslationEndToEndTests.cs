@@ -122,7 +122,7 @@ public sealed class McpToolFaultTranslationEndToEndTests
         builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge>(
             new StubBridge(new LatticeCredential("agent")));
         builder.Services.AddSingleton<ILatticeApiMcpPermissionResolver>(
-            new StubResolver(LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data)));
+            new StubResolver(TestAccessSets.Granting(LatticeApiMcpGroup.Data)));
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer());
 
         // The facade the data tool resolves per invocation; its read throws the
