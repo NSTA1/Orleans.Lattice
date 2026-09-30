@@ -27,7 +27,10 @@ namespace Orleans.Lattice.Tenancy;
 /// An advance that pushed only to the (empty) new table would return while those
 /// silos stayed authoritative on a stale snapshot. So every advance also waits out
 /// a grace period of one lease plus the margin from the ledger's creation, which
-/// covers any lease the previous incarnation could have granted.
+/// covers any lease the previous incarnation could have granted - unless the host
+/// establishes sooner that every silo that could hold such a lease has since leased
+/// from this incarnation (and so has already been told its snapshot is out of date),
+/// and calls <see cref="ReleaseGrace"/>.
 /// </para>
 /// <para>
 /// The lease table and the current epoch are guarded by a lock, so leases can be
@@ -44,6 +47,7 @@ internal sealed class TenantPolicyEpochLedger<TSubscriber>
     private readonly Dictionary<TSubscriber, long> _leases = [];
     private readonly TimeProvider _time;
     private readonly long _graceUntil;
+    private readonly TaskCompletionSource _graceReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TenantPolicyEpoch _current;
 
     /// <summary>Initializes a ledger for a fresh incarnation.</summary>
@@ -85,6 +89,16 @@ internal sealed class TenantPolicyEpochLedger<TSubscriber>
 
     /// <summary>The clock-rate allowance added to every lease the ledger waits out.</summary>
     public TimeSpan Margin { get; }
+
+    /// <summary><c>true</c> once the fresh-incarnation grace has been released early by <see cref="ReleaseGrace"/>.</summary>
+    public bool IsGraceReleased => _graceReleased.Task.IsCompleted;
+
+    /// <summary>
+    /// Ends the fresh-incarnation grace early. Call only once every silo that could
+    /// hold a lease granted by a previous incarnation has leased from this one, so no
+    /// such lease can still make a silo authoritative. Idempotent.
+    /// </summary>
+    public void ReleaseGrace() => _graceReleased.TrySetResult();
 
     /// <summary>The number of subscribers currently in the lease table, expired or not.</summary>
     public int SubscriberCount
@@ -171,9 +185,9 @@ internal sealed class TenantPolicyEpochLedger<TSubscriber>
             pending.Add(DeliverAsync(lease.Key, lease.Value, epoch, notify, cancellationToken));
         }
 
-        if (now < _graceUntil)
+        if (now < _graceUntil && !_graceReleased.Task.IsCompleted)
         {
-            pending.Add(WaitUntilAsync(_graceUntil, cancellationToken));
+            pending.Add(WaitOutGraceAsync(cancellationToken));
         }
 
         await Task.WhenAll(pending).ConfigureAwait(false);
@@ -213,6 +227,21 @@ internal sealed class TenantPolicyEpochLedger<TSubscriber>
             {
                 _leases.Remove(subscriber);
             }
+        }
+    }
+
+    private async Task WaitOutGraceAsync(CancellationToken cancellationToken)
+    {
+        using var expiry = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var grace = WaitUntilAsync(_graceUntil, expiry.Token);
+        try
+        {
+            await Task.WhenAny(grace, _graceReleased.Task).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        finally
+        {
+            await expiry.CancelAsync().ConfigureAwait(false);
         }
     }
 

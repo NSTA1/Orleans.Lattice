@@ -49,6 +49,7 @@ internal sealed class ReplicationTenantIsolationGate(
     private readonly ITenantRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
     private readonly ITenantResidencyResolver _residency = residency ?? throw new ArgumentNullException(nameof(residency));
     private readonly CompiledTenantPolicySnapshotMaintainer _policy = policy ?? throw new ArgumentNullException(nameof(policy));
+    private readonly ITenantResidencyConfirmation? _residencyConfirmation = residency as ITenantResidencyConfirmation;
     /// <inheritdoc />
     /// <remarks>
     /// Always <see langword="true"/>: the tenancy add-on registers this gate only
@@ -122,25 +123,56 @@ internal sealed class ReplicationTenantIsolationGate(
             // tenant's data goes on changing anyway from any peer region still
             // shipping for it. Existence is not the same question as admissibility,
             // and this gate previously only asked the first.
-            return new ValueTask<ReplicationTenantIsolationDecision>(
-                compiled.Status == TenantStatus.Active
-                    ? EvaluateResidency(tenant)
-                    : ReplicationTenantIsolationDecision.RejectSuspendedTenant);
+            if (compiled.Status != TenantStatus.Active)
+            {
+                return new ValueTask<ReplicationTenantIsolationDecision>(
+                    ReplicationTenantIsolationDecision.RejectSuspendedTenant);
+            }
+
+            // The residency half is trusted only while the residency view is
+            // authoritative too (issue #4051): a drain committed through another
+            // silo must not keep admitting inbound writes here. A stale view falls
+            // through to the registry, which answers residency from the record.
+            if (TryEvaluateResidency(tenant, out var decision))
+            {
+                return new ValueTask<ReplicationTenantIsolationDecision>(decision);
+            }
         }
 
         return EvaluateAgainstRegistryAsync(tenant, cancellationToken);
     }
 
     /// <summary>
-    /// Residency half of the decision, shared by the snapshot-hit fast path and the
-    /// registry fallback so both apply identical rules. An in-memory lookup against
-    /// the residency snapshot; inert (admits every region) when residency is not
-    /// wired.
+    /// Residency half of the decision from the resolver's in-memory view. Returns
+    /// <c>false</c> when that view is not authoritative, so the caller confirms
+    /// against the registry record instead; inert (admits every region) when
+    /// residency is not wired.
     /// </summary>
-    private ReplicationTenantIsolationDecision EvaluateResidency(TenantId tenant)
-        => _residency.IsActive && !_residency.IsOnlineInServingRegion(tenant)
-            ? ReplicationTenantIsolationDecision.RejectOutOfRegion
-            : ReplicationTenantIsolationDecision.Admit;
+    private bool TryEvaluateResidency(TenantId tenant, out ReplicationTenantIsolationDecision decision)
+    {
+        if (!_residency.IsActive)
+        {
+            decision = ReplicationTenantIsolationDecision.Admit;
+            return true;
+        }
+
+        bool online;
+        if (_residencyConfirmation is { } confirmation)
+        {
+            if (!confirmation.TryResolveOnline(tenant, out online))
+            {
+                decision = default;
+                return false;
+            }
+        }
+        else
+        {
+            online = _residency.IsOnlineInServingRegion(tenant);
+        }
+
+        decision = online ? ReplicationTenantIsolationDecision.Admit : ReplicationTenantIsolationDecision.RejectOutOfRegion;
+        return true;
+    }
 
     /// <summary>
     /// Slow path for a tenant absent from the compiled snapshot: consults the
@@ -165,6 +197,17 @@ internal sealed class ReplicationTenantIsolationGate(
             return ReplicationTenantIsolationDecision.RejectSuspendedTenant;
         }
 
-        return EvaluateResidency(tenant);
+        // Residency from the authoritative record when the resolver can read one;
+        // otherwise through the resolver's own seam.
+        if (_residencyConfirmation is { } confirmation)
+        {
+            return confirmation.IsOnline(record)
+                ? ReplicationTenantIsolationDecision.Admit
+                : ReplicationTenantIsolationDecision.RejectOutOfRegion;
+        }
+
+        return TryEvaluateResidency(tenant, out var decision)
+            ? decision
+            : ReplicationTenantIsolationDecision.RejectOutOfRegion;
     }
 }
