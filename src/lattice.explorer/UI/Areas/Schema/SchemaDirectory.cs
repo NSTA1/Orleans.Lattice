@@ -183,7 +183,7 @@ internal sealed class SchemaDirectory
         var versionState = SchemaReadState.Read;
         try
         {
-            version = await schema.GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
+            version = SchemaVersioning.Effective(await schema.GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

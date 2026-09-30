@@ -121,7 +121,7 @@ public partial class SchemaVersionsPanel : IDisposable
         _versioningMissing = false;
         try
         {
-            _config = await Facades.RequireSchema().GetVersionConfigAsync(workspace.TreeId, _lifetime.Token);
+            _config = SchemaVersioning.Effective(await Facades.RequireSchema().GetVersionConfigAsync(workspace.TreeId, _lifetime.Token));
             _loaded = true;
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)

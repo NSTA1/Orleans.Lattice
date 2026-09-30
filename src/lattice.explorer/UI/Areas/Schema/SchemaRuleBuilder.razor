@@ -44,9 +44,13 @@
     }
 
     <div class="lt-toolbar lt-schema-actions">
-        <LtButton OnClick="SaveAsync" Disabled="@Busy">Save policy</LtButton>
+        <LtButton OnClick="SaveAsync" Disabled="@(Busy || !HasRules)" aria-describedby="@(HasRules ? null : "lt-schema-save-note")">Save policy</LtButton>
         <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync">Cancel</LtButton>
     </div>
+    @if (!HasRules)
+    {
+        <p id="lt-schema-save-note" class="lt-schema-muted">@NoRulesNote</p>
+    }
 
     <LtDialog Open="@_confirmSave" OpenChanged="value => _confirmSave = value" Alert="true"
               Title="Some sampled values would not comply">
@@ -196,8 +200,8 @@
                 <fieldset class="lt-schema-step">
                     <legend class="lt-schema-step__legend"><span class="lt-schema-step__number">1</span> What it checks</legend>
                     <LtComboBox Label="Member path" Value="@card.Path" ValueChanged="OnPathChanged" Source="@_rootMembers"
-                                Mode="LtComboBoxMode.Suggest" Noun="member" Placeholder="order.total"
-                                Hint="Pick a member below or type its path. Leave it empty to check the whole value." />
+                                Mode="LtComboBoxMode.Suggest" Noun="member"
+                                Hint="Choose a member below or type its path, such as order.total. Leave it empty to check the whole value." />
                     @RenderShape()
                 </fieldset>
 
@@ -251,7 +255,7 @@
                 }
                 else
                 {
-                    <span>From @Count(_shape.Documents, "sampled value") and the current policy.</span>
+                    <span>From @Count(_shape.Documents, "sampled value") and the current policy. Choose one to check it.</span>
                 }
             </p>
             <ul class="lt-schema-shape__list">
@@ -340,7 +344,7 @@
                            @onchange="() => ChooseKind(card, option, scope, parent)" />
                     <span class="lt-schema-gallery__title">@SchemaCardExamples.Title(option)</span>
                     <span class="lt-schema-gallery__meaning">@SchemaCardExamples.Meaning(option)</span>
-                    <span class="lt-schema-gallery__example">@(available ? SchemaCardExamples.Example(option, node) : reason)</span>
+                    <span class="lt-schema-gallery__example">@(available ? SchemaCardExamples.Example(option, node, card) : reason)</span>
                 </label>
             }
         </div>

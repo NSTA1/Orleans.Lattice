@@ -136,6 +136,25 @@ public sealed class SchemaAreaTests : SchemaTestContext
     }
 
     [Test]
+    public async Task A_default_version_config_is_neither_under_schema_nor_versioned()
+    {
+        // The cluster reads an absent config as family 0 at version 0 (#3985).
+        UseEstate();
+        Schema.UnversionedReadsAsDefault = true;
+
+        Assert.That(await Area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("3 trees under schema, 2 versioned."));
+    }
+
+    [Test]
+    public async Task Only_default_version_configs_leave_no_tree_under_schema()
+    {
+        UseTrees("scratch", "factory-floor");
+        Schema.UnversionedReadsAsDefault = true;
+
+        Assert.That(await Area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("No tree is under a schema policy yet."));
+    }
+
+    [Test]
     public async Task The_badge_answers_only_from_a_listing_already_read()
     {
         UseEstate();

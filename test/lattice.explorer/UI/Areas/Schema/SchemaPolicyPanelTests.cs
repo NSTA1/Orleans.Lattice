@@ -120,11 +120,10 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
         var cut = Open("scratch");
         ClickWhenShown(cut, "Set a policy");
 
-        ClickWhenShown(cut, "Save policy");
-
         cut.WaitUntil(() =>
         {
-            Assert.That(cut.Find(".lt-schema-rulebuilder > .lt-schema-error").TextContent, Does.StartWith("A policy needs at least one rule."));
+            Assert.That(Button(cut, "Save policy").HasAttribute("disabled"), Is.True, "a policy with no rules is not offered for saving");
+            Assert.That(cut.Find("#lt-schema-save-note").TextContent, Is.EqualTo("Add a rule to save the policy."));
             Assert.That(Schema.CountOf("SetPolicy"), Is.Zero);
         });
     }
