@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 public sealed class TenancyTenantPageTests : TenancyTestContext
 {
     [Test]
-    public void The_overview_shows_state_kind_residency_apps_workspace_and_quota()
+    public void The_overview_shows_state_kind_residency_apps_workspace_and_the_way_to_its_quota()
     {
         UseTenancyAs(isOperator: true);
 
@@ -34,9 +34,11 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
                 ["Allowed"] = "eu-west",
                 ["Apps"] = "2 apps installed",
                 ["Workspace"] = "Open the tenant's workspace",
+                ["Quota"] = "Use against quota, and its limits",
             }));
-            Assert.That(cut.FindAll(".lt-tenancy-nav__link").Select(link => link.TextContent), Is.EqualTo(new[] { "Overview", "Grants", "Admin subjects", "Regions" }));
-            Assert.That(cut.FindAll(".lt-tenancy-section__title").Select(title => title.TextContent), Is.EqualTo(new[] { "Lifecycle", "Quota" }));
+            Assert.That(cut.FindAll(".lt-dl__row a").Single(link => link.TextContent == "Use against quota, and its limits").GetAttribute("href"), Is.EqualTo("tenancy/acme/quota"));
+            Assert.That(cut.FindAll(".lt-tenancy-nav__link").Select(link => link.TextContent), Is.EqualTo(new[] { "Overview", "Members", "Quota", "Regions", "Sharing" }), "#3987: the operator's tabs use the tenant admin's words");
+            Assert.That(cut.FindAll(".lt-tenancy-section__title").Select(title => title.TextContent), Is.EqualTo(new[] { "Lifecycle" }), "quota has its own tab");
         });
     }
 
@@ -222,43 +224,78 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
         RenderAt<TenancyTenantPage>("tenancy/acme");
         Assert.That(Navigation.Uri, Does.EndWith("/t/acme/tenancy"));
 
-        RenderAt<TenancyGrantsPage>("tenancy/acme/grants");
+        RenderAt<TenancyGrantsPage>("tenancy/acme/sharing");
         Assert.That(Navigation.Uri, Does.EndWith("/t/acme/tenancy/sharing"));
 
-        RenderAt<TenancyAccessPage>("tenancy/acme/access");
+        RenderAt<TenancyAccessPage>("tenancy/acme/members");
         Assert.That(Navigation.Uri, Does.EndWith("/t/acme/tenancy/members"));
+
+        RenderAt<TenancyQuotaPage>("tenancy/acme/quota");
+        Assert.That(Navigation.Uri, Does.EndWith("/t/acme/tenancy/quota"));
 
         RenderAt<TenancyRegionsPage>("tenancy/acme/regions");
         Assert.That(Navigation.Uri, Does.EndWith("/t/acme/tenancy/regions"));
     }
 
     [Test]
-    public void The_grants_page_lists_the_tenants_grants_under_its_navigation()
+    [TestCase("tenancy/acme/sharing")]
+    [TestCase("tenancy/acme/grants")]
+    public void The_sharing_page_lists_the_tenants_grants_under_its_navigation(string address)
     {
         UseTenancyAs(isOperator: true);
         Cluster.WithTenant("globex").WithGrant("globex", "acme", "orders", TenantGrantLifecycleState.Pending);
 
-        var cut = RenderAt<TenancyGrantsPage>("tenancy/acme/grants");
+        var cut = RenderAt<TenancyGrantsPage>(address);
 
         cut.WaitUntil(() =>
         {
-            Assert.That(CurrentTab(cut), Is.EqualTo("Grants"));
+            Assert.That(CurrentTab(cut), Is.EqualTo("Sharing"));
             Assert.That(cut.FindAll("tbody th").Select(cell => cell.TextContent.Trim()), Does.Contain("globex"));
         });
     }
 
     [Test]
-    public void The_access_page_lists_the_tenants_admin_subjects_under_its_navigation()
+    [TestCase("tenancy/acme/members")]
+    [TestCase("tenancy/acme/access")]
+    public void The_members_page_lists_the_tenants_admin_subjects_under_its_navigation(string address)
     {
         UseTenancyAs(isOperator: true);
 
-        var cut = RenderAt<TenancyAccessPage>("tenancy/acme/access");
+        var cut = RenderAt<TenancyAccessPage>(address);
 
         cut.WaitUntil(() =>
         {
-            Assert.That(CurrentTab(cut), Is.EqualTo("Admin subjects"));
+            Assert.That(CurrentTab(cut), Is.EqualTo("Members"));
             Assert.That(cut.FindAll("tbody th").Select(cell => cell.TextContent.Trim()), Is.EqualTo(new[] { FakeTenancyCluster.Caller }));
         });
+    }
+
+    [Test]
+    public void The_quota_page_lets_an_operator_set_a_tenants_limits_under_its_navigation()
+    {
+        // #3987: quota was missing from the operator's tabs.
+        UseTenancyAs(isOperator: true);
+
+        var cut = RenderAt<TenancyQuotaPage>("tenancy/acme/quota");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(CurrentTab(cut), Is.EqualTo("Quota"));
+            Assert.That(cut.Find("h1").TextContent, Is.EqualTo("acme"));
+            Assert.That(TenancyForms.HasButton(cut, "Edit quotas"), Is.True);
+        });
+    }
+
+    [Test]
+    public void The_default_tenants_quota_page_shows_use_without_a_quota_editor()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants[TenantId.DefaultId].Listed = true;
+
+        var cut = RenderAt<TenancyQuotaPage>("tenancy/default/quota");
+
+        cut.WaitUntil(() => Assert.That(CurrentTab(cut), Is.EqualTo("Quota")));
+        Assert.That(TenancyForms.HasButton(cut, "Edit quotas"), Is.False);
     }
 
     [Test]
@@ -293,11 +330,12 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
         var notFound = 0;
         Navigation.OnNotFound += (_, _) => notFound++;
 
-        RenderAt<TenancyGrantsPage>("tenancy/Bad_Id/grants");
-        RenderAt<TenancyAccessPage>("tenancy/Bad_Id/access");
+        RenderAt<TenancyGrantsPage>("tenancy/Bad_Id/sharing");
+        RenderAt<TenancyAccessPage>("tenancy/Bad_Id/members");
+        RenderAt<TenancyQuotaPage>("tenancy/Bad_Id/quota");
         RenderAt<TenancyRegionsPage>("tenancy/Bad_Id/regions");
 
-        Assert.That(notFound, Is.EqualTo(3));
+        Assert.That(notFound, Is.EqualTo(4));
     }
 
     [Test]
@@ -314,7 +352,7 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
 
     private static Dictionary<string, string> Facts<TComponent>(IRenderedComponent<TComponent> cut)
         where TComponent : Microsoft.AspNetCore.Components.IComponent =>
-        cut.FindAll(".lt-dl__row").Take(6).ToDictionary(
+        cut.FindAll(".lt-dl__row").Take(7).ToDictionary(
             row => row.QuerySelector("dt")!.TextContent.Trim(),
             row => row.QuerySelector("dd")!.TextContent.Trim());
 

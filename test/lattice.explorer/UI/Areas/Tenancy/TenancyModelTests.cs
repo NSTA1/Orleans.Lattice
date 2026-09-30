@@ -20,8 +20,9 @@ public sealed class TenancyModelTests
         {
             Assert.That(TenancyRoutes.Directory.Format(), Is.EqualTo("/tenancy"));
             Assert.That(TenancyRoutes.Tenant("acme").Format(), Is.EqualTo("/tenancy/acme"));
-            Assert.That(TenancyRoutes.TenantGrants("acme").Format(), Is.EqualTo("/tenancy/acme/grants"));
-            Assert.That(TenancyRoutes.TenantAccess("acme").Format(), Is.EqualTo("/tenancy/acme/access"));
+            Assert.That(TenancyRoutes.TenantSharing("acme").Format(), Is.EqualTo("/tenancy/acme/sharing"));
+            Assert.That(TenancyRoutes.TenantMembers("acme").Format(), Is.EqualTo("/tenancy/acme/members"));
+            Assert.That(TenancyRoutes.TenantQuota("acme").Format(), Is.EqualTo("/tenancy/acme/quota"));
             Assert.That(TenancyRoutes.TenantRegions("acme").Format(), Is.EqualTo("/tenancy/acme/regions"));
             Assert.That(TenancyRoutes.MyTenant("acme").Format(), Is.EqualTo("/t/acme/tenancy"));
             Assert.That(TenancyRoutes.MyTenant("acme", TenancyRoutes.SharingSegment).Format(), Is.EqualTo("/t/acme/tenancy/sharing"));
@@ -38,7 +39,7 @@ public sealed class TenancyModelTests
         Assert.Multiple(() =>
         {
             Assert.Throws<ArgumentException>(() => TenancyRoutes.Tenant(""));
-            Assert.Throws<ArgumentException>(() => TenancyRoutes.TenantGrants(""));
+            Assert.Throws<ArgumentException>(() => TenancyRoutes.TenantSharing(""));
             Assert.Throws<ArgumentException>(() => TenancyRoutes.MyTenant(""));
             Assert.Throws<ArgumentException>(() => TenancyRoutes.Apps(""));
         });

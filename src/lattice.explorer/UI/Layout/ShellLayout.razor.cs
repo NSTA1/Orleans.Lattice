@@ -55,6 +55,7 @@ public partial class ShellLayout : IAsyncDisposable
     private ILatticeStateConnection? _watchedConnection;
     private LatticeConnectionState _connectionState;
     private bool _sessionReady;
+    private bool _resolvedOnce;
     private string? _entriesTenant;
     private (bool Authenticated, string? User)? _tenantResolvedFor;
 
@@ -280,8 +281,22 @@ public partial class ShellLayout : IAsyncDisposable
 
         if (resolution.Notice is { } notice)
         {
-            Toasts.Show(notice, resolution.RedirectTo is null ? LtToastTone.Info : LtToastTone.Warning);
+            if (resolution.RedirectTo is not null)
+            {
+                // A refused switch left the caller somewhere they did not ask to
+                // be: that stays on screen until it is read and dismissed.
+                Toasts.Show(notice, LtToastTone.Warning);
+            }
+            else if (_resolvedOnce)
+            {
+                // A switch the address and the header already show is only read
+                // out. The circuit's first address merely establishes the tenant
+                // (a reload, a bookmark, a pasted link), so it announces nothing.
+                Toasts.Announce(notice);
+            }
         }
+
+        _resolvedOnce = true;
 
         if (resolution.RedirectTo is { } redirect)
         {

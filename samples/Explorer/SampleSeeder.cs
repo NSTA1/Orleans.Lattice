@@ -2,6 +2,7 @@ using System.Text;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Apps;
+using Orleans.Lattice.Apps.Sources;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Samples.Explorer.TaskBoard;
@@ -338,27 +339,32 @@ internal static class SampleSeeder
     /// requests. Activation provisions the app's tree, writes its role rules and
     /// enrols the tree its manifest declares for replication.
     /// </summary>
+    /// <remarks>
+    /// The app is resolved from the in-image source and recorded under the
+    /// provenance that source vouches for, exactly as an install from Apps &gt;
+    /// Catalogue records it - never the manifest's self-declared publisher. Its
+    /// trees are claimed under that publisher, so a later upgrade from the same
+    /// source is the same owner and is not refused by the ownership claim check.
+    /// </remarks>
     /// <returns>The effective id of the app's <c>tasks</c> tree.</returns>
     private static async Task<string> InstallTaskBoardAsync(IServiceProvider services, TenantId tenant, CancellationToken cancellationToken)
     {
-        AppManifest manifest;
-        using (var stream = TaskBoardApp.Assembly.GetManifestResourceStream(TaskBoardApp.ManifestResourceName)
-            ?? throw new InvalidOperationException($"The task board's manifest resource '{TaskBoardApp.ManifestResourceName}' is missing."))
+        var slug = AppSlug.Parse(TaskBoardApp.Slug);
+        var resolved = await services.GetRequiredService<AppSourceSet>()
+            .ResolveAsync(slug, version: null, InImageAppSource.SourceKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (!resolved.IsResolved || resolved.Manifest is not { } manifest || resolved.Provenance is not { } provenance)
         {
-            var parsed = AppManifestParser.Parse(stream);
-            manifest = parsed.Manifest
-                ?? throw new InvalidOperationException("The task board's manifest does not validate: "
-                    + string.Join("; ", parsed.Errors.Select(error => $"{error.Path}: {error.Message}")));
+            throw new InvalidOperationException($"The in-image source did not resolve '{slug}': {resolved.Status}.");
         }
 
         using var _ = LatticeSystemOrigin.Enter();
         var registry = services.GetRequiredService<IAppRegistry>();
-        var slug = manifest.Identity.Slug;
         var installed = await registry.InstallAsync(
             new AppRegistryInstallRequest
             {
                 Tenant = tenant,
-                Identity = manifest.Identity,
+                Identity = new AppIdentity { Slug = slug, Version = manifest.Identity.Version, Provenance = provenance },
                 Ceiling = AppCapabilityCeiling.Structural(
                     LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write | LatticeOperation.Delete),
                 RoleBindings = [AppRoleBinding.Create("editor", SampleIdentities.AcmeEditorsGroup)],

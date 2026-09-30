@@ -3,7 +3,8 @@
 
 @*
     One tenant's administration overview: its state and lifecycle verbs, where
-    it is resident, its installed apps, and its quota.
+    it is resident, its installed apps, and the way to its quota, which has its
+    own tab as it does in the tenant's workspace.
 *@
 
 <PageTitle>@($"Tenant {TenantId} - Orleans.Lattice Explorer")</PageTitle>
@@ -46,6 +47,7 @@ else
         <LtDefinition Term="Allowed" Mono="true"><a href="@Href(TenancyRoutes.TenantRegions(TenantId))" aria-label="@($"Allowed: {TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))}. Open the regions of tenant {TenantId}")">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))</a></LtDefinition>
         <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@(_apps is { } apps ? (apps == 1 ? "1 app installed" : $"{TenancyFormat.Count(apps)} apps installed") : "Installed apps")</a></LtDefinition>
         <LtDefinition Term="Workspace"><a href="@Href(TenancyRoutes.MyTenant(TenantId))">@(IsActive ? "Open the tenant's workspace" : "Scope to this tenant")</a></LtDefinition>
+        <LtDefinition Term="Quota"><a href="@Href(TenancyRoutes.TenantQuota(TenantId))">@(view.IsDefault ? "Use against quota" : "Use against quota, and its limits")</a></LtDefinition>
     </LtDefinitionList>
     @if (TenancyFormat.IsServedNowhere(view.Regions))
     {
@@ -74,8 +76,6 @@ else
             </div>
         }
     </section>
-
-    <TenancyQuota TenantId="@TenantId" CanEdit="@(!view.IsDefault)" />
 }
 
 <LtDialog Open="_confirmSuspend" OpenChanged="@(open => _confirmSuspend = open)" Title="@($"Suspend tenant {TenantId}?")" Alert="true" Placement="DialogPlacement">

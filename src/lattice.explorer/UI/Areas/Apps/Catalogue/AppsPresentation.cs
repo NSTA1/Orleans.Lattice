@@ -130,18 +130,18 @@ internal static class AppsPresentation
     /// <param name="tree">The app-local tree name.</param>
     public static string TreePath(string slug, string tree) => $"a/{slug}/{tree}";
 
-    /// <summary>A bridge grant in plain language, such as "read its own trees".</summary>
+    /// <summary>A bridge grant in plain language, such as "read its own trees" or "read the tasks tree".</summary>
     /// <param name="grant">The grant.</param>
     public static string BridgeText(AppUiBridgeGrantDescriptor grant)
     {
         ArgumentNullException.ThrowIfNull(grant);
-        var trees = grant.Tree is { } tree ? $"its tree {tree}" : "its own trees";
+        var trees = grant.Tree is { } tree ? $"the {tree} tree" : "its own trees";
         return grant.Operation switch
         {
             "context.read" => "know its version, the theme and your tenant's display name",
             "context.user" => "see your display name",
             "data.read" => "read " + trees,
-            "data.write" => "write " + trees,
+            "data.write" => "write to " + trees,
             "data.delete" => "delete keys in " + trees,
             "nav.sync" => "keep its page in the address line",
             "ui.notify" => "show you short notifications",
@@ -149,10 +149,70 @@ internal static class AppsPresentation
         };
     }
 
+    /// <summary>A bridge grant as a list item or option label, such as "Read the tasks tree".</summary>
+    /// <param name="grant">The grant.</param>
+    public static string BridgeLabel(AppUiBridgeGrantDescriptor grant)
+    {
+        var text = BridgeText(grant);
+        return string.Concat(char.ToUpperInvariant(text[0]).ToString(), text.AsSpan(1));
+    }
+
+    /// <summary>
+    /// Bridge grants in reading order: what it may know of you, then read, write and delete, then
+    /// navigation and notices, then anything unrecognised; grants of one operation by tree.
+    /// </summary>
+    /// <param name="grants">The grants.</param>
+    public static IEnumerable<AppUiBridgeGrantDescriptor> OrderBridge(IEnumerable<AppUiBridgeGrantDescriptor> grants)
+    {
+        ArgumentNullException.ThrowIfNull(grants);
+        return grants
+            .OrderBy(grant => BridgeRank(grant.Operation))
+            .ThenBy(grant => grant.Operation, StringComparer.Ordinal)
+            .ThenBy(grant => grant.Tree, StringComparer.Ordinal);
+    }
+
+    private static int BridgeRank(string operation) => operation switch
+    {
+        "context.read" => 0,
+        "context.user" => 1,
+        "data.read" => 2,
+        "data.write" => 3,
+        "data.delete" => 4,
+        "nav.sync" => 5,
+        "ui.notify" => 6,
+        _ => 7,
+    };
+
     /// <summary>Whether a bridge operation is one this Explorer recognises.</summary>
     /// <param name="operation">The operation.</param>
     public static bool IsKnownBridgeOperation(string operation) => operation is
         "context.read" or "context.user" or "data.read" or "data.write" or "data.delete" or "nav.sync" or "ui.notify";
+
+    /// <summary>
+    /// A source in plain language, such as "In-image apps: shipped with the cluster, one version
+    /// of each app": what it is, then what it can do, never a bare kind name.
+    /// </summary>
+    /// <param name="source">The source.</param>
+    public static string SourceDescription(AppSourceSummary source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var traits = new List<string>(3);
+        if (source.Capabilities.HasFlag(AppSourceSummaryCapabilities.Search))
+        {
+            traits.Add("searchable");
+        }
+
+        traits.Add(source.Capabilities.HasFlag(AppSourceSummaryCapabilities.MultipleVersions)
+            ? "several versions of each app"
+            : "one version of each app");
+        if (source.Capabilities.HasFlag(AppSourceSummaryCapabilities.RequiresAcquisition))
+        {
+            traits.Add("downloaded and verified before review");
+        }
+
+        var origin = source.Kind == AppSourceSummaryKind.Dynamic ? "fetched from a live source; " : "shipped with the cluster, ";
+        return $"{source.DisplayName}: {origin}{string.Join(", ", traits)}";
+    }
 
     /// <summary>A source's kind and capabilities, such as "Dynamic - search, several versions, acquired on install".</summary>
     /// <param name="source">The source.</param>

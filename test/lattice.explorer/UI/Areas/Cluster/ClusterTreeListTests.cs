@@ -43,6 +43,27 @@ public sealed class ClusterTreeListTests : ClusterTestContext
     }
 
     [Test]
+    public void The_list_counts_its_trees_in_the_words_home_uses_and_says_system_trees_are_left_out()
+    {
+        UseTrees(Tree("a/crm/orders"), Tree("invoices"), Tree("t/acme/orders"));
+
+        var cut = RenderAt("/cluster/trees");
+
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-cluster-count]").TextContent, Is.EqualTo("3 trees. System trees are not listed.")));
+    }
+
+    [Test]
+    public void Under_a_tenant_the_count_says_whose_trees_it_lists()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ClusterTreeList.CountLine(2, "globex"), Is.EqualTo("2 trees of tenant globex. Other tenants' trees and system trees are not listed."));
+            Assert.That(ClusterTreeList.CountLine(1, "default"), Is.EqualTo("1 tree. System trees are not listed."));
+            Assert.That(ClusterTreeList.CountLine(0, null), Is.EqualTo("0 trees. System trees are not listed."));
+        });
+    }
+
+    [Test]
     public void The_filter_narrows_by_name_owner_or_tenant_and_says_when_nothing_matches()
     {
         UseTrees(Tree("a/crm/orders"), Tree("invoices"));

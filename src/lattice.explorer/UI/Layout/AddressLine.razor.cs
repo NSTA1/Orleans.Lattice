@@ -53,6 +53,17 @@ public partial class AddressLine : IDisposable
     private string? _activeId;
     private string? _status;
 
+    // Until the reader moves the active option with the arrow keys, it follows the
+    // first option, so the list always opens on its first suggestion.
+    private bool _followFirst = true;
+
+    // The pointer shades the option under it only once it has moved over the list:
+    // a list that opens under a resting pointer must not look as though the pointer
+    // chose the option it happens to cover.
+    private bool _pointerMoved;
+    private Dictionary<string, object>? _popupResting;
+    private Dictionary<string, object>? _popupPointer;
+
     [CascadingParameter]
     internal ExplorerLocation? Location { get; set; }
 
@@ -95,7 +106,7 @@ public partial class AddressLine : IDisposable
             ? "lt-shell-address-line lt-shell-address-line--editing lt-shell-address-line--sheet"
             : "lt-shell-address-line lt-shell-address-line--editing";
 
-    private IReadOnlyList<LtChainLink> Chain => BuildChain(CurrentLocation.Address);
+    private IReadOnlyList<LtChainLink> Chain => BuildChain(CurrentLocation.Address, Directory.Find(CurrentLocation.Address.Area));
 
     /// <summary>Stops any completion still running.</summary>
     public void Dispose()
@@ -114,6 +125,7 @@ public partial class AddressLine : IDisposable
     {
         _editing = true;
         _focusInput = true;
+        _pointerMoved = false;
         _text = text ?? CurrentLocation.Address.Format();
 
         if (text is null)
@@ -152,49 +164,57 @@ public partial class AddressLine : IDisposable
         }
     }
 
-    private static IReadOnlyList<LtChainLink> BuildChain(ExplorerAddress address)
+    /// <summary>
+    /// The chain for <paramref name="address"/>: the tenant root (or Home), the
+    /// area, then the path grouped as the area says - a logical tree id is one
+    /// node, not one per <c>/</c>. The query is state within the page, not a
+    /// place, so it is never a node.
+    /// </summary>
+    /// <param name="address">The current address.</param>
+    /// <param name="area">The address's area, or <see langword="null"/> when none is registered.</param>
+    internal static IReadOnlyList<LtChainLink> BuildChain(ExplorerAddress address, IExplorerArea? area)
     {
-        var nodes = new List<ExplorerAddress>();
-        for (var node = address; node is not null; node = node.Parent)
+        var links = new List<LtChainLink>();
+        if (address.Tenant is { } tenant)
         {
-            // With a tenant root, the tenant is the root node; the bare Home above it is not shown.
-            if (node.Tenant is null && node.IsHome && address.Tenant is not null)
-            {
-                break;
-            }
-
-            nodes.Add(node);
+            links.Add(new LtChainLink(
+                ExplorerAddress.TenantSegment + "/" + tenant,
+                ExplorerAddress.Home.WithTenant(tenant).ToHref()));
+        }
+        else
+        {
+            links.Add(new LtChainLink("Home", ExplorerAddress.Home.ToHref()));
         }
 
-        nodes.Reverse();
-
-        var links = new LtChainLink[nodes.Count];
-        for (var i = 0; i < nodes.Count; i++)
+        if (address.Area is not { } key)
         {
-            links[i] = new LtChainLink(NodeLabel(nodes[i], i == 0 ? null : nodes[i - 1]), nodes[i].ToHref());
+            return links;
+        }
+
+        links.Add(new LtChainLink(key, ExplorerAddress.Create(address.Tenant, key).ToHref()));
+
+        var path = address.Path;
+        var end = 0;
+        foreach (var span in ChainSpans(address, area))
+        {
+            var start = end;
+            end += span;
+            var segments = path.Take(end).ToArray();
+            links.Add(new LtChainLink(
+                string.Join('/', path.Skip(start).Take(span)),
+                ExplorerAddress.Create(address.Tenant, key, segments).ToHref()));
         }
 
         return links;
     }
 
-    private static string NodeLabel(ExplorerAddress node, ExplorerAddress? parent)
+    private static IEnumerable<int> ChainSpans(ExplorerAddress address, IExplorerArea? area)
     {
-        if (node.Query.Count > 0)
-        {
-            return "?" + string.Join('&', node.Query.Select(pair => pair.Key + "=" + pair.Value));
-        }
-
-        if (node.Path.Count > 0)
-        {
-            return node.Path[^1];
-        }
-
-        if (node.Area is { } area)
-        {
-            return area;
-        }
-
-        return node.Tenant is { } tenant ? ExplorerAddress.TenantSegment + "/" + tenant : "Home";
+        var count = address.Path.Count;
+        var spans = count == 0 ? null : area?.GetChainSpans(address);
+        return spans is not null && spans.All(span => span > 0) && spans.Sum() == count
+            ? spans
+            : Enumerable.Repeat(1, count);
     }
 
     private Task OpenFromClickAsync() => OpenAsync();
@@ -266,6 +286,7 @@ public partial class AddressLine : IDisposable
             ? (step > 0 ? 0 : options.Length - 1)
             : (index + step + options.Length) % options.Length;
 
+        _followFirst = false;
         _activeId = options[index].ElementId;
         _status = options[index].Label + (options[index].Detail is { } detail ? ", " + detail : string.Empty);
     }
@@ -311,6 +332,7 @@ public partial class AddressLine : IDisposable
         Dispose();
         _editing = false;
         _focusTrigger = restoreFocus;
+        _pointerMoved = false;
         _text = string.Empty;
         ClearOptions();
         _status = null;
@@ -320,8 +342,33 @@ public partial class AddressLine : IDisposable
     {
         _groups = [];
         _activeId = null;
+        _followFirst = true;
         _notes.Clear();
     }
+
+    // The first option is active until the reader picks another; a picked option
+    // that has gone hands the choice back to the first.
+    private void SettleActive()
+    {
+        if (!_followFirst && _activeId is not null && _groups.Any(group => group.Options.Any(option => option.ElementId == _activeId)))
+        {
+            return;
+        }
+
+        _followFirst = true;
+        _activeId = _groups.SelectMany(group => group.Options).FirstOrDefault()?.ElementId;
+    }
+
+    // Rendered only until the pointer first moves, so the circuit hears one event, not one per movement.
+    private Dictionary<string, object> PopupAttributes => _pointerMoved
+        ? _popupPointer ??= new() { ["class"] = "lt-shell-combobox__popup lt-shell-combobox__popup--pointer" }
+        : _popupResting ??= new()
+        {
+            ["class"] = "lt-shell-combobox__popup",
+            ["onmousemove"] = EventCallback.Factory.Create<MouseEventArgs>(this, OnPointerMoved),
+        };
+
+    private void OnPointerMoved(MouseEventArgs args) => _pointerMoved = true;
 
     private async Task RefreshAsync()
     {
@@ -334,6 +381,7 @@ public partial class AddressLine : IDisposable
         if (immediate is not null)
         {
             _groups = [immediate];
+            SettleActive();
         }
 
         if (input.Mode == AddressQueryMode.Command)
@@ -382,10 +430,7 @@ public partial class AddressLine : IDisposable
                 _groups = ComposeGroups(immediate, sources, answered);
                 _notes.Clear();
                 _notes.AddRange(Notes(sources, answered));
-                if (_activeId is not null && !_groups.Any(group => group.Options.Any(option => option.ElementId == _activeId)))
-                {
-                    _activeId = null;
-                }
+                SettleActive();
 
                 StateHasChanged();
             }

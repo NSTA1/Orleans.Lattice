@@ -22,13 +22,17 @@ public partial class BackupsNav : IDisposable
     /// <summary>The maintenance page's key.</summary>
     public const string MaintenancePage = "maintenance";
 
+    /// <summary>The way back a page below the row's pages shows in place of the row.</summary>
+    public const string BackText = "Back to the catalogue";
+
     private readonly CancellationTokenSource _disposed = new();
     private bool _health;
 
     /// <summary>
     /// The key of the page being shown (<see cref="CataloguePage"/>,
     /// <see cref="SchedulesPage"/>, <see cref="HealthPage"/> or
-    /// <see cref="MaintenancePage"/>), or <see langword="null"/> when none of them is.
+    /// <see cref="MaintenancePage"/>), or <see langword="null"/> on a page below
+    /// them, which shows the way back to the catalogue instead of the row.
     /// </summary>
     [Parameter]
     public string? Current { get; set; }

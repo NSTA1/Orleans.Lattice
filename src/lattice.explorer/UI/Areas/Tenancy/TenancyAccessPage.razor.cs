@@ -4,7 +4,7 @@ using Orleans.Lattice.Explorer.UI.Navigation.Address;
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
 /// <summary>
-/// A tenant's admin subjects (<c>/tenancy/{tenant}/access</c>) for a platform operator: who may administer it, with add and a confirmed remove. Anyone else is sent to the same section of their tenant's workspace.
+/// A tenant's members - its admin subjects - (<c>/tenancy/{tenant}/members</c>, and the earlier <c>/access</c>) for a platform operator: who may administer it, with add and a confirmed remove. Anyone else is sent to the same section of their tenant's workspace.
 /// </summary>
 public partial class TenancyAccessPage
 {

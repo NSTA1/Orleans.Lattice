@@ -25,6 +25,18 @@ public sealed class ReplicationAreaTests
     private readonly FakeReplicationControl _control = new();
 
     [Test]
+    public void A_tree_page_is_the_trees_node_then_the_whole_tree_id()
+    {
+        var area = Create();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/replication/trees/t/acme/a/task-board/tasks?health=lagging")), Is.EqualTo(new[] { 1, 5 }));
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/replication/trees")), Is.Null);
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/replication?region=west")), Is.Null);
+        });
+    }
+    [Test]
     public async Task It_is_visible_when_the_caller_can_read_peer_status()
     {
         var area = Create();

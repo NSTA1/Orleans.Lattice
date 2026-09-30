@@ -143,9 +143,24 @@ Tenancy has two roots: `/tenancy` for an operator's tenant directory and
 `/t/{tenant}/tenancy` for the active tenant administration view. It requires the
 tenant self-service facade and tenancy to be active, then proves whether the
 caller is an operator or administers the scoped tenant. Operators get the
-`tenancy.create-tenant` command; non-default tenant admins get
-`tenancy.offer-grant`. See [Tenant scope](tenant-scope.md) for re-rooting,
-tenant selection, grants, regions and quota.
+`tenancy.create-tenant` and `tenancy.set-regions` ("Set a tenant's regions",
+`/tenancy?set-regions=true`) commands; whoever administers a non-default scoped
+tenant gets `tenancy.change-residency` ("Change residency") and
+`tenancy.offer-grant`.
+
+A tenant's Regions page splits **Allowed regions (set by a platform operator)**
+from **Residency (where the tenant's data is kept)**, and says what each region's
+lifecycle status means for the tenant: a Provisioning region waits for a platform
+operator of the hosting deployment to promote it, and once a tenant has any
+residency it is served only in Online regions. A change that would leave no
+Online region is confirmed first, and so is creating a tenant with an initial
+residency. The directory's **Resident in** column, and the **Resident in** and
+**Allowed** lines of a tenant's overview, link to its Regions page, and Home
+counts tenants with no residency set, reading at most 50 tenants. See
+[Regions and residency](tenant-scope.md#regions-and-residency).
+
+See [Tenant scope](tenant-scope.md) for re-rooting, tenant selection, grants,
+regions and quota.
 
 ## Replication
 

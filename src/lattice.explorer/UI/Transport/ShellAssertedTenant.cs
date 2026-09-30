@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
@@ -38,6 +39,37 @@ internal sealed class ShellAssertedTenant(ILatticeActiveTenantProvider? inner = 
     /// <param name="left">A tenant, or <see langword="null"/>.</param>
     /// <param name="right">A tenant, or <see langword="null"/>.</param>
     public static bool Same(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a tenant-scoped listing for <paramref name="listingTenant"/> shows
+    /// <paramref name="treeId"/>: every tree when there is no listing tenant
+    /// (tenancy off), otherwise only a tree that tenant owns. The cluster lists
+    /// every tenant's trees, and its system trees, to the reserved default
+    /// tenant, so a listing scoped to the default tenant must narrow itself.
+    /// </summary>
+    /// <param name="listingTenant">The tenant the listing is for, from <see cref="ListingTenantOf"/>, or <see langword="null"/>.</param>
+    /// <param name="treeId">The logical tree id.</param>
+    /// <returns><see langword="true"/> when the listing shows the tree.</returns>
+    public static bool Lists(string? listingTenant, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return string.IsNullOrEmpty(listingTenant)
+            || ExplorerTenantTrees.IsOwnedBy(treeId, new ExplorerTenantId(listingTenant));
+    }
+
+    /// <summary>
+    /// The tenant a tenant-scoped listing read through <paramref name="provider"/>
+    /// is for: <see langword="null"/> with tenancy off (no provider is registered),
+    /// otherwise the asserted tenant, or the reserved default tenant when none is
+    /// asserted - a call that asserts nothing is a default-tenant call.
+    /// </summary>
+    /// <param name="provider">The circuit's tenant provider, or <see langword="null"/> when tenancy is off.</param>
+    /// <returns>The listing tenant, or <see langword="null"/>.</returns>
+    public static string? ListingTenantOf(ILatticeActiveTenantProvider? provider) =>
+        provider is null ? null : provider.AssertedTenant ?? ExplorerTenantTrees.DefaultTenantId;
+
+    /// <summary>The tenant a tenant-scoped listing read now is for; see <see cref="ListingTenantOf"/>.</summary>
+    public string? ListingTenant => inner is null ? null : AssertedTenant ?? ExplorerTenantTrees.DefaultTenantId;
 
     /// <summary>
     /// Holds <paramref name="tenant"/> as the asserted tenant for the calling

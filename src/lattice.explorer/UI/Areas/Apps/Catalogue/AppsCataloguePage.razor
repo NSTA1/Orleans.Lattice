@@ -41,7 +41,9 @@
 }
 
 <div class="lt-toolbar">
-    <LtSelect Label="Source" Options="SourceOptions" Value="@(_view.SourceKey ?? AppsRoutes.AllSources)" ValueChanged="SelectSourceAsync" Hint="@SourceHint" />
+    <div class="@(IsCompact ? null : "lt-apps-source-field")">
+        <LtSelect Label="Source" Options="SourceOptions" Value="@(_view.SourceKey ?? AppsRoutes.AllSources)" ValueChanged="SelectSourceAsync" Hint="@SourceHint" />
+    </div>
     @if (IsCompact)
     {
         <LtSelect Label="Show" Options="FilterOptions" Value="@AppsRoutes.FilterText(_view.Filter)" ValueChanged="SelectFilterFromTextAsync" />
@@ -55,12 +57,18 @@
             }
         </div>
     }
-    <LtSearchInput Label="Search apps" Placeholder="Search apps" Value="@_text" ValueChanged="text => _text = text" OnSubmit="SearchAsync" Disabled="@(!TextEnabled)" />
+    <LtSearchInput Label="Search apps"
+                   Placeholder="@(TextEnabled ? "Search apps" : "Search is not available")"
+                   Value="@_text"
+                   ValueChanged="text => _text = text"
+                   OnSubmit="SearchAsync"
+                   Disabled="@(!TextEnabled)"
+                   aria-describedby="@(TextEnabled ? null : SearchHintId)" />
     <span class="lt-apps-count" role="status">@CountText</span>
 </div>
 @if (!TextEnabled)
 {
-    <p class="lt-apps-hint">@(_view.SourceKey is null ? "No configured source supports search." : "This source does not support search.")</p>
+    <p id="@SearchHintId" class="lt-apps-hint lt-apps-search-note">@(_view.SourceKey is null ? "No configured source supports search." : "This source does not support search.")</p>
 }
 
 @if (_error is not null)
@@ -101,7 +109,9 @@ else if (_error is null || _rows.Count > 0)
                     </span>
                 </div>
             </LtColumn>
-            <LtColumn TItem="AvailableAppSummary" Title="Source" Mono="true" Value="app => app.SourceKey" SortBy="app => app.SourceKey" />
+            <LtColumn TItem="AvailableAppSummary" Title="Source" Mono="true" SortBy="app => app.SourceKey">
+                <span class="lt-apps-source">@context.SourceKey</span>
+            </LtColumn>
             <LtColumn TItem="AvailableAppSummary" Title="Version" Mono="true" Value="app => app.NewestVersion" />
             <LtColumn TItem="AvailableAppSummary" Title="State">
                 @StatePill(context)

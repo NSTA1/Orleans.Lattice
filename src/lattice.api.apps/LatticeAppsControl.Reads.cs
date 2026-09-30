@@ -110,7 +110,8 @@ internal sealed partial class LatticeAppsControl
             }
 
             var provenance = resolved.Provenance ?? manifest.Identity.Provenance;
-            var conflicts = await _registry.GetTreeOwnershipConflictsAsync(tenant, manifest, provenance, cancellationToken)
+            var owner = AppsControlMapping.OwnershipProbeProvenance(live ? matching : null, provenance);
+            var conflicts = await _registry.GetTreeOwnershipConflictsAsync(tenant, manifest, owner, cancellationToken)
                 .ConfigureAwait(false);
             return AppsControlMapping.ToDescriptor(
                 manifest,

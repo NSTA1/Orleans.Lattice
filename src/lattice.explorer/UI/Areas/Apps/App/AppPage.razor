@@ -3,6 +3,7 @@
 @namespace Orleans.Lattice.Explorer.UI.Areas.Apps.App
 @inherits ExplorerPage
 @using Orleans.Lattice.Api.Apps
+@using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue
 @using Orleans.Lattice.Explorer.UI.Framing
 @using Orleans.Lattice.Explorer.UI.Layout
 @using Orleans.Lattice.Explorer.UI.Pages
@@ -76,7 +77,7 @@ else
         }
         else
         {
-            <LtNode Kind="LtNodeKind.Hollow" Size="LtNodeSize.Large" />
+            <span class="lt-app-head__icon lt-app-head__monogram" aria-hidden="true">@AppsPresentation.Monogram(model.Slug)</span>
         }
         <div class="lt-app-head__text">
             <h1 class="lt-shell-page-title">@model.DisplayName</h1>

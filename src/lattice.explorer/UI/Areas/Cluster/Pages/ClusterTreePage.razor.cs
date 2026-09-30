@@ -17,11 +17,18 @@ public partial class ClusterTreePage : IDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private ClusterLoad<LatticeTreeAdminCapabilities> _access = ClusterLoad<LatticeTreeAdminCapabilities>.Loading;
     private TreeConfigurationReport? _config;
-    private string? _tab = "summary";
+    private string? _missingUnder;
 
     /// <summary>The logical tree id.</summary>
     [Parameter, EditorRequired]
     public string TreeId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The open tab, from the address's <c>?tab=</c>: <c>configuration</c>,
+    /// <c>shards</c>, <c>storage</c> or <c>lifecycle</c>. Absent or unknown opens the summary.
+    /// </summary>
+    [Parameter]
+    public string? Tab { get; set; }
 
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
@@ -63,6 +70,17 @@ public partial class ClusterTreePage : IDisposable
                 token);
             if (config.Value is { Exists: false })
             {
+                // Under a tenant other than the default the cluster reads a bare tree
+                // name as that tenant's own tree, so the same cluster-wide address can
+                // name a tree for one tenant and nothing for another. Say so, rather
+                // than claim nothing lives at an address that does for another tenant.
+                if (ClusterTreeCatalog.NarrowingTenant(Facades.AssertedTenant) is { } tenant
+                    && ClusterTreeName.Parse(TreeId).Tenant is null)
+                {
+                    _missingUnder = tenant;
+                    return;
+                }
+
                 Navigation.NotFound();
                 return;
             }
@@ -72,4 +90,18 @@ public partial class ClusterTreePage : IDisposable
     }
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
+
+    private string ActiveTab => string.IsNullOrEmpty(Tab) ? ClusterAddresses.SummaryTab : Tab;
+
+    // Every tab has its own address, so a tab can be linked, reloaded and gone back to.
+    private void OnTabChanged(string tab)
+    {
+        if (!string.Equals(tab, ActiveTab, StringComparison.Ordinal)
+            && ClusterAddresses.TryTree(TreeId, ClusterTreeView.Overview, out var address))
+        {
+            Navigator.NavigateTo(address.WithQuery(
+                ClusterAddresses.TabQuery,
+                string.Equals(tab, ClusterAddresses.SummaryTab, StringComparison.Ordinal) ? null : tab));
+        }
+    }
 }

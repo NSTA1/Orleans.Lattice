@@ -20,6 +20,9 @@ public sealed partial class EstateSmokeTests
 
     private static readonly TimeSpan ReplicationBudget = TimeSpan.FromSeconds(60);
 
+    /// <summary>How long an approved cross-tenant grant may take to reach the tenant gate's compiled snapshot.</summary>
+    private static readonly TimeSpan GrantBudget = TimeSpan.FromSeconds(30);
+
     private ExplorerSample _sample = null!;
 
     [OneTimeSetUp]

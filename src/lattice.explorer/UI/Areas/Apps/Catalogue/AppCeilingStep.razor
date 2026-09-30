@@ -7,7 +7,7 @@
 {
     var requested = AppConsentAnalysis.RequiredOperations(app);
     var scopes = AppConsentAnalysis.RequiredScopes(app).Concat(Flow.Draft.Scopes).Distinct().ToArray();
-    var grants = AppConsentAnalysis.RequestedBridge(app).Concat(Flow.Draft.BridgeGrants).Distinct().ToArray();
+    var grants = AppsPresentation.OrderBridge(AppConsentAnalysis.RequestedBridge(app).Concat(Flow.Draft.BridgeGrants).Distinct()).ToArray();
     var issues = Flow.Issues;
 
     <section class="lt-apps-section" aria-labelledby="lt-apps-ceiling">
@@ -50,7 +50,7 @@
                 @foreach (var grant in grants)
                 {
                     var item = grant;
-                    <LtCheckbox Label="@AppsPresentation.BridgeText(item)"
+                    <LtCheckbox Label="@AppsPresentation.BridgeLabel(item)"
                                 Checked="@Flow.Draft.BridgeGrants.Contains(item)"
                                 CheckedChanged="value => Flow.SetBridge(item, value)" />
                 }
