@@ -40,6 +40,168 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<int, long>? _pendingCheckpointOffsetsByPartition;
 
     /// <summary>
+    /// The exact pre-commit projection-checkpoint state, captured by
+    /// <see cref="CaptureCheckpointCommitUndo"/> so a checkpoint commit whose
+    /// persist throws can be rolled back verbatim (issue #4017).
+    /// </summary>
+    /// <remarks>
+    /// The raw fields are captured rather than the values
+    /// <c>GetPersistedCheckpointForPartition</c> resolves, because that accessor
+    /// folds the issue #2703 born-zero ambiguity: restoring through the setter
+    /// would write an explicit <c>-1</c> and mark the scalar assigned, turning a
+    /// never-assigned partition 0 into an assigned one. A rollback must leave no
+    /// trace at all.
+    /// </remarks>
+    private readonly record struct CheckpointCommitUndo(
+        long ScalarOffset,
+        bool? ScalarAssigned,
+        long[]? OffsetsByPartition);
+
+    /// <summary>
+    /// Captures the projection-checkpoint state a checkpoint commit is about to
+    /// overwrite, so <see cref="RollbackCheckpointCommit"/> can restore it if the
+    /// durable write fails.
+    /// </summary>
+    /// <remarks>
+    /// The per-partition copy is the one allocation this adds, and it is taken
+    /// once per <em>durable</em> checkpoint persist - a coalesced event bounded
+    /// by <c>MaterialiserCheckpointInterval</c> / <c>MaterialiserCheckpointEntries</c>,
+    /// not per applied entry - immediately before an awaited storage write that
+    /// dominates it by orders of magnitude. The array is one <c>long</c> per WAL
+    /// partition.
+    /// </remarks>
+    private CheckpointCommitUndo CaptureCheckpointCommitUndo() => new(
+        state.State.ProjectionCheckpointOffset,
+        state.State.ProjectionCheckpointOffsetAssigned,
+        // The setter mutates this array in place as well as replacing it, so the
+        // undo needs a copy rather than the live reference.
+        state.State.ProjectionCheckpointOffsetsByPartition?.ToArray());
+
+    /// <summary>
+    /// Commits <paramref name="pending"/> into the leaf's persisted-checkpoint
+    /// state and returns the undo token the caller must hand to
+    /// <see cref="RollbackCheckpointCommit"/> if its <c>PersistAsync</c> throws.
+    /// <para>
+    /// This is the whole synchronous prologue both checkpoint-commit sites share
+    /// - the ordinary flush and the graceful-deactivation teardown persist. They
+    /// are split here at the <c>await</c> boundary rather than merged outright:
+    /// each caller keeps its own <c>PersistAsync</c> and its own post-persist
+    /// tail (<c>CompleteCheckpointFlushTailAsync</c> versus the deactivation
+    /// shape, which takes a deadline and publishes the pin ahead of its snapshot
+    /// recheck for issue #3393). So no flag selects a tail, no branch is added to
+    /// the persist path, and nothing here starts a state machine or allocates a
+    /// <c>Task</c> - the constraints the deactivation method's own remarks set
+    /// out when it restated this sequence.
+    /// </para>
+    /// <para>
+    /// Issue #4017. Before this extraction the sequence was duplicated verbatim
+    /// with only a "keep the two commit sequences in step" comment holding them
+    /// together, and that comment demonstrably failed: both copies carried the
+    /// identical durability defect. Single-sourcing the commit and its rollback
+    /// is what makes the invariant structural rather than advisory, and it
+    /// matters more after the fix than before it, because the fragment that
+    /// would otherwise be duplicated is now a rollback on the least-exercised
+    /// path.
+    /// </para>
+    /// </summary>
+    /// <param name="pending">The pending per-partition advance to commit.</param>
+    private CheckpointCommitUndo ApplyPendingCheckpointAdvance(Dictionary<int, long> pending)
+    {
+        var undo = CaptureCheckpointCommitUndo();
+        foreach (var (partition, offset) in pending)
+        {
+            SetPersistedCheckpointForPartition(partition, offset);
+        }
+
+        _pendingCheckpointOffsetsByPartition = null;
+        // A forward checkpoint advance here is driven by cache-resident applies
+        // (foreground writes or WAL tail replay folded into the in-memory cache
+        // before SetCheckpointOffsetAsync queued the advance). Latch that so the
+        // graceful-deactivation snapshot capture knows this activation produced
+        // cache-backed coverage it may safely persist - as opposed to a cold
+        // reactivation whose checkpoint was merely restored from state (see
+        // TryCaptureSnapshotOnDeactivateAsync and the #1535 no-loss gate).
+        _checkpointAdvancedThisActivation = true;
+        // The checkpoint offset is a field of the published ChildDigestSnapshot,
+        // so an advance must propagate upward even when the projection hash
+        // itself is unchanged - the parent's SubtreeHighestCheckpointOffset
+        // aggregate depends on it.
+        MarkDigestDirty();
+        return undo;
+    }
+
+    /// <summary>
+    /// Undoes a checkpoint commit whose <c>PersistAsync</c> threw: restores the
+    /// persisted-checkpoint fields to <paramref name="undo"/> and returns
+    /// <paramref name="pending"/> to <see cref="_pendingCheckpointOffsetsByPartition"/>
+    /// so the advance is retried rather than lost (issue #4017).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this is a durability fix and not hygiene.</b> The commit wrote the
+    /// advance into <c>state.State</c> before awaiting the persist, so a failed
+    /// write left the activation's in-memory checkpoint ahead of the durable one.
+    /// <c>GetPersistedCheckpointForPartition</c> reads <c>state.State</c> and is
+    /// the single accessor every durability decision goes through - including
+    /// <c>ResolveDurablePinForPartition</c>, whose issue #3476 clamp bounds the
+    /// published materialiser pin by it. The WAL GC's offset floor is a minimum
+    /// over those pins, and the pin store merges by monotonic max and can never
+    /// take one back, so a single dropped checkpoint write authorised the GC to
+    /// trim past a prefix that was never durably checkpointed. The next
+    /// activation replays from the checkpoint that actually reached storage,
+    /// finds the WAL trimmed past it, and latches
+    /// <c>LeafProjectionStaleException</c>.
+    /// </para>
+    /// <para>
+    /// Restoring the pending map is the liveness half. Rewinding the checkpoint
+    /// alone would be safe but would discard the advance: the leaf would never
+    /// re-persist that range, its pin would sit at the pre-commit offset for the
+    /// rest of the activation, and the tree's WAL floor would be held there with
+    /// nothing able to lift it. Retaining it makes a failed write cost bounded
+    /// retention until the next flush, which is the correct price.
+    /// </para>
+    /// <para>
+    /// The digest is deliberately left dirty. It is a republish hint, not
+    /// durable state, and clearing it here could suppress a publish an earlier
+    /// mutation still owes.
+    /// </para>
+    /// <para>
+    /// <c>_checkpointAdvancedThisActivation</c> is deliberately NOT rolled back.
+    /// It records that this activation produced cache-backed coverage, which
+    /// remains true after a failed checkpoint write - the applies happened in
+    /// the in-memory cache and the rows are still held. It is what authorises
+    /// the graceful-deactivation snapshot capture, and that capture is precisely
+    /// what turns those in-memory rows into durable coverage for the prefix the
+    /// checkpoint could not record. Rolling it back would suppress the one
+    /// mechanism that makes this failure recoverable; see
+    /// <c>A_faulting_checkpoint_flush_no_longer_cancels_the_snapshot_capture_barrier</c>.
+    /// </para>
+    /// </remarks>
+    private void RollbackCheckpointCommit(in CheckpointCommitUndo undo, Dictionary<int, long> pending)
+    {
+        state.State.ProjectionCheckpointOffset = undo.ScalarOffset;
+        state.State.ProjectionCheckpointOffsetAssigned = undo.ScalarAssigned;
+        state.State.ProjectionCheckpointOffsetsByPartition = undo.OffsetsByPartition;
+
+        // Merge rather than overwrite: an advance queued while the persist was
+        // in flight is newer than the one being restored, and the seam is
+        // monotonic, so the higher offset wins per partition.
+        if (_pendingCheckpointOffsetsByPartition is not { } queued)
+        {
+            _pendingCheckpointOffsetsByPartition = pending;
+            return;
+        }
+
+        foreach (var (partition, offset) in pending)
+        {
+            if (!queued.TryGetValue(partition, out var newer) || offset > newer)
+            {
+                queued[partition] = offset;
+            }
+        }
+    }
+
+    /// <summary>
     /// <see cref="Stopwatch.GetTimestamp"/> reading at the last durable
     /// checkpoint persist. Compared against
     /// <c>MaterialiserCheckpointInterval</c> on each advance, and on each
@@ -420,15 +582,27 @@ internal sealed partial class BPlusLeafGrain
     /// (issues #3393, #3599).
     /// </summary>
     /// <remarks>
-    /// The commit is restated here rather than routed through
-    /// <see cref="FlushPendingCheckpointAsync"/> so the persist path shared
-    /// with every other caller - the coalescing fast path, the idempotent
-    /// re-assert, the interface flush - and its tail
-    /// <see cref="CompleteCheckpointFlushTailAsync"/> stay byte-identical: no
-    /// new argument, no new branch, no change to the steady-state allocation
-    /// profile. Keep the two commit sequences in step; the deactivation
-    /// fixtures pin this one's observable effects (persisted checkpoint,
-    /// digest dirtied and published, the cache-backed-coverage latch).
+    /// The commit prologue is shared with <see cref="FlushPendingCheckpointAsync"/>
+    /// through <see cref="ApplyPendingCheckpointAdvance"/>, and its rollback
+    /// through <see cref="RollbackCheckpointCommit"/>. Only the persist and the
+    /// tail are restated, so the persist path shared with every other caller -
+    /// the coalescing fast path, the idempotent re-assert, the interface flush -
+    /// and its tail <see cref="CompleteCheckpointFlushTailAsync"/> stay
+    /// byte-identical: no new argument, no new branch, no change to the
+    /// steady-state allocation profile.
+    /// <para>
+    /// This previously duplicated the four-line commit with a "keep the two
+    /// commit sequences in step" comment as the only thing holding them
+    /// together. Issue #4017 is the demonstration that this did not work: both
+    /// copies committed into <c>state.State</c> before awaiting the persist, so
+    /// both advertised a durable materialiser pin over an advance that a failed
+    /// write had never recorded. The deactivation fixtures still pin this
+    /// method's observable effects (persisted checkpoint, digest dirtied and
+    /// published, the cache-backed-coverage latch), and
+    /// <c>Failed_deactivation_checkpoint_persist_publishes_no_durable_pin_past_the_last_durably_written_checkpoint</c>
+    /// now pins the failure path here specifically, so a fix or a regression
+    /// reaching only one site is caught.
+    /// </para>
     /// </remarks>
     /// <param name="cancellationToken">The deactivation deadline.</param>
     private async Task FlushPendingCheckpointOnDeactivateAsync(CancellationToken cancellationToken)
@@ -440,15 +614,18 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        foreach (var (partition, offset) in pending)
+        var undo = ApplyPendingCheckpointAdvance(pending);
+        try
         {
-            SetPersistedCheckpointForPartition(partition, offset);
+            await PersistAsync();
         }
-
-        _pendingCheckpointOffsetsByPartition = null;
-        _checkpointAdvancedThisActivation = true;
-        MarkDigestDirty();
-        await PersistAsync();
+        catch
+        {
+            // Issue #4017: the durable write failed, so the advance is NOT
+            // durable and must not be readable as though it were.
+            RollbackCheckpointCommit(in undo, pending);
+            throw;
+        }
 
         // Durable write committed; the tail is contained exactly as the
         // ordinary tail is (#2220).
@@ -474,27 +651,18 @@ internal sealed partial class BPlusLeafGrain
     {
         if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } pending)
         {
-            foreach (var (partition, offset) in pending)
+            var undo = ApplyPendingCheckpointAdvance(pending);
+            try
             {
-                SetPersistedCheckpointForPartition(partition, offset);
+                await PersistAsync();
             }
-            _pendingCheckpointOffsetsByPartition = null;
-            // A forward checkpoint advance here is driven by cache-resident
-            // applies (foreground writes or WAL tail replay folded into the
-            // in-memory cache before SetCheckpointOffsetAsync queued the
-            // advance). Latch that so the graceful-deactivation snapshot
-            // capture knows this activation produced cache-backed coverage it
-            // may safely persist - as opposed to a cold reactivation whose
-            // checkpoint was merely restored from state (see
-            // TryCaptureSnapshotOnDeactivateAsync and the #1535 no-loss gate).
-            _checkpointAdvancedThisActivation = true;
-            // The checkpoint offset is a field of the published
-            // ChildDigestSnapshot, so an advance must propagate upward
-            // even when the projection hash itself is unchanged - the
-            // parent's SubtreeHighestCheckpointOffset aggregate
-            // depends on it.
-            MarkDigestDirty();
-            await PersistAsync();
+            catch
+            {
+                // Issue #4017: the durable write failed, so the advance is NOT
+                // durable and must not be readable as though it were.
+                RollbackCheckpointCommit(in undo, pending);
+                throw;
+            }
             // The durable advance has now committed. Per the #2220
             // invariant, no failure in the post-persist notification tail
             // (cursor report, inline upward digest publish, snapshot
