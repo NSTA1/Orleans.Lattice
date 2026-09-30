@@ -212,17 +212,14 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
         Toggle(cut).Click();
         var focusesBefore = Module.Invocations["focusElement"].Count;
 
-        Field(cut).KeyDown(new KeyboardEventArgs { Key = "ArrowDown" });
+        Field(cut).Focus();
         cut.WaitUntil(() => Assert.That(Options(cut), Has.Length.EqualTo(3)));
-        Field(cut).KeyDown(new KeyboardEventArgs { Key = "Escape" });
-        Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Has.Count.EqualTo(1), "the first Escape closes only the list");
-        Assert.That(Field(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
 
         Field(cut).KeyDown(new KeyboardEventArgs { Key = "Escape" });
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty, "the list is the panel's dropdown, so one Escape closes both");
             Assert.That(Toggle(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
             Assert.That(Module.Invocations["focusElement"], Has.Count.GreaterThan(focusesBefore), "focus goes back to the button through the chrome's safe route");
         });
@@ -269,6 +266,26 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
         cut.WaitUntil(() => Assert.That(
             cut.FindAll(".lt-shell-tenant--stacked [role=option] .lt-combobox__value").Select(value => value.TextContent),
             Is.EqualTo(Reachable)));
+    }
+
+    [Test]
+    public void Pressing_the_toggle_again_closes_the_open_panel_and_its_list()
+    {
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/acme/data/orders");
+        cut.WaitUntil(() => Assert.That(Toggles(cut), Has.Count.EqualTo(1)));
+        Toggle(cut).Click();
+        Field(cut).Focus();
+        cut.WaitUntil(() => Assert.That(Options(cut), Has.Length.EqualTo(3)));
+
+        Field(cut).Blur();
+        Toggle(cut).Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty);
+            Assert.That(Toggle(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
+        });
     }
 
     [Test]

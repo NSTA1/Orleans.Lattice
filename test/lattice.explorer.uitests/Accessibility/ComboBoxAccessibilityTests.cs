@@ -98,6 +98,22 @@ public sealed class ComboBoxAccessibilityTests : UiTestBase
         await Expect(tree).ToHaveAttributeAsync("aria-expanded", "false");
     }
 
+    [Test]
+    public async Task The_address_line_shortcut_still_works_from_inside_a_picker()
+    {
+        // The field keeps its keys from its Blazor ancestors; the chrome's own shortcut
+        // listens on the document and must still hear them.
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, PickerPage, WorldIdentities.Admin);
+        var tree = Tree(page);
+        await Expect(tree).ToBeVisibleAsync();
+        await tree.FocusAsync();
+
+        await page.Keyboard.PressAsync("Control+k");
+
+        await Expect(Shell.AddressInput(page)).ToBeFocusedAsync();
+    }
+
     internal static ILocator Tree(IPage page) => page.GetByRole(AriaRole.Combobox, new() { Name = "Tree", Exact = true });
 
     internal static async Task OpenListAsync(IPage page, ILocator combobox)

@@ -168,10 +168,19 @@ public partial class LtComboBox : IAsyncDisposable
 
     /// <summary>
     /// Raised when Escape is pressed while the list is already closed, so a host -
-    /// a floating panel holding the field - can close too. The field decides this
-    /// on the server when the key arrives, so it holds however quickly the keys come,
-    /// unlike a host's own handler, which a stale stop-propagation flag can starve.
+    /// a floating panel holding the field - can close too. With
+    /// <see cref="OpenOnFocus"/> the list is the field's dropdown rather than a
+    /// suggestion, so the one Escape that closes it is raised here as well.
     /// </summary>
+    /// <remarks>
+    /// The field keeps every key it receives from its ancestors' key handlers and
+    /// decides on the server, when the key arrives, whether Escape dismisses its
+    /// host, so this holds however quickly the keys come. A render-time
+    /// stop-propagation flag that followed the list's state went stale between
+    /// two quick presses and swallowed the second. Left unset inside an
+    /// <see cref="LtDialog"/>, the dismissal closes that dialog, as Escape
+    /// anywhere else in it does.
+    /// </remarks>
     [Parameter]
     public EventCallback OnDismiss { get; set; }
 
@@ -189,6 +198,9 @@ public partial class LtComboBox : IAsyncDisposable
 
     [Inject]
     internal IJSRuntime JS { get; set; } = default!;
+
+    [CascadingParameter]
+    private LtDialog? Dialog { get; set; }
 
     /// <summary>The input element's id, for a caller that needs to point at it.</summary>
     public string InputId => _inputId;
@@ -453,9 +465,9 @@ public partial class LtComboBox : IAsyncDisposable
             case "Escape":
                 var listed = IsListOpen;
                 Close();
-                if (!listed)
+                if (!listed || OpenOnFocus)
                 {
-                    await OnDismiss.InvokeAsync().ConfigureAwait(true);
+                    await DismissAsync().ConfigureAwait(true);
                 }
 
                 break;
@@ -471,6 +483,11 @@ public partial class LtComboBox : IAsyncDisposable
                 break;
         }
     }
+
+    private Task DismissAsync() =>
+        OnDismiss.HasDelegate ? OnDismiss.InvokeAsync()
+        : Dialog is { } dialog ? dialog.DismissFromFieldAsync()
+        : Task.CompletedTask;
 
     private async Task OpenOrMoveAsync(int step)
     {

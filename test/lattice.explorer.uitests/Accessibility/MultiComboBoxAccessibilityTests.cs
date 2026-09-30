@@ -57,6 +57,34 @@ public sealed class MultiComboBoxAccessibilityTests : UiTestBase
         await AxeConformance.SweepAsync(page, "a multi-value field with chosen values under forced colours");
     }
 
+    [Test]
+    public async Task Two_quick_Escapes_in_a_dialog_field_close_its_list_and_then_the_dialog()
+    {
+        // Issue #3986: Escape from a field inside a dialog is decided by the field on the
+        // server, never by a render-time stop-propagation flag that could go stale between
+        // two quick presses. This guards the outcome - list, then dialog, closed - with no
+        // wait between the keys. The stale-flag race itself did not reproduce locally in a
+        // dialog; it did in the tenant panel, which now closes on LtComboBox.OnDismiss.
+        var world = await UiHosts.TenantWorldAsync();
+        var page = await OpenAsync(world.Head, "/tenancy", WorldIdentities.Admin);
+        await Expect(Shell.Heading(page)).ToHaveTextAsync("Tenancy");
+        var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "New tenant" });
+
+        for (var round = 0; round < 6; round++)
+        {
+            await page.GetByRole(AriaRole.Button, new() { Name = "New tenant", Exact = true }).ClickAsync();
+            var field = page.GetByRole(AriaRole.Combobox, new() { Name = FieldName, Exact = true });
+            await field.FocusAsync();
+            await page.Keyboard.PressAsync("ArrowDown");
+            await Expect(field).ToHaveAttributeAsync("aria-expanded", "true");
+
+            await page.Keyboard.PressAsync("Escape");
+            await page.Keyboard.PressAsync("Escape");
+
+            await Expect(dialog).ToHaveCountAsync(0, new() { Timeout = 5000 });
+        }
+    }
+
     private static async Task<ILocator> OpenWithChipsAsync(IPage page)
     {
         await page.GetByRole(AriaRole.Button, new() { Name = "New tenant", Exact = true }).ClickAsync();

@@ -33,7 +33,7 @@
                @bind:set="OnTextChangedAsync"
                @bind:event="oninput"
                @onkeydown="OnKeyDownAsync"
-               @onkeydown:stopPropagation="@IsListOpen"
+               @onkeydown:stopPropagation="true"
                @onclick="OnClickAsync"
                @onfocus="OnFocusAsync"
                @onblur="OnBlurAsync" />

@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.AspNetCore.Components.Web;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
@@ -136,6 +137,67 @@ public sealed partial class LtComboBoxTests
             Assert.That(dismissed, Is.EqualTo(1), "the next Escape asks the host to close");
         });
     }
+
+    [Test]
+    public void With_OpenOnFocus_one_Escape_closes_the_list_and_asks_the_host_to_dismiss()
+    {
+        // The list is the field's dropdown, so Escape is not spent closing it first.
+        var dismissed = 0;
+        var cut = RenderBox(new FakeSuggestionSource(Trees), p => p.Add(x => x.OpenOnFocus, true).Add(x => x.OnDismiss, () => dismissed++));
+        cut.Find("input").Focus();
+        Assert.That(cut.Find("input").GetAttribute("aria-expanded"), Is.EqualTo("true"));
+
+        Key(cut, "Escape");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dismissed, Is.EqualTo(1));
+            Assert.That(cut.Find("input").GetAttribute("aria-expanded"), Is.EqualTo("false"));
+        });
+    }
+
+    [Test]
+    public void Inside_a_dialog_Escape_on_a_closed_list_closes_the_dialog_exactly_once()
+    {
+        // The field keeps its keys from its ancestors, so the dialog is closed by the
+        // field alone: never twice, and never starved by a stale propagation flag.
+        var closes = 0;
+        var cut = RenderInDialog(() => closes++, dismissOnEscape: true);
+        var input = cut.Find("input");
+
+        input.Input("crm/");
+        input.KeyDown(new KeyboardEventArgs { Key = "Escape" });
+        var afterListEscape = closes;
+        input.KeyDown(new KeyboardEventArgs { Key = "Escape" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterListEscape, Is.Zero, "the first Escape closes only the list");
+            Assert.That(closes, Is.EqualTo(1), "the next one closes the dialog, once");
+        });
+    }
+
+    [Test]
+    public void Inside_a_dialog_that_ignores_Escape_the_field_does_not_close_it()
+    {
+        var closes = 0;
+        var cut = RenderInDialog(() => closes++, dismissOnEscape: false);
+
+        cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+
+        Assert.That(closes, Is.Zero);
+    }
+
+    private IRenderedComponent<LtDialog> RenderInDialog(Action closed, bool dismissOnEscape) =>
+        Render<LtDialog>(p => p
+            .Add(x => x.Open, true)
+            .Add(x => x.Title, "New tenant")
+            .Add(x => x.DismissOnEscape, dismissOnEscape)
+            .Add(x => x.OpenChanged, (bool open) => { if (!open) { closed(); } })
+            .AddChildContent<LtComboBox>(box => box
+                .Add(x => x.Label, "Tree")
+                .Add(x => x.Noun, "tree")
+                .Add(x => x.Source, new FakeSuggestionSource(Trees))));
 
     [Test]
     public void A_suggestion_is_not_current_unless_it_says_so()

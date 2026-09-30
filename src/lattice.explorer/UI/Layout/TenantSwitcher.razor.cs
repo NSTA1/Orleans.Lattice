@@ -26,8 +26,8 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// In the header it is a disclosure button: Enter or a click opens the panel and
 /// moves focus into the field, which lists every reachable tenant at once, the
 /// active one marked; typing filters the list, Down and Up move through it, Enter
-/// switches, and Escape closes the list and then the panel, returning focus to the
-/// button. Opening it closes any other header panel. <see cref="Stacked"/> renders
+/// switches, and Escape closes the list and the panel together, returning focus to
+/// the button. Opening it closes any other header panel. <see cref="Stacked"/> renders
 /// the field alone, for the compact directory sheet, where focusing it lists the
 /// tenants in the same way.
 /// </para>
@@ -162,9 +162,9 @@ public partial class TenantSwitcher : IDisposable
         }
     }
 
-    // The field keeps Escape while its list is open; once the list is closed, the
-    // field reports the next Escape and the panel closes, putting focus back on the
-    // button. The field is the panel's only focusable element.
+    // The field reports Escape - its list is the panel's dropdown, so one Escape
+    // closes both - and the panel closes, putting focus back on the button. The
+    // field is the panel's only focusable element.
     private async Task DismissAsync()
     {
         _open = false;
