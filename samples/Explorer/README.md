@@ -229,7 +229,10 @@ dotnet run --project samples/Explorer/Explorer.csproj -- --explorer-region west
 ```
 
 The console is still served on `http://localhost:5080/`, but dials `west`'s
-endpoint, `http://localhost:5198`. Replication then shows `west`'s side of the
+endpoint, `http://localhost:5198`. The console's endpoint is set by the sample,
+not in the browser: the sample leaves `AllowInteractiveEndpointConfiguration`
+off, so the header offers no **Connection settings** and there is no connection
+test. Restart with a different `--explorer-region` to change it. Replication then shows `west`'s side of the
 links, and Cluster names `west` as this region. Both regions seed the same
 identities, policy and tenants, and the data seeded in `east` has replicated.
 
