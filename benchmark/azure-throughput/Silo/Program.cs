@@ -98,8 +98,8 @@
 //                           docs/lattice/wal-tuning.md.
 //   BENCH_SHARD_COUNT       Override the tree's physical shard count at startup via
 //                           ILattice.ReshardAsync. 0 = keep the library default (64).
-//                           Notes: (a) ReshardAsync is grow-only against a populated
-//                           tree (target must be > current shard count); (b) against a
+//                           Notes: (a) against a populated tree a larger target grows
+//                           it and a smaller one starts an online shrink; (b) against a
 //                           freshly-registered/empty tree any target works via the
 //                           empty-tree fast-path and returns synchronously; (c) the
 //                           harness polls IsReshardCompleteAsync before opening the TCP
@@ -1090,10 +1090,10 @@ internal sealed class TcpIngestService(
         {
             // Layer 3 silos must run with BENCH_SHARD_COUNT=0. In a
             // multi-replica cluster, racing this block from every silo
-            // makes the first replica grow the tree and the rest hit the
-            // grow-only ArgumentOutOfRangeException path below, crashlooping
-            // otherwise healthy replicas. The Orleans-client producer owns
-            // the one-shot reshard in that topology.
+            // makes every replica submit the same reshard concurrently and
+            // each wait out the migration before it listens. The
+            // Orleans-client producer owns the one-shot reshard in that
+            // topology.
             // The very first call into a freshly-activated LatticeGrain
             // races the Orleans client directory cache and routinely fails
             // with OrleansMessageRejectionException ("Unable to create
@@ -1124,8 +1124,7 @@ internal sealed class TcpIngestService(
                 }
                 catch (ArgumentOutOfRangeException ex)
                 {
-                    // Grow-only violation (target <= current shard count on a
-                    // populated tree) or above the virtual-shard-space ceiling.
+                    // Target below 2 or above the virtual-shard-space ceiling.
                     // Not retriable - and not silently survivable either:
                     // the bench would otherwise measure the previously-pinned
                     // shard count, which is exactly the misconfiguration the

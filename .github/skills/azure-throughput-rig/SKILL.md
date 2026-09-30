@@ -341,7 +341,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC` | library default (12) | Per-commit deadline for the PhaseTwoWorker's manifest commit. `0` = unbounded; `>0` = finite deadline (a hung commit becomes a bounded timeout the resync path recovers). |
 | `BENCH_DIGEST_COALESCING_WINDOW_MS` | 5 | Coalescing window (ms) for digest writes. |
 | `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` | library default | Toggle the hot-path candidate-row elimination optimisation. |
-| `BENCH_SHARD_COUNT` | 0 (library default, 64) | Override the tree's physical shard count via `ILattice.ReshardAsync` at startup (grow-only against a populated tree; any target works against an empty tree). |
+| `BENCH_SHARD_COUNT` | 0 (library default, 64) | Override the tree's physical shard count via `ILattice.ReshardAsync` at startup (a smaller target on a populated tree starts an online shrink, which the silo waits out before listening; any target works against an empty tree). |
 
 ### WAL transport hygiene
 

@@ -9086,7 +9086,7 @@
           "name": "targetShardCount",
           "type": "int",
           "required": true,
-          "notes": "Desired physical shard count. Targets below the current count are rejected; an equal target is a no-op; the target must be at least 2 and at most the smaller of 4096 and the tree's virtual slot count except an empty tree may be re-pinned below the current count."
+          "notes": "Desired physical shard count. A larger target grows the tree and a smaller one shrinks it; an equal target is a no-op; the target must be at least 2 and at most the smaller of 4096 and the tree's virtual slot count."
         },
         {
           "name": "region",
@@ -9116,7 +9116,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "A request for the current physical shard count, or a matching in-flight target, is a no-op; a target below the current count is rejected except for the documented empty-tree re-pin case.",
+        "basis": "A request for the current physical shard count, or a matching in-flight target, is a no-op; a different in-flight target is rejected.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {

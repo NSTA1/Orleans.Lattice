@@ -231,8 +231,22 @@ internal sealed class TreeShardConsolidationGrain(
         var registry = grainFactory.GetLatticeRegistry();
         var resolved = await optionsResolver.ResolveAsync(TreeId);
 
-        var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+        var currentMap = await registry.GetShardMapAsync(TreeId);
+        if (currentMap is null)
+        {
+            // A tree that has never changed topology has no persisted map, and
+            // its readers take a version-0 fast path that counts every entry on
+            // every shard without asking which slots each owns - sound only
+            // while no shard holds another's entries. A fold breaks that from
+            // the moment the survivor absorbs its first drained copy, while the
+            // map would still read version 0. Materialise the map first, so any
+            // reader that overlaps the fold sees a version change and falls back
+            // to slot-owned counting. An empty reassignment persists the live map
+            // (or this default) inside one registry call, so it cannot erase a
+            // concurrent split's reassignment the way a get-then-set could.
+            var defaultMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            currentMap = await registry.ReassignSlotsAsync(TreeId, [], survivorShardIndex, defaultMap);
+        }
 
         if (!ShardConsolidationPlanner.TryPlan(
                 currentMap, donorShardIndex, survivorShardIndex, out var plan, out var reason))

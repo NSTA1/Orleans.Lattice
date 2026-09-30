@@ -5671,7 +5671,7 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#ReshardAsync"
       },
       "concurrency": {
-        "rule": "Populated trees grow only; empty trees can be re-pinned directly to any valid count, and concurrent requests for a different in-flight target are rejected.",
+        "rule": "Populated trees grow by online splits and shrink by online shard consolidation; empty trees can be re-pinned directly to any valid count, and concurrent requests for a different in-flight target are rejected.",
         "source": "src/lattice/BPlusTree/ILattice.cs#ReshardAsync"
       },
       "sources": [
