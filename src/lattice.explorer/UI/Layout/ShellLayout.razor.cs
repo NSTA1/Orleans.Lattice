@@ -98,6 +98,9 @@ public partial class ShellLayout : IAsyncDisposable
     [Inject]
     internal ExplorerTenantSwitch TenantSwitch { get; set; } = default!;
 
+    [Inject]
+    internal ShellHeaderPanels HeaderPanels { get; set; } = default!;
+
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
     // The compact modifier is how a stylesheet reacts to the band without a width
@@ -500,9 +503,10 @@ public partial class ShellLayout : IAsyncDisposable
 
     // Any session modal - asked for from anywhere, or the re-authentication
     // interstitial raised off the renderer by Core - closes both compact sheets
-    // before it opens, so modals never stack.
+    // and every header panel before it opens, so modals never stack.
     private void OnSessionOverlayOpening(SessionOverlayKind kind) => _ = InvokeAsync(() =>
     {
+        HeaderPanels.Opening(Session);
         if (_menuOpen || _directoryOpen)
         {
             _menuOpen = false;

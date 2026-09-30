@@ -33,6 +33,34 @@ public sealed class TenantSwitcherAccessibilityTests : UiTestBase
     }
 
     [Test]
+    public async Task Opening_the_switcher_lists_every_tenant_inside_its_panel_with_the_active_one_marked_under_forced_colours()
+    {
+        // Issue #3986: a dropdown, not an empty field - and its list stays inside the panel's border.
+        var world = await UiHosts.TenantWorldAsync();
+        var page = await OpenAsync(world.Head, "/data", WorldIdentities.Admin, configure: options => options.ForcedColors = ForcedColors.Active);
+        var toggle = TenantSwitcherJourneyTests.Toggle(page);
+        await Expect(toggle).ToBeVisibleAsync();
+        Assert.That(await page.EvaluateAsync<bool>("() => matchMedia('(forced-colors: active)').matches"), Is.True,
+            "The premise failed: the browser does not report forced colours.");
+
+        await toggle.ClickAsync();
+
+        await Expect(TenantSwitcherJourneyTests.Options(page)).ToHaveTextAsync(["default", "acme", "globex"], new() { UseInnerText = true });
+        await Shell.WaitForMotionToSettleAsync(page);
+        var panel = await page.Locator(".lt-shell-tenant__panel").BoundingBoxAsync();
+        var list = await page.Locator(".lt-shell-tenant__panel [role=listbox]").BoundingBoxAsync();
+        Assert.That(list!.Y + list.Height, Is.LessThanOrEqualTo(panel!.Y + panel.Height + 0.5), "The list overflows the panel's border.");
+        Assert.That(list.X + list.Width, Is.LessThanOrEqualTo(panel.X + panel.Width + 0.5), "The list overflows the panel's border.");
+
+        var active = page.Locator(".lt-shell-tenant__panel [role=option]").First.Locator(".lt-node--join");
+        await Expect(active).ToHaveCountAsync(1);
+        var mark = await active.EvaluateAsync<string>("n => getComputedStyle(n).backgroundColor");
+        var canvas = await page.EvaluateAsync<string>("() => getComputedStyle(document.body).backgroundColor");
+        Assert.That(mark, Is.Not.EqualTo(canvas).And.Not.EqualTo("rgba(0, 0, 0, 0)"), "Under forced colours the active tenant's node is not marked.");
+        await AxeConformance.SweepAsync(page, "an open tenant switcher under forced colours");
+    }
+
+    [Test]
     public async Task At_phone_width_the_switcher_is_in_the_directory_sheet()
     {
         var world = await UiHosts.TenantWorldAsync();

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Session;
 using Orleans.Lattice.Explorer.Tests.UI.Design;
 
@@ -34,6 +35,7 @@ public abstract class SessionTestContext : ShellDesignTestContext
         Services.AddSingleton<IConnectionTester>(Tester);
         Services.AddSingleton(_ => _options);
         Services.AddScoped<SessionChromeState>();
+        Services.AddScoped<ShellHeaderPanels>();
         Services.AddSingleton<AntiforgeryStateProvider, FakeAntiforgeryStateProvider>();
         Services.AddSingleton<IExplorerAuthMethod, BasicExplorerAuthMethod>();
     }

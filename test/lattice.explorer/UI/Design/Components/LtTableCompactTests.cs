@@ -201,11 +201,15 @@ public sealed class LtTableCompactTests : ShellDesignTestContext
     }
 
     [Test]
-    public void An_empty_list_says_so()
+    public void An_empty_list_shows_its_empty_state_alone()
     {
         var cut = RenderOrders(LtBreakpoint.Compact, rows: []);
 
-        Assert.That(cut.Find(".lt-table-list__empty").TextContent.Trim(), Is.EqualTo("No rows."));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No rows."));
+            Assert.That(cut.FindAll(".lt-table-list__rows, .lt-table-list__sort"), Is.Empty, "no ruled list and no sort control frame an empty list");
+        });
     }
 
     [Test]

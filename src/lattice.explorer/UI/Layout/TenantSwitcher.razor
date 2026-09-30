@@ -1,7 +1,8 @@
 @*
     The top bar's tenant switcher. In the header it is a disclosure button naming
     the active tenant that opens a hairline-framed panel holding a type-ahead
-    field; stacked, in the compact directory sheet, it is the field itself. It
+    field that lists every tenant as soon as it has focus; stacked, in the
+    compact directory sheet, it is the field itself. It
     renders nothing at all unless the caller may switch between two or more
     tenants.
 *@
@@ -16,6 +17,8 @@
                         Source="_choices"
                         Noun="tenant"
                         Limit="Limit"
+                        OpenOnFocus="true"
+                        Placeholder="@FilterPlaceholder"
                         Hint="@ActiveHint"
                         OnCommit="ChooseAsync"
                         data-lt-command="@ChromeCommands.TenantSwitchId" />
@@ -37,14 +40,17 @@
 
             @if (_open)
             {
-                <div id="@_panelId" class="lt-shell-menu lt-shell-tenant__panel" role="group" aria-label="Switch tenant" @onkeydown="OnPanelKeyDownAsync">
+                <div id="@_panelId" class="lt-shell-menu lt-shell-tenant__panel" role="group" aria-label="Switch tenant">
                     <LtComboBox @ref="_field"
                                 Label="Switch to tenant"
                                 Source="_choices"
                                 Noun="tenant"
                                 Limit="Limit"
+                                OpenOnFocus="true"
+                                Placeholder="@FilterPlaceholder"
                                 Hint="@ActiveHint"
-                                OnCommit="ChooseAsync" />
+                                OnCommit="ChooseAsync"
+                                OnDismiss="DismissAsync" />
                 </div>
             }
         </div>

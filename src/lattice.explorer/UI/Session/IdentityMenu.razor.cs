@@ -5,6 +5,7 @@ using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Layout;
 
 namespace Orleans.Lattice.Explorer.UI.Session;
 
@@ -32,6 +33,11 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// it is active. With no tenant established it says so, rather than implying the
 /// caller sees everything: the view fails closed.
 /// </para>
+/// <para>
+/// It is one of the header's panels (<see cref="ShellHeaderPanels"/>): opening it
+/// closes the appearance menu or tenant switcher, and it closes when another
+/// panel or a session modal opens.
+/// </para>
 /// </remarks>
 public partial class IdentityMenu
 {
@@ -42,6 +48,9 @@ public partial class IdentityMenu
 
     /// <summary>Creates the menu, binding its dialog callback once rather than per render.</summary>
     public IdentityMenu() => _openChanged = EventCallback.Factory.Create<bool>(this, open => _open = open);
+
+    [Inject]
+    internal ShellHeaderPanels Panels { get; set; } = default!;
 
     [Inject]
     private IExplorerAuthSession Auth { get; set; } = default!;
@@ -70,6 +79,7 @@ public partial class IdentityMenu
     {
         Auth.AuthenticationChanged -= OnChanged;
         State.Changed -= OnChanged;
+        Panels.Opened -= OnPanelOpened;
     }
 
     /// <inheritdoc />
@@ -79,11 +89,25 @@ public partial class IdentityMenu
         TenantView = Services.GetService<IExplorerTenantView>();
         Auth.AuthenticationChanged += OnChanged;
         State.Changed += OnChanged;
+        Panels.Opened += OnPanelOpened;
     }
 
     private void OpenSignIn() => State.OpenSignIn();
 
-    private void Open() => _open = true;
+    private void Open()
+    {
+        _open = true;
+        Panels.Opening(this);
+    }
+
+    private void OnPanelOpened(object panel)
+    {
+        if (_open && !ReferenceEquals(panel, this))
+        {
+            _open = false;
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
 
     private async Task SignOutAsync()
     {
