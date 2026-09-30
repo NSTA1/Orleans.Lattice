@@ -139,6 +139,18 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, TenantPolicyEpochSubscription>());
 
+        // Every per-silo tenant-registry snapshot the subscription keeps current:
+        // the compiled policy here, and the residency and placement snapshots
+        // registered below (issues #4051, #4052). Like the IMutationObserver
+        // factories, these are not idempotent under TryAdd and rely on the
+        // once-only guard above.
+        builder.Services.AddSingleton<ITenantEpochSubscriber>(
+            sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
+        builder.Services.AddSingleton<ITenantEpochSubscriber>(
+            sp => sp.GetRequiredService<TenantResidencySnapshotMaintainer>());
+        builder.Services.AddSingleton<ITenantEpochSubscriber>(
+            sp => sp.GetRequiredService<TenantPlacementSnapshotMaintainer>());
+
         // The tenant-policy decision engine: the in-memory decision surface that
         // resolves a subject's allowed tenants, validates an active tenant, and
         // resolves cross-tenant grants against the compiled snapshot. It is live on
@@ -234,7 +246,8 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.Replace(
             ServiceDescriptor.Singleton<ITenantResidencyResolver>(
                 sp => new TenantResidencyResolver(
-                    sp.GetRequiredService<TenantResidencySnapshotMaintainer>())));
+                    sp.GetRequiredService<TenantResidencySnapshotMaintainer>(),
+                    sp.GetRequiredService<ITenantRegistry>())));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, TenantResidencyWarmupHostedService>());
 

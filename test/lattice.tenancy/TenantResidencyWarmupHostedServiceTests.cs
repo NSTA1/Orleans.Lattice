@@ -53,6 +53,7 @@ public sealed class TenantResidencyWarmupHostedServiceTests
             registry,
             Options.Create(new ClusterOptions { ClusterId = "region-a" }),
             Array.Empty<ITenantRegionStatusChangeListener>(),
+            TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);
 
     private static TenantResidencyWarmupHostedService Service(

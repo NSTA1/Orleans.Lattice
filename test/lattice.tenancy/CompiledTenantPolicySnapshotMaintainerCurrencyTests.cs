@@ -119,7 +119,7 @@ public sealed class CompiledTenantPolicySnapshotMaintainerCurrencyTests
         maintainer.ApplyLease(
             new TenantPolicyEpochLease(
                 new TenantPolicyEpoch(IncarnationA, 0),
-                TimeSpan.FromMilliseconds(CompiledTenantPolicySnapshotMaintainer.CoarseClockAllowanceMilliseconds)),
+                TimeSpan.FromMilliseconds(TenantSnapshotCurrency.CoarseClockAllowanceMilliseconds)),
             TimeProvider.System.GetTimestamp());
         await maintainer.BackgroundRebuild;
 

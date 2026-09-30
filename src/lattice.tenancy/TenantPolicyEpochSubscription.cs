@@ -6,12 +6,13 @@ namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
 /// The silo-hosted half of the cross-silo tenant-policy currency protocol (issue
-/// #4030). It keeps this silo's <see cref="CompiledTenantPolicySnapshotMaintainer"/>
-/// leased by, and subscribed to, the cluster-wide
-/// <see cref="ITenantPolicyEpochGrain"/>; applies every epoch the grain pushes;
-/// treats any silo declared dead by cluster membership as a possible unpublished
-/// registry write; and warms the snapshot at start-up so a cold silo does not
-/// report registered tenants as unregistered.
+/// #4030, #4051, #4052). It keeps every per-silo tenant-registry snapshot (each
+/// <see cref="ITenantEpochSubscriber"/>: the compiled tenant-policy, residency and
+/// placement snapshots) leased by, and subscribed to, the cluster-wide
+/// <see cref="ITenantPolicyEpochGrain"/>; applies every epoch the grain pushes to
+/// each of them; treats any silo declared dead by cluster membership as a possible
+/// unpublished registry write; and warms every snapshot at start-up so a cold silo
+/// does not report registered tenants as unregistered.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -32,8 +33,9 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(1);
 
     private readonly IGrainFactory _grainFactory;
-    private readonly CompiledTenantPolicySnapshotMaintainer _maintainer;
+    private readonly ITenantEpochSubscriber[] _snapshots;
     private readonly IClusterMembershipService _membership;
+    private readonly SiloAddress _siloAddress;
     private readonly TimeProvider _time;
     private readonly TimeSpan _leaseDuration;
     private readonly ILogger<TenantPolicyEpochSubscription> _logger;
@@ -46,30 +48,34 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
 
     /// <summary>Initializes the subscription.</summary>
     /// <param name="grainFactory">The silo's grain factory.</param>
-    /// <param name="maintainer">This silo's compiled tenant-policy snapshot maintainer.</param>
+    /// <param name="snapshots">This silo's tenant-registry snapshots kept current by the epoch.</param>
     /// <param name="membership">Cluster membership, watched for silos declared dead.</param>
+    /// <param name="localSilo">This silo's details, whose address identifies it to the epoch grain.</param>
     /// <param name="timeProvider">The clock the lease and retry delays are measured on.</param>
     /// <param name="options">The tenancy options carrying the lease duration.</param>
     /// <param name="logger">The logger for renewal and warm-up failures.</param>
     /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
     public TenantPolicyEpochSubscription(
         IGrainFactory grainFactory,
-        CompiledTenantPolicySnapshotMaintainer maintainer,
+        IEnumerable<ITenantEpochSubscriber> snapshots,
         IClusterMembershipService membership,
+        ILocalSiloDetails localSilo,
         TimeProvider timeProvider,
         IOptions<LatticeTenancyOptions> options,
         ILogger<TenantPolicyEpochSubscription> logger)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
-        ArgumentNullException.ThrowIfNull(maintainer);
+        ArgumentNullException.ThrowIfNull(snapshots);
         ArgumentNullException.ThrowIfNull(membership);
+        ArgumentNullException.ThrowIfNull(localSilo);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _grainFactory = grainFactory;
-        _maintainer = maintainer;
+        _snapshots = [.. snapshots];
         _membership = membership;
+        _siloAddress = localSilo.SiloAddress;
         _time = timeProvider;
         _leaseDuration = options.Value.PolicySnapshotLeaseDuration;
         _logger = logger;
@@ -120,12 +126,16 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
 
     /// <inheritdoc />
     /// <remarks>
-    /// Marks the snapshot out of date and schedules its rebuild synchronously, so
+    /// Marks every snapshot out of date and schedules its rebuild synchronously, so
     /// the completed task is a true acknowledgement to the epoch grain.
     /// </remarks>
     public Task OnEpochAdvancedAsync(TenantPolicyEpoch epoch)
     {
-        _maintainer.ObserveEpoch(epoch);
+        foreach (var snapshot in _snapshots)
+        {
+            snapshot.ObserveEpoch(epoch);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -136,7 +146,11 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
         {
             try
             {
-                await _maintainer.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
+                foreach (var snapshot in _snapshots)
+                {
+                    await snapshot.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -165,8 +179,12 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
             var requestedAt = _time.GetTimestamp();
             try
             {
-                var lease = await grain.LeaseAsync(reference).WaitAsync(cancellationToken).ConfigureAwait(false);
-                _maintainer.ApplyLease(lease, requestedAt);
+                var lease = await grain.LeaseAsync(reference, _siloAddress).WaitAsync(cancellationToken).ConfigureAwait(false);
+                foreach (var snapshot in _snapshots)
+                {
+                    snapshot.ApplyLease(lease, requestedAt);
+                }
+
                 delay = lease.Duration / 3;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -212,7 +230,7 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
                     dead = current;
                     if (newlyDead)
                     {
-                        _maintainer.InvalidateClusterView();
+                        InvalidateAll();
                     }
                 }
 
@@ -227,13 +245,21 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
                 // A silo that missed membership updates may have missed a death, so
                 // treat the gap as one.
                 _logger.LogDebug(ex, "Watching cluster membership for the tenant-policy snapshot failed; retrying.");
-                _maintainer.InvalidateClusterView();
+                InvalidateAll();
             }
 
             if (!await DelayAsync(MaxRetryDelay, cancellationToken).ConfigureAwait(false))
             {
                 return;
             }
+        }
+    }
+
+    private void InvalidateAll()
+    {
+        foreach (var snapshot in _snapshots)
+        {
+            snapshot.InvalidateClusterView();
         }
     }
 
