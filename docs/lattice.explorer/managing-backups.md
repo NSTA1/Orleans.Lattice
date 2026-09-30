@@ -36,7 +36,7 @@ The Backups area is tenant-scoped. These route forms exist in the shipped pages:
 
 ## Navigation row
 
-Every Backups page has the Backups page row:
+The Catalogue, Schedules, Health and Maintenance pages share the Backups page row:
 
 - **Catalogue**;
 - **Schedules**;
@@ -44,6 +44,8 @@ Every Backups page has the Backups page row:
 - **Maintenance**.
 
 The Health address is not found when health monitoring is unavailable.
+
+A page below them (capturing a backup, one backup's page, and an operation's status page) is none of the row's pages, so instead of a row with nothing selected it shows a **Back to the catalogue** link.
 
 ## Catalogue
 
