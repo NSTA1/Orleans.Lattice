@@ -14,6 +14,20 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 public sealed class TenantSwitcherJourneyTests : UiTestBase
 {
     [Test]
+    public async Task Arriving_at_another_tenants_address_by_url_scopes_to_it_without_a_notice()
+    {
+        // #3987: every plain URL navigation into a tenant raised "Scoped to tenant X.",
+        // which stayed on screen over the page until it was dismissed.
+        var world = await UiHosts.TenantWorldAsync();
+        var page = await OpenAsync(world.Head, "/t/acme/data", WorldIdentities.Admin);
+
+        await Expect(Toggle(page)).ToContainTextAsync("acme");
+        await Expect(Shell.Heading(page)).ToHaveTextAsync("Data");
+        await Expect(Shell.Announcement(page)).ToHaveCountAsync(0);
+        await Expect(Shell.Toasts(page)).ToHaveCountAsync(0);
+    }
+
+    [Test]
     public async Task An_operator_switches_tenant_from_the_top_bar_by_keyboard()
     {
         var world = await UiHosts.TenantWorldAsync();
@@ -41,7 +55,8 @@ public sealed class TenantSwitcherJourneyTests : UiTestBase
         await page.Keyboard.PressAsync("Enter");
 
         await Expect(page).ToHaveURLAsync(world.Head.Url("/t/acme/data"));
-        await Expect(Shell.ToastMessages(page).Filter(new() { HasText = "Scoped to tenant acme." })).ToHaveCountAsync(1);
+        await Expect(Shell.Announcement(page)).ToHaveTextAsync("Scoped to tenant acme.");
+        await Expect(Shell.Toasts(page)).ToHaveCountAsync(0);
         await Expect(toggle).ToContainTextAsync("acme");
         await Expect(toggle).ToBeFocusedAsync();
     }
@@ -62,7 +77,8 @@ public sealed class TenantSwitcherJourneyTests : UiTestBase
         await page.Keyboard.PressAsync("ArrowDown");
         await page.Keyboard.PressAsync("Enter");
 
-        await Expect(Shell.ToastMessages(page).Filter(new() { HasText = "Scoped to tenant globex." })).ToHaveCountAsync(1);
+        await Expect(Shell.Announcement(page)).ToHaveTextAsync("Scoped to tenant globex.");
+        await Expect(Shell.Toasts(page)).ToHaveCountAsync(0);
         await Expect(toggle).ToContainTextAsync("globex");
         await Expect(page).ToHaveURLAsync(world.Head.Url("/cluster"));
         await Expect(Shell.Heading(page)).ToHaveTextAsync("Cluster");

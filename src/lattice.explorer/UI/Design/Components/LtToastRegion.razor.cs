@@ -9,13 +9,15 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// </summary>
 /// <remarks>
 /// Each toast names its tone in words ("Done", "Failed") as well as colour, and
-/// stays until dismissed. The region itself is always in the document, empty or
+/// stays until dismissed. The service's latest announcement is read out from the
+/// same region but never drawn. The region itself is always in the document, empty or
 /// not, because a live region added at the same moment as its content is often
 /// not announced.
 /// </remarks>
 public partial class LtToastRegion : IDisposable
 {
     private IReadOnlyList<LtToast> _toasts = [];
+    private LtToast? _announcement;
 
     /// <summary>The region's accessible name. Defaults to "Notifications".</summary>
     [Parameter]
@@ -28,6 +30,7 @@ public partial class LtToastRegion : IDisposable
     protected override void OnInitialized()
     {
         _toasts = Toasts.Toasts;
+        _announcement = Toasts.Announcement;
         Toasts.Changed += HandleChanged;
     }
 
@@ -59,6 +62,7 @@ public partial class LtToastRegion : IDisposable
     private void HandleChanged() => _ = InvokeAsync(() =>
     {
         _toasts = Toasts.Toasts;
+        _announcement = Toasts.Announcement;
         StateHasChanged();
     });
 }

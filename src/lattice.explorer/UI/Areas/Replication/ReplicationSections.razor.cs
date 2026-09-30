@@ -6,7 +6,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 
 /// <summary>
 /// The Replication area's section links: the estate and the enrolled trees, with the
-/// current section marked and the active filters carried across.
+/// current section marked and the active filters carried across. One tree's page is
+/// below both, so it shows the way back to the enrolled trees instead.
 /// </summary>
 public partial class ReplicationSections
 {
@@ -38,12 +39,8 @@ public partial class ReplicationSections
 
     private ExplorerAddress Current => Location?.Address ?? Navigator.Current ?? ReplicationAddresses.Estate;
 
-    private string? TreesCurrent => Section switch
-    {
-        SectionKind.Trees => "page",
-        SectionKind.Tree => "location",
-        _ => null,
-    };
+    /// <summary>The way back one tree's page shows in place of the section row.</summary>
+    internal const string BackText = "Back to enrolled trees";
 
     private string Href(ExplorerAddress section)
     {

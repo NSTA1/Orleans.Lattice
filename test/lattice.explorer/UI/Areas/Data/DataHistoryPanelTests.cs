@@ -4,6 +4,7 @@ using Grpc.Core;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Areas.Data;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 
@@ -94,6 +95,60 @@ public sealed class DataHistoryPanelTests : DataTestContext
         cut.Find("form.lt-toolbar").Submit();
 
         cut.WaitUntil(() => Assert.That(CurrentRelative, Is.EqualTo("/data/orders?tab=history&key=k&at=2026-09-28T14%3A05%3A00Z")));
+    }
+
+    [Test]
+    public void Metadata_only_revisions_are_explained_once_for_the_timeline_not_under_each_revision()
+    {
+        // #3987: "Only the value's size and hash were retained." repeated on every revision.
+        SeedHistory("orders", "k", "\"a\"", "\"b\"", "\"c\"");
+        Client.History[("orders", "k")] =
+        [
+            .. Client.History[("orders", "k")].Select(revision => revision with
+            {
+                ValuePreview = [],
+                Retention = new RevisionRetention { Mode = HistoryRetentionMode.MetadataOnly, ValueRetained = false },
+            }),
+        ];
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(3)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-data-timeline__rev .lt-data-note"), Is.Empty, "no revision repeats the note");
+            Assert.That(cut.FindAll(".lt-data-note").Count(note => note.TextContent == DataHistoryPanel.MetadataOnlyText), Is.EqualTo(1));
+            Assert.That(cut.FindAll(".lt-data-timeline__kind").Select(kind => kind.TextContent), Is.All.EqualTo("Set (metadata only)"));
+        });
+    }
+
+    [Test]
+    public void A_timeline_with_retained_values_has_no_metadata_only_note()
+    {
+        SeedHistory("orders", "k", "\"a\"");
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        Assert.That(cut.FindAll(".lt-data-note").Select(note => note.TextContent), Has.None.EqualTo(DataHistoryPanel.MetadataOnlyText));
+    }
+
+    [Test]
+    public void The_as_of_field_starts_empty_and_describes_its_form_without_a_stale_sample_time()
+    {
+        // #3987: a placeholder of 2026-09-28T14:00:00Z read as a pre-filled, stale value.
+        SeedHistory("orders", "k", "\"a\"");
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        var field = Control(cut, "As of (UTC)");
+        Assert.Multiple(() =>
+        {
+            Assert.That(field.GetAttribute("value") ?? string.Empty, Is.Empty);
+            Assert.That(field.GetAttribute("placeholder"), Is.Null.Or.Empty);
+            Assert.That(cut.Find("#" + field.GetAttribute("aria-describedby")!.Split(' ')[0]).TextContent, Is.EqualTo(DataHistoryPanel.AtHint));
+        });
     }
 
     [Test]
