@@ -233,10 +233,13 @@ public static class DurabilitySelector
     /// failure it raises is attributed to its grain and measured against the busy
     /// window and the write convoy. The busy window is read from the provider's own
     /// resolved connection string, so it cannot drift from the window the provider
-    /// actually retries for. A lock failure on a WAL materialiser pin-state write or
-    /// clear is re-issued under <see cref="RepoContextGrainStorageLockRetryPolicy.PinStateWrites"/>
-    /// (issue #3761 item 6), so a bulk-ingest write convoy no longer leaves the
-    /// published pin stale.
+    /// actually retries for. A lock failure on a write or clear whose loss generates
+    /// more writes is re-issued under
+    /// <see cref="RepoContextGrainStorageLockRetryPolicy.SelfAmplifyingWrites"/>, and
+    /// write concurrency is bounded by the
+    /// <see cref="RepoContextGrainStorageLockMeter.WriteGate"/> the meter carries, so
+    /// a write convoy no longer drops the checkpoint advances and pin publishes whose
+    /// loss is what refills it (issues #3761 item 6, #2419).
     /// </summary>
     /// <param name="services">The service collection the provider is registered in.</param>
     /// <param name="name">The grain-storage provider name.</param>
@@ -261,7 +264,12 @@ public static class DurabilitySelector
             ?? throw new InvalidOperationException(
                 $"No keyed {nameof(IGrainStorage)} is registered under '{name}', so there is nothing to attribute lock failures on.");
 
-        services.TryAddSingleton(_ => new RepoContextGrainStorageLockMeter());
+        services.TryAddSingleton(_ => new RepoContextGrainStorageWriteGate(
+            RepoContextGrainStorageWriteGate.DefaultPermits,
+            RepoContextGrainStorageWriteGate.DefaultAcquireTimeout));
+        services.TryAddSingleton(sp => new RepoContextGrainStorageLockMeter(
+            convoy: null,
+            writeGate: sp.GetRequiredService<RepoContextGrainStorageWriteGate>()));
 
         services.Remove(registered);
         services.AddKeyedSingleton<IGrainStorage>(name, (sp, key) =>
@@ -277,7 +285,7 @@ public static class DurabilitySelector
                 sp.GetRequiredService<ILogger<RepoContextLockAttributingGrainStorage>>(),
                 busyWindow,
                 timeProvider: null,
-                retryPolicy: RepoContextGrainStorageLockRetryPolicy.PinStateWrites);
+                retryPolicy: RepoContextGrainStorageLockRetryPolicy.SelfAmplifyingWrites);
         });
 
         return services;

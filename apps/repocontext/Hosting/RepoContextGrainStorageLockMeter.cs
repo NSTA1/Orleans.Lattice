@@ -44,6 +44,15 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     /// </summary>
     public const string LockRetriesCounterName = "lattice_repocontext_grain_storage_lock_retries_total";
 
+    /// <summary>
+    /// Writes and clears that reached the write admission gate, by how they were
+    /// admitted.
+    /// </summary>
+    public const string WriteGateAdmissionsCounterName = "lattice_repocontext_grain_storage_write_gate_admissions_total";
+
+    /// <summary>Writes and clears waiting for admission to the grain store now.</summary>
+    public const string WriteGateQueuedGaugeName = "lattice_repocontext_grain_storage_write_gate_queued";
+
     /// <summary>Writes and clears in flight at the moment a lock failure surfaced.</summary>
     public const string LockConvoyWidthHistogramName = "lattice_repocontext_grain_storage_lock_convoy_width";
 
@@ -86,6 +95,9 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     /// </summary>
     public const string OutcomeGaveUp = "gave_up";
 
+    /// <summary>The tag naming how a write or clear was admitted by the write gate.</summary>
+    public const string AdmissionTag = "admission";
+
     // Declared above the instruments it constructs, and every instrument is built
     // from this field, so reordering throws at initialisation rather than
     // publishing an instrument against a null meter. See the metrics conventions in
@@ -94,6 +106,7 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
 
     private readonly Counter<long> _lockFailures;
     private readonly Counter<long> _lockRetries;
+    private readonly Counter<long> _writeGateAdmissions;
     private readonly Histogram<long> _lockConvoyWidth;
 
     /// <summary>Creates the meter and publishes every instrument.</summary>
@@ -101,9 +114,18 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     /// The convoy the gauges read. A new one is created when omitted; the host
     /// shares it with the storage decorator through <see cref="Convoy"/>.
     /// </param>
-    public RepoContextGrainStorageLockMeter(RepoContextGrainStorageConvoy? convoy = null)
+    /// <param name="writeGate">
+    /// The write admission gate the queue gauge reads and the storage decorator takes
+    /// its admissions from. <see cref="RepoContextGrainStorageWriteGate.Unbounded"/>
+    /// when omitted, so a meter constructed without one bounds nothing and the
+    /// decorator behaves exactly as it did before issue #2419.
+    /// </param>
+    public RepoContextGrainStorageLockMeter(
+        RepoContextGrainStorageConvoy? convoy = null,
+        RepoContextGrainStorageWriteGate? writeGate = null)
     {
         Convoy = convoy ?? new RepoContextGrainStorageConvoy();
+        WriteGate = writeGate ?? RepoContextGrainStorageWriteGate.Unbounded;
 
         _meter = new Meter(RepoContextHostMeter.Name);
         _lockFailures = _meter.CreateCounter<long>(
@@ -128,6 +150,22 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
                 + "operation, not per attempt; every failed attempt is also counted on "
                 + LockFailuresCounterName
                 + ". The write and clear arms are published at zero from process start.");
+        _writeGateAdmissions = _meter.CreateCounter<long>(
+            WriteGateAdmissionsCounterName,
+            unit: "{operation}",
+            description:
+                "Writes and clears that reached the write admission gate (issue #2419), by operation "
+                + "and by admission: immediate when a permit was free, queued when the writer waited "
+                + "for one, timed_out when it waited the whole acquire timeout and proceeded ungated, "
+                + "and unbounded when the host bounds write concurrency not at all. Read queued "
+                + "against "
+                + WritesInFlightGaugeName
+                + ": queueing here is the gate doing its job, because a writer waiting here holds no "
+                + "connection and burns none of its busy window, whereas one waiting inside SQLite is "
+                + "spending the budget that decides whether its write survives. A rising timed_out arm "
+                + "is the one to act on - it means the bound is too tight or the store too slow for "
+                + "the offered load, and those writers are contending exactly as they did before the "
+                + "gate existed. Every arm is published at zero from process start.");
         _lockConvoyWidth = _meter.CreateHistogram<long>(
             LockConvoyWidthHistogramName,
             unit: "{write}",
@@ -157,6 +195,17 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
                 + "mark is what records one that "
                 + WritesInFlightGaugeName
                 + " sampled either side of.");
+        _meter.CreateObservableGauge(
+            WriteGateQueuedGaugeName,
+            () => WriteGate.Queued,
+            unit: "{write}",
+            description:
+                "Writes and clears waiting for admission to the grain store now (issue #2419). These "
+                + "hold no connection and no lock, so unlike "
+                + WritesInFlightGaugeName
+                + " this depth costs the store nothing; it is offered load the gate is holding back "
+                + "from the single SQLite writer. Zero at all times means the bound is never reached. "
+                + "Reads are never gated and never appear here.");
 
         foreach (var operation in Enum.GetValues<RepoContextGrainStorageOperation>())
         {
@@ -166,12 +215,19 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
             {
                 _lockRetries.Add(0, OperationPair(operation), OutcomePair(recovered: true));
                 _lockRetries.Add(0, OperationPair(operation), OutcomePair(recovered: false));
+                foreach (var admission in Enum.GetValues<RepoContextGrainStorageWriteGateOutcome>())
+                {
+                    _writeGateAdmissions.Add(0, OperationPair(operation), AdmissionPair(admission));
+                }
             }
         }
     }
 
     /// <summary>The convoy the gauges read and the storage decorator records into.</summary>
     public RepoContextGrainStorageConvoy Convoy { get; }
+
+    /// <summary>The write admission gate the queue gauge reads and the storage decorator admits through.</summary>
+    public RepoContextGrainStorageWriteGate WriteGate { get; }
 
     /// <summary>The meter the instruments are published on, so a test can listen to this instance alone.</summary>
     internal Meter Meter => _meter;
@@ -204,6 +260,13 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     public void RecordLockRetry(RepoContextGrainStorageOperation operation, bool recovered)
         => _lockRetries.Add(1, OperationPair(operation), OutcomePair(recovered));
 
+    /// <summary>Records how one write or clear was admitted by the write gate.</summary>
+    /// <param name="operation">The operation admitted.</param>
+    /// <param name="admission">How it was admitted.</param>
+    public void RecordWriteGateAdmission(
+        RepoContextGrainStorageOperation operation, RepoContextGrainStorageWriteGateOutcome admission)
+        => _writeGateAdmissions.Add(1, OperationPair(operation), AdmissionPair(admission));
+
     /// <inheritdoc />
     public void Dispose() => _meter.Dispose();
 
@@ -215,4 +278,7 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
 
     private static KeyValuePair<string, object?> OutcomePair(bool recovered)
         => new(OutcomeTag, recovered ? OutcomeRecovered : OutcomeGaveUp);
+
+    private static KeyValuePair<string, object?> AdmissionPair(RepoContextGrainStorageWriteGateOutcome admission)
+        => new(AdmissionTag, admission.TagValue());
 }

@@ -220,6 +220,29 @@ public sealed class RepoContextGarbageCollectionMeterTests
     }
 
     [Test]
+    public void The_eager_construction_guard_accepts_an_eager_assignment_with_constructor_arguments()
+    {
+        // The guard asks WHEN the meter is constructed, not what with. A meter handed
+        // a collaborator is still constructed during registration, so requiring empty
+        // parentheses would fail a registration whose property under test holds.
+        const string eager = "var storageLockMeter = new RepoContextGarbageCollectionMeter(convoy: null, writeGate: gate);\n"
+            + "builder.Services.AddSingleton(storageLockMeter);";
+
+        Assert.That(ConstructsEagerly(eager, "RepoContextGarbageCollectionMeter"), Is.True);
+    }
+
+    [Test]
+    public void The_eager_construction_guard_rejects_a_lazy_factory_that_passes_arguments()
+    {
+        // The widened eager arm must not have cost the guard its discriminating
+        // power: a factory registration is still a factory registration however many
+        // arguments it forwards.
+        const string lazy = "services.TryAddSingleton(sp => new RepoContextGarbageCollectionMeter(convoy: null, writeGate: sp.Get()));";
+
+        Assert.That(ConstructsEagerly(lazy, "RepoContextGarbageCollectionMeter"), Is.False);
+    }
+
+    [Test]
     public void The_eager_construction_guard_rejects_an_eager_assignment_beside_a_lazy_factory()
     {
         // A second, lazy registration beside the eager one would still resolve the
@@ -236,11 +259,22 @@ public sealed class RepoContextGarbageCollectionMeterTests
     /// constructor call alone cannot tell the two apart, because
     /// <c>AddSingleton(_ =&gt; new T())</c> contains the same call.
     /// </summary>
+    /// <remarks>
+    /// The eager arm accepts constructor arguments. What it is testing is WHEN the
+    /// meter is constructed, not what it is constructed with, and a meter that takes
+    /// a collaborator - as the storage lock meter does since issue #2419, which hands
+    /// it the write gate its queue gauge reads - is no less eagerly constructed for
+    /// it. Requiring empty parentheses would fail that registration while the
+    /// property under test still held. The argument list is bounded to one statement
+    /// (<c>[^;]*</c>) so the match cannot run past the assignment it is reading, and
+    /// the lazy arm below is an independent veto, so widening this one cannot let a
+    /// factory registration through.
+    /// </remarks>
     internal static bool ConstructsEagerly(string source, string typeName)
     {
         var escaped = System.Text.RegularExpressions.Regex.Escape(typeName);
         var eager = new System.Text.RegularExpressions.Regex(
-            $@"\bvar\s+\w+\s*=\s*new\s+{escaped}\s*\(\s*\)\s*;");
+            $@"\bvar\s+\w+\s*=\s*new\s+{escaped}\s*\([^;]*\)\s*;");
         var lazy = new System.Text.RegularExpressions.Regex(
             $@"=>\s*new\s+{escaped}\s*\(");
 
