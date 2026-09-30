@@ -141,9 +141,9 @@ Five more variables bound how long the approximate index may hold its build coor
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_BUDGET_SECONDS` | `5` | Wall-clock ceiling on one attempt to open (restore) the durable index. A stopped attempt banks what it walked and the next continues past it, so this slices one long open into short ones. `0` removes the bound. |
+| `LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_BUDGET_SECONDS` | `5` | Wall-clock ceiling on one attempt to open (restore) the durable index. A stopped attempt banks what it walked and the next continues past it, so this slices one long open into short ones. `0` removes the bound. A value above about 49.7 days (the longest wait a timer accepts) is held at that ceiling. |
 | `LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_MAX_EXTENSIONS` | `6` | How many further open-slice budget periods an open slice that has banked nothing may take before the budget fires anyway. `0` reproduces the elapsed-only bound. |
-| `LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_BUDGET_SECONDS` | `5` | Wall-clock ceiling on one ingest slice of the build, so the coordinator's keep-alive reminder and arming calls are answered while a build runs. |
+| `LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_BUDGET_SECONDS` | `5` | Wall-clock ceiling on one ingest slice of the build, so the coordinator's keep-alive reminder and arming calls are answered while a build runs. A value above about 49.7 days (the longest wait a timer accepts) is held at that ceiling. |
 | `LATTICE_REPOCONTEXT_ANN_OPEN_MAX_CONSECUTIVE_REFUSALS` | `12` | Consecutive admission refusals after which the open declares itself terminally saturated. Declaring does not stop retrying. `0` removes the count bound. |
 | `LATTICE_REPOCONTEXT_ANN_OPEN_REFUSAL_TERMINAL_SECONDS` | `600` | How long an unbroken run of admission refusals may last before the same terminal state is declared, whichever bound is reached first. `0` removes the elapsed bound. |
 

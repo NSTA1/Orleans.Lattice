@@ -45,6 +45,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </remarks>
 internal sealed class RepoContextAnnOpenSliceDeadline : IDisposable
 {
+    /// <summary>
+    /// The longest due time or period a timer accepts: <c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days. <see cref="RepoContextAnnOptions.OpenSliceBudget"/>
+    /// is read from an environment variable that admits any duration a
+    /// <see cref="TimeSpan"/> can hold, and the system timer throws
+    /// <see cref="ArgumentOutOfRangeException"/> above this, so a longer budget is
+    /// armed at the ceiling instead of faulting every open attempt.
+    /// </summary>
+    internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     private readonly CancellationTokenSource _source = new();
     private readonly Func<int> _bankedProbe;
     private readonly int _startCount;
@@ -53,7 +63,7 @@ internal sealed class RepoContextAnnOpenSliceDeadline : IDisposable
     private int _extensions;
 
     /// <summary>Creates an armed deadline and starts its first period.</summary>
-    /// <param name="budget">One slice period. Must be positive.</param>
+    /// <param name="budget">One slice period. Must be positive; a period longer than <see cref="MaxTimerDuration"/> is armed at that ceiling.</param>
     /// <param name="maxExtensions">
     /// How many further periods an unproductive slice may be granted before the
     /// deadline fires regardless. Zero reproduces the historical elapsed-only
@@ -74,7 +84,8 @@ internal sealed class RepoContextAnnOpenSliceDeadline : IDisposable
         _bankedProbe = bankedProbe;
         _maxExtensions = Math.Max(0, maxExtensions);
         _startCount = bankedProbe();
-        _timer = timeProvider.CreateTimer(static s => ((RepoContextAnnOpenSliceDeadline)s!).Tick(), this, budget, budget);
+        var period = budget > MaxTimerDuration ? MaxTimerDuration : budget;
+        _timer = timeProvider.CreateTimer(static s => ((RepoContextAnnOpenSliceDeadline)s!).Tick(), this, period, period);
     }
 
     /// <summary>The token cancelled when the deadline fires.</summary>

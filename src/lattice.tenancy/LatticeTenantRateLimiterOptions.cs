@@ -68,7 +68,9 @@ public sealed class LatticeTenantRateLimiterOptions
     /// the loop for longer than one interval. Defaults to
     /// <see cref="DefaultLeaseCycleTimeout"/>; a non-positive value falls back to
     /// that default, and any value at or above <see cref="LeaseInterval"/> is
-    /// clamped down to the interval so the duty cycle stays bounded.
+    /// clamped down to the interval so the duty cycle stays bounded. The result is
+    /// also held to the longest delay a timer accepts (<c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days), as the tick period is.
     /// </summary>
     public TimeSpan LeaseCycleTimeout { get; set; } = DefaultLeaseCycleTimeout;
 
