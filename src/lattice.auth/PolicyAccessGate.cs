@@ -125,7 +125,7 @@ internal sealed class PolicyAccessGate(
         // machine.
         if (maintainer.CurrentEpoch > 0)
         {
-            return new ValueTask<LatticeAccessDecision>(EvaluateAndObserve(in request, start));
+            return EvaluateAndObserve(in request, start, cancellationToken);
         }
 
         // Cold path (first request on this silo): warm the snapshot once, then
@@ -140,7 +140,7 @@ internal sealed class PolicyAccessGate(
         CancellationToken cancellationToken)
     {
         await maintainer.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
-        return EvaluateAndObserve(in request, start);
+        return await EvaluateAndObserve(in request, start, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -150,7 +150,10 @@ internal sealed class PolicyAccessGate(
     /// path the byte-for-byte-unchanged fast evaluation is used and only the
     /// (listener-guarded) metrics are recorded.
     /// </summary>
-    private LatticeAccessDecision EvaluateAndObserve(in LatticeAccessRequest request, long start)
+    private ValueTask<LatticeAccessDecision> EvaluateAndObserve(
+        in LatticeAccessRequest request,
+        long start,
+        CancellationToken cancellationToken)
     {
         LatticeAccessDecision decision;
         PolicyMatch match = default;
@@ -179,14 +182,63 @@ internal sealed class PolicyAccessGate(
         // the decision and the whole no-tenancy path are byte-for-byte unchanged -
         // no allocation, no async state machine. The enforcer is consulted only
         // for an already-allowed request, keeping it off the deny fast path.
+        //
+        // The enforcer is consulted through EnforceAsync so it can confirm a
+        // decision its warm snapshot cannot answer authoritatively (issue #4001:
+        // a cross-tenant grant revoked moments ago must not keep admitting reads
+        // until the tenant snapshot rebuilds). On the steady state it completes
+        // synchronously, so this path still allocates no state machine; only the
+        // non-authoritative window pays the asynchronous continuation.
         if (decision.Allowed && tenantEnforcer.IsActive)
         {
-            var tenantDecision = tenantEnforcer.Enforce(in request);
-            if (!tenantDecision.Allowed)
-            {
-                decision = tenantDecision;
-            }
+            return EnforceTenantAndObserve(in request, decision, in match, start, cancellationToken);
         }
+
+        observer.Observe(in request, in decision, in match, maintainer.CurrentEpoch, start);
+        return new ValueTask<LatticeAccessDecision>(decision);
+    }
+
+    /// <summary>
+    /// The tenant-isolation half of <see cref="EvaluateAndObserve"/>, for a
+    /// request the policy engine allowed while an active enforcer is installed.
+    /// Kept out of the policy path so that path's frame and inlining are
+    /// unchanged by the (rare) asynchronous continuation below.
+    /// </summary>
+    private ValueTask<LatticeAccessDecision> EnforceTenantAndObserve(
+        in LatticeAccessRequest request,
+        LatticeAccessDecision policyDecision,
+        in PolicyMatch match,
+        long start,
+        CancellationToken cancellationToken)
+    {
+        var pending = tenantEnforcer.EnforceAsync(in request, cancellationToken);
+        if (!pending.IsCompletedSuccessfully)
+        {
+            return CompleteTenantEnforcementAsync(pending, policyDecision, request, match, start);
+        }
+
+        var tenantDecision = pending.Result;
+        var decision = tenantDecision.Allowed ? policyDecision : tenantDecision;
+        observer.Observe(in request, in decision, in match, maintainer.CurrentEpoch, start);
+        return new ValueTask<LatticeAccessDecision>(decision);
+    }
+
+    /// <summary>
+    /// Slow path of <see cref="EnforceTenantAndObserve"/> for a tenant decision the
+    /// enforcer had to confirm asynchronously: awaits it, composes it with the
+    /// already-allowed policy decision (a tenant deny replaces it, a tenant allow
+    /// keeps it), and observes the result. The request and match are copied by
+    /// value because an async method cannot take an <c>in</c> parameter.
+    /// </summary>
+    private async ValueTask<LatticeAccessDecision> CompleteTenantEnforcementAsync(
+        ValueTask<LatticeAccessDecision> pending,
+        LatticeAccessDecision policyDecision,
+        LatticeAccessRequest request,
+        PolicyMatch match,
+        long start)
+    {
+        var tenantDecision = await pending.ConfigureAwait(false);
+        var decision = tenantDecision.Allowed ? policyDecision : tenantDecision;
 
         observer.Observe(in request, in decision, in match, maintainer.CurrentEpoch, start);
         return decision;
@@ -336,7 +388,13 @@ internal sealed class PolicyAccessGate(
         if (tenantEnforcer.IsActive)
         {
             var probe = new LatticeAccessRequest(treeId, operation, subject);
-            if (!tenantEnforcer.Enforce(in probe).Allowed)
+            var pending = tenantEnforcer.EnforceAsync(in probe, cancellationToken);
+            if (!pending.IsCompletedSuccessfully)
+            {
+                return AwaitTenantProbeAsync(pending);
+            }
+
+            if (!pending.Result.Allowed)
             {
                 return new ValueTask<bool>(false);
             }
@@ -344,6 +402,13 @@ internal sealed class PolicyAccessGate(
 
         return new ValueTask<bool>(true);
     }
+
+    /// <summary>
+    /// Slow path of the <see cref="HasAnyGrantAsync"/> tenant composition, taken
+    /// only when the enforcer confirmed its decision asynchronously.
+    /// </summary>
+    private static async ValueTask<bool> AwaitTenantProbeAsync(ValueTask<LatticeAccessDecision> pending) =>
+        (await pending.ConfigureAwait(false)).Allowed;
 
     /// <summary>
     /// The operation bits that count as a write for the strict-consistency fence:
