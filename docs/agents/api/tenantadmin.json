@@ -1316,7 +1316,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "concurrency": {
-        "rule": "The last-resident-region guard runs before the write and again after the CRDT join to handle concurrent removals.",
+        "rule": "The last-resident-region guard runs before the write and again after the CRDT join; added regions start Provisioning until operator promotion, and dropped regions drain automatically through Offline to Removed.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "sources": [

@@ -118,7 +118,7 @@ concepts:
         - statement: "Enable and disable authorize the target tree through the access gate before touching engine state."
           source: "docs/lattice.api.replication/README.md"
       out_of_scope:
-        - statement: "A conflicting concurrent enable can leave the mode ambiguous until disable and re-enable."
+        - statement: "A concurrent enable under a different merge mode can leave the mode ambiguous until disable and re-enable."
           source: "FEATURES.md"
     operational_envelope:
       limits: []
@@ -1156,7 +1156,7 @@ concepts:
   - id: mutation-observer
     name: "Mutation observer"
     category: core
-    definition: "A mutation observer is notified after the leaf applies a committed mutation in the wal-apply-observer-digest pipeline."
+    definition: "A mutation observer is invoked synchronously after a published mutation has been durably persisted and before the grain method returns."
     packages:
       - "Orleans.Lattice"
     capability_boundary:
