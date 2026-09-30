@@ -159,11 +159,29 @@ public partial class LtComboBox : IAsyncDisposable
     public bool ReadOnly { get; set; }
 
     /// <summary>
-    /// Content shown between the label and the input, such as the values a
-    /// multi-value field has already chosen.
+    /// Content drawn inside the field's frame before the input, such as the values
+    /// a multi-value field has already chosen, so the two read as one control.
+    /// When it is set the frame is drawn around both, not around the input alone.
     /// </summary>
     [Parameter]
     public RenderFragment? Leading { get; set; }
+
+    /// <summary>
+    /// Raised when Escape is pressed while the list is already closed, so a host -
+    /// a floating panel holding the field - can close too. The field decides this
+    /// on the server when the key arrives, so it holds however quickly the keys come,
+    /// unlike a host's own handler, which a stale stop-propagation flag can starve.
+    /// </summary>
+    [Parameter]
+    public EventCallback OnDismiss { get; set; }
+
+    /// <summary>
+    /// Whether focusing the input lists the values at once, as a dropdown does,
+    /// rather than waiting for typing or Down: for a short list the caller chooses
+    /// from, such as the tenants they can switch between. Typing still filters it.
+    /// </summary>
+    [Parameter]
+    public bool OpenOnFocus { get; set; }
 
     /// <summary>Any further attributes for the <c>input</c> element, such as <c>maxlength</c>.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
@@ -188,6 +206,19 @@ public partial class LtComboBox : IAsyncDisposable
     private string InputClass => Mono ? "lt-input lt-input--mono" : "lt-input";
 
     private string ValueClass => Mono ? "lt-combobox__value lt-combobox__value--mono" : "lt-combobox__value";
+
+    // A field that can list values says so while idle, as a select's chevron does.
+    private bool ShowsChevron => CanSuggest;
+
+    private string ControlClass => (Leading is not null, ShowsChevron, EffectiveError is not null) switch
+    {
+        (false, false, _) => "lt-combobox__control",
+        (false, true, _) => "lt-combobox__control lt-combobox__control--picker",
+        (true, false, false) => "lt-combobox__control lt-combobox__control--tokens",
+        (true, false, true) => "lt-combobox__control lt-combobox__control--tokens lt-combobox__control--invalid",
+        (true, true, false) => "lt-combobox__control lt-combobox__control--tokens lt-combobox__control--picker",
+        (true, true, true) => "lt-combobox__control lt-combobox__control--tokens lt-combobox__control--picker lt-combobox__control--invalid",
+    };
 
 
     private string? EnterBehaviour =>
@@ -389,6 +420,8 @@ public partial class LtComboBox : IAsyncDisposable
         }
     }
 
+    private Task OnFocusAsync(FocusEventArgs args) => OpenOnFocus ? OnClickAsync() : Task.CompletedTask;
+
     private async Task OnKeyDownAsync(KeyboardEventArgs args)
     {
         switch (args.Key)
@@ -418,7 +451,13 @@ public partial class LtComboBox : IAsyncDisposable
                 break;
 
             case "Escape":
+                var listed = IsListOpen;
                 Close();
+                if (!listed)
+                {
+                    await OnDismiss.InvokeAsync().ConfigureAwait(true);
+                }
+
                 break;
 
             case "Home":

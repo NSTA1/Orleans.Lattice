@@ -51,6 +51,34 @@ public sealed class ComboBoxAccessibilityTests : UiTestBase
     }
 
     [Test]
+    public async Task Forced_colours_keep_an_idle_pickers_arrow()
+    {
+        // Issue #3986: an idle picker carries the select's arrow, drawn in the text colour.
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, PickerPage, WorldIdentities.Admin, configure: options => options.ForcedColors = ForcedColors.Active);
+        var tree = Tree(page);
+        await Expect(tree).ToBeVisibleAsync();
+        Assert.That(await page.EvaluateAsync<bool>("() => matchMedia('(forced-colors: active)').matches"), Is.True,
+            "The premise failed: the browser does not report forced colours.");
+
+        var arrow = page.Locator(".lt-combobox__control--picker > .lt-combobox__chevron").First;
+        await Expect(arrow).ToBeVisibleAsync();
+        var box = await arrow.BoundingBoxAsync();
+        var paint = await arrow.EvaluateAsync<string>("a => { const s = getComputedStyle(a); return s.fill + '|' + s.color; }");
+        var fill = paint.Split('|')[0];
+        var colour = paint.Split('|')[1];
+        var canvas = await page.EvaluateAsync<string>("() => getComputedStyle(document.body).backgroundColor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(box!.Width, Is.GreaterThan(4), "the arrow has a visible size");
+            Assert.That(fill, Is.EqualTo(colour), "the arrow is filled in the (forced) text colour");
+            Assert.That(fill, Is.Not.EqualTo(canvas), "the arrow is not painted in the canvas colour");
+        });
+        await AxeConformance.SweepAsync(page, "an idle tree picker under forced colours");
+    }
+
+    [Test]
     public async Task Escape_closes_the_list_and_Tab_leaves_the_field()
     {
         var world = await UiHosts.WorldAsync();

@@ -22,8 +22,8 @@ public sealed class AccessRuleTableTests : AccessTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.Find("caption").TextContent, Is.EqualTo("Matched rules"));
-            Assert.That(cut.Find("caption").ClassList, Does.Not.Contain("lt-visually-hidden"));
+            Assert.That(cut.Find(".lt-table__caption").TextContent, Is.EqualTo("Matched rules"));
+            Assert.That(cut.Find(".lt-table__caption").ClassList, Does.Not.Contain("lt-visually-hidden"));
             Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("Nothing matched."));
         });
     }

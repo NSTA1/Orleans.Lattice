@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Web;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -24,16 +23,22 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// where it is while the tenant changes. A refusal shows the address line's notice.
 /// </para>
 /// <para>
-/// In the header it is a disclosure button: Enter or a click opens the field and
-/// moves focus into it, Down lists the tenants, Enter switches, and Escape closes
-/// the panel and returns focus to the button. <see cref="Stacked"/> renders the
-/// field alone, for the compact directory sheet.
+/// In the header it is a disclosure button: Enter or a click opens the panel and
+/// moves focus into the field, which lists every reachable tenant at once, the
+/// active one marked; typing filters the list, Down and Up move through it, Enter
+/// switches, and Escape closes the list and then the panel, returning focus to the
+/// button. Opening it closes any other header panel. <see cref="Stacked"/> renders
+/// the field alone, for the compact directory sheet, where focusing it lists the
+/// tenants in the same way.
 /// </para>
 /// </remarks>
 public partial class TenantSwitcher : IDisposable
 {
     /// <summary>The most tenants the field lists at once; typing narrows the rest.</summary>
     internal const int Limit = 20;
+
+    /// <summary>What the field says while nothing is typed: the list is already shown, and typing narrows it.</summary>
+    internal const string FilterPlaceholder = "Type to filter";
 
     private readonly string _panelId = LtIds.Next("lt-shell-tenant-panel");
     private readonly CancellationTokenSource _lifetime = new();
@@ -62,19 +67,27 @@ public partial class TenantSwitcher : IDisposable
     [Inject]
     internal ShellChromeInterop Interop { get; set; } = default!;
 
+    [Inject]
+    internal ShellHeaderPanels Panels { get; set; } = default!;
+
     private string? ActiveHint => _choices.Active is { } active ? "Active tenant: " + active + "." : null;
 
     /// <summary>Stops listening for the palette's open requests.</summary>
     public void Dispose()
     {
         Switch.OpenRequested -= OnOpenRequested;
+        Panels.Opened -= OnPanelOpened;
         _lifetime.Cancel();
         _lifetime.Dispose();
         GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc />
-    protected override void OnInitialized() => Switch.OpenRequested += OnOpenRequested;
+    protected override void OnInitialized()
+    {
+        Switch.OpenRequested += OnOpenRequested;
+        Panels.Opened += OnPanelOpened;
+    }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -133,17 +146,29 @@ public partial class TenantSwitcher : IDisposable
     {
         _open = !_open;
         _focusField = _open;
+        if (_open)
+        {
+            Panels.Opening(this);
+        }
     }
 
-    private async Task OnPanelKeyDownAsync(KeyboardEventArgs args)
+    private void OnPanelOpened(object panel)
     {
-        // The field keeps Escape while its list is open; once it is closed, Escape
-        // closes the panel and puts focus back on the button.
-        if (args.Key == "Escape")
+        if (_open && !ReferenceEquals(panel, this))
         {
             _open = false;
-            await Interop.FocusAsync(_toggle);
+            _focusField = false;
+            _ = InvokeAsync(StateHasChanged);
         }
+    }
+
+    // The field keeps Escape while its list is open; once the list is closed, the
+    // field reports the next Escape and the panel closes, putting focus back on the
+    // button. The field is the panel's only focusable element.
+    private async Task DismissAsync()
+    {
+        _open = false;
+        await Interop.FocusAsync(_toggle);
     }
 
     private async Task ChooseAsync(string tenant)
@@ -168,6 +193,11 @@ public partial class TenantSwitcher : IDisposable
 
         _open = !Stacked;
         _focusField = true;
+        if (_open)
+        {
+            Panels.Opening(this);
+        }
+
         StateHasChanged();
     });
 }

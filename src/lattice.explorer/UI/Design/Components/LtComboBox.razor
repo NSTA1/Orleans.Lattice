@@ -2,12 +2,14 @@
     A combobox: a labelled text input that offers the existing values matching
     what is typed, as an ARIA 1.2 combobox with a listbox popup. The options are
     drawn as the address line draws its suggestions: a hollow node and the value
-    in mono, the highlighted one on the marker band.
+    in mono, the highlighted one on the marker band. While the field can list
+    values it carries a select's arrow; a multi-value field draws its chosen
+    values inside the same frame as the input.
 *@
 <div class="lt-field lt-combobox">
     <label class="lt-field__label" for="@_inputId">@Label</label>
-    @Leading
-    <div class="lt-combobox__control">
+    <div class="@ControlClass" data-lt-open="@(IsListOpen ? "true" : null)">
+        @Leading
         <input @ref="_input"
                @attributes="AdditionalAttributes"
                id="@_inputId"
@@ -33,7 +35,14 @@
                @onkeydown="OnKeyDownAsync"
                @onkeydown:stopPropagation="@IsListOpen"
                @onclick="OnClickAsync"
+               @onfocus="OnFocusAsync"
                @onblur="OnBlurAsync" />
+        @if (ShowsChevron)
+        {
+            <svg class="lt-combobox__chevron" viewBox="0 0 10 5" aria-hidden="true" focusable="false">
+                <path d="M0 0 L10 0 L5 5 Z" />
+            </svg>
+        }
         @if (IsListOpen)
         {
             <ul id="@_listboxId" class="lt-combobox__list" role="listbox" aria-label="@ListLabel">
@@ -47,7 +56,7 @@
                         aria-selected="@(index == _active ? "true" : "false")"
                         @onmousedown:preventDefault
                         @onclick="@(() => ChooseAsync(item))">
-                        <LtNode Kind="LtNodeKind.Hollow" />
+                        <LtNode Kind="@(item.Current ? LtNodeKind.Join : LtNodeKind.Hollow)" />
                         <span class="@ValueClass">@item.Value</span>
                         @if (item.Detail is not null)
                         {

@@ -115,6 +115,7 @@ public sealed class DataSuggestionSourcesTests : DataTestContext
             Assert.That(answer.Items.Select(item => item.Value), Is.EqualTo(new[] { "acme", "globex" }));
             Assert.That(answer.Items[0].Detail, Is.EqualTo(TenantSuggestionSource.ActiveDetail));
             Assert.That(answer.Items[1].Detail, Is.Null);
+            Assert.That(answer.Items.Select(item => item.Current), Is.EqualTo(new[] { true, false }), "the active tenant is drawn as current");
         });
     }
 }

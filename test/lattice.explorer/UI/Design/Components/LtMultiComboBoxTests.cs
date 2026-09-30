@@ -40,6 +40,46 @@ public sealed class LtMultiComboBoxTests : ShellDesignTestContext
     }
 
     [Test]
+    public void The_chips_and_the_input_are_one_control_in_one_frame()
+    {
+        // Issue #3986: chips drawn as boxes above an empty input read as two controls.
+        var cut = RenderBox(new FakeSuggestionSource(Regions), ["eu-west", "us-east"]);
+
+        var frame = cut.Find(".lt-combobox__control");
+        var children = frame.Children.Select(child => child.LocalName).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(frame.ClassList, Does.Contain("lt-combobox__control--tokens"));
+            Assert.That(children.Take(2), Is.EqualTo(new[] { "ul", "input" }), "the chosen values come first, then the input, inside the one frame");
+            Assert.That(frame.QuerySelector(".lt-combobox__chips"), Is.Not.Null);
+            Assert.That(cut.Find(".lt-combobox").Children.Count(child => child.LocalName == "ul"), Is.Zero, "no chip list sits outside the frame");
+        });
+    }
+
+    [Test]
+    public void The_frame_is_drawn_before_anything_is_chosen_so_the_field_never_changes_shape()
+    {
+        var cut = RenderBox(new FakeSuggestionSource(Regions), []);
+
+        Assert.That(cut.Find(".lt-combobox__control").ClassList, Does.Contain("lt-combobox__control--tokens"));
+    }
+
+    [Test]
+    public void An_error_marks_the_frame_not_the_borderless_input()
+    {
+        var cut = RenderBox(new FakeSuggestionSource(Regions), ["eu-west"]);
+
+        cut.Find("input").Input("mars");
+        cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "Enter" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-combobox__control").ClassList, Does.Contain("lt-combobox__control--invalid"));
+            Assert.That(cut.Find("input").GetAttribute("aria-invalid"), Is.EqualTo("true"));
+        });
+    }
+
+    [Test]
     public void Choosing_a_suggestion_adds_it_and_clears_the_input()
     {
         IReadOnlyList<string>? values = null;

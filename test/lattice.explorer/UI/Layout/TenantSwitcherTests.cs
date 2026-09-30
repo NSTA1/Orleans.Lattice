@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Session;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
 
@@ -181,13 +182,104 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
         Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Has.Count.EqualTo(1), "the first Escape closes only the list");
         Assert.That(Field(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
 
-        cut.Find(".lt-shell-tenant__panel").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+        Field(cut).KeyDown(new KeyboardEventArgs { Key = "Escape" });
 
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty);
             Assert.That(Toggle(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
             Assert.That(Module.Invocations["focusElement"], Has.Count.GreaterThan(focusesBefore), "focus goes back to the button through the chrome's safe route");
+        });
+    }
+
+    [Test]
+    public void Opening_the_panel_lists_every_tenant_at_once_with_the_active_one_marked()
+    {
+        // Issue #3986: it is a dropdown, not an empty text field that lists only after Down.
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/acme/data/orders");
+        cut.WaitUntil(() => Assert.That(Toggles(cut), Has.Count.EqualTo(1)));
+
+        Toggle(cut).Click();
+        Field(cut).Focus();
+
+        cut.WaitUntil(() => Assert.That(Options(cut), Is.EqualTo(new[] { "acme", "default", "globex" })));
+        var active = cut.FindAll(".lt-shell-tenant__panel [role=option]")[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(Field(cut).GetAttribute("aria-expanded"), Is.EqualTo("true"));
+            Assert.That(Field(cut).GetAttribute("placeholder"), Is.EqualTo(TenantSwitcher.FilterPlaceholder));
+            Assert.That(active.QuerySelector(".lt-node")!.ClassList, Does.Contain("lt-node--join"), "the active tenant carries the you-are-here node");
+            Assert.That(active.QuerySelector(".lt-combobox__detail")!.TextContent, Is.EqualTo(TenantSwitchChoices.ActiveDetail));
+            Assert.That(cut.FindAll(".lt-shell-tenant__panel .lt-node--join"), Has.Count.EqualTo(1));
+        });
+
+        Field(cut).Input("glo");
+        cut.WaitUntil(() => Assert.That(Options(cut), Is.EqualTo(new[] { "globex" }), "typing filters the list"));
+    }
+
+    [Test]
+    public async Task At_phone_width_focusing_the_stacked_field_lists_every_tenant()
+    {
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/acme/data/orders");
+        cut.WaitUntil(() => Assert.That(Toggles(cut), Has.Count.EqualTo(1)));
+        await SetBandAsync(cut, 0);
+        cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Directory").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-shell-tenant--stacked input"), Has.Count.EqualTo(1)));
+
+        cut.Find(".lt-shell-tenant--stacked input").Focus();
+
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll(".lt-shell-tenant--stacked [role=option] .lt-combobox__value").Select(value => value.TextContent),
+            Is.EqualTo(Reachable)));
+    }
+
+    [Test]
+    public void Opening_the_switcher_closes_the_appearance_menu_and_opening_appearance_closes_the_switcher()
+    {
+        // Issue #3986: header panels close each other.
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/acme/data/orders");
+        cut.WaitUntil(() => Assert.That(Toggles(cut), Has.Count.EqualTo(1)));
+        var appearance = $".lt-shell-header button[data-lt-command=\"{ChromeCommands.AppearanceMenuId}\"]";
+
+        cut.Find(appearance).Click();
+        Assert.That(AppearancePanels(cut), Has.Count.EqualTo(1));
+        Toggle(cut).Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(AppearancePanels(cut), Is.Empty);
+            Assert.That(cut.Find(appearance).GetAttribute("aria-expanded"), Is.EqualTo("false"));
+            Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Has.Count.EqualTo(1));
+        });
+
+        cut.Find(appearance).Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty);
+            Assert.That(Toggle(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
+            Assert.That(AppearancePanels(cut), Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Opening_the_connection_settings_closes_an_open_header_panel()
+    {
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/acme/data/orders");
+        cut.WaitUntil(() => Assert.That(Toggles(cut), Has.Count.EqualTo(1)));
+        Toggle(cut).Click();
+        Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Has.Count.EqualTo(1));
+
+        cut.InvokeAsync(() => Services.GetRequiredService<SessionChromeState>().OpenConfiguration());
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty);
+            Assert.That(Toggle(cut).GetAttribute("aria-expanded"), Is.EqualTo("false"));
         });
     }
 
@@ -309,4 +401,7 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
 
     private static string[] Options(IRenderedComponent<ShellLayout> cut) =>
         [.. cut.FindAll(".lt-shell-tenant__panel [role=option] .lt-combobox__value").Select(value => value.TextContent)];
+
+    private static IReadOnlyList<AngleSharp.Dom.IElement> AppearancePanels(IRenderedComponent<ShellLayout> cut) =>
+        cut.FindAll(".lt-shell-header .lt-shell-menu[aria-label=\"Appearance\"]");
 }

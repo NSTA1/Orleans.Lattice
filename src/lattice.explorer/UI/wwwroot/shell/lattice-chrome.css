@@ -204,6 +204,14 @@
   width: 20rem;
 }
 
+/* The switcher is a dropdown: its list opens in flow under the field, inside
+   the panel's hairline or the directory sheet, rather than floating over and
+   past their edges. */
+.lt-shell-tenant .lt-combobox__list {
+  position: static;
+  margin-block-start: var(--lt-space-1);
+}
+
 /* Stacked in the compact directory sheet, above the spine it scopes. */
 .lt-shell-tenant--stacked {
   margin-bottom: var(--lt-space-5);

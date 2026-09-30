@@ -2,7 +2,24 @@
 @attribute [CascadingTypeParameter(nameof(TItem))]
 
 <CascadingValue Value="this" IsFixed="true">@ChildContent</CascadingValue>
-@if (IsCompactList)
+@if (_rows.Count == 0)
+{
+    @* No rows: the empty state alone, with no column headers above it and no rules around it. *@
+    <div class="lt-table-empty">
+        <p id="@CaptionId" class="@(CaptionHidden ? "lt-table__caption lt-visually-hidden" : "lt-table__caption")">@Caption</p>
+        <div class="lt-table__empty">
+            @if (EmptyContent is not null)
+            {
+                @EmptyContent
+            }
+            else
+            {
+                <span>No rows.</span>
+            }
+        </div>
+    </div>
+}
+else if (IsCompactList)
 {
     <div class="lt-table-list" role="region" aria-labelledby="@CaptionId">
         <p id="@CaptionId" class="@(CaptionHidden ? "lt-table__caption lt-visually-hidden" : "lt-table__caption")">@Caption</p>
@@ -13,20 +30,7 @@
             </div>
         }
         <ul class="lt-table-list__rows">
-            @if (_rows.Count == 0)
-            {
-                <li class="lt-table-list__empty">
-                    @if (EmptyContent is not null)
-                    {
-                        @EmptyContent
-                    }
-                    else
-                    {
-                        <span>No rows.</span>
-                    }
-                </li>
-            }
-            else if (IsVirtualized)
+            @if (IsVirtualized)
             {
                 <Virtualize Items="_rows" ItemSize="CompactRowHeight" SpacerElement="li" Context="item">
                     @RenderCompactRow(item)
@@ -41,29 +45,6 @@
             }
         </ul>
     </div>
-    <LtDialog Open="_detailOpen"
-              OpenChanged="OnDetailOpenChanged"
-              Title="@DetailTitleText"
-              Placement="LtDialogPlacement.End"
-              ReturnFocus="_returnFocus"
-              Actions="@(_hasDetail && DetailActions is not null ? DetailActions(_detailItem!) : null)">
-        @if (_hasDetail)
-        {
-            @if (Detail is not null)
-            {
-                @Detail(_detailItem!)
-            }
-            else
-            {
-                <LtDefinitionList>
-                    @foreach (var column in _columns)
-                    {
-                        <LtDefinition Term="@column.Title" Mono="@column.Mono">@RenderCell(column, _detailItem!)</LtDefinition>
-                    }
-                </LtDefinitionList>
-            }
-        }
-    </LtDialog>
 }
 else
 {
@@ -93,22 +74,7 @@ else
                 </tr>
             </thead>
             <tbody>
-                @if (_rows.Count == 0)
-                {
-                    <tr class="lt-table__row">
-                        <td class="lt-table__empty" colspan="@Math.Max(1, _columns.Count)">
-                            @if (EmptyContent is not null)
-                            {
-                                @EmptyContent
-                            }
-                            else
-                            {
-                                <span>No rows.</span>
-                            }
-                        </td>
-                    </tr>
-                }
-                else if (IsVirtualized)
+                @if (IsVirtualized)
                 {
                     <Virtualize Items="_rows" ItemSize="RowHeight" SpacerElement="tr" Context="item">
                         @RenderRow(item)
@@ -125,6 +91,32 @@ else
         </table>
     </div>
 }
+@if (IsCompactList)
+{
+    <LtDialog Open="_detailOpen"
+              OpenChanged="OnDetailOpenChanged"
+              Title="@DetailTitleText"
+              Placement="LtDialogPlacement.End"
+              ReturnFocus="_returnFocus"
+              Actions="@(_hasDetail && DetailActions is not null ? DetailActions(_detailItem!) : null)">
+        @if (_hasDetail)
+        {
+            @if (Detail is not null)
+            {
+                @Detail(_detailItem!)
+            }
+            else
+            {
+                <LtDefinitionList>
+                    @foreach (var column in _columns)
+                    {
+                        <LtDefinition Term="@column.Title" Mono="@column.Mono">@RenderCell(column, _detailItem!)</LtDefinition>
+                    }
+                </LtDefinitionList>
+            }
+        }
+    </LtDialog>
+}
 
 @code {
     private RenderFragment RenderRow(TItem item) => __builder =>
@@ -134,11 +126,11 @@ else
             {
                 @if (column.RowHeader)
                 {
-                    <th scope="row" class="@CellClass(column)">@RenderCell(column, item)</th>
+                    <th scope="row" class="@CellClass(column)" title="@column.TooltipOf(item)">@RenderCell(column, item)</th>
                 }
                 else
                 {
-                    <td class="@CellClass(column)">@RenderCell(column, item)</td>
+                    <td class="@CellClass(column)" title="@column.TooltipOf(item)">@RenderCell(column, item)</td>
                 }
             }
         </tr>

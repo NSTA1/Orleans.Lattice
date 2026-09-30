@@ -9,8 +9,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
 /// <summary>
 /// The tenant directory (<c>/tenancy</c>) for a platform operator: every tenant
-/// the caller can reach with its state, then its quota use, residency (linking
-/// to its regions) and installed apps as each is read, a search, a "New tenant"
+/// the caller can reach with its state, then its quota use and residency
+/// (linking to its regions) as each is read - the installed-app count is read
+/// only for the active tenant, so it is the label of a row's Apps action rather
+/// than a column that would be unknown on every other row - a search, a "New tenant"
 /// form - the visible control of the palette's create command - that can also
 /// set the new tenant's allowed regions and initial residency, and a "Set
 /// regions" picker, the visible control of the palette's set-regions command.
@@ -180,10 +182,8 @@ public partial class TenancyDirectoryPage
         { } count => $"{TenancyFormat.Count(count)} apps",
     };
 
-    private static string AppsLabel(TenancyDirectoryRow row) => $"{AppsText(row)} installed for tenant {row.TenantId}";
-
     private static string RegionsLabel(TenancyDirectoryRow row, IReadOnlyList<string> regions) => regions.Count == 0
-        ? $"No residency set; open the regions of tenant {row.TenantId}"
+        ? $"{TenancyFormat.NoResidency}: no residency is set; open the regions of tenant {row.TenantId}"
         : $"Resident in {TenancyFormat.RegionList(regions)}; open the regions of tenant {row.TenantId}";
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();

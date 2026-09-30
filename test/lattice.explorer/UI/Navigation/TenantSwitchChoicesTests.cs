@@ -44,6 +44,7 @@ public sealed class TenantSwitchChoicesTests
         {
             Assert.That(all.Items.Select(item => item.Value), Is.EqualTo(new[] { "acme", "default", "globex" }));
             Assert.That(all.Items.Select(item => item.Detail), Is.EqualTo(new[] { TenantSwitchChoices.ActiveDetail, null, null }));
+            Assert.That(all.Items.Select(item => item.Current), Is.EqualTo(new[] { true, false, false }), "the active tenant is drawn as current");
             Assert.That(narrowed.Items.Select(item => item.Value), Is.EqualTo(new[] { "globex" }));
             Assert.That(bounded.Truncated, Is.True);
         });

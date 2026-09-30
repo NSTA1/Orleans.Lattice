@@ -3,7 +3,7 @@
 
 @*
     The tenant directory, for a platform operator: every tenant the caller can
-    reach, its state, quota use, regions and installed apps, a validated create
+    reach, its state, quota use and regions, a validated create
     form that can also set a new tenant's allowed regions and initial residency,
     and a picker that opens a tenant's regions. Anyone else is taken to their
     own tenant.
@@ -62,9 +62,6 @@ else
                 {
                     @Pending(context, null)
                 }
-            </LtColumn>
-            <LtColumn TItem="TenancyDirectoryRow" Title="Apps">
-                <a href="@Href(TenancyRoutes.Apps(context.TenantId))" aria-label="@AppsLabel(context)">@AppsText(context)</a>
             </LtColumn>
             <LtColumn TItem="TenancyDirectoryRow" Title="Workspace" Align="LtColumnAlign.End">
                 <a href="@Href(TenancyRoutes.MyTenant(context.TenantId))">@(IsActive(context) ? "Open workspace" : "Scope to tenant")</a>
