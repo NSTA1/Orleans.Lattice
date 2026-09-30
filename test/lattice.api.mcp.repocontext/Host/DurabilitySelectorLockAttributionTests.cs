@@ -79,9 +79,36 @@ public sealed class DurabilitySelectorLockAttributionTests
             Assert.That(decorator.BusyWindow, Is.EqualTo(TimeSpan.FromSeconds(15)),
                 "The busy window is read from the provider's own resolved connection string, which the "
                 + "host derives as half the 30 s request budget.");
-            Assert.That(decorator.RetryPolicy, Is.SameAs(RepoContextGrainStorageLockRetryPolicy.PinStateWrites),
-                "Issue #3761 item 6: the host re-issues pin-state writes that fail on a lock, so a "
-                + "bulk-ingest convoy does not leave the published materialiser pin stale.");
+            Assert.That(decorator.RetryPolicy, Is.SameAs(RepoContextGrainStorageLockRetryPolicy.SelfAmplifyingWrites),
+                "Issue #2419: the host re-issues every write whose loss generates more writes - the "
+                + "leaf's checkpoint advance and the shard root as well as the materialiser pin - so "
+                + "a convoy does not drop the writes whose loss is what refills it. Pinning the "
+                + "exact policy instance is what stops the wiring quietly reverting to the narrower "
+                + "pre-#2419 set while every policy unit test still passes.");
+        });
+    }
+
+    [Test]
+    public void The_sqlite_arm_bounds_write_concurrency_rather_than_wiring_an_unbounded_gate()
+    {
+        using var provider = Wire(
+            services => services.Configure<SiloMessagingOptions>(o => o.ResponseTimeout = TimeSpan.FromSeconds(30)),
+            (RepoContextHostConfiguration.GrainStorageKey, "sqlite"),
+            (RepoContextHostConfiguration.SqlitePathKey, "/mnt/data/repo.db"));
+
+        _ = provider.GetRequiredKeyedService<IGrainStorage>(LatticeOptions.StorageProviderName);
+        var gate = provider.GetRequiredService<RepoContextGrainStorageLockMeter>().WriteGate;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.IsBounded, Is.True,
+                "The gate defaults to unbounded so that a meter constructed without one behaves "
+                + "exactly as it did before issue #2419. That default is safe for a fixture and "
+                + "useless in production: were the host to resolve a meter that was never handed a "
+                + "gate, write concurrency would be unbounded again and every other test here would "
+                + "still pass. This is the assertion that makes the wiring load-bearing.");
+            Assert.That(gate.Permits, Is.EqualTo(RepoContextGrainStorageWriteGate.DefaultPermits));
+            Assert.That(gate.AcquireTimeout, Is.EqualTo(RepoContextGrainStorageWriteGate.DefaultAcquireTimeout));
         });
     }
 
