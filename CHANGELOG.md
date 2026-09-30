@@ -18,8 +18,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
 
-- **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
-
 - **Retrieval - Latency and readiness.** Retrieval latency is measured end to end and by stage, readiness and its 503 are attributable on the wire, a suppressed exact fallback is its own retrieval path, and both ladder guards report their operating state. ([#2253](https://github.com/NSTA1/Orleans.Lattice/issues/2253), [#2624](https://github.com/NSTA1/Orleans.Lattice/issues/2624), [#2720](https://github.com/NSTA1/Orleans.Lattice/issues/2720), [#2936](https://github.com/NSTA1/Orleans.Lattice/issues/2936), [#2962](https://github.com/NSTA1/Orleans.Lattice/issues/2962)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Indexing - Job telemetry.** The index job and `reset_index` report liveness and bounded progress, ingest publishes per-repository `repocontext.ingest.*` metrics with an alertable last-pass age, coverage-gate stand-downs and gap identity are readable, and each repository names its indexed root. ([#2208](https://github.com/NSTA1/Orleans.Lattice/issues/2208), [#2616](https://github.com/NSTA1/Orleans.Lattice/issues/2616), [#2617](https://github.com/NSTA1/Orleans.Lattice/issues/2617), [#2642](https://github.com/NSTA1/Orleans.Lattice/issues/2642), [#2654](https://github.com/NSTA1/Orleans.Lattice/issues/2654), [#2679](https://github.com/NSTA1/Orleans.Lattice/issues/2679), [#2705](https://github.com/NSTA1/Orleans.Lattice/issues/2705), [#2814](https://github.com/NSTA1/Orleans.Lattice/issues/2814), [#2875](https://github.com/NSTA1/Orleans.Lattice/pull/2875), [#2964](https://github.com/NSTA1/Orleans.Lattice/issues/2964), [#3151](https://github.com/NSTA1/Orleans.Lattice/issues/3151)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -54,18 +52,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Aggregation saga operation id.** Every numeric contribution and retraction interpolated a payload string purely to transcode it into the buffer that hashes it, then built the id from three more. It now composes those bytes in place and formats once, a third faster. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
 
-- **Performance - Leaf frame structural row walk.** The frame codec's row parser took its materialise-or-skip mode as a runtime flag, so the skipping walk behind frame validation still ran every branch of the materialising one. The mode is now a type argument the JIT specialises away, halving the walk. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
-
-- **Performance - Aggregation contribution slots.** A numeric contribution touches at most two accumulator slots, yet accumulated them in a dictionary and then walked it back out to rebuild the same keys for cleanup. Two locals now carry both, removing 44% of the flip's allocation. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
-
-- **Performance - Aggregation shard slot derivation.** A re-grouping contribution derived its shard slot once per accumulator key, transcoding the source key to UTF-8 and hashing it twice for an answer that cannot differ. It is derived once, making the pair 39% faster. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
-
-- **Performance - Event publish fan-out.** A multi-key set, conditional set or CRDT delta apply published its per-key stream events one await at a time. They now go out in bounded concurrent windows of 32, so a 500-key request costs 16 grain-call rounds instead of 500. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
-
-- **Performance - Leaf frame state-bytes walk.** The row walker that sums a frame's state bytes is now pinned as an inline root, so the JIT inlines its per-row parser into the walk instead of inlining the walk into its callers. The walk is 68% faster over a 4096-row frame. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
-
-- **Performance - Compacted OR-set decode.** Decoding a compacted OR-set overflowed its presized buffer and let list doubling widen it. It now widens once to the provable ceiling, cutting 29% of the decode's allocation and 31% of its time. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
-
 - **Docs - Multi-silo guide scope.** The multi-silo scaling guide now states that its figures come from one tree on one storage account and links multi-account fan-out, the Operate track lists it, and the internal `benchmark/` notes are no longer published on the docs site. ([#3617](https://github.com/NSTA1/Orleans.Lattice/pull/3617)) (`repository-wide`)
 
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -79,7 +65,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 ### Fixed
 
 - **Schema - Unversioned trees were enveloped at version 0.** An absent version config read back as a zero-valued config, so writes to a tree with none were wrapped in a (0,0) envelope and the admin reported a phantom config. Absence now reads as null and writes pass through unchanged. ([#3993](https://github.com/NSTA1/Orleans.Lattice/issues/3993)) (`Orleans.Lattice.Schema`)
-- **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
 - **Config - Tenant lease cycle timeout above the timer ceiling.** With `LeaseInterval` and `LeaseCycleTimeout` both longer than a timer can wait (about 49.7 days), the rate-budget lease loop died on its first cycle and never apportioned a rate. The timeout now clamps to the ceiling. ([#4013](https://github.com/NSTA1/Orleans.Lattice/issues/4013)) (`Orleans.Lattice.Tenancy`)
 - **Config - ANN slice budgets above the timer ceiling.** An open or ingest slice budget longer than a timer can wait (about 49.7 days) faulted every open attempt and every build slice that waited, so the approximate index never opened or built. Both deadlines now clamp to the ceiling. ([#4014](https://github.com/NSTA1/Orleans.Lattice/issues/4014)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 - **CRDT - Counter component overflow.** A G-Counter or PN-Counter advance past `long.MaxValue` wrapped the component negative, so the pointwise-max merge discarded it and the write succeeded having counted nothing. It now throws `OverflowException` and writes nothing. ([#3926](https://github.com/NSTA1/Orleans.Lattice/issues/3926)) (`Orleans.Lattice`)
@@ -188,8 +173,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Tenancy - A dropped region never finished draining.** A region removed from residency now advances from Draining to Removed on its own, and a lifecycle promotion can no longer overwrite a later residency change. Promoting an added region to Online is a documented operator step. ([#3897](https://github.com/NSTA1/Orleans.Lattice/issues/3897)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Mcp`)
 
-- **Replay - Admission refusals logged a stack trace each.** An expected replay-permit refusal no longer logs its exception. Refusals are counted into at most one summary warning a minute per silo, which names the arm that fired and its remedy. ([#3906](https://github.com/NSTA1/Orleans.Lattice/issues/3906)) (`Orleans.Lattice`)
-
 - **Observability - The replay permit gate could not show why it refused.** Replay-permit refusals carry an `arm` tag, permit hold time and service rate are exported, and a no-progress refusal says no permit was released instead of blaming queue depth. ([#3921](https://github.com/NSTA1/Orleans.Lattice/issues/3921)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Vector - A saturated load discarded a healthy index.** A durable index load re-reads a record the manifest names before discarding, and defers when any read returns it. Only a record every read path agrees is absent is rebuilt, and a discard names the generation it destroyed. ([#3905](https://github.com/NSTA1/Orleans.Lattice/issues/3905)) (`Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -197,8 +180,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Core - A busy resize timed out and could not be undone.** The resize snapshot copies in wall-clock-bounded slices, so it no longer outlives the caller's timeout or starves its keepalive. An undo is accepted while a phase runs, unwinds at the next boundary, and shows in resize status. ([#3904](https://github.com/NSTA1/Orleans.Lattice/issues/3904), [#3923](https://github.com/NSTA1/Orleans.Lattice/issues/3923)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
 
 - **WAL - An undone resize leaked its copy's WAL.** Undoing a resize now discards its destination, retiring its materialiser pins and trimming its WAL at once. The WAL GC no longer reactivates a deleted tree's leaves, and it heals copies an earlier undo left behind. ([#3930](https://github.com/NSTA1/Orleans.Lattice/issues/3930)) (`Orleans.Lattice`)
-- **WAL - Trim could outrun a leaf's durable checkpoint.** A checkpoint persist that failed left the leaf advertising an advance it never wrote, so the GC could trim a prefix no snapshot covered and the next replay latched stale. The advance is now rolled back and retried. ([#4017](https://github.com/NSTA1/Orleans.Lattice/issues/4017)) (`Orleans.Lattice`)
-
 - **Core - A purge stopped part-way and wedged its tree id.** A tree purge is accepted and walked in the background, with shard progress in deletion status, so the response timeout cannot stop it. A tree re-created under a purged id can again be resized, deleted and recovered. ([#3940](https://github.com/NSTA1/Orleans.Lattice/issues/3940), [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
 
 ### Security
@@ -226,6 +207,40 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Container - Provenance and tooling.** The image git revision reaches the assembly instead of publishing an unknown build, the provenance guard adjudicates the real deployment rather than a default service name, metrics are served rather than answering 404, and tuning no longer drops a path. ([#2363](https://github.com/NSTA1/Orleans.Lattice/issues/2363), [#2686](https://github.com/NSTA1/Orleans.Lattice/issues/2686), [#2886](https://github.com/NSTA1/Orleans.Lattice/issues/2886), [#2929](https://github.com/NSTA1/Orleans.Lattice/issues/2929), [#3086](https://github.com/NSTA1/Orleans.Lattice/issues/3086), [#3169](https://github.com/NSTA1/Orleans.Lattice/issues/3169)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ## Released
+
+## [2026-09-30]
+
+Patch release from the `release/9.8` line: `Orleans.Lattice` and `Orleans.Lattice.Dashboards` advance to `9.8.2`. Every other package stays where the 9.8.1 wave left it. Packages that depend on a patched package still require its earlier version, so reference a patched package directly to pick up its fixes.
+
+**Upgrading from 9.8.1.** A rolling upgrade is supported: no wire format, persisted state layout or public API changes. The headline fix closes a durability hole in which a failed checkpoint persist left a leaf advertising a WAL trim entitlement it had never written, so the garbage collector could trim a prefix no snapshot covered and the next replay latched stale. A leaf already latched stale still needs an operator rebuild; this patch prevents new occurrences rather than repairing existing ones. Expected replay-permit refusals now log one summary warning a minute per silo instead of a stack trace each, so an alert matching that stack no longer fires.
+
+### Added
+
+- **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+### Changed
+
+- **Performance - Aggregation contribution slots.** A numeric contribution touches at most two accumulator slots, yet accumulated them in a dictionary and then walked it back out to rebuild the same keys for cleanup. Two locals now carry both, removing 44% of the flip's allocation. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation shard slot derivation.** A re-grouping contribution derived its shard slot once per accumulator key, transcoding the source key to UTF-8 and hashing it twice for an answer that cannot differ. It is derived once, making the pair 39% faster. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
+- **Performance - Leaf frame state-bytes walk.** The row walker that sums a frame's state bytes is now pinned as an inline root, so the JIT inlines its per-row parser into the walk instead of inlining the walk into its callers. The walk is 68% faster over a 4096-row frame. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
+- **Performance - Compacted OR-set decode.** Decoding a compacted OR-set overflowed its presized buffer and let list doubling widen it. It now widens once to the provable ceiling, cutting 29% of the decode's allocation and 31% of its time. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
+- **Performance - Event publish fan-out.** A multi-key set, conditional set or CRDT delta apply published its per-key stream events one await at a time. They now go out in bounded concurrent windows of 32, so a 500-key request costs 16 grain-call rounds instead of 500. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
+- **Performance - Leaf frame structural row walk.** The frame codec's row parser took its materialise-or-skip mode as a runtime flag, so the skipping walk behind frame validation still ran every branch of the materialising one. The mode is now a type argument the JIT specialises away, halving the walk. ([#3910](https://github.com/NSTA1/Orleans.Lattice/issues/3910)) (`Orleans.Lattice`)
+
+### Fixed
+
+- **WAL - Trim could outrun a leaf's durable checkpoint.** A checkpoint persist that failed left the leaf advertising an advance it never wrote, so the GC could trim a prefix no snapshot covered and the next replay latched stale. The advance is now rolled back and retried. ([#4017](https://github.com/NSTA1/Orleans.Lattice/issues/4017)) (`Orleans.Lattice`)
+
+- **Replay - Admission refusals logged a stack trace each.** An expected replay-permit refusal no longer logs its exception. Refusals are counted into at most one summary warning a minute per silo, which names the arm that fired and its remedy. ([#3906](https://github.com/NSTA1/Orleans.Lattice/issues/3906)) (`Orleans.Lattice`)
+
+- **Config - Core timeouts above the timer ceiling.** A WAL, shard, digest, scan or fan-out timeout, budget or cadence longer than a timer can wait (about 49.7 days), such as `TimeSpan.MaxValue`, passed validation and then failed every operation that armed it. Validation now rejects it. ([#4012](https://github.com/NSTA1/Orleans.Lattice/issues/4012)) (`Orleans.Lattice`)
+
+
 
 ## [2026-09-29]
 
