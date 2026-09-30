@@ -355,6 +355,8 @@ public partial class AggregationRowCodecTests
         {
             Assert.That(head.GroupKey, Is.EqualTo(full.GroupKey));
             Assert.That(head.Numeric, Is.EqualTo(full.Numeric));
+            Assert.That(head.HasMember, Is.True);
+            Assert.That(head.HasMember, Is.EqualTo(full.Member is not null));
         });
     }
 
@@ -371,7 +373,24 @@ public partial class AggregationRowCodecTests
         {
             Assert.That(head.GroupKey, Is.EqualTo(full.GroupKey));
             Assert.That(head.Numeric, Is.EqualTo(full.Numeric));
+            Assert.That(head.HasMember, Is.False);
+            Assert.That(head.HasMember, Is.EqualTo(full.Member is not null));
         });
+    }
+
+    [Test]
+    public void DecodeMembershipHead_reports_an_empty_member_as_present()
+    {
+        // The head reads the presence flag the encoder wrote, not the member's
+        // length, so a row carrying the empty string is a row that HAS a member.
+        // Callers that use HasMember to decide whether a stored row is
+        // byte-identical to a member-free one depend on exactly that.
+        var row = AggregationRowCodec.EncodeMembership(
+            new AggregationRowCodec.MembershipRow("group/eu", 0, string.Empty));
+
+        var head = AggregationRowCodec.DecodeMembershipHead(row);
+
+        Assert.That(head.HasMember, Is.True);
     }
 
     [Test]
