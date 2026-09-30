@@ -39,6 +39,13 @@ internal sealed class FakeSchemaControl : ILatticeSchemaControl
     /// <summary>Whether the versioning add-on is registered; when not, every version verb throws <see cref="InvalidOperationException"/>.</summary>
     public bool VersioningRegistered { get; set; } = true;
 
+    /// <summary>
+    /// Whether an unversioned tree reads as the value-type default config (family 0
+    /// at version 0) rather than <see langword="null"/>, as a cluster whose store
+    /// deserializes an absent config to its default answers.
+    /// </summary>
+    public bool UnversionedReadsAsDefault { get; set; }
+
     /// <summary>When set, a migration, an advance and migrate, and a remediation wait for it.</summary>
     public TaskCompletionSource<LatticeSchemaRemediationReport>? OperationGate { get; set; }
 
@@ -135,7 +142,10 @@ internal sealed class FakeSchemaControl : ILatticeSchemaControl
     public Task<LatticeSchemaVersionConfig?> GetVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)
     {
         RecordVersion("GetVersionConfig", treeId);
-        return Task.FromResult<LatticeSchemaVersionConfig?>(Versions.TryGetValue(treeId, out var config) ? config : null);
+        return Task.FromResult<LatticeSchemaVersionConfig?>(
+            Versions.TryGetValue(treeId, out var config) ? config
+            : UnversionedReadsAsDefault ? default(LatticeSchemaVersionConfig)
+            : null);
     }
 
     /// <inheritdoc />

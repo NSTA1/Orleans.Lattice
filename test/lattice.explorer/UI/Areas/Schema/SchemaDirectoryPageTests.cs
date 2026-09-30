@@ -68,6 +68,24 @@ public sealed class SchemaDirectoryPageTests : SchemaTestContext
     }
 
     [Test]
+    public void A_tree_with_only_a_default_version_config_is_not_listed_under_schema()
+    {
+        // The cluster reads an absent config as family 0 at version 0 (#3985).
+        UseEstate();
+        Schema.UnversionedReadsAsDefault = true;
+
+        var cut = RenderAt<SchemaDirectoryPage>("schema");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("tbody tr").Select(row => row.Children[0].TextContent.Trim()),
+                Is.EqualTo(new[] { "a/crm/orders", "audit", "orders" }), "scratch has only the default config");
+            Assert.That(Cells(Row(cut, "a/crm/orders"))[2], Is.EqualTo("Unversioned"));
+            Assert.That(cut.Find(".lt-schema-status").TextContent, Does.StartWith("3 trees of 4 trees under schema."));
+        });
+    }
+
+    [Test]
     public void Show_all_lists_every_tree_and_marks_the_switch()
     {
         UseEstate();

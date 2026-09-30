@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 /// Issue #3963: the schema rule builder, by the keyboard alone. Two rules are added
 /// without typing a regular expression - a number range on a member picked by its
 /// path, and a common format - the live check against the tree's sample shows the one
-/// order that fails, and saving warns about it before the policy is set.
+/// order that fails, and saving warns about it before the policy is set. Issue #3985:
+/// Required on the whole value, an object, claims, reads and checks the same and saves.
 /// </summary>
 [TestFixture]
 [Category("UI")]
@@ -54,6 +55,42 @@ public sealed class SchemaRuleBuilderJourneyTests : UiTestBase
 
         var saved = await Admin(world).GetPolicyAsync(ExplorerWorld.OrdersTree);
         Assert.That(saved!.Rules.Select(rule => rule.Kind), Is.EqualTo(new[] { LatticeSchemaRuleKind.Structured, LatticeSchemaRuleKind.Regex }));
+        await ResetAsync(world);
+    }
+
+    [Test]
+    public async Task Required_on_the_whole_value_an_object_passes_the_sample_and_saves_with_no_warning()
+    {
+        // Issue #3985: the whole value is an object, which the older presence check reads as missing.
+        var world = await UiHosts.WorldAsync();
+        await ResetAsync(world);
+        var page = await OpenAsync(world.Head, $"/schema/{ExplorerWorld.OrdersTree}", WorldIdentities.Admin);
+        var content = Shell.Content(page);
+
+        await PressAsync(content.GetByRole(AriaRole.Button, new() { Name = "Set a policy", Exact = true }), "Enter");
+        await Expect(content.Locator(".lt-schema-rulebuilder__aside")).ToContainTextAsync("Checked");
+        await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Save policy", Exact = true })).ToBeDisabledAsync();
+
+        await PressAsync(content.GetByRole(AriaRole.Button, new() { Name = "Add a rule", Exact = true }), "Enter");
+        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "Add a rule", Exact = true })).ToBeFocusedAsync();
+        await PressAsync(content.GetByRole(AriaRole.Button, new() { Name = "The whole value" }), "Enter");
+        await Expect(content.GetByRole(AriaRole.Button, new() { Name = "The whole value" })).ToHaveAttributeAsync("aria-pressed", "true");
+
+        var required = content.Locator(".lt-schema-gallery__option").Filter(new() { HasText = "Required" });
+        await Expect(required.Locator(".lt-schema-gallery__example")).ToHaveTextAsync("Set in 5 of 5 sampled values.");
+        await Expect(content.GetByRole(AriaRole.Switch, new() { Name = "It holds an object or a list" })).ToHaveAttributeAsync("aria-checked", "true");
+        await Expect(content.Locator(".lt-schema-composer__reads")).ToContainTextAsync("The value must be present, as any value");
+        await Expect(content.Locator(".lt-schema-composer__example")).ToContainTextAsync("Against the sample: 5 of 5 values pass.");
+
+        await PressAsync(content.GetByRole(AriaRole.Button, new() { Name = "Add rule", Exact = true }), "Enter");
+        await Expect(RuleSentences(page)).ToHaveCountAsync(1);
+        await Expect(content.Locator(".lt-schema-ruleset__rule")).ToContainTextAsync("all pass");
+
+        await PressAsync(content.GetByRole(AriaRole.Button, new() { Name = "Save policy", Exact = true }), "Enter");
+        await Expect(Shell.ToastMessages(page)).ToContainTextAsync($"The policy of {ExplorerWorld.OrdersTree} is saved.");
+
+        var saved = await Admin(world).GetPolicyAsync(ExplorerWorld.OrdersTree);
+        Assert.That(saved!.Rules.Single().Predicate, Is.EqualTo(LatticePredicateNode.TypeOf(null, LatticeValueKind.Present)));
         await ResetAsync(world);
     }
 

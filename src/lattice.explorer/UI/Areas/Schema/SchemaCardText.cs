@@ -55,7 +55,7 @@ internal static class SchemaCardText
         ArgumentNullException.ThrowIfNull(card);
         return card.Kind switch
         {
-            SchemaCardKind.Required => card.Structural ? "must be present, as any value" : "must be present",
+            SchemaCardKind.Required => card.Structural ? "must be present, as any value" : "must be present as text, a number or true or false",
             SchemaCardKind.Type => "must be " + TypePhrase(card.ValueType),
             SchemaCardKind.OneOf => OneOf(card),
             SchemaCardKind.NumberRange => NumberRange(card),
