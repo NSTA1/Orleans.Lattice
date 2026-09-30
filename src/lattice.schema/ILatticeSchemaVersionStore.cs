@@ -23,7 +23,9 @@ public interface ILatticeSchemaVersionStore
 
     /// <summary>
     /// Reads the schema-version configuration for <paramref name="treeId"/>, or
-    /// <c>null</c> when the tree is not versioned.
+    /// <c>null</c> when the tree is not versioned. A tree with no stored config
+    /// always answers <c>null</c> - never <c>default(LatticeSchemaVersionConfig)</c> -
+    /// so a caller's <c>is { }</c> test is the complete "is versioned" check.
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the read.</param>

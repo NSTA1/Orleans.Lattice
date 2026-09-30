@@ -34,15 +34,28 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// count and no retry. It changes no timeout. Issue #2431 deliberately shipped
 /// attribution before any remedy; with that attribution in hand, issue #3761 item 6
 /// found the remaining lock failures on the WAL materialiser pin store, whose failed
-/// write leaves the published pin stale. So a lock failure on a write or clear that
-/// <see cref="RepoContextGrainStorageLockRetryPolicy"/> admits - by default the pin
-/// store's alone - is re-issued after a jittered backoff, a bounded number of times,
-/// and each re-issued operation's outcome is counted with
+/// write leaves the published pin stale, and issue #2419 widened the admitted set to
+/// every write whose loss generates more writes. So a lock failure on a write or
+/// clear that <see cref="RepoContextGrainStorageLockRetryPolicy"/> admits is
+/// re-issued after a jittered backoff, a bounded number of times, and each re-issued
+/// operation's outcome is counted with
 /// <see cref="RepoContextGrainStorageLockMeter.RecordLockRetry"/>. Every failed
 /// attempt is still attributed and counted as a lock failure, so a recovered write is
 /// never mistaken for an uncontended one. With
 /// <see cref="RepoContextGrainStorageLockRetryPolicy.None"/> the decorator only
 /// observes.
+/// </para>
+/// <para>
+/// <b>It also bounds how many writes contend at once</b> (issue #2419), through the
+/// <see cref="RepoContextGrainStorageLockMeter.WriteGate"/> the meter carries. SQLite
+/// has one writer, so the 106 concurrent writes the attribution recorded bought no
+/// throughput and converted the surplus straight into exhausted busy windows. A
+/// writer waits for admission before it enters the convoy, and both the admission and
+/// the convoy are released before any retry backoff, so a writer sleeping out its
+/// jitter holds neither. The gate fails open: a writer not admitted within the
+/// acquire timeout proceeds ungated, so the worst case is the behaviour that shipped
+/// before it. Reads are never gated - in <c>WAL</c> journal mode a reader does not
+/// take the write lock.
 /// </para>
 /// <para>
 /// It forwards <see cref="ILifecycleParticipant{TLifecycleObservable}"/> to the
@@ -151,49 +164,65 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
         IGrainState<T> grainState)
     {
         var convoy = _meter.Convoy;
-        var width = convoy.Enter(operation);
-        var writesAtEntry = operation == RepoContextGrainStorageOperation.Read ? convoy.WritesInFlight : width;
-        var started = _time.GetTimestamp();
+        var gate = _meter.WriteGate;
+        var isWrite = operation != RepoContextGrainStorageOperation.Read;
         var retries = 0;
-        try
+
+        while (true)
         {
-            while (true)
+            // Admission is taken OUTSIDE the convoy, and the convoy is entered only
+            // once a permit is held, so WritesInFlight keeps meaning "issued to
+            // SQLite" rather than "wanted to be". That is what makes the gate
+            // measurable: it is the quantity the attribution line reports as 106 at
+            // peak, and the gate's whole purpose is to cap it.
+            var admission = isWrite
+                ? await gate.AcquireAsync(CancellationToken.None).ConfigureAwait(false)
+                : RepoContextGrainStorageWriteGateOutcome.Unbounded;
+            if (isWrite)
             {
-                try
+                _meter.RecordWriteGateAdmission(operation, admission);
+            }
+
+            var width = convoy.Enter(operation);
+            var writesAtEntry = operation == RepoContextGrainStorageOperation.Read ? convoy.WritesInFlight : width;
+            var started = _time.GetTimestamp();
+            try
+            {
+                await call(_inner, stateName, grainId, grainState).ConfigureAwait(false);
+                if (retries > 0)
                 {
-                    await call(_inner, stateName, grainId, grainState).ConfigureAwait(false);
+                    _meter.RecordLockRetry(operation, recovered: true);
+                }
+
+                return;
+            }
+            catch (Exception failure) when (SqliteLockClassifier.TryFind(failure, out var lockFailure))
+            {
+                var retrying = retries < _retry.MaxRetries && _retry.Applies(operation, stateName);
+                Attribute(operation, stateName, grainId, writesAtEntry, started, lockFailure!, retries + 1, retrying);
+                if (!retrying)
+                {
                     if (retries > 0)
                     {
-                        _meter.RecordLockRetry(operation, recovered: true);
+                        _meter.RecordLockRetry(operation, recovered: false);
                     }
 
-                    return;
+                    throw;
                 }
-                catch (Exception failure) when (SqliteLockClassifier.TryFind(failure, out var lockFailure))
-                {
-                    var retrying = retries < _retry.MaxRetries && _retry.Applies(operation, stateName);
-                    Attribute(operation, stateName, grainId, writesAtEntry, started, lockFailure!, retries + 1, retrying);
-                    if (!retrying)
-                    {
-                        if (retries > 0)
-                        {
-                            _meter.RecordLockRetry(operation, recovered: false);
-                        }
-
-                        throw;
-                    }
-                }
-
-                // The failed attempt was one autocommit statement rolled back whole, so the
-                // row and the grain state's ETag are as they were; see the retry policy.
-                retries++;
-                await Task.Delay(_retry.DelayFor(retries, Random.Shared.NextDouble()), _time).ConfigureAwait(false);
-                started = _time.GetTimestamp();
             }
-        }
-        finally
-        {
-            convoy.Exit(operation);
+            finally
+            {
+                // Both released before the backoff below, never across it: a writer
+                // sleeping out its jitter is not in the convoy and must not hold a
+                // permit another writer could be using.
+                convoy.Exit(operation);
+                gate.Release(admission);
+            }
+
+            // The failed attempt was one autocommit statement rolled back whole, so the
+            // row and the grain state's ETag are as they were; see the retry policy.
+            retries++;
+            await Task.Delay(_retry.DelayFor(retries, Random.Shared.NextDouble()), _time).ConfigureAwait(false);
         }
     }
 

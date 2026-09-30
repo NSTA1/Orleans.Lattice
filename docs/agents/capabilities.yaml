@@ -1283,7 +1283,7 @@ capabilities:
         source: "docs/lattice.explorer/managing-access.md"
       - statement: "The Entra Graph provider searches and resolves users and groups with app-only Microsoft Graph permissions."
         source: "docs/lattice.membership/identity-directory-providers.md"
-      - statement: "The tenant access-administration facade validates added admin-subject ids through the identity directory when validation is required and a real provider is active; the shipped tenant create registration does not validate seed admin subjects."
+      - statement: "The tenant access-administration facade validates added admin-subject ids, and tenant create validates explicitly supplied seed admin-subject ids, through the identity directory when validation is required and a real provider is active."
         source: "docs/lattice.membership/identity-directory-providers.md"
     non_guarantees:
       - statement: "A principal returned by the identity-directory provider is a searchable identity and never grants access on its own."

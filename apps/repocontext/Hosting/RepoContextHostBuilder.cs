@@ -316,13 +316,20 @@ public static class RepoContextHostBuilder
         owned.Add(heapCeilingMeter);
         builder.Services.AddSingleton(heapCeilingMeter);
 
-        // SQLite grain-storage lock attribution (issue #2431). Constructed eagerly for
-        // the same reason as its neighbours: its failure counter is pre-minted at zero
-        // and its gauges are observable, and none of that reaches the exposition until
-        // the meter exists. Registered before UseOrleans so the storage decorator the
-        // durability wiring installs records on this instance rather than creating
-        // its own on first use.
-        var storageLockMeter = new RepoContextGrainStorageLockMeter();
+        // SQLite grain-storage lock attribution (issue #2431) and the write admission
+        // gate that bounds the convoy it attributes (issue #2419). Constructed eagerly
+        // for the same reason as its neighbours: its failure counter is pre-minted at
+        // zero and its gauges are observable, and none of that reaches the exposition
+        // until the meter exists. Registered before UseOrleans so the storage decorator
+        // the durability wiring installs records on this instance, and admits through
+        // this gate, rather than creating its own on first use.
+        var storageWriteGate = new RepoContextGrainStorageWriteGate(
+            RepoContextGrainStorageWriteGate.DefaultPermits,
+            RepoContextGrainStorageWriteGate.DefaultAcquireTimeout);
+        owned.Add(storageWriteGate);
+        builder.Services.AddSingleton(storageWriteGate);
+
+        var storageLockMeter = new RepoContextGrainStorageLockMeter(convoy: null, writeGate: storageWriteGate);
         owned.Add(storageLockMeter);
         builder.Services.AddSingleton(storageLockMeter);
 

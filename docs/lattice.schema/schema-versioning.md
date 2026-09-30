@@ -81,7 +81,9 @@ await admin.SetVersionConfigAsync(
 ```
 
 Read a tree's config back with `GetVersionConfigAsync` (`null` for an unversioned
-tree). `ClearVersionConfigAsync` opts the tree out again: new writes are no longer
+tree - one never given a config, or whose config was cleared - and never a
+zero-valued config, so writes to such a tree keep their exact bytes with no
+envelope). `ClearVersionConfigAsync` opts the tree out again: new writes are no longer
 stamped, and an already-stamped stored value is still stripped of its envelope on
 read but returned at its stored version, because no target remains to upcast it to.
 

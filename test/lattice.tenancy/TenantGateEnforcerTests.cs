@@ -29,7 +29,27 @@ public sealed class TenantGateEnforcerTests
     private static TenantGateEnforcer CreateEnforcer(
         ITenantPolicyEngine engine,
         ITenantResidencyResolver? residency = null) =>
-        new(engine, residency ?? new NullTenantResidencyResolver());
+        new(
+            engine,
+            residency ?? new NullTenantResidencyResolver(),
+            AuthoritativePolicy(),
+            Substitute.For<ITenantRegistry>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantGateEnforcer>.Instance);
+
+    /// <summary>
+    /// A maintainer that has built one (empty) snapshot with no rebuild
+    /// outstanding, so it is authoritative and the enforcer decides from the
+    /// substituted engine exactly as it did before issue #4001. The snapshot lag
+    /// window is covered by <see cref="TenantGateEnforcerSnapshotLagTests"/>.
+    /// </summary>
+    private static CompiledTenantPolicySnapshotMaintainer AuthoritativePolicy()
+    {
+        var policy = new CompiledTenantPolicySnapshotMaintainer(
+            new TenantPolicyTestData.FakeTenantRegistry(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        policy.RebuildNowAsync().GetAwaiter().GetResult();
+        return policy;
+    }
 
     private static LatticeAccessRequest Request(
         string treeId,

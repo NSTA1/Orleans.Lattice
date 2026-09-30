@@ -330,8 +330,10 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     /// tenant-admin grant - a dangling reference that whoever later registers that
     /// id would inherit. The caller-seeded default is not validated here: it comes
     /// from the authenticated caller's own resolved subject, not from the wire.
-    /// The shipped registration constructs this facade without an identity
-    /// directory, so in that configuration this check never runs.
+    /// The shipped <c>AddLatticeTenantAdminApi</c> registration supplies the
+    /// registered identity directory and its options, exactly as it does for the
+    /// access-administration facade, so this check runs wherever a real provider is
+    /// registered and validation is required.
     /// </remarks>
     private async Task ValidateDirectorySubjectsAsync(
         IReadOnlyList<string> adminSubjects,
