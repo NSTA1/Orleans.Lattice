@@ -169,14 +169,15 @@ public sealed class AccessAreaTests : AccessTestContext
     }
 
     [Test]
-    public void With_tenancy_on_access_addresses_are_never_tenant_rooted()
+    public void With_tenancy_on_a_tenant_rooted_access_address_keeps_its_tenant_and_a_plain_one_stays_cluster_wide()
     {
         UseTenancy("acme");
         var navigator = Services.GetRequiredService<ExplorerNavigator>();
 
         Assert.Multiple(() =>
         {
-            Assert.That(navigator.Canonicalize(ExplorerAddress.Parse("/t/acme/access/rules")).Format(), Is.EqualTo("/access/rules"));
+            Assert.That(navigator.Canonicalize(ExplorerAddress.Parse("/t/acme/access/rules")).Format(), Is.EqualTo("/t/acme/access/rules"));
+            Assert.That(navigator.Canonicalize(ExplorerAddress.Parse("/access/rules")).Format(), Is.EqualTo("/access/rules"));
             Assert.That(navigator.Canonicalize(AccessRoutes.Group("ops")).Format(), Is.EqualTo("/access/groups/ops"));
             Assert.That(navigator.Canonicalize(AccessRoutes.AppRoles("crm")).Format(), Is.EqualTo("/t/acme/apps/crm/roles"));
         });

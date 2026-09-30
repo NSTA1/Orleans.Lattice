@@ -65,7 +65,7 @@ public sealed class KeyboardAccessibilityTests : UiTestBase
 
         await page.Keyboard.PressAsync("Enter");
         await Expect(Shell.Heading(page)).ToHaveTextAsync("Access");
-        await Expect(page).ToHaveURLAsync(world.Head.Url("/access"));
+        await Expect(page).ToHaveURLAsync(world.Head.Url("/t/default/access"));
         await Expect(Shell.Stop(page, "access")).ToHaveAttributeAsync("aria-current", "page");
     }
 

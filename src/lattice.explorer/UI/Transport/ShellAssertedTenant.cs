@@ -58,6 +58,30 @@ internal sealed class ShellAssertedTenant(ILatticeActiveTenantProvider? inner = 
     }
 
     /// <summary>
+    /// Whether a page scoped to <paramref name="listingTenant"/> may name
+    /// <paramref name="treeId"/> and read it: every tree with no listing tenant
+    /// (tenancy off); otherwise the tenant's own qualified tree, or, under a tenant
+    /// other than the reserved default, a bare name, which the cluster reads as
+    /// that tenant's own tree. Another tenant's tree, and a system tree, are
+    /// never named.
+    /// </summary>
+    /// <param name="listingTenant">The tenant the page is scoped to, or <see langword="null"/>.</param>
+    /// <param name="treeId">The tree id the page names.</param>
+    /// <returns><see langword="true"/> when the page may read the tree.</returns>
+    public static bool Names(string? listingTenant, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (Lists(listingTenant, treeId))
+        {
+            return true;
+        }
+
+        return !string.Equals(listingTenant, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal)
+            && ExplorerTenantTrees.TryGetOwner(treeId, out var owner)
+            && owner == ExplorerTenantId.Default;
+    }
+
+    /// <summary>
     /// The tenant a tenant-scoped listing read through <paramref name="provider"/>
     /// is for: <see langword="null"/> with tenancy off (no provider is registered),
     /// otherwise the asserted tenant, or the reserved default tenant when none is

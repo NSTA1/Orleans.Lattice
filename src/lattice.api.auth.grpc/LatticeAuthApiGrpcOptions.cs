@@ -37,4 +37,15 @@ public sealed class LatticeAuthApiGrpcOptions
     /// token is used as the credential.
     /// </summary>
     public string CredentialScheme { get; set; } = "Bearer";
+
+    /// <summary>
+    /// The inbound request-header (gRPC metadata) name carrying the caller's
+    /// asserted active tenant. Honoured only by a rule listing that asks to be
+    /// narrowed to the active tenant (<c>AuthPageRequest.ActiveTenantOnly</c>);
+    /// every other call is cluster-wide and ignores it. The assertion is
+    /// re-validated against the caller's own membership before it narrows
+    /// anything. Defaults to <c>lattice-active-tenant</c>; <see langword="null"/>
+    /// or empty disables it, so a narrowed listing resolves the default tenant.
+    /// </summary>
+    public string? ActiveTenantHeaderName { get; set; } = LatticeActiveTenantAssertion.DefaultHeaderName;
 }

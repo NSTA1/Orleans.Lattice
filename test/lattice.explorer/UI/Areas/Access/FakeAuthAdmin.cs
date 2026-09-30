@@ -1,5 +1,6 @@
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
@@ -190,9 +191,27 @@ internal sealed class FakeAuthAdmin : ILatticeAuthAdmin
     public async Task<AuthRulePage> ListRulesAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
     {
         await EnterAsync(nameof(ListRulesAsync));
+        RuleRequests.Add(request);
+        if (request.ActiveTenantOnly && NarrowsTo is { } tenant)
+        {
+            var owned = Rules.Where(rule => AccessCatalog.IsOwnedBy(rule, TenantId.Parse(tenant))).ToList();
+            var (narrowed, after) = Page(owned, request);
+            return new AuthRulePage { Entries = narrowed, NextPageToken = after, Tenant = tenant };
+        }
+
         var (entries, next) = Page(Rules, request);
         return new AuthRulePage { Entries = entries, NextPageToken = next };
     }
+
+    /// <summary>Every rule-listing request, in order.</summary>
+    public List<AuthPageRequest> RuleRequests { get; } = [];
+
+    /// <summary>
+    /// The tenant a narrowed rule listing is narrowed to, as a current cluster
+    /// does; <see langword="null"/> (the default) ignores the narrowing, as a
+    /// cluster that predates it does.
+    /// </summary>
+    public string? NarrowsTo { get; set; }
 
     /// <inheritdoc />
     public async Task<AuthRulePage> ListRulesForTreeAsync(string treeId, AuthPageRequest request, CancellationToken cancellationToken = default)

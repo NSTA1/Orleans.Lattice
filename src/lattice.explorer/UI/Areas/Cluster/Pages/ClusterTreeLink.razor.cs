@@ -23,6 +23,10 @@ public partial class ClusterTreeLink
     [Parameter]
     public string? View { get; set; }
 
+    /// <summary>The tenant a tenant-rooted address names, or <see langword="null"/> on a cluster-wide address; links keep it.</summary>
+    [CascadingParameter(Name = ClusterScope.CascadeName)]
+    internal string? Scope { get; set; }
+
     [Inject]
     private ExplorerNavigator Navigator { get; set; } = default!;
 
@@ -39,7 +43,7 @@ public partial class ClusterTreeLink
         };
 
         _href = ClusterAddresses.TryTree(TreeId, view, out var address)
-            ? Navigator.Canonicalize(address).ToHref()
+            ? Navigator.Canonicalize(address.WithTenant(Scope)).ToHref()
             : null;
     }
 }

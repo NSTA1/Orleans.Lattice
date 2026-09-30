@@ -81,7 +81,7 @@ internal sealed class BackupsArea : IExplorerArea
                     + (inventory.NewestBackupUtc is { } newest ? ", newest " + BackupsFormat.Time(newest) : string.Empty);
         }
 
-        var page = await _control.ListBackupsAsync(
+        var page = await _access.ListBackupsAsync(
             new BackupCatalogRequest { PageSize = 1, OrderByCreatedDescending = true },
             cancellationToken).ConfigureAwait(false);
         return page.Entries.Count == 0

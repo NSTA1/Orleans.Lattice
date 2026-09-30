@@ -58,6 +58,9 @@ public partial class BackupCapturePage : IDisposable
     internal ILatticeBackupControl Control { get; set; } = default!;
 
     [Inject]
+    internal BackupsAccess Access { get; set; } = default!;
+
+    [Inject]
     internal BackupActions Actions { get; set; } = default!;
 
     [Inject]
@@ -152,7 +155,7 @@ public partial class BackupCapturePage : IDisposable
         _error = null;
         try
         {
-            var page = await Control.ListBackupsAsync(
+            var page = await Access.ListBackupsAsync(
                 new BackupCatalogRequest { PageSize = 50, OrderByCreatedDescending = true, Kind = BackupKind.Full, TreeId = tree },
                 _disposed.Token);
             _bases = page.Entries;

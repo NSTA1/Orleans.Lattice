@@ -15,7 +15,7 @@
 {
     <p class="lt-shell-page-lede">@displayName</p>
 }
-<AccessNav Current="@AccessRoutes.GroupsSegment" />
+<AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Address.Tenant" />
 
 @if (_failure is { } failure)
 {

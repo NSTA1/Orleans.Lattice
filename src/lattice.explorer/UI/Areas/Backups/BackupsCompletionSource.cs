@@ -23,13 +23,16 @@ internal sealed class BackupsCompletionSource : IAddressCompletionSource
     private static readonly string AddressPrefix = "/" + BackupsAddresses.AreaKey + "/";
 
     private readonly ILatticeBackupControl _control;
+    private readonly ShellAssertedTenant _tenant;
 
     /// <summary>Creates the source over the circuit's backup facade.</summary>
     /// <param name="control">The backup facade.</param>
-    public BackupsCompletionSource([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control)
+    /// <param name="tenant">The circuit's asserted tenant: only the listing tenant's own backups complete.</param>
+    public BackupsCompletionSource([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control, ShellAssertedTenant? tenant = null)
     {
         ArgumentNullException.ThrowIfNull(control);
         _control = control;
+        _tenant = tenant ?? ShellAssertedTenant.None;
     }
 
     /// <inheritdoc />
@@ -55,10 +58,11 @@ internal sealed class BackupsCompletionSource : IAddressCompletionSource
             return await ByIdAsync(text[IdToken.Length..], query.Limit, cancellationToken).ConfigureAwait(false);
         }
 
+        var listing = _tenant.ListingTenant;
         var page = await _control.ListBackupsAsync(
-            new BackupCatalogRequest { PageSize = query.Limit, OrderByCreatedDescending = true, NamePrefix = text },
+            BackupsAccess.Narrow(new BackupCatalogRequest { PageSize = query.Limit, OrderByCreatedDescending = true, NamePrefix = text }, listing),
             cancellationToken).ConfigureAwait(false);
-        return [.. page.Entries.Take(query.Limit).Select(Completion)];
+        return [.. page.Entries.Where(manifest => BackupsAccess.Lists(listing, manifest)).Take(query.Limit).Select(Completion)];
     }
 
     private async Task<IReadOnlyList<AddressCompletion>> ByIdAsync(string prefix, int limit, CancellationToken cancellationToken)
@@ -66,9 +70,10 @@ internal sealed class BackupsCompletionSource : IAddressCompletionSource
         prefix = prefix.Trim().ToLowerInvariant();
         var found = new List<AddressCompletion>(Math.Min(limit, 8));
         var scanned = 0;
+        var listing = _tenant.ListingTenant;
         await foreach (var manifest in _control.StreamBackupsAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (manifest.Id.StartsWith(prefix, StringComparison.Ordinal))
+            if (manifest.Id.StartsWith(prefix, StringComparison.Ordinal) && BackupsAccess.Lists(listing, manifest))
             {
                 found.Add(Completion(manifest));
                 if (found.Count >= limit)

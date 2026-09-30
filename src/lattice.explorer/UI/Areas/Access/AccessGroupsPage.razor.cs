@@ -30,6 +30,8 @@ public partial class AccessGroupsPage
     private string _newName = string.Empty;
     private string? _idError;
     private string? _formError;
+    private bool _loaded;
+    private string? _loadedScope;
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
@@ -83,12 +85,39 @@ public partial class AccessGroupsPage
         }
     }
 
+    /// <summary>
+    /// The tenant the page's address is rooted at, or <see langword="null"/> on
+    /// the cluster-wide page. Groups belong to no tenant, so a tenant-rooted page
+    /// lists none and says where they are.
+    /// </summary>
+    private string? Scope => Address.Tenant;
+
+    private string ClusterWideHref => Navigator.Canonicalize(AccessRoutes.Groups.WithTenant(null)).ToHref();
+
     /// <inheritdoc />
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        _model = await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
-        _createOpen = MembershipEditable && string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
-        await LoadFirstPageAsync().ConfigureAwait(true);
+        // The page is reused when only the tenant root changes, so what it shows
+        // follows the address, not the instance.
+        if (_loaded && string.Equals(_loadedScope, Scope, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _loaded = true;
+        _loadedScope = Scope;
+        _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
+        _createOpen = Scope is null && MembershipEditable && string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
+        if (Scope is null)
+        {
+            await LoadFirstPageAsync().ConfigureAwait(true);
+        }
+        else
+        {
+            _failure = null;
+            _groups = null;
+            _next = null;
+        }
     }
 
     private async Task LoadFirstPageAsync()

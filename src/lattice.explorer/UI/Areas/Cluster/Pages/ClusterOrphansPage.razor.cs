@@ -36,6 +36,10 @@ public partial class ClusterOrphansPage : IDisposable
     [Parameter]
     public string? TreeId { get; set; }
 
+    /// <summary>The tenant a tenant-rooted address names, or <see langword="null"/> on a cluster-wide address; links keep it.</summary>
+    [CascadingParameter(Name = ClusterScope.CascadeName)]
+    internal string? Scope { get; set; }
+
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
 
@@ -87,7 +91,7 @@ public partial class ClusterOrphansPage : IDisposable
             return;
         }
 
-        Navigator.NavigateTo(ClusterAddresses.Orphans(tree));
+        Navigator.NavigateTo(ClusterAddresses.Orphans(tree).WithTenant(Scope));
     }
 
     private void Stop()

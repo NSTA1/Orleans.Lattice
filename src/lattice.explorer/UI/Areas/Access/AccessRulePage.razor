@@ -11,7 +11,7 @@
 <PageTitle>@(RuleId ?? "Rule") - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title lt-shell-mono">@RuleId</h1>
-<AccessNav Current="@AccessRoutes.RulesSegment" />
+<AccessNav Current="@AccessRoutes.RulesSegment" Tenant="@Address.Tenant" />
 
 @if (_failure is { } failure)
 {
@@ -23,7 +23,7 @@
 else if (_candidates is { Count: > 1 })
 {
     <p class="lt-shell-page-lede">The id @RuleId is used by a rule in more than one tree. Choose the one you mean.</p>
-    <AccessRuleTable Rules="_candidates" Caption="Rules with this id" />
+    <AccessRuleTable Rules="_candidates" Caption="Rules with this id" Tenant="@Address.Tenant" />
 }
 else if (_rule is null)
 {
@@ -98,7 +98,7 @@ else
         <LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="Edit rule" Placement="DialogPlacement">
             @if (_editorOpen)
             {
-                <AccessRuleEditor Rule="rule" Model="_model" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
+                <AccessRuleEditor Tenant="@Address.Tenant" Rule="rule" Model="_model" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
             }
         </LtDialog>
         <LtConfirmDestructive Open="_confirmOpen"

@@ -6,10 +6,12 @@
 
 @*
     Every Cluster address lands here and is read once, by ClusterAddresses, into
-    the page it names. The area is cluster-wide, so a tenant-rooted address is
-    only ever a redirect the layout performs; the routes exist so it can.
+    the page it names. A tenant-rooted address shows only that tenant's own trees
+    and storage; the scope reaches every page and link through a cascade.
 *@
 
+@* Keyed on the scope, so moving between /cluster and /t/{tenant}/cluster builds each page afresh. *@
+<CascadingValue @key="@(Address.Tenant ?? string.Empty)" Name="@ClusterScope.CascadeName" Value="@Address.Tenant">
 @switch (_location)
 {
     case { Kind: ClusterPageKind.Overview }:
@@ -48,3 +50,4 @@
         <ClusterOrphansPage TreeId="@orphans.TreeId" @key="orphans.TreeId" />
         break;
 }
+</CascadingValue>

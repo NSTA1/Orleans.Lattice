@@ -24,13 +24,17 @@ public partial class ClusterTreeStorage : IDisposable
     [Parameter, EditorRequired]
     public LatticeTreeAdminCapabilities Capabilities { get; set; } = default!;
 
+    /// <summary>The tenant a tenant-rooted address names, or <see langword="null"/> on a cluster-wide address; links keep it.</summary>
+    [CascadingParameter(Name = ClusterScope.CascadeName)]
+    internal string? Scope { get; set; }
+
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
 
     [Inject]
     private ExplorerNavigator Navigator { get; set; } = default!;
 
-    private string WalHref => Navigator.Canonicalize(ClusterAddresses.Wal(TreeId)).ToHref();
+    private string WalHref => Navigator.Canonicalize(ClusterAddresses.Wal(TreeId).WithTenant(Scope)).ToHref();
 
     /// <inheritdoc />
     public void Dispose()

@@ -133,6 +133,14 @@ internal sealed class SchemaDirectory
     /// <exception cref="InvalidOperationException">No cluster connection is configured.</exception>
     public async Task<bool> ExistsAsync(string treeId, CancellationToken cancellationToken)
     {
+        // The directory is tenant-scoped, so a tree it does not list does not exist
+        // here: the default tenant is handed every tenant's trees, and another
+        // tenant's tree must answer not found rather than be read.
+        if (!ShellAssertedTenant.Lists(_facades.ListingTenant, treeId))
+        {
+            return false;
+        }
+
         var trees = await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         if (Contains(trees, treeId))
         {

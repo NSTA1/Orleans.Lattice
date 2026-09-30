@@ -6,14 +6,15 @@
 
 @*
     Every authorization rule on the cluster, authored and app-owned alike, in
-    pages. App-owned rules are attributed to their app and are read-only.
+    pages; at a tenant-rooted address, only the rules governing that tenant's own
+    trees. App-owned rules are attributed to their app and are read-only.
 *@
 
 <PageTitle>Access rules - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Access</h1>
 <p class="lt-shell-page-lede">Who may do what on this cluster: the authorization rules, the groups they name, and why a decision came out as it did.</p>
-<AccessNav Current="@AccessRoutes.RulesSegment" />
+<AccessNav Current="@AccessRoutes.RulesSegment" Tenant="@Scope" />
 <AccessPostureBanner Model="_model" />
 
 <div class="lt-toolbar">
@@ -51,7 +52,11 @@ else if (_rules is null)
 }
 else
 {
-    <AccessRuleTable Rules="Visible" Caption="Authorization rules" CaptionHidden="true" EmptyText="@EmptyText" />
+    <AccessRuleTable Rules="Visible" Caption="Authorization rules" CaptionHidden="true" EmptyText="@EmptyText" Tenant="@Scope" />
+    @if (ClusterWideText is { } wide)
+    {
+        <p class="lt-access-caveat" data-lt-cluster-wide-rules="true">@wide <a href="@ClusterWideHref">See every rule on the cluster</a>.</p>
+    }
     @if (_next is not null)
     {
         <div class="lt-access-actions">
@@ -63,6 +68,6 @@ else
 <LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="New rule" Placement="DialogPlacement">
     @if (_editorOpen)
     {
-        <AccessRuleEditor Model="_model" OnSaved="OnSavedAsync" OnCancel="@(() => _editorOpen = false)" />
+        <AccessRuleEditor Tenant="@Address.Tenant" Model="_model" OnSaved="OnSavedAsync" OnCancel="@(() => _editorOpen = false)" />
     }
 </LtDialog>

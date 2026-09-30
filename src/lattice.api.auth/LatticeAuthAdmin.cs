@@ -44,7 +44,8 @@ internal sealed class LatticeAuthAdmin(
     IOptions<LatticeApiAuthOptions> apiOptions,
     IOptionsMonitor<LatticeAuthOptions> authOptions,
     IOptionsMonitor<LatticeMembershipOptions> membershipOptions,
-    IOptionsMonitor<LatticeIdentityDirectoryOptions> identityDirectoryOptions) : ILatticeAuthAdmin
+    IOptionsMonitor<LatticeIdentityDirectoryOptions> identityDirectoryOptions,
+    ITenantContextResolver? tenants = null) : ILatticeAuthAdmin
 {
     private const string RuleKeySeparator = "\u001f";
 
@@ -248,14 +249,82 @@ internal sealed class LatticeAuthAdmin(
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
         // The store scans the policy tree system-origin internally.
+        var source = _store.ListRulesAsync(cancellationToken);
+        TenantId? tenant = null;
+        if (request.ActiveTenantOnly)
+        {
+            // The tenant is the one the call is resolved to act as, never one the
+            // request names; a denied assertion fails closed. Narrowing before the
+            // page is cut keeps every page but the last full.
+            var resolved = await ResolveActiveTenantAsync(cancellationToken).ConfigureAwait(false);
+            tenant = resolved;
+            source = OwnedByAsync(source, resolved, cancellationToken);
+        }
+
         var (page, next) = await PageAsync(
-            _store.ListRulesAsync(cancellationToken),
+            source,
             request.PageToken,
             request.EffectivePageSize,
             RuleCatalogKey,
             cancellationToken).ConfigureAwait(false);
 
-        return new AuthRulePage { Entries = page, NextPageToken = next };
+        return new AuthRulePage { Entries = page, NextPageToken = next, Tenant = tenant?.Value };
+    }
+
+    /// <summary>
+    /// Whether <paramref name="rule"/> belongs to <paramref name="tenant"/>: its
+    /// governed tree is one of that tenant's own trees. A cluster-wide
+    /// <c>Tree:*</c> rule and a rule on a platform tree belong to no tenant.
+    /// </summary>
+    /// <param name="rule">The rule.</param>
+    /// <param name="tenant">The tenant.</param>
+    internal static bool IsOwnedBy(LatticeAuthorizationRule rule, TenantId tenant)
+    {
+        var treeId = rule.Scope.TreeId;
+        if (string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var owner = LatticeTenantTrees.GetOwner(treeId);
+        return owner.IsTenantOwned && owner.Tenant.Equals(tenant);
+    }
+
+    private static async IAsyncEnumerable<LatticeAuthorizationRule> OwnedByAsync(
+        IAsyncEnumerable<LatticeAuthorizationRule> source,
+        TenantId tenant,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var rule in source.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (IsOwnedBy(rule, tenant))
+            {
+                yield return rule;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves the tenant the call acts as: the caller's validated active-tenant
+    /// assertion, or the reserved default tenant when there is none (or tenancy is
+    /// off). An assertion the caller may not make is refused, never defaulted.
+    /// </summary>
+    private async ValueTask<TenantId> ResolveActiveTenantAsync(CancellationToken cancellationToken)
+    {
+        if (tenants is null)
+        {
+            return TenantId.Default;
+        }
+
+        var tenant = tenants.TryResolveCurrent(out var warm)
+            ? warm
+            : await tenants.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+        if (tenant.Value is null)
+        {
+            throw new LatticeTenantAccessDeniedException();
+        }
+
+        return tenant;
     }
 
     /// <inheritdoc />

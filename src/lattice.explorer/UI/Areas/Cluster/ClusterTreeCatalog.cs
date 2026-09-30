@@ -84,6 +84,37 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
     public void Invalidate() => _remembered = null;
 
     /// <summary>
+    /// The trees a listing for <paramref name="scope"/> shows: every tree the
+    /// cluster listed on a cluster-wide address, and only the scope tenant's own
+    /// on a tenant-rooted one. The cluster lists every tenant's trees to the
+    /// reserved default tenant, so the narrowing is needed there above all.
+    /// </summary>
+    /// <param name="trees">The catalogue.</param>
+    /// <param name="scope">The tenant a tenant-rooted address names, or <see langword="null"/> for the cluster-wide listing.</param>
+    /// <returns>The trees in scope; <paramref name="trees"/> itself when nothing is left out.</returns>
+    public static IReadOnlyList<ClusterTreeEntry> InScope(IReadOnlyList<ClusterTreeEntry> trees, string? scope)
+    {
+        ArgumentNullException.ThrowIfNull(trees);
+        if (scope is null || trees.All(tree => ShellAssertedTenant.Lists(scope, tree.TreeId)))
+        {
+            return trees;
+        }
+
+        return [.. trees.Where(tree => ShellAssertedTenant.Lists(scope, tree.TreeId))];
+    }
+
+    /// <summary>
+    /// Whether a tenant-rooted address for <paramref name="scope"/> may name
+    /// <paramref name="treeId"/>: the scope tenant's own qualified tree, or, under
+    /// a tenant other than the default, a bare name, which the cluster reads as
+    /// that tenant's own tree. Another tenant's tree, and a system tree, are never
+    /// named. Every tree may be named on a cluster-wide address.
+    /// </summary>
+    /// <param name="scope">The tenant a tenant-rooted address names, or <see langword="null"/>.</param>
+    /// <param name="treeId">The tree id the address names.</param>
+    public static bool Names(string? scope, string treeId) => ShellAssertedTenant.Names(scope, treeId);
+
+    /// <summary>
     /// The tenant the catalogue is narrowed to when the circuit asserts
     /// <paramref name="assertedTenant"/>: the cluster lists only that tenant's
     /// trees under any tenant but the reserved default. <see langword="null"/>

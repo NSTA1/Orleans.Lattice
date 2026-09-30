@@ -36,6 +36,13 @@ public partial class AccessRuleEditor
     [Parameter]
     public AccessModelDescriptor? Model { get; set; }
 
+    /// <summary>
+    /// The tenant the editing page's address is rooted at, or <see langword="null"/>
+    /// on a cluster-wide page: the rule ids checked for a clash are that tenant's.
+    /// </summary>
+    [Parameter]
+    public string? Tenant { get; set; }
+
     /// <summary>Raised with the saved rule.</summary>
     [Parameter]
     public EventCallback<LatticeAuthorizationRule> OnSaved { get; set; }
@@ -85,7 +92,7 @@ public partial class AccessRuleEditor
     };
 
     /// <inheritdoc />
-    protected override void OnInitialized() => _ruleIds = new AccessRuleIdSuggestionSource(Catalog, () => _draft.TreeId);
+    protected override void OnInitialized() => _ruleIds = new AccessRuleIdSuggestionSource(Catalog, () => _draft.TreeId, () => Tenant);
 
     /// <inheritdoc />
     protected override void OnParametersSet()

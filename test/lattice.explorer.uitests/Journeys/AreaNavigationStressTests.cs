@@ -103,7 +103,7 @@ public sealed class AreaNavigationStressTests : UiTestBase
         await page.EvaluateAsync("() => { window.__ltSameDocument = true; }");
 
         await Shell.Stop(page, "cluster").ClickAsync();
-        await Expect(page).ToHaveURLAsync(world.Head.Url("/cluster"));
+        await Expect(page).ToHaveURLAsync(world.Head.Url("/t/default/cluster"));
         await Expect(Shell.Heading(page)).ToHaveTextAsync("Cluster");
         await Expect(Shell.Stop(page, "cluster")).ToHaveAttributeAsync("aria-current", "page");
         var sameDocument = await page.EvaluateAsync<bool>("() => window.__ltSameDocument === true");

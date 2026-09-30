@@ -14,10 +14,17 @@ public partial class AccessNav
     [Parameter]
     public string? Current { get; set; }
 
+    /// <summary>
+    /// The tenant the page's address is rooted at, or <see langword="null"/> on a
+    /// cluster-wide page; the links keep it.
+    /// </summary>
+    [Parameter]
+    public string? Tenant { get; set; }
+
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
 
-    private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
+    private string Href(ExplorerAddress address) => Navigator.Canonicalize(address.WithTenant(Tenant)).ToHref();
 
     private string? CurrentFor(string section) =>
         string.Equals(Current, section, StringComparison.Ordinal) ? "page" : null;

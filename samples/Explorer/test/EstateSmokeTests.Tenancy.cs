@@ -39,17 +39,19 @@ public sealed partial class EstateSmokeTests
 
         Assert.Multiple(() =>
         {
-            // The stops are cluster-wide addresses, which name no tenant, so the prerender of
-            // each is the neutral resolving state (issue #3999); the live circuit renders the
-            // pages themselves, which AreaSwitchJourneyTests drives in a browser.
+            // The Tenancy stop is a cluster-wide address and the Access stop keeps the default
+            // tenant (#4025); the prerender of each is the neutral resolving state (issue #3999),
+            // and the live circuit renders the pages themselves, which AreaSwitchJourneyTests
+            // drives in a browser.
             Assert.That(targets["tenancy"], Is.EqualTo("tenancy"), "the operator's Tenancy stop leads to the tenant directory from /t/default");
             Assert.That(tenancyAddress.AbsolutePath, Is.EqualTo("/tenancy"));
             Assert.That(tenancy, Does.Contain("Resolving your tenant"));
             Assert.That(tenancy, Does.Not.Contain("This tenant could not be read"));
             Assert.That(workspaceAddress.AbsolutePath, Is.EqualTo("/tenancy"), "the default tenant's workspace root is the directory");
             Assert.That(workspace, Does.Not.Contain("This tenant could not be read"));
-            Assert.That(accessAddress.AbsolutePath, Is.EqualTo("/access"));
-            Assert.That(access, Does.Contain("Resolving your tenant"));
+            Assert.That(targets["access"], Is.EqualTo("t/default/access"), "from a tenant-rooted page the Access stop keeps the tenant (#4025)");
+            Assert.That(accessAddress.AbsolutePath, Is.EqualTo("/t/default/access"));
+            Assert.That(access, Does.Contain("<h1 class=\"lt-shell-page-title\">Access</h1>").Or.Contain("Resolving your tenant"), "a tenant-rooted address names its tenant, so the prerender may render the page");
             Assert.That(access, Does.Not.Contain("Nothing lives at this address"));
         });
     }
