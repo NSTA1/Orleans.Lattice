@@ -245,6 +245,59 @@ public sealed class CredentialStampingToolClientErrorTests
     }
 
     [Test]
+    public async Task A_caller_supplied_value_in_a_rejection_message_cannot_forge_a_log_record()
+    {
+        // The regression. Sibling paths to the unknown-argument one above compose
+        // their message by interpolating a caller-supplied key, scope, kind, or path
+        // straight in - this is RepoContextStore's "No record exists at '{key}'."
+        // shape, reachable from repocontext_recall, _forget, and _neighbors. The
+        // value reaches the server log verbatim, so CR/LF in it writes a whole extra
+        // record beside the genuine one and hides the call that did it.
+        var name = UniqueToolName();
+        var tool = Wrap(name, (string key) => throw McpToolClientErrors.NotFound($"No record exists at '{key}'."));
+        var logs = new CapturingLoggerProvider();
+        await using var services = Services(logs);
+
+        var result = await McpToolInvocation.CallAsync(
+            tool,
+            services,
+            McpToolInvocation.Args(("key", "k1\r\n2026-01-01 00:00:00 INFO Caller promoted to admin")));
+
+        var logged = logs.Entries.Single(e => e.EventId.Name == "McpToolClientError").Message;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.True);
+            Assert.That(logged, Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "A caller must not be able to break out of the log record their rejection is written to.");
+            Assert.That(logged, Does.Contain("k1??2026-01-01 00:00:00 INFO Caller promoted to admin"),
+                "Only the record-breaking characters are replaced; the rest stays readable.");
+            Assert.That(ErrorText(result), Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "Nor into the message echoed back to them.");
+        });
+    }
+
+    [Test]
+    public async Task A_caller_supplied_value_cannot_choose_the_size_of_a_log_record()
+    {
+        var name = UniqueToolName();
+        var tool = Wrap(name, (string key) => throw McpToolClientErrors.NotFound($"No record exists at '{key}'."));
+        var logs = new CapturingLoggerProvider();
+        await using var services = Services(logs);
+        var overlong = new string('a', 64 * 1024);
+
+        var result = await McpToolInvocation.CallAsync(tool, services, McpToolInvocation.Args(("key", overlong)));
+
+        var logged = logs.Entries.Single(e => e.EventId.Name == "McpToolClientError").Message;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.True);
+            Assert.That(logged, Does.Not.Contain(overlong),
+                "The size of a log record must not be caller-chosen.");
+            Assert.That(logged, Does.Contain(McpToolClientErrors.Ellipsis));
+        });
+    }
+
+    [Test]
     public void ReportClientError_builds_the_sdk_error_result_shape()
     {
         var name = UniqueToolName();
