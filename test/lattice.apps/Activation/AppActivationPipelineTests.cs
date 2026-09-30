@@ -133,6 +133,70 @@ public sealed class AppActivationPipelineTests
     }
 
     [Test]
+    public async Task UninstallAsync_reconciles_a_dependant_declared_through_a_cross_app_role_scope()
+    {
+        // The existing fan-out test declares its dependency as a subscription. A
+        // cross-app ROLE SCOPE is the other way an app reaches into the uninstalled
+        // one, and it is the one that carries a live grant: missing it would leave a
+        // dependant holding authorization over trees whose owner no longer exists.
+        var store = new InMemoryAppRegistryStore();
+        var source = new ActivationAppSource();
+        var grains = new Dictionary<string, IAppActivationGrain>(StringComparer.Ordinal);
+        var factory = GrainFactoryRecording(grains);
+
+        void Seed(string slug, AppScopeTemplate[] scopes)
+        {
+            var app = AppSlug.Parse(slug);
+            store.Seed(AppRegistryTreeNames.ComposeKey(TenantId.Default, app), AppRegistryTestData.Record(AppRegistryLifecycleState.Enabled, slug: app));
+            source.Publish(ActivationHarness.Manifest(slug: app) with
+            {
+                Roles = [new AppRoleDeclaration { Name = "reader", Operations = LatticeOperation.Read, Scopes = scopes }],
+                Subscriptions = [],
+            });
+        }
+
+        // "crm" scopes a tree owned by the app being uninstalled; "hr" scopes only
+        // its own, so it must not be reconciled.
+        Seed("crm", [new AppScopeTemplate { Tree = "records", App = ActivationHarness.Slug }]);
+        Seed("hr", [new AppScopeTemplate { Tree = "records" }]);
+        var pipeline = new AppActivationPipeline(factory, new InMemoryActivationStatusStore(), AppRegistryTestData.CreateRegistry(store), source);
+
+        var outcome = await pipeline.UninstallAsync(TenantId.Default, ActivationHarness.Slug);
+
+        Assert.That(outcome.Succeeded, Is.True);
+        Assert.That(Reconciled(grains), Is.EquivalentTo(new[] { "default/crm" }),
+            "only the app whose role scope names the uninstalled owner is reconciled");
+    }
+
+    private static IGrainFactory GrainFactoryRecording(Dictionary<string, IAppActivationGrain> grains)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IAppActivationGrain>(Arg.Any<string>(), null).Returns(call =>
+        {
+            var key = call.ArgAt<string>(0);
+            if (!grains.TryGetValue(key, out var grain))
+            {
+                grain = Substitute.For<IAppActivationGrain>();
+                grain.ExecuteAsync(default, default, default, default).ReturnsForAnyArgs(c => Task.FromResult(new AppActivationOutcome
+                {
+                    Tenant = c.ArgAt<TenantId>(1),
+                    Slug = c.ArgAt<AppSlug>(2),
+                    Operation = c.ArgAt<AppActivationOperation>(0),
+                }));
+                grains[key] = grain;
+            }
+
+            return grain;
+        });
+        return factory;
+    }
+
+    private static string[] Reconciled(Dictionary<string, IAppActivationGrain> grains) => grains
+        .Where(pair => pair.Value.ReceivedCalls().Any(c => (AppActivationOperation)c.GetArguments()[0]! == AppActivationOperation.Reconcile))
+        .Select(pair => pair.Key)
+        .ToArray();
+
+    [Test]
     public void Constructor_rejects_null_dependencies()
     {
         Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(null!, new InMemoryActivationStatusStore(), AppRegistryTestData.CreateRegistry(new InMemoryAppRegistryStore()), NullAppSource.Instance));

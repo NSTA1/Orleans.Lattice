@@ -14,10 +14,15 @@ internal sealed class InMemoryActivationStatusStore : IAppActivationStatusStore
 
     public int Writes { get; private set; }
 
-    public Task<AppActivationStatus?> GetAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken) =>
-        FailReads
+    public Task<AppActivationStatus?> GetAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken)
+    {
+        // A real store observes the token, and the engine's cancellation arm is
+        // reachable only through a collaborator that does.
+        cancellationToken.ThrowIfCancellationRequested();
+        return FailReads
             ? throw new InvalidOperationException("status store unreadable")
             : Task.FromResult(_statuses.TryGetValue(AppRegistryTreeNames.ComposeKey(tenant, slug), out var status) ? status : null);
+    }
 
     public Task SetAsync(AppActivationStatus status, CancellationToken cancellationToken)
     {
