@@ -20,7 +20,9 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// The frame around the table is a labelled, focusable region, so a table wider
 /// than its column scrolls inside its own frame and can be scrolled from the
 /// keyboard. The current row - "you are here" - carries <c>aria-current</c>, the
-/// soft marker band, a marker bar and a heavier weight.
+/// soft marker band, a marker bar and a heavier weight. A mono column never
+/// breaks inside an id: one too long for its column ends in an ellipsis, with its
+/// full text as the cell's tooltip. With no rows, the empty state is shown alone.
 /// </para>
 /// <para>
 /// Below the small breakpoint (the width band the Shell's layout cascades), the
@@ -70,7 +72,11 @@ public partial class LtTable<TItem>
     [Parameter]
     public RenderFragment? ChildContent { get; set; }
 
-    /// <summary>What the body shows when <see cref="Items"/> is empty. Defaults to "No rows.".</summary>
+    /// <summary>
+    /// What is shown when <see cref="Items"/> is empty, in place of the table: the
+    /// empty state alone, with no column headers above it and no rules around it.
+    /// Defaults to "No rows.".
+    /// </summary>
     [Parameter]
     public RenderFragment? EmptyContent { get; set; }
 

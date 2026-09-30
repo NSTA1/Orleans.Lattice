@@ -141,20 +141,25 @@ adds `"state": "unknown"`), so the Versions page has a registry to target.
 ### Tenancy
 
 As the operator, `/tenancy` is the tenant directory: `acme` and `globex`, their
-state, quota use and apps. Open a tenant for its overview and lifecycle, its
-**Grants**, **Admin subjects** and **Regions**:
+state, quota use and apps. Open a tenant for its **Overview** and lifecycle, and
+its **Members**, **Quota**, **Regions** and **Sharing** tabs, the same tabs a
+tenant admin sees:
 
 - **Quota**: `acme` is capped at 500 keys and `globex` at 200, each at ten trees
-  with a 20% burst allowance.
-- **Grants**: `acme` has offered `globex` Read on `t/acme/orders`, by its full
+  with a 20% burst allowance. The operator sets the limits here; a tenant admin's
+  Quota tab reads them.
+- **Sharing**: `acme` has offered `globex` Read on `t/acme/orders`, by its full
   tree id, which is what the cluster's tenant gate matches. The grant is *Pending*
   until `globex` approves it.
-- **Regions**: both tenants may use `east` and `west`. Residency is left
-  unconfigured, so the page lists both regions as not resident, which the
-  cluster treats as online in every region. Setting residency starts a region
-  *Provisioning*; only backfill machinery, which this sample does not run, moves
-  it on, and a region where the tenant is not online refuses the tenant's
-  replicated writes.
+- **Regions**: both tenants may use `east` and `west`, under **Allowed regions
+  (set by a platform operator)**. Residency is left unconfigured, so
+  **Residency (where the tenant's data is kept)** reads *Not set* and lists both
+  regions as not resident, and the page says the tenant is served in every
+  region; Home's Tenancy line counts both tenants as having no residency set.
+  Setting residency starts a region *Provisioning*; only backfill machinery,
+  which this sample does not run, moves it on, so the Explorer asks you to
+  confirm a residency that would leave no Online region, and a region where the
+  tenant is not online refuses the tenant's replicated writes.
 
 For the **tenant-scoped view**, restart with `--sign-in-as acme-admin`. The
 console opens at `/t/acme` with only Data, Apps, Tenancy, Replication and

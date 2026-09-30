@@ -36,7 +36,8 @@ internal sealed class TenantSuggestionSource(ExplorerTenancy tenancy, ShellAsser
         var values = new List<LtSuggestion>(tenants.Count);
         foreach (var id in tenants)
         {
-            values.Add(new LtSuggestion(id, string.Equals(id, active, StringComparison.Ordinal) ? ActiveDetail : null));
+            var current = string.Equals(id, active, StringComparison.Ordinal);
+            values.Add(new LtSuggestion(id, current ? ActiveDetail : null) { Current = current });
         }
 
         return values;

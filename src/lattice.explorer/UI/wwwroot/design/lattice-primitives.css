@@ -88,11 +88,15 @@
    2. Button - one outlined button, and its quiet and destructive weights
    ========================================================================== */
 
+/* One style for anything drawn as a button, whether it is a <button> or an <a>
+   that navigates: an anchor keeps no link underline and sizes its border into
+   the same control height as a native button. */
 .lt-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--lt-space-2);
+  box-sizing: border-box;
   min-height: var(--lt-op-control-height);
   padding: 0 0.95rem;
   border: 1px solid var(--lt-ink);
@@ -103,6 +107,7 @@
   font-size: var(--lt-text-md);
   font-weight: var(--lt-weight-strong);
   line-height: 1.2;
+  text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
   transition: background-color var(--lt-duration-fast) var(--lt-ease-out);
@@ -404,6 +409,69 @@
   min-width: 0;
 }
 
+/* A field that can list values carries the select's own arrow while idle -
+   the same size, place and ink - so it reads as a picker before anything is
+   typed; it turns while the list is open. It is filled in the text colour, so
+   forced colours keep it. */
+.lt-combobox__control--picker > .lt-input {
+  padding-inline-end: 2rem;
+}
+
+.lt-combobox__chevron {
+  position: absolute;
+  top: calc(var(--lt-op-control-height) / 2);
+  inset-inline-end: 0.7rem;
+  width: 0.6rem;
+  height: 0.3rem;
+  color: var(--lt-ink-2);
+  fill: currentColor;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.lt-combobox__control[data-lt-open] > .lt-combobox__chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+/* A multi-value field is one control: the chosen values and the input share a
+   single sunken frame, the values set off by hairlines, the input taking the
+   rest of the row. The frame, not the borderless input, shows an error. */
+.lt-combobox__control--tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: calc(var(--lt-op-control-height) + 2px);
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-combobox__control--tokens.lt-combobox__control--picker {
+  padding-inline-end: 2rem;
+}
+
+.lt-combobox__control--tokens > .lt-combobox__chevron {
+  top: calc(var(--lt-op-control-height) / 2 + 1px);
+}
+
+.lt-combobox__control--tokens > .lt-input {
+  flex: 1 1 8rem;
+  width: auto;
+  padding-inline-end: 0.65rem;
+  border: 0;
+  background: transparent;
+}
+
+.lt-combobox__control--tokens > .lt-input:focus-visible {
+  outline-offset: calc(-1 * var(--lt-op-focus-ring-width));
+}
+
+.lt-combobox__control--invalid {
+  border-color: var(--lt-danger);
+  border-width: 1.5px;
+}
+
 .lt-combobox__list {
   position: absolute;
   top: calc(100% + var(--lt-space-1));
@@ -480,7 +548,7 @@
 .lt-combobox__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--lt-space-1);
+  min-width: 0;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -491,9 +559,7 @@
   align-items: stretch;
   min-width: 0;
   min-height: var(--lt-op-control-height);
-  border: 1px solid var(--lt-rule-strong);
-  border-radius: var(--lt-radius-md);
-  background: var(--lt-surface);
+  border-inline-end: 1px solid var(--lt-rule-strong);
   color: var(--lt-ink);
 }
 
@@ -501,7 +567,7 @@
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  padding-inline-start: var(--lt-space-2);
+  padding-inline-start: 0.65rem;
   font-size: var(--lt-text-sm);
   overflow-wrap: anywhere;
 }
@@ -892,10 +958,17 @@ a.lt-chain__text:hover {
   text-align: end;
 }
 
+/* An id is never broken mid-token: a mono cell keeps its value on one line and
+   cuts one too long for the column with an ellipsis, the full value being the
+   cell's tooltip. The cell's padding keeps a link's focus ring inside the clip. */
 .lt-table__cell--mono {
+  max-inline-size: 18rem;
+  overflow: hidden;
   font-family: var(--lt-font-mono);
   font-size: var(--lt-text-sm);
   font-variant-ligatures: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lt-table__row:hover {
@@ -944,10 +1017,19 @@ a.lt-chain__text:hover {
   color: var(--lt-ink);
 }
 
+/* A table with no rows shows its empty state alone: no column headers over
+   nothing, and no booktabs rules framing an empty body. */
+.lt-table-empty {
+  min-width: 0;
+}
+
 .lt-table__empty {
-  padding: var(--lt-space-5) var(--lt-op-cell-padding-x);
+  padding-block: var(--lt-space-3);
   color: var(--lt-ink-2);
-  text-align: start;
+}
+
+.lt-table__empty > .lt-empty {
+  padding-block: var(--lt-space-3);
 }
 
 .lt-dl {
@@ -1083,11 +1165,6 @@ a.lt-chain__text:hover {
   font-weight: var(--lt-weight-strong);
 }
 
-.lt-table-list__empty {
-  padding: var(--lt-space-4) var(--lt-space-3);
-  color: var(--lt-ink-2);
-}
-
 .lt-compact-row {
   display: grid;
   gap: 0.15rem;
@@ -1134,15 +1211,24 @@ a.lt-chain__text:hover {
   min-width: 0;
 }
 
+/* A tab row never wraps: one wider than its column scrolls inside its own frame
+   (the responsive contract), and the tabs' script keeps the active tab in view.
+   The marker bar sits on the tab's own lower edge, inside the frame, so the
+   scrolling frame never clips it, and a focused tab's ring is drawn inside the
+   tab for the same reason. */
 .lt-tabs__list {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--lt-space-5);
+  overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 1px solid var(--lt-rule);
+  scrollbar-width: thin;
 }
 
 .lt-tabs__tab {
   position: relative;
+  flex-shrink: 0;
   min-height: 2.5rem;
   padding: 0 var(--lt-space-1);
   border: 0;
@@ -1151,7 +1237,12 @@ a.lt-chain__text:hover {
   font-family: var(--lt-font-sans);
   font-size: var(--lt-text-md);
   font-weight: var(--lt-weight-label);
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.lt-tabs__tab:focus-visible {
+  outline-offset: calc(-1 * var(--lt-op-focus-ring-width));
 }
 
 .lt-tabs__tab:hover {
@@ -1167,7 +1258,7 @@ a.lt-chain__text:hover {
   content: "";
   position: absolute;
   right: 0;
-  bottom: -1px;
+  bottom: 0;
   left: 0;
   height: 3px;
   background: var(--lt-marker);

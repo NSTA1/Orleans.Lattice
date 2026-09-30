@@ -26,6 +26,19 @@
   object-fit: contain;
 }
 
+/* No drawable icon: the slug's monogram in the icon's own box, as the catalogue draws it. */
+.lt-app-head__monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-md);
+  text-transform: lowercase;
+}
+
 .lt-app-head__text {
   min-width: 0;
   overflow-wrap: anywhere;

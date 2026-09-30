@@ -66,7 +66,7 @@ internal sealed class AppsArea(
         var snapshot = await access.GetAsync(cancellationToken).ConfigureAwait(false);
         if (snapshot.Control.CanList)
         {
-            var parts = new List<string>(3) { Count(snapshot.Installed.Length, "app", "apps") + " installed" };
+            var parts = new List<string>(3) { Count(snapshot.InTenant.Length, "app", "apps") + " installed" };
             var failed = snapshot.FailedActivations.Count();
             if (failed > 0)
             {
@@ -95,7 +95,7 @@ internal sealed class AppsArea(
     public async ValueTask<string?> GetDirectoryBadgeAsync(CancellationToken cancellationToken)
     {
         var snapshot = await access.GetAsync(cancellationToken).ConfigureAwait(false);
-        var count = snapshot.Control.CanList ? snapshot.Installed.Length : snapshot.MyApps.Length;
+        var count = snapshot.Control.CanList ? snapshot.InTenant.Length : snapshot.MyApps.Length;
         return count > 0 ? count.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : null;
     }
 

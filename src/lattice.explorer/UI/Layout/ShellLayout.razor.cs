@@ -58,6 +58,7 @@ public partial class ShellLayout : IAsyncDisposable
     private bool _sessionReady;
     private bool _tenantProvisional;
     private bool _tenantPending;
+    private bool _resolvedOnce;
     private string? _entriesTenant;
     private (bool Authenticated, string? User)? _tenantResolvedFor;
 
@@ -99,6 +100,9 @@ public partial class ShellLayout : IAsyncDisposable
 
     [Inject]
     internal ExplorerTenantSwitch TenantSwitch { get; set; } = default!;
+
+    [Inject]
+    internal ShellHeaderPanels HeaderPanels { get; set; } = default!;
 
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
@@ -323,8 +327,22 @@ public partial class ShellLayout : IAsyncDisposable
 
         if (resolution.Notice is { } notice)
         {
-            Toasts.Show(notice, resolution.RedirectTo is null ? LtToastTone.Info : LtToastTone.Warning);
+            if (resolution.RedirectTo is not null)
+            {
+                // A refused switch left the caller somewhere they did not ask to
+                // be: that stays on screen until it is read and dismissed.
+                Toasts.Show(notice, LtToastTone.Warning);
+            }
+            else if (_resolvedOnce)
+            {
+                // A switch the address and the header already show is only read
+                // out. The circuit's first address merely establishes the tenant
+                // (a reload, a bookmark, a pasted link), so it announces nothing.
+                Toasts.Announce(notice);
+            }
         }
+
+        _resolvedOnce = true;
 
         if (resolution.RedirectTo is { } redirect)
         {
@@ -593,9 +611,10 @@ public partial class ShellLayout : IAsyncDisposable
 
     // Any session modal - asked for from anywhere, or the re-authentication
     // interstitial raised off the renderer by Core - closes both compact sheets
-    // before it opens, so modals never stack.
+    // and every header panel before it opens, so modals never stack.
     private void OnSessionOverlayOpening(SessionOverlayKind kind) => _ = InvokeAsync(() =>
     {
+        HeaderPanels.Opening(Session);
         if (_menuOpen || _directoryOpen)
         {
             _menuOpen = false;

@@ -7,7 +7,10 @@
     booktabs table - logical name (never a physical id), kind, owning app, shard
     count, lifecycle, and a view's source. With tenancy on, the trees and
     prefixes other tenants share with the tenant through a grant it approved
-    follow its own trees, each with its owner and what the grant allows. The
+    follow its own trees, each with its owner and what the grant allows. A
+    filter or column that cannot apply to this listing is left out: no sharing
+    at the reserved default tenant, no App column when no tree belongs to an
+    app, no Source column when there is no view. The
     catalogue is read once per circuit, filtered here, and virtualised, so
     thousands of trees stay usable. Below the small breakpoint the table becomes
     two-line rows with a detail sheet, and the toolbar stacks.
@@ -67,7 +70,9 @@ else if (_entries.Count == 0)
 }
 else
 {
+    @* Keyed on the column set: a column that comes or goes is laid out in its place, never appended at the end. *@
     <LtTable TItem="DataTreeEntry"
+             @key="ColumnSet"
              Items="@_visible"
              Caption="Trees and views"
              CaptionHidden="true"
@@ -86,7 +91,7 @@ else
                 }
             </LtColumn>
             <LtColumn TItem="DataTreeEntry" Title="Kind" Value="@(entry => entry.KindText)" SortBy="@(entry => entry.KindText)" />
-            @if (Tenancy.IsActive)
+            @if (Directory.SharingApplies)
             {
                 <LtColumn TItem="DataTreeEntry" Context="entry" Title="Shared by" Mono="true" SortBy="@(entry => entry.SharedBy)">
                     @if (entry.SharedBy is { } owner)
@@ -95,22 +100,28 @@ else
                     }
                 </LtColumn>
             }
-            <LtColumn TItem="DataTreeEntry" Context="entry" Title="App" SortBy="@(entry => entry.AppSlug)">
-                @if (entry.AppSlug is { } slug)
-                {
-                    <a class="lt-shell-mono" href="@AppHref(slug)">@slug</a>
-                }
-            </LtColumn>
+            @if (_anyApp)
+            {
+                <LtColumn TItem="DataTreeEntry" Context="entry" Title="App" SortBy="@(entry => entry.AppSlug)">
+                    @if (entry.AppSlug is { } slug)
+                    {
+                        <a class="lt-shell-mono" href="@AppHref(slug)">@slug</a>
+                    }
+                </LtColumn>
+            }
             <LtColumn TItem="DataTreeEntry" Title="Shards" Align="LtColumnAlign.End" Value="@(entry => entry.ShardCount)" SortBy="@(entry => entry.ShardCount)" />
             <LtColumn TItem="DataTreeEntry" Context="entry" Title="Status" SortBy="@(entry => StatusText(entry))">
                 <LtStatusPill State="@StatusRole(entry)" Text="@StatusText(entry)" />
             </LtColumn>
-            <LtColumn TItem="DataTreeEntry" Context="entry" Title="Source" Mono="true" SortBy="@(entry => entry.SourceLogicalId)">
-                @if (entry.SourceLogicalId is not null && SourceOf(entry) is { } source)
-                {
-                    <a href="@Navigator.Canonicalize(source.Address).ToHref()">@source.LogicalId</a>
-                }
-            </LtColumn>
+            @if (_anySource)
+            {
+                <LtColumn TItem="DataTreeEntry" Context="entry" Title="Source" Mono="true" SortBy="@(entry => entry.SourceLogicalId)">
+                    @if (entry.SourceLogicalId is not null && SourceOf(entry) is { } source)
+                    {
+                        <a href="@Navigator.Canonicalize(source.Address).ToHref()">@source.LogicalId</a>
+                    }
+                </LtColumn>
+            }
         </ChildContent>
         <CompactRow Context="entry">
             <LtCompactRow Mono="true">

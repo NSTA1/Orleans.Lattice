@@ -185,6 +185,58 @@ public sealed class LtTabsTests : ShellDesignTestContext
             Throws.InvalidOperationException);
     }
 
+    [Test]
+    public void The_active_tab_is_revealed_in_the_row_on_first_render_and_on_each_change_only()
+    {
+        // Issue #3986: a row wider than its column scrolls in its own frame, keeping the active tab in view.
+        var module = JSInterop.SetupModule(Orleans.Lattice.Explorer.UI.Design.ShellDesignAssets.TabsModuleSpecifier);
+        module.Mode = JSRuntimeMode.Loose;
+        var cut = RenderTabs(active: "views");
+        var afterFirst = module.Invocations["reveal"].Count;
+
+        cut.Render(p => p.Add(x => x.Label, "Tree views, again"));
+        var afterSameTab = module.Invocations["reveal"].Count;
+        cut.FindAll("[role=tab]")[1].Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterFirst, Is.EqualTo(1));
+            Assert.That(module.Invocations["reveal"][0].Arguments[0], Is.TypeOf<ElementReference>(), "the script is handed the row to scroll, never the page");
+            Assert.That(((ElementReference)module.Invocations["reveal"][0].Arguments[0]!).Id, Is.Not.Empty);
+            Assert.That(afterSameTab, Is.EqualTo(1), "a render that keeps the active tab reveals nothing");
+            Assert.That(module.Invocations["reveal"], Has.Count.EqualTo(2), "a new active tab is revealed");
+        });
+    }
+
+    [Test]
+    public void Tabs_still_work_when_the_script_fails()
+    {
+        var module = JSInterop.SetupModule(Orleans.Lattice.Explorer.UI.Design.ShellDesignAssets.TabsModuleSpecifier);
+        module.SetupVoid("reveal", _ => true).SetException(new JSException("The row has gone."));
+        string? changed = null;
+        var cut = RenderTabs(onChanged: id => changed = id);
+
+        cut.FindAll("[role=tab]")[2].Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed, Is.EqualTo("views"));
+            Assert.That(cut.FindAll("[role=tab]")[2].GetAttribute("aria-selected"), Is.EqualTo("true"));
+        });
+    }
+
+    [Test]
+    public async Task Disposing_the_tabs_releases_the_script_module()
+    {
+        var module = JSInterop.SetupModule(Orleans.Lattice.Explorer.UI.Design.ShellDesignAssets.TabsModuleSpecifier);
+        module.Mode = JSRuntimeMode.Loose;
+        var cut = RenderTabs();
+
+        await cut.InvokeAsync(() => cut.Instance.DisposeAsync().AsTask());
+
+        Assert.That(async () => await cut.Instance.DisposeAsync(), Throws.Nothing, "disposing twice is harmless");
+    }
+
     private IRenderedComponent<LtTabs> RenderTabs(string? active = null, Action<string>? onChanged = null)
     {
         return Render<LtTabs>(p =>

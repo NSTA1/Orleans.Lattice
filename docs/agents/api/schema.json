@@ -255,6 +255,11 @@
           "name": "Children",
           "type": "LatticePredicateNode[]?",
           "required": false
+        },
+        {
+          "name": "ValueKind",
+          "type": "LatticeValueKind",
+          "required": true
         }
       ],
       "source": "src/lattice/Predicates/LatticePredicateNode.cs#LatticePredicateNode"
@@ -266,7 +271,11 @@
         "Constant",
         "Compare",
         "Boolean",
-        "StringMethod"
+        "StringMethod",
+        "TypeOf",
+        "Length",
+        "Every",
+        "Self"
       ],
       "source": "src/lattice/Predicates/LatticePredicateNodeKind.cs#LatticePredicateNodeKind"
     },
@@ -583,6 +592,20 @@
         "Equals"
       ],
       "source": "src/lattice/Predicates/LatticeStringMethod.cs#LatticeStringMethod"
+    },
+    "LatticeValueKind": {
+      "kind": "enum",
+      "values": [
+        "Present",
+        "Null",
+        "Boolean",
+        "Number",
+        "Integer",
+        "String",
+        "Object",
+        "Array"
+      ],
+      "source": "src/lattice/Predicates/LatticeValueKind.cs#LatticeValueKind"
     },
     "LatticeValueTransform": {
       "kind": "struct",

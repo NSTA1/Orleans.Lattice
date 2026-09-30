@@ -7,7 +7,7 @@ using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 
 /// <summary>
-/// The tenant directory: the list with state, quota use, residency and apps,
+/// The tenant directory: the list with state, quota use and residency,
 /// the active tenant marked current, the validated create form and its command,
 /// a non-operator sent to their own tenant, and the loading, error, empty and
 /// compact states.
@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 public sealed partial class TenancyDirectoryPageTests : TenancyTestContext
 {
     [Test]
-    public void Every_tenant_is_listed_with_its_state_quota_use_residency_and_apps()
+    public void Every_tenant_is_listed_with_its_state_quota_use_and_residency()
     {
         UseTenancyAs(isOperator: true);
         Cluster.WithTenant("globex", TenantLifecycleStatus.Suspended);
@@ -31,8 +31,8 @@ public sealed partial class TenancyDirectoryPageTests : TenancyTestContext
             var rows = cut.FindAll("tbody tr");
             Assert.That(rows, Has.Count.EqualTo(2));
             Assert.That(cut.FindAll("tbody th a").Select(link => link.GetAttribute("href")), Is.EqualTo(new[] { "tenancy/acme", "tenancy/globex" }));
-            Assert.That(rows[0].QuerySelectorAll("td").Select(cell => cell.TextContent.Trim()).ToArray(), Is.EqualTo(new[] { "Active", "Keys 42%", "eu-west", "2 apps", "Open workspace" }));
-            Assert.That(rows[1].QuerySelectorAll("td").Select(cell => cell.TextContent.Trim()).ToArray(), Is.EqualTo(new[] { "Suspended", "Unbounded", "eu-west", "Apps", "Scope to tenant" }));
+            Assert.That(rows[0].QuerySelectorAll("td").Select(cell => cell.TextContent.Trim()).ToArray(), Is.EqualTo(new[] { "Active", "Keys 42%", "eu-west", "Open workspace" }));
+            Assert.That(rows[1].QuerySelectorAll("td").Select(cell => cell.TextContent.Trim()).ToArray(), Is.EqualTo(new[] { "Suspended", "Unbounded", "eu-west", "Scope to tenant" }));
             Assert.That(cut.Find(".lt-tenancy-count").TextContent, Is.EqualTo("2 tenants, 1 suspended"));
         });
     }
@@ -49,9 +49,27 @@ public sealed partial class TenancyDirectoryPageTests : TenancyTestContext
         {
             Assert.That(cut.FindAll("tbody tr[aria-current]").Select(row => row.QuerySelector("th")!.TextContent.Trim()), Is.EqualTo(new[] { "acme" }));
             var links = cut.FindAll("tbody tr")[1].QuerySelectorAll("td a").Select(link => link.GetAttribute("href")).ToArray();
-            Assert.That(links, Is.EqualTo(new[] { "tenancy/globex/regions", "t/globex/apps", "t/globex/tenancy" }));
-            Assert.That(cut.FindAll("tbody tr")[0].QuerySelector("td a[href='t/acme/apps']")!.GetAttribute("aria-label"), Is.EqualTo("2 apps installed for tenant acme"));
+            Assert.That(links, Is.EqualTo(new[] { "tenancy/globex/regions", "t/globex/tenancy" }));
             Assert.That(cut.FindAll("tbody tr")[0].QuerySelector("td a[href='tenancy/acme/regions']")!.GetAttribute("aria-label"), Is.EqualTo("Resident in eu-west; open the regions of tenant acme"));
+        });
+    }
+
+    [Test]
+    public void There_is_no_apps_column_whose_every_other_cell_would_be_the_word_apps()
+    {
+        // Issue #3986: an app count is readable for the active tenant only, so a column
+        // showed the literal word "Apps" on every other row. The count labels the
+        // row's Apps action in the compact sheet instead.
+        UseTenancyAs(isOperator: true);
+        Cluster.WithTenant("globex");
+
+        var cut = RenderAt<TenancyDirectoryPage>("tenancy");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2));
+            Assert.That(cut.FindAll("thead th").Select(header => header.TextContent.Trim()), Is.EqualTo(new[] { "Tenant", "State", "Quota use", "Resident in", "Workspace" }));
+            Assert.That(cut.FindAll("tbody a").Select(link => link.TextContent.Trim()), Has.None.EqualTo("Apps"));
         });
     }
 

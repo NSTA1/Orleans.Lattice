@@ -133,6 +133,13 @@ public partial class LtDialog
     /// <returns>A task that completes when the host has been told.</returns>
     public Task CloseAsync() => OpenChanged.InvokeAsync(false);
 
+    /// <summary>
+    /// Escape from a field inside the dialog that keeps its keys to itself - a
+    /// combobox - closes the dialog as Escape anywhere else in it does.
+    /// </summary>
+    /// <returns>A task that completes when the host has been told, if Escape dismisses.</returns>
+    internal Task DismissFromFieldAsync() => DismissOnEscape ? CloseAsync() : Task.CompletedTask;
+
     private async Task FocusDialogAsync() => await _dialog.FocusSafelyAsync();
 
     private Task HandleKeyDownAsync(KeyboardEventArgs args) =>

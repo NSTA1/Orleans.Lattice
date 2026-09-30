@@ -85,11 +85,39 @@ public sealed partial class AppReviewPageTests : AppsTestContext
             Assert.That(ui.TextContent, Does.Contain("It ships a UI that runs in a sandboxed frame"));
             var items = ui.QuerySelectorAll("li").Select(item => item.TextContent).ToArray();
             Assert.That(items, Has.Length.EqualTo(3));
-            Assert.That(items[0], Does.Contain("read its own trees"));
-            Assert.That(items[1], Does.Contain("see your display name"));
-            Assert.That(items[2], Does.Contain("use the unrecognised operation \"net.fetch\"").And.Contain("not recognised by this Explorer"));
+            Assert.That(items[0], Does.Contain("See your display name"));
+            Assert.That(items[1], Does.Contain("Read its own trees"));
+            Assert.That(items[2], Does.Contain("Use the unrecognised operation \"net.fetch\"").And.Contain("not recognised by this Explorer"));
             Assert.That(items.Take(2), Has.None.Contains("not recognised"));
         });
+    }
+
+    [Test]
+    public void The_bridge_operations_are_listed_read_write_delete_and_name_the_tree()
+    {
+        Offer(AppsTestData.TaskBoard(bridge:
+        [
+            new AppUiBridgeGrantDescriptor { Operation = "context.read" },
+            new AppUiBridgeGrantDescriptor { Operation = "data.delete", Tree = "tasks" },
+            new AppUiBridgeGrantDescriptor { Operation = "data.read", Tree = "tasks" },
+            new AppUiBridgeGrantDescriptor { Operation = "data.write", Tree = "tasks" },
+            new AppUiBridgeGrantDescriptor { Operation = "nav.sync" },
+            new AppUiBridgeGrantDescriptor { Operation = "ui.notify" },
+        ]));
+
+        var cut = RenderReady(Review);
+
+        Assert.That(
+            cut.Find("section[aria-labelledby=lt-apps-ui]").QuerySelectorAll("li").Select(item => item.TextContent.Trim()),
+            Is.EqualTo(new[]
+            {
+                "Know its version, the theme and your tenant's display name",
+                "Read the tasks tree",
+                "Write to the tasks tree",
+                "Delete keys in the tasks tree",
+                "Keep its page in the address line",
+                "Show you short notifications",
+            }));
     }
 
     [Test]

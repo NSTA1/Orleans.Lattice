@@ -63,13 +63,19 @@ public sealed partial class EstateSmokeTests
         var offered = (await circuit.Grants.ListGrantsAsync(SampleIdentities.GlobexTenant)).Received
             .Single(grant => grant.GranterTenantId == SampleIdentities.AcmeTenant);
         await circuit.Grants.ApproveGrantAsync(SampleIdentities.AcmeTenant, SampleIdentities.GlobexTenant, offered.Scope);
-        var read = await circuit.ReadAsync(acmeOrders, "order-1001");
+
+        // The tenant gate resolves grants from a compiled policy snapshot that a registry write
+        // schedules a background rebuild of, so an approval is admitted once that rebuild lands.
+        Orleans.Lattice.Api.State.Grpc.EntryGetResponse read = null!;
+        var admitted = await SampleTestHost.EventuallyAsync(
+            async () => (read = await circuit.ReadAsync(acmeOrders, "order-1001")).Status == Orleans.Lattice.Api.State.StateQueryStatus.Found,
+            GrantBudget);
         var (address, data) = await SampleTestHost.GetPageAsync(_sample, "t/globex/data");
 
         Assert.Multiple(() =>
         {
             Assert.That(offered.Scope, Is.EqualTo(acmeOrders), "acme offers its orders by their full tree id, which the tenant gate matches");
-            Assert.That(read.Status, Is.EqualTo(Orleans.Lattice.Api.State.StateQueryStatus.Found), "globex reads acme's orders by the granted id, not re-rooted into globex");
+            Assert.That(admitted, Is.True, $"globex reads acme's orders by the granted id, not re-rooted into globex, within {GrantBudget.TotalSeconds}s of approving (last status {read.Status})");
             Assert.That(read.Entry, Is.Not.Null);
             Assert.That(address.AbsolutePath, Is.EqualTo("/t/globex/data"));
             Assert.That(data, Does.Contain($"href=\"t/globex/data/{acmeOrders}\""), "globex's directory links acme's orders under globex's own root");

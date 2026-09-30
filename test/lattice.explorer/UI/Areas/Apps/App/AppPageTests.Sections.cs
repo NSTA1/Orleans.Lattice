@@ -97,7 +97,7 @@ public sealed partial class AppPageTests
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll(".lt-table__empty")[0].TextContent, Is.EqualTo("You hold no role in this app."));
-            Assert.That(Cells(cut.FindAll("table")[1].QuerySelector("tbody tr")!)[1], Is.EqualTo("Not bound"));
+            Assert.That(Cells(cut.FindAll("table").Single().QuerySelector("tbody tr")!)[1], Is.EqualTo("Not bound"), "an empty table shows its empty state alone, so the bindings are the one table");
         });
     }
 

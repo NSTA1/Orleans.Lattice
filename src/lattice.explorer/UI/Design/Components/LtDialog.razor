@@ -21,11 +21,13 @@
             {
                 <p id="@DescriptionId" class="lt-dialog__description">@Description</p>
             }
-            <div class="lt-dialog__body">@ChildContent</div>
-            @if (Actions is not null)
-            {
-                <div class="lt-dialog__actions">@Actions</div>
-            }
+            <CascadingValue Value="this" IsFixed="true">
+                <div class="lt-dialog__body">@ChildContent</div>
+                @if (Actions is not null)
+                {
+                    <div class="lt-dialog__actions">@Actions</div>
+                }
+            </CascadingValue>
         </div>
         <span class="lt-dialog__sentinel" tabindex="0" @onfocus="FocusDialogAsync"></span>
     </div>

@@ -44,7 +44,7 @@ Each row shows:
 
 - the logical tree id, linking to `/schema/{tree}`;
 - policy state: a policy summary, **None**, **Not permitted**, **Not available**, or **Could not read**;
-- versioning state: the target version summary, **Unversioned**, **Not permitted**, **Not available**, or **Could not read**;
+- versioning state: the target version summary, **Unversioned**, **Not permitted**, **Not available**, or **Could not read**. A version config whose target version is 0, the reserved unversioned value, counts as **Unversioned**, here and on the Versions tab;
 - the last compliance scan result recorded in this Explorer circuit;
 - the declaring app, when an installed app manifest declares the tree's schema.
 
@@ -60,16 +60,60 @@ The workspace has five tabs.
 
 ### Policy
 
-The Policy tab reads, sets, edits, and clears the tree's write-validation policy. A tree with no policy accepts every value. The editor can add these rule shapes:
+The Policy tab reads, sets, edits, and clears the tree's write-validation policy. A tree with no policy accepts every value. A value must satisfy every rule. Rules are written with the rule builder below.
 
-- well-formed UTF-8;
-- one JSON document;
-- largest size in bytes;
-- regular-expression match, optionally under a member path.
+A policy needs at least one rule, so **Save policy** is disabled until there is a rule, or one being written, with a note saying so; to accept every value, clear the policy instead. Saving replaces the whole policy and affects new writes immediately. Existing stored values are not changed.
 
-The member path, and a remediation step's member or new name, is a [picker](navigation-model.md#pickers) that suggests the member paths the tree's policy already names. It accepts any path, because a value's members are not known to the cluster until a rule names them.
+#### Rule builder
 
-A policy needs at least one rule; to accept every value, clear the policy instead. Saving replaces the whole policy and affects new writes immediately. Existing stored values are not changed.
+The rule builder writes the policy as a list of plain-language rules, each read back as a sentence such as "total must be a number between 0 and 10,000". Rules can be edited, moved up or down, and removed. **Add a rule** opens a composer with three steps:
+
+1. **What it checks.** Pick a member from the tree's shape, or type its dotted path, such as `order.total`; leave it empty to check the whole value. The shape is inferred from a sample of the tree's values and the members the policy already names: each member shows the kinds of value seen in the sample. It is bounded (8 levels deep, 64 members per object, 400 members in all), so a very large value shows only part of its shape.
+2. **What it must be.** Pick a card from the gallery. Each card shows a live example drawn from the sample for the chosen member, such as "Seen 9.99 to 1,210." A card that does not fit is disabled with the reason.
+3. **Details.** Fill in the card's settings. The composer reads the rule back as a sentence and says how many sampled values it passes.
+
+The gallery's cards, and what each one compiles to:
+
+| Card | Checks | Compiles to |
+| --- | --- | --- |
+| Required | The member is there and not null. | A structured rule. With "It holds an object or a list" on, a presence test (`TypeOf` `Present`) that accepts any value. Off, a "not null" comparison, which older clusters also understand but which reads an object or a list as missing, so the card then says "must be present as text, a number or true or false". The switch is turned on for a member the sample showed holding an object or a list, and its example counts only the values the chosen form accepts. |
+| Type | Text, a number, true or false, an object or a list. | A structured rule. Text uses a string test, number and true-or-false use comparisons, and object and list use a `TypeOf` test. |
+| One of a set | Only the listed values. "Compare as numbers" treats `5` and `5.0` as the same value. | A structured rule: an "or" of equality comparisons. |
+| Number range | A smallest and largest number, optionally whole numbers only. | A structured rule: comparisons, plus a `TypeOf` `Integer` test for whole numbers only. |
+| Text length | The fewest and most characters. | A structured rule: a `TypeOf` `String` test and comparisons on `LengthOf`. |
+| Common format | An email address, URL, UUID, ISO date, time or date and time, IPv4 or IPv6 address, slug, country or currency code, hex colour, semantic version or E.164 phone number. | A regular-expression rule on the member. |
+| Starts, ends or contains | A prefix, a suffix or some text anywhere. | A structured rule: a string test. |
+| List length | The fewest and most items. | A structured rule: a `TypeOf` `Array` test and comparisons on `LengthOf`. |
+| Every item | Each item of a list satisfies another card. | A structured rule: an `Every` quantifier over the list. |
+| Custom pattern | A regular expression, with a live tester. | A regular-expression rule on the member or the whole value. |
+| Well-formed value | The whole value is well-formed UTF-8, or one JSON document. | A UTF-8 or JSON rule. Whole value only. |
+| Largest size | The whole value is at most a number of bytes. | A size rule. Whole value only. |
+
+Cards combine in three ways:
+
+- **Every item.** The card nests another card, which checks each item; an empty path there means the item itself. Only cards that compile to a structured predicate can be nested, so a format, pattern or whole-value card cannot sit inside it, and a list must be a list for the card to pass.
+- **Any of.** **Or...** on a rule adds an alternative, and the rule then passes when at least one alternative holds. Alternatives are structured-predicate cards, so a format, pattern or whole-value card cannot be one.
+- **Also accept a missing value.** This toggle makes a card optional: a missing or null member passes, and a present one must satisfy the card. It is offered on structured-predicate cards other than Required and an "any of" group, so not on a format, pattern or whole-value card.
+
+A card can also carry an optional message, which enforcement reports as the violation reason when a value fails it. A rule the builder cannot express as a card, such as one written through the API, is kept exactly as it is and shown as a read-only **Custom rule** card marked "kept as it is". It can be moved or removed, but not edited.
+
+The Common format and Starts, ends or contains cards show the same check as a regular expression. On a top-level rule, **Edit as regex** turns the card into a Custom pattern card holding that expression, so it can be adjusted by hand.
+
+The structured cards use the [structural predicate kinds](../lattice/predicated-operations.md#structural-predicate-kinds). The builder combines checks only with *and* and *or*, so during a rolling upgrade a silo that does not know a structural kind rejects a value a newer silo would accept, never the reverse. The Required card avoids the structural kinds unless the member holds an object or a list.
+
+#### Checking against a sample
+
+Beside the rules, **Check against a sample** reads one page of the tree's values, the first 100 in key order. A value too large for the page's preview is read in full, and one that cannot be read is skipped and counted. Nothing is written, and the read's cursor is released straight away. For a versioned tree the version envelope is stripped first, because a policy judges the body.
+
+The draft is checked locally, with the cluster's own `LatticeSchemaPolicyValidator`, so the result agrees with what enforcement and a compliance scan would say about the same values. The panel shows how many sampled values pass, how many fail each rule, and the first failing values with the rule and its reason. **Read the sample again** refreshes it. The sample is a preview only; the full scan is on the [Compliance](#compliance) tab.
+
+If sampled values would fail the draft, **Save policy** asks first, in a dialog named **Some sampled values would not comply**. It explains that saving does not change stored values, links to **Plan a remediation** on the Remediation tab, and offers **Save anyway** or **Keep editing**. A rule still open in the composer is added before saving, or the save stops and says what to finish.
+
+#### Advanced view
+
+The **Advanced** switch shows the exact policy as JSON, as the cluster will store it, beside the raw rule editor, which adds the four basic rule shapes directly: well-formed UTF-8, one JSON document, a largest size, and a regular expression, optionally on a member. Turning it off returns to the rules as sentences.
+
+The member-path fields in the builder and the raw editor are [pickers](navigation-model.md#pickers) that suggest the members of the inferred shape and accept any path, because a value's members are not known to the cluster until a rule names them.
 
 **Strict ingest** controls whether replicated and restored values are checked too. When it is on, a value that fails strict ingest is diverted to dead letters instead of being applied.
 
@@ -103,7 +147,7 @@ If the tree has no policy, the tab says there is nothing to scan against and lin
 
 The Remediation tab is the status page for a tree's background migration or remediation, and the place to start a remediation when the caller may manage schema.
 
-A remediation rewrites every value through ordered transform steps, checks each rewritten value against the current policy, and cuts over only when every value passes. If a value still fails, nothing is cut over. The editor can add only top-level member steps: set, remove, and rename. Conditional or computed transforms are registered in code on the silos and are not authored here.
+A remediation rewrites every value through ordered transform steps, checks each rewritten value against the current policy, and cuts over only when every value passes. If a value still fails, nothing is cut over. The editor can add only top-level member steps: set, remove, and rename. A step's member, and a rename's new name, is a [picker](navigation-model.md#pickers) that suggests the member paths the tree's policy already names and accepts any path. Conditional or computed transforms are registered in code on the silos and are not authored here.
 
 Starting a remediation opens a destructive confirmation named **Remediate this tree**. It says every value is rewritten and checked, that a successful run cuts over to the rewritten values, and that a failed value leaves the tree unchanged. The operation runs in the background and the page can be left while it runs.
 
@@ -137,6 +181,7 @@ Address completions list governed trees from the remembered directory read. Sear
 - Dead-letter reads load 100 entries at a time.
 - Running operation status is re-read every 2 seconds while it is running.
 - Compliance scan results are remembered only in the current Explorer circuit.
+- The rule builder's sample is the first 100 values in key order, and its inferred shape stops at 8 levels, 64 members per object and 400 members in all.
 
 ## Server authority
 

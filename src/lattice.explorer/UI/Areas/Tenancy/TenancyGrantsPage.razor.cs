@@ -4,7 +4,7 @@ using Orleans.Lattice.Explorer.UI.Navigation.Address;
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
 /// <summary>
-/// A tenant's cross-tenant grants (<c>/tenancy/{tenant}/grants</c>) for a platform operator: the offers made to it and by it, with every verb of the two-step agreement. Anyone else is sent to the same section of their tenant's workspace.
+/// A tenant's sharing - its cross-tenant grants - (<c>/tenancy/{tenant}/sharing</c>, and the earlier <c>/grants</c>) for a platform operator: the offers made to it and by it, with every verb of the two-step agreement. Anyone else is sent to the same section of their tenant's workspace.
 /// </summary>
 public partial class TenancyGrantsPage
 {

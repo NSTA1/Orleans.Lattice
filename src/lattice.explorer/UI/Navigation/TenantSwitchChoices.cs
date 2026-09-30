@@ -27,7 +27,8 @@ internal sealed class TenantSwitchChoices : ILtSuggestionSource
         _suggestions = new LtSuggestion[tenants.Length];
         for (var i = 0; i < tenants.Length; i++)
         {
-            _suggestions[i] = new LtSuggestion(tenants[i], string.Equals(tenants[i], active, StringComparison.Ordinal) ? ActiveDetail : null);
+            var current = string.Equals(tenants[i], active, StringComparison.Ordinal);
+            _suggestions[i] = new LtSuggestion(tenants[i], current ? ActiveDetail : null) { Current = current };
         }
     }
 

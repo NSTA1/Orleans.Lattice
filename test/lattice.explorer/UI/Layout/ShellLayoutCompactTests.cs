@@ -111,6 +111,22 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
     }
 
     [Test]
+    public async Task Compact_keeps_the_brand_whole_by_dropping_its_namespace()
+    {
+        // #3987: at 390px the full name was cut to "Orleans.Lattice Ex...".
+        var cut = RenderLayout();
+        Assert.That(cut.Find(".lt-shell-brand").TextContent.Trim(), Is.EqualTo("Orleans.Lattice Explorer"));
+
+        await SetBandAsync(cut, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-shell-brand").TextContent.Trim(), Is.EqualTo("Lattice Explorer"));
+            Assert.That(cut.FindAll(".lt-shell-brand__prefix"), Is.Empty);
+        });
+    }
+
+    [Test]
     public async Task Compact_folds_the_session_slots_and_appearance_into_the_overflow_menu()
     {
         AddSlotProbes();

@@ -322,6 +322,42 @@ public sealed class AppInstallFlowTests
     }
 
     [Test]
+    public async Task Managing_the_installed_version_is_never_blocked_by_an_ownership_conflict()
+    {
+        var installed = AppsTestData.TaskBoard();
+        _control.Install(installed, AppLifecycleState.Enabled);
+        _catalog.Descriptions[("in-image", installed.Slug, installed.Version)] = installed with
+        {
+            Trees = [new AppTreeDescriptor { Name = "tasks", OwnershipConflict = "owned by another install" }],
+        };
+        var flow = Flow(AppsTestData.InImage);
+        await flow.LoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flow.Mode, Is.EqualTo(AppInstallMode.Reconsent));
+            Assert.That(flow.IsManaging, Is.True);
+            Assert.That(flow.Issues.Select(issue => issue.Kind), Does.Not.Contain(AppActivationIssueKind.TreeOwnershipConflict));
+            Assert.That(flow.IsBlocked, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_version_that_is_not_installed_is_not_managed_and_a_conflict_blocks_it()
+    {
+        var app = AppsTestData.TaskBoard() with { Trees = [new AppTreeDescriptor { Name = "tasks", OwnershipConflict = "owned by crm" }] };
+        _catalog.Descriptions[("in-image", app.Slug, app.Version)] = app;
+        var flow = Flow(AppsTestData.InImage);
+        await flow.LoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flow.IsManaging, Is.False);
+            Assert.That(flow.IsBlocked, Is.True);
+        });
+    }
+
+    [Test]
     public async Task The_installed_version_with_drift_is_reconsented_without_rebinding_roles()
     {
         var installed = AppsTestData.TaskBoard();

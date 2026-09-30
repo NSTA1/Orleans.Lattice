@@ -224,6 +224,33 @@ public sealed class AppearanceTests : ShellChromeTestContext
     }
 
     [Test]
+    public void Opening_the_menu_announces_it_to_the_other_header_panels()
+    {
+        // Issue #3986: header panels close each other.
+        var panels = Services.GetRequiredService<ShellHeaderPanels>();
+        var opened = new List<object>();
+        panels.Opened += opened.Add;
+        var cut = Render<AppearanceMenu>();
+
+        cut.Find("button").Click();
+        cut.Find("button").Click();
+
+        Assert.That(opened, Is.EqualTo(new object[] { cut.Instance }), "announced once, as it opens, never as it closes");
+    }
+
+    [Test]
+    public void Another_header_panel_opening_closes_the_menu()
+    {
+        var cut = Render<AppearanceMenu>();
+        cut.Find("button").Click();
+
+        cut.InvokeAsync(() => Services.GetRequiredService<ShellHeaderPanels>().Opening(new object()));
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-shell-menu"), Is.Empty));
+        Assert.That(cut.Find("button").GetAttribute("aria-expanded"), Is.EqualTo("false"));
+    }
+
+    [Test]
     public void Escape_in_the_menu_survives_a_refused_focus()
     {
         RefuseEveryFocus();

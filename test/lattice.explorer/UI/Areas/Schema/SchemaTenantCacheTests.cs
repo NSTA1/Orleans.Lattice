@@ -24,10 +24,10 @@ public sealed class SchemaTenantCacheTests : SchemaTestContext
     {
         Services.AddSingleton<ILatticeActiveTenantProvider>(_tenant);
 
-        // The cluster lists the asserted tenant's trees.
+        // The cluster lists the asserted tenant's trees, by their qualified ids.
         Explorer.Connection
             .ListTreesAsync(Arg.Any<CatalogRequest>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new TreeCatalogPage { Entries = [SchemaTestData.Entry(_tenant.AssertedTenant + "-orders")] }));
+            .Returns(_ => Task.FromResult(new TreeCatalogPage { Entries = [SchemaTestData.Entry("t/" + _tenant.AssertedTenant + "/orders")] }));
     }
 
     [Test]
@@ -42,9 +42,9 @@ public sealed class SchemaTenantCacheTests : SchemaTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(acme, Is.EqualTo(new[] { "acme-orders" }));
+            Assert.That(acme, Is.EqualTo(new[] { "t/acme/orders" }));
             Assert.That(cached, Is.SameAs(acme));
-            Assert.That(globex, Is.EqualTo(new[] { "globex-orders" }));
+            Assert.That(globex, Is.EqualTo(new[] { "t/globex/orders" }));
         });
     }
 
@@ -58,9 +58,9 @@ public sealed class SchemaTenantCacheTests : SchemaTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(acme.Rows.Select(row => row.TreeId), Is.EqualTo(new[] { "acme-orders" }));
+            Assert.That(acme.Rows.Select(row => row.TreeId), Is.EqualTo(new[] { "t/acme/orders" }));
             Assert.That(last, Is.Null, "acme's listing is not the last listing under globex");
-            Assert.That(globex.Rows.Select(row => row.TreeId), Is.EqualTo(new[] { "globex-orders" }));
+            Assert.That(globex.Rows.Select(row => row.TreeId), Is.EqualTo(new[] { "t/globex/orders" }));
             Assert.That(Directory.Last, Is.SameAs(globex));
         });
     }
@@ -83,6 +83,34 @@ public sealed class SchemaTenantCacheTests : SchemaTestContext
             Assert.That(acmeGrants.HasAny, Is.True);
             Assert.That(globexArea.Kind, Is.Not.EqualTo(AreaAvailabilityKind.Visible));
             Assert.That(globexGrants.HasAny, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task At_the_default_tenant_the_directory_lists_only_its_own_trees()
+    {
+        // The circuit asserts nothing for the reserved default tenant.
+        _tenant.Set(null);
+        Explorer.Connection
+            .ListTreesAsync(Arg.Any<CatalogRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeCatalogPage
+            {
+                Entries =
+                [
+                    SchemaTestData.Entry("factory-floor"),
+                    SchemaTestData.Entry("t/acme/a/task-board/tasks"),
+                    SchemaTestData.Entry("t/globex/orders"),
+                    SchemaTestData.Entry("sys-replication-config"),
+                ],
+            });
+
+        var listing = await Directory.GetAsync(refresh: false, CancellationToken.None);
+        var addressed = await Directory.ExistsAsync("t/acme/a/task-board/tasks", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(listing.Rows.Select(row => row.TreeId), Is.EqualTo(new[] { "factory-floor" }), "the cluster hands the default tenant every tenant's trees");
+            Assert.That(addressed, Is.True, "a tree addressed by its id is still reachable");
         });
     }
 

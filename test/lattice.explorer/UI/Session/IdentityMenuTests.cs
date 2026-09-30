@@ -3,7 +3,9 @@ using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Tenancy;
+using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Session;
+using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Session;
 
@@ -55,6 +57,34 @@ public sealed class IdentityMenuTests : SessionTestContext
         cut.InvokeAsync(() => Auth.SignIn("alice")).GetAwaiter().GetResult();
 
         Assert.That(cut.Find("button").TextContent, Is.EqualTo("alice"));
+    }
+
+    [Test]
+    public void Opening_the_menu_announces_it_so_the_other_header_panels_close()
+    {
+        // Issue #3986: header panels close each other.
+        Auth.SignIn("alice");
+        var opened = new List<object>();
+        Services.GetRequiredService<ShellHeaderPanels>().Opened += opened.Add;
+        var cut = Render<IdentityMenu>();
+
+        cut.Find("button").Click();
+
+        Assert.That(opened, Is.EqualTo(new object[] { cut.Instance }));
+    }
+
+    [Test]
+    public void Another_header_panel_opening_closes_the_session_details()
+    {
+        Auth.SignIn("alice");
+        var cut = Render<IdentityMenu>();
+        cut.Find("button").Click();
+        Assert.That(cut.FindAll("[role=dialog]"), Has.Count.EqualTo(1));
+
+        cut.InvokeAsync(() => Services.GetRequiredService<ShellHeaderPanels>().Opening(new object()));
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=dialog]"), Is.Empty));
+        Assert.That(cut.Find("button").GetAttribute("aria-expanded"), Is.EqualTo("false"));
     }
 
     [Test]

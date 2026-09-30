@@ -76,7 +76,7 @@ public sealed class TenancyGrantsTests : TenancyTestContext
             Assert.That((grant.GranterTenantId, grant.GranteeTenantId, grant.Scope, grant.Operations, grant.State),
                 Is.EqualTo(("acme", "globex", "t/acme/orders/", TenantGrantAccess.ReadWrite, TenantGrantLifecycleState.Pending)), "a tenant-local name is qualified into the granting tenant's namespace, which the tenant gate matches");
             Assert.That(cut.FindAll("form.lt-tenancy-form"), Is.Empty);
-            Assert.That(cut.FindAll("table")[1].QuerySelector("tbody th")!.TextContent.Trim(), Is.EqualTo("globex"));
+            Assert.That(cut.FindAll("table").Single().QuerySelector("tbody th")!.TextContent.Trim(), Is.EqualTo("globex"), "the empty incoming direction shows its empty state alone");
             Assert.That(Services.GetToasts().Last().Message, Is.EqualTo("Offered orders/ to tenant globex. It takes effect once tenant globex approves."));
         });
     }
@@ -216,7 +216,7 @@ public sealed class TenancyGrantsTests : TenancyTestContext
         failed.WaitUntil(() => Assert.That(failed.Find(".lt-empty h3").TextContent, Is.EqualTo("Grants could not be read")));
         Cluster.Heal(nameof(FakeTenancyCluster.ListGrantsAsync));
         TenancyForms.Button(failed, "Try again").Click();
-        failed.WaitUntil(() => Assert.That(failed.FindAll("table"), Has.Count.EqualTo(2)));
+        failed.WaitUntil(() => Assert.That(failed.FindAll(".lt-table__empty"), Has.Count.EqualTo(2), "both directions are listed, each empty"));
     }
 
     [Test]
@@ -232,7 +232,7 @@ public sealed class TenancyGrantsTests : TenancyTestContext
             Assert.That(cut.Find("[data-lt-command]").HasAttribute("disabled"), Is.True);
         });
         cut.InvokeAsync(hold.SetResult);
-        cut.WaitUntil(() => Assert.That(cut.FindAll("table"), Has.Count.EqualTo(2)));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-table__empty"), Has.Count.EqualTo(2), "both directions are listed, each empty"));
     }
 
     [Test]

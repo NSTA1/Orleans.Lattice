@@ -1,4 +1,5 @@
 using Bunit;
+using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Bunit.TestDoubles;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
@@ -64,7 +65,7 @@ public sealed partial class AppPageTests : AppPageTestContext
     }
 
     [Test]
-    public void A_non_image_icon_is_not_shown_and_the_head_falls_back_to_a_node()
+    public void A_non_image_icon_is_not_shown_and_the_head_falls_back_to_the_apps_monogram()
     {
         Workspace.Grant(Workspace()).Icons[Slug] = Icon("text/html");
 
@@ -73,8 +74,22 @@ public sealed partial class AppPageTests : AppPageTestContext
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll("img"), Is.Empty);
-            Assert.That(cut.FindAll(".lt-app-head .lt-node"), Has.Count.EqualTo(1));
+            Assert.That(cut.FindAll(".lt-app-head .lt-node"), Is.Empty, "never an empty circle where the icon belongs");
+            Assert.That(cut.Find(".lt-app-head .lt-app-head__monogram").TextContent, Is.EqualTo("cr"));
         });
+    }
+
+    [Test]
+    public void An_operator_without_a_role_sees_the_installed_versions_icon()
+    {
+        Control.Administer(Admin(), CoveringConsent());
+        Catalog.Icons[("in-image", Slug)] = Icon();
+
+        var cut = RenderAt("apps/crm/overview");
+
+        cut.WaitUntil(() => Assert.That(
+            cut.Find("img.lt-app-head__icon").GetAttribute("src"),
+            Is.EqualTo("data:image/svg+xml;base64," + Convert.ToBase64String(Icon().Bytes.Span))));
     }
 
     [Test]

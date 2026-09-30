@@ -38,6 +38,16 @@ internal static class ShellDesignAssets
     /// <summary>The specifier <see cref="ComboBoxModule"/> is imported by, resolved against the document's base.</summary>
     public const string ComboBoxModuleSpecifier = "./" + ComboBoxModule;
 
+    /// <summary>
+    /// The tabs' small script: a tab row that scrolls inside its own frame keeps the
+    /// selected tab in view, without scrolling the page. <see cref="Components.LtTabs"/>
+    /// imports it itself.
+    /// </summary>
+    public const string TabsModule = DesignBasePath + "lattice-tabs.js";
+
+    /// <summary>The specifier <see cref="TabsModule"/> is imported by, resolved against the document's base.</summary>
+    public const string TabsModuleSpecifier = "./" + TabsModule;
+
     /// <summary>The favicon: the lattice mark on an ink tile, linked from the documentation site.</summary>
     public const string Favicon = DesignBasePath + "favicon.svg";
 

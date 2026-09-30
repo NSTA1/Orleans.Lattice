@@ -64,6 +64,30 @@ public sealed class AppPageLoaderTests
     }
 
     [Test]
+    public async Task An_app_install_holder_without_a_role_gets_the_installed_versions_icon_from_the_catalogue()
+    {
+        var control = new FakeAppPagesControl().Administer(Admin(), DriftedConsent());
+        var catalog = new Catalogue.FakeAppCatalog();
+        catalog.Icons[("in-image", Slug)] = Icon();
+
+        var model = (await new AppPageLoader(new FakeAppPagesWorkspace(), control, catalog: catalog).LoadAsync(Slug, CancellationToken.None)).Model!;
+
+        Assert.That(model.IconDataUri, Does.StartWith("data:image/svg+xml;base64,"));
+    }
+
+    [Test]
+    public async Task A_catalogue_that_cannot_answer_leaves_the_admin_view_without_an_icon()
+    {
+        var control = new FakeAppPagesControl().Administer(Admin(), DriftedConsent());
+        var catalog = new Catalogue.FakeAppCatalog { IconGate = new TaskCompletionSource() };
+        catalog.IconGate.SetException(new InvalidOperationException("catalogue down"));
+
+        var model = (await new AppPageLoader(new FakeAppPagesWorkspace(), control, catalog: catalog).LoadAsync(Slug, CancellationToken.None)).Model!;
+
+        Assert.That(model.IconDataUri, Is.Null);
+    }
+
+    [Test]
     public async Task A_caller_with_neither_path_is_not_found_and_the_control_is_never_asked_to_describe()
     {
         var control = new FakeAppPagesControl();

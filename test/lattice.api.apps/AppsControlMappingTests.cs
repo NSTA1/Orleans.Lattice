@@ -270,6 +270,16 @@ public sealed class AppsControlMappingTests
     }
 
     [Test]
+    public void OwnershipProbeProvenance_is_the_live_installs_own_provenance_and_otherwise_the_sources()
+    {
+        var record = AppsControlHarness.Record(AppRegistryLifecycleState.Enabled);
+        var source = new AppProvenance { Source = "in-image", Publisher = "the-source", Reference = "ref" };
+
+        Assert.That(AppsControlMapping.OwnershipProbeProvenance(record, source), Is.SameAs(record.Provenance));
+        Assert.That(AppsControlMapping.OwnershipProbeProvenance(null, source), Is.SameAs(source));
+    }
+
+    [Test]
     public void ToDescriptor_maps_a_record_holding_no_role_bindings_to_empty()
     {
         var descriptor = AppsControlMapping.ToDescriptor(

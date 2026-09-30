@@ -1,4 +1,9 @@
 <div class="lt-toasts" role="status" aria-live="polite" aria-label="@Label">
+    @if (_announcement is { } announcement)
+    {
+        @* Keyed on the announcement, so the same words announced again are a new node and are read again. *@
+        <span @key="announcement.Id" class="lt-visually-hidden">@announcement.Message</span>
+    }
     @foreach (var toast in _toasts)
     {
         <div @key="toast.Id" class="lt-toast" data-lt-tone="@ToneKey(toast.Tone)">

@@ -25,7 +25,10 @@
     </div>
     <p class="lt-shell-page-lede">@Lede</p>
 
-    <AppInstallSteps />
+    @if (ShowsSteps)
+    {
+        <AppInstallSteps />
+    }
 
     @switch (_flow.Stage)
     {

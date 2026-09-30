@@ -1,6 +1,6 @@
 <CascadingValue Value="this" IsFixed="true">
     <div class="lt-tabs">
-        <div class="lt-tabs__list" role="tablist" aria-label="@Label" @onkeydown="HandleKeyDownAsync">
+        <div @ref="_list" class="lt-tabs__list" role="tablist" aria-label="@Label" @onkeydown="HandleKeyDownAsync">
             @foreach (var tab in _tabs)
             {
                 var active = IsActive(tab);

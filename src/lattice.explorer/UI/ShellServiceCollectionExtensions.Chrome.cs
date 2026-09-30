@@ -29,6 +29,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<ExplorerTenantSwitch>();
 
         services.TryAddScoped<ShellChromeInterop>();
+        services.TryAddScoped<ShellHeaderPanels>();
         services.TryAddScoped<IShellAppearanceApplier, JsShellAppearanceApplier>();
         services.TryAddScoped<ShellAppearance>();
     }

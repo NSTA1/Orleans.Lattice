@@ -29,8 +29,22 @@ public partial class LtColumn<TItem> : IDisposable
     public Func<TItem, IComparable?>? SortBy { get; set; }
 
     /// <summary>Whether the column holds data - ids, keys, digests - set in Cascadia Mono.</summary>
+    /// <remarks>
+    /// A mono cell never breaks inside an id: a value too long for its column is cut
+    /// short with an ellipsis, and its full text is the cell's tooltip (see
+    /// <see cref="FullText"/>).
+    /// </remarks>
     [Parameter]
     public bool Mono { get; set; }
+
+    /// <summary>
+    /// The full text of a <see cref="Mono"/> cell, shown as its tooltip so an id cut
+    /// short is still readable. Defaults to the text of <see cref="Value"/>, and for
+    /// a cell drawn by <see cref="ChildContent"/> to the <see cref="SortBy"/> key when
+    /// that is a string, as it is for an id column; set it when neither is the text.
+    /// </summary>
+    [Parameter]
+    public Func<TItem, string?>? FullText { get; set; }
 
     /// <summary>How the column's cells align. Numbers align to the end.</summary>
     [Parameter]
@@ -50,6 +64,29 @@ public partial class LtColumn<TItem> : IDisposable
     /// <param name="item">The row.</param>
     internal RenderFragment RenderCell(TItem item) =>
         ChildContent?.Invoke(item) ?? (builder => builder.AddContent(0, Value?.Invoke(item)?.ToString()));
+
+    /// <summary>The tooltip of a mono cell for <paramref name="item"/>: its full text, or <see langword="null"/>.</summary>
+    /// <param name="item">The row.</param>
+    internal string? TooltipOf(TItem item)
+    {
+        // A figure (end-aligned) is never long enough to be cut, so it needs no tooltip.
+        if (!Mono || Align == LtColumnAlign.End)
+        {
+            return null;
+        }
+
+        if (FullText is { } fullText)
+        {
+            return fullText(item);
+        }
+
+        if (Value is { } value)
+        {
+            return value(item)?.ToString();
+        }
+
+        return ChildContent is not null && SortBy?.Invoke(item) is string key ? key : null;
+    }
 
     /// <inheritdoc />
     protected override void OnInitialized()

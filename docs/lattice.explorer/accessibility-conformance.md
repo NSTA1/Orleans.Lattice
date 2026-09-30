@@ -29,7 +29,8 @@ and the enforcing tests for each, is [`ConformanceChecklist.md`](../../test/latt
   `aria-current` and `aria-selected`, so no state is carried by colour alone.
 - **Announcements.** The address line announces how many suggestions there are
   and which areas did not answer, in a polite status region, and notifications
-  appear in one toast region. A long-running tree operation's progress bar is an
+  appear in one toast region. A tenant switch, which the address and header
+  already show, is announced from that region without being drawn. A long-running tree operation's progress bar is an
   ARIA `progressbar` that describes itself in `aria-valuetext`; a change of step is
   announced once, and the moving percentage is not, so a reader is not interrupted
   on every poll.

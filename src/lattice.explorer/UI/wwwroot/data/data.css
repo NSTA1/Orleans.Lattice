@@ -129,6 +129,40 @@
   border-top: 1px solid var(--lt-rule-strong);
 }
 
+/* The expanded width reads the list and the open entry side by side: the list
+   keeps the larger share, the entry stands on a strong hairline beside it and
+   stays in view while the list scrolls. Narrower, the two stack as before. */
+.lt-data-split {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(20rem, 2fr);
+  gap: var(--lt-space-5);
+  align-items: start;
+}
+
+.lt-data-split__list {
+  min-width: 0;
+}
+
+.lt-data-split__detail {
+  position: sticky;
+  top: var(--lt-space-3);
+  min-width: 0;
+  max-height: calc(100vh - var(--lt-space-5));
+  overflow: auto;
+}
+
+.lt-data-split__detail .lt-data-entry {
+  margin-top: 0;
+  padding-top: 0;
+  padding-inline-start: var(--lt-space-5);
+  border-top: 0;
+  border-inline-start: 1px solid var(--lt-rule-strong);
+}
+
+.lt-data-split__detail .lt-data-section-title {
+  margin-top: 0;
+}
+
 .lt-data-entry__key {
   margin: 0 0 var(--lt-space-2);
   font-size: var(--lt-text-md);

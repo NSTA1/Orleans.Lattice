@@ -126,15 +126,16 @@ public sealed class LtTableTests : ShellDesignTestContext
     }
 
     [Test]
-    public void An_empty_table_says_so_across_every_column()
+    public void An_empty_table_shows_its_empty_state_alone()
     {
+        // Issue #3986: no column headers over nothing, no booktabs rules around it.
         var cut = RenderTable([]);
-        var cell = cut.Find("tbody td");
 
         Assert.Multiple(() =>
         {
-            Assert.That(cell.GetAttribute("colspan"), Is.EqualTo("3"));
-            Assert.That(cell.TextContent.Trim(), Is.EqualTo("No rows."));
+            Assert.That(cut.FindAll("table, thead, th, .lt-table-frame"), Is.Empty);
+            Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No rows."));
+            Assert.That(cut.Find(".lt-table-empty .lt-table__caption").TextContent, Is.EqualTo("Trees"), "the caption still says what is empty");
         });
     }
 
@@ -143,7 +144,67 @@ public sealed class LtTableTests : ShellDesignTestContext
     {
         var cut = RenderTable([], configure: p => p.Add(x => x.EmptyContent, "No trees match this filter."));
 
-        Assert.That(cut.Find("tbody td").TextContent.Trim(), Is.EqualTo("No trees match this filter."));
+        Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No trees match this filter."));
+    }
+
+    [Test]
+    public void Rows_arriving_replace_the_empty_state_with_the_table()
+    {
+        var cut = RenderTable([]);
+
+        cut.Render(p => p.Add(x => x.Items, Trees));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-table__empty"), Is.Empty);
+            Assert.That(cut.FindAll("thead th"), Has.Count.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void A_mono_cell_carries_its_full_value_as_a_tooltip()
+    {
+        // Issue #3986: an id is cut with an ellipsis, never broken, so its full text must be reachable.
+        var cut = RenderTable(Trees);
+        var firstRow = cut.FindAll("tbody tr")[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstRow.Children[0].GetAttribute("title"), Is.EqualTo("orders"));
+            Assert.That(firstRow.Children[1].HasAttribute("title"), Is.False, "a figure is never cut, so it needs no tooltip");
+            Assert.That(firstRow.Children[2].HasAttribute("title"), Is.False, "a proportional cell wraps, so it needs no tooltip");
+        });
+    }
+
+    [Test]
+    public void A_templated_mono_cell_takes_its_sort_key_or_its_full_text_as_the_tooltip()
+    {
+        var cut = Render<LtTable<TreeRow>>(p =>
+        {
+            p.Add(x => x.Items, Trees).Add(x => x.Caption, "Trees");
+            p.AddChildContent<LtColumn<TreeRow>>(column => column
+                .Add(x => x.Title, "Link")
+                .Add(x => x.Mono, true)
+                .Add(x => x.SortBy, row => row.Name)
+                .Add(x => x.ChildContent, row => $"<a href=\"/{row.Name}\">{row.Name}</a>"));
+            p.AddChildContent<LtColumn<TreeRow>>(column => column
+                .Add(x => x.Title, "Address")
+                .Add(x => x.Mono, true)
+                .Add(x => x.FullText, row => "t/acme/" + row.Name)
+                .Add(x => x.ChildContent, row => $"<a href=\"/{row.Name}\">{row.Name}</a>"));
+            p.AddChildContent<LtColumn<TreeRow>>(column => column
+                .Add(x => x.Title, "Unsorted")
+                .Add(x => x.Mono, true)
+                .Add(x => x.ChildContent, row => $"<b>{row.Name}</b>"));
+        });
+        var cells = cut.FindAll("tbody tr")[0].Children;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cells[0].GetAttribute("title"), Is.EqualTo("orders"));
+            Assert.That(cells[1].GetAttribute("title"), Is.EqualTo("t/acme/orders"));
+            Assert.That(cells[2].HasAttribute("title"), Is.False, "with no text to go on, no tooltip is invented");
+        });
     }
 
     [Test]

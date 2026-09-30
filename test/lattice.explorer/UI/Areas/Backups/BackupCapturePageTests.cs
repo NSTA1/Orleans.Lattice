@@ -16,6 +16,23 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 public sealed class BackupCapturePageTests : BackupsTestContext
 {
     [Test]
+    public void The_capture_page_shows_the_way_back_to_the_catalogue_not_a_row_with_no_tab_selected()
+    {
+        // #3987: /backups/new is none of Catalogue, Schedules, Health or Maintenance.
+        var cut = RenderAt<BackupCapturePage>("backups/new");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-backups-back__link"), Has.Count.EqualTo(1)));
+        var back = cut.Find(".lt-backups-back__link");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-backups-nav__link"), Is.Empty);
+            Assert.That(back.TextContent, Is.EqualTo(BackupsNav.BackText));
+            Assert.That(back.GetAttribute("href"), Is.EqualTo("backups"));
+            Assert.That(back.Closest("nav")!.GetAttribute("aria-label"), Is.EqualTo("Backups pages"));
+        });
+    }
+
+    [Test]
     public void A_full_capture_of_a_whole_tree_starts_an_operation_and_opens_its_status_page()
     {
         var cut = RenderAt<BackupCapturePage>("backups/new?tree=a/crm/orders");

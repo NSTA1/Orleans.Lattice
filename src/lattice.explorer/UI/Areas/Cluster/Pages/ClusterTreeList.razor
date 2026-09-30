@@ -15,6 +15,8 @@
 }
 else if (_trees.Value is { } trees)
 {
+    <p class="lt-cluster-note" data-lt-cluster-count>@CountLine(trees.Count, Facades.AssertedTenant)</p>
+
     <LtTable Items="Filtered(trees)"
              Caption="Trees"
              CaptionHidden="true"

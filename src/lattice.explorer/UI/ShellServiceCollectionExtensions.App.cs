@@ -22,6 +22,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped(provider => new AppPageLoader(
             provider.GetShellFacade<ILatticeAppWorkspace>(),
             provider.GetShellFacade<ILatticeAppsControl>(),
-            provider.GetService<ILogger<AppPageLoader>>()));
+            provider.GetService<ILogger<AppPageLoader>>(),
+            provider.GetShellFacade<ILatticeAppCatalog>()));
     }
 }

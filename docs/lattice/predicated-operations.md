@@ -65,6 +65,76 @@ that involves the lambda parameter - a method call on it outside that set, an
 indexer, arithmetic, or any other operator - throws `NotSupportedException` at
 translation time on the client.
 
+## Structural predicate kinds
+
+Four node kinds look at a value's shape rather than comparing a scalar. The
+translator never produces them, so a C# lambda cannot express them. They are
+built directly on `LatticePredicateNode` and reach the cluster wherever a node is
+supplied as is: a schema policy's structured rule (`LatticeSchemaRule.Structured`),
+a value transform's condition, a predicate view's filter, and
+`LatticePredicateEvaluation.Matches`.
+
+| Kind | Factory | Meaning |
+| --- | --- | --- |
+| `TypeOf` | `LatticePredicateNode.TypeOf(memberPath, kind)` | A test: the value at the member path is of the given `LatticeValueKind`. Unlike a comparison, it sees objects and arrays. A missing member is not of any kind. |
+| `Length` | `LatticePredicateNode.LengthOf(memberPath)` | A numeric operand: the length of a string (in Unicode scalars), the item count of an array, or the member count of an object. Anything else resolves as missing, so a comparison with it fails. |
+| `Every` | `LatticePredicateNode.Every(memberPath, item)` | A quantifier: the value at the member path is an array and `item` holds for every element, evaluated with that element as the current document. An empty array satisfies it; anything that is not an array does not. |
+| `Self` | `LatticePredicateNode.Self()` | An operand naming the current document: the whole value, or the element an enclosing `Every` is visiting. |
+
+A `null` or empty member path means the current document. `LatticeValueKind`
+names the kinds a `TypeOf` tests for:
+
+| `LatticeValueKind` | Matches |
+| --- | --- |
+| `Present` | Any value other than JSON `null` |
+| `Null` | JSON `null` |
+| `Boolean` | `true` or `false` |
+| `Number` | Any JSON number |
+| `Integer` | A number with no fractional part, such as `3` or `3.0` |
+| `String` | A JSON string |
+| `Object` | A JSON object |
+| `Array` | A JSON array |
+
+For example, "`id` is present, and every tag is text of 1 to 32 characters":
+
+```csharp verify
+var rule = LatticePredicateNode.Bool(
+    LatticeBooleanOperator.And,
+    LatticePredicateNode.TypeOf("id", LatticeValueKind.Present),
+    LatticePredicateNode.Every(
+        "tags",
+        LatticePredicateNode.Bool(
+            LatticeBooleanOperator.And,
+            LatticePredicateNode.TypeOf(null, LatticeValueKind.String),
+            LatticePredicateNode.Compare(
+                LatticeComparisonOperator.GreaterThanOrEqual,
+                LatticePredicateNode.LengthOf(null),
+                LatticePredicateNode.Const(LatticeConstant.Integer(1))),
+            LatticePredicateNode.Compare(
+                LatticeComparisonOperator.LessThanOrEqual,
+                LatticePredicateNode.LengthOf(null),
+                LatticePredicateNode.Const(LatticeConstant.Integer(32))))));
+
+bool matches = LatticePredicateEvaluation.Matches(
+    Encoding.UTF8.GetBytes("""{"id":"a1","tags":["red","blue"]}"""),
+    rule);
+```
+
+Structural kinds always parse the whole document, so a predicate that contains
+one never takes the forward-only reader path. They are additive on the wire: the
+new kinds, and `LatticePredicateNode.ValueKind`, are appended values and members,
+and a predicate view's projection version includes the value kind only for a
+type test, so an existing view keeps the version it always had.
+
+**Mixed-version clusters.** A silo that predates these kinds evaluates a node of
+a kind it does not know as `false`, and an operand of an unknown kind as
+missing. For a rule that can only make a value fail, that fails closed: during a
+rolling upgrade an older silo rejects a value a newer one would admit, never the
+reverse. The Explorer's schema rule builder only combines checks with *and* and
+*or*, so everything it writes has that property. A hand-written predicate that
+puts `Not` over a structural kind does not: on an older silo the negated `false`
+becomes `true`. Avoid `Not` over the new kinds until every silo is upgraded.
+
 ## Reading values by predicate - `GetManyAsync`
 
 `GetManyAsync<T>` with a predicate returns only the entries whose live value

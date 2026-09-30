@@ -61,6 +61,22 @@
   outline-offset: var(--lt-op-focus-ring-offset);
 }
 
+/* A page below the row's pages shows the way back instead of a row with
+   nothing selected, on the same hairline the row would draw. */
+
+.lt-backups-back {
+  margin: 0 0 var(--lt-space-4);
+  padding-bottom: var(--lt-space-2);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-backups-back__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  font-weight: var(--lt-weight-label);
+}
+
 /* Inline links in tables, definition lists and results. */
 
 .lt-backups-link {

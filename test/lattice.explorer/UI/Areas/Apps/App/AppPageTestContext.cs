@@ -23,8 +23,10 @@ public abstract class AppPageTestContext : ShellChromeTestContext
     {
         Workspace = new FakeAppPagesWorkspace();
         Control = new FakeAppPagesControl();
+        Catalog = new Catalogue.FakeAppCatalog();
         Services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, Workspace);
         Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Control);
+        Services.AddKeyedSingleton<ILatticeAppCatalog>(ShellFacades.Key, Catalog);
         ComponentFactories.AddStub<AppFrame>();
     }
 
@@ -33,6 +35,9 @@ public abstract class AppPageTestContext : ShellChromeTestContext
 
     /// <summary>The app control an <c>AppInstall</c> holder reads.</summary>
     internal FakeAppPagesControl Control { get; }
+
+    /// <summary>The app catalogue, which draws the installed version's icon for an <c>AppInstall</c> holder without a role.</summary>
+    internal Catalogue.FakeAppCatalog Catalog { get; }
 
     /// <summary>Navigates to <paramref name="relative"/> and renders the app page there.</summary>
     /// <param name="relative">The base-relative address, such as <c>apps/crm/trees</c>.</param>

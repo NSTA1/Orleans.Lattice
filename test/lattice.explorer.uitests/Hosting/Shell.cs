@@ -149,6 +149,9 @@ internal static class Shell
     /// <summary>The message text of each toast.</summary>
     public static ILocator ToastMessages(IPage page) => page.Locator(".lt-toast .lt-toast__message");
 
+    /// <summary>The live region's latest announcement: read out by a screen reader, never drawn.</summary>
+    public static ILocator Announcement(IPage page) => page.Locator(".lt-toasts > .lt-visually-hidden");
+
     /// <summary>
     /// Signs <paramref name="user"/> in through the Explorer's own sign-in dialog and its
     /// server form post, then waits for the redirected document's live circuit.

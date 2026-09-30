@@ -75,9 +75,15 @@ public sealed class StaticIdentityDirectory : ILatticeIdentityDirectory
 
     /// <inheritdoc />
     public string DescribeEntry(DirectoryPrincipalKind? kind) =>
-        "Enter an exact id provisioned at deployment time - a static-roster principal or a " +
-        "LATTICE_STATE_USER_<name> Basic credential - not an arbitrary string. Ids that are " +
-        "not in the deployed roster are rejected.";
+        $"Enter the exact id of a {KindWord(kind)} on the roster deployed with this cluster. " +
+        "An id that is not on the roster is rejected.";
+
+    private static string KindWord(DirectoryPrincipalKind? kind) => kind switch
+    {
+        DirectoryPrincipalKind.User => "user",
+        DirectoryPrincipalKind.Group => "group",
+        _ => "user or group",
+    };
 
     /// <inheritdoc />
     public Task<DirectorySearchPage> SearchAsync(DirectorySearchQuery query, CancellationToken cancellationToken = default)
