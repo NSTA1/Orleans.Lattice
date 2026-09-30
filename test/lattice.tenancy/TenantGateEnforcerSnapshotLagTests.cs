@@ -215,12 +215,14 @@ public sealed class TenantGateEnforcerSnapshotLagTests
 
     // ---- helpers --------------------------------------------------------
 
-    /// <summary>A maintainer that has never built a snapshot, so it is not authoritative.</summary>
+    /// <summary>
+    /// A maintainer that has built an (empty) snapshot but holds no lease, so it is
+    /// warm yet not authoritative.
+    /// </summary>
     private static CompiledTenantPolicySnapshotMaintainer NonAuthoritativePolicy()
     {
-        var policy = new CompiledTenantPolicySnapshotMaintainer(
-            Substitute.For<ITenantRegistry>(),
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var policy = TenantPolicyEpochTestCluster.Unleased(new FakeTenantRegistry());
+        policy.RebuildNowAsync().GetAwaiter().GetResult();
         Assert.That(policy.IsSnapshotAuthoritative, Is.False, "precondition: a cold maintainer is not authoritative");
         return policy;
     }
@@ -256,8 +258,8 @@ public sealed class TenantGateEnforcerSnapshotLagTests
         {
             Registry = registry;
             _owner = owner;
-            Maintainer = new CompiledTenantPolicySnapshotMaintainer(
-                registry, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+            Cluster = new TenantPolicyEpochTestCluster();
+            Maintainer = Cluster.AddSilo(registry);
             Engine = new LatticeTenantPolicyEngine(Maintainer);
             Enforcer = new TenantGateEnforcer(
                 Engine,
@@ -268,6 +270,8 @@ public sealed class TenantGateEnforcerSnapshotLagTests
         }
 
         public GatedTenantRegistry Registry { get; }
+
+        public TenantPolicyEpochTestCluster Cluster { get; }
 
         public CompiledTenantPolicySnapshotMaintainer Maintainer { get; }
 
@@ -289,6 +293,8 @@ public sealed class TenantGateEnforcerSnapshotLagTests
             registry.Records.Add(Record("beta", admins: [Subject]));
 
             var world = new World(registry, owner, residency);
+            world.Cluster.Renew(world.Maintainer);
+            await world.Maintainer.BackgroundRebuild;
             await world.Maintainer.RebuildNowAsync();
             Assert.That(world.Maintainer.IsSnapshotAuthoritative, Is.True, "precondition: the warm snapshot is authoritative");
             return world;
