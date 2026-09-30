@@ -31,6 +31,30 @@ public class ExplorerAuthSessionTests
     }
 
     [Test]
+    public void A_sign_in_replay_in_flight_when_the_session_is_disposed_completes_without_faulting()
+    {
+        // Issue #4093: Dispose disposed the gate while InitializeAsync held it across the
+        // credential read, so the replay's finally { _gate.Release(); } threw
+        // ObjectDisposedException out of the chrome's initialisation and ended the circuit.
+        var explorerSession = Substitute.For<IExplorerSession>();
+        explorerSession.Connection.Returns(Substitute.For<ILatticeStateConnection>());
+        explorerSession.Current.Returns(new ExplorerConfiguration { Endpoint = "https://cluster.internal:443" });
+        var read = new TaskCompletionSource<StoredCredential?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ICredentialStore>();
+        store.GetAsync(Arg.Any<CancellationToken>()).Returns(read.Task);
+        var session = new ExplorerAuthSession(explorerSession, store);
+
+        var replay = session.InitializeAsync();
+        Assert.That(replay.IsCompleted, Is.False, "the replay holds the gate across the credential read");
+
+        session.Dispose();
+        read.SetResult(null);
+
+        Assert.DoesNotThrowAsync(() => replay);
+        Assert.That(session.IsAuthenticated, Is.False);
+    }
+
+    [Test]
     public async Task LoginAsync_setsAuthenticatedStateAndUsername()
     {
         var (session, _, _, _) = CreateSession();

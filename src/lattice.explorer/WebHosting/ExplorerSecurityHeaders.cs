@@ -17,20 +17,35 @@ internal static class ExplorerSecurityHeaders
     /// The <c>Content-Security-Policy</c> value. <c>frame-ancestors 'none'</c> is
     /// the primary clickjacking control; the remaining directives are the
     /// tightest set compatible with the Blazor Web App (interactive server)
-    /// asset model. <c>'unsafe-inline'</c> is retained for <c>script-src</c> and
-    /// <c>style-src</c> because Blazor Web App streaming SSR injects inline
-    /// <c>&lt;script&gt;</c> DOM-patch blocks and interactive components emit
-    /// inline <c>style</c> attributes; a strict policy without it would break the
-    /// running console. <c>connect-src 'self'</c> permits the same-origin SignalR
-    /// WebSocket that carries the interactive circuit.
+    /// asset model. <c>script-src</c> is <c>'self'</c> alone: the console serves no
+    /// inline script (its first-paint and framework scripts are same-origin files,
+    /// and Blazor Web App streaming SSR patches the DOM through
+    /// <c>&lt;blazor-ssr&gt;</c> templates rather than inline <c>&lt;script&gt;</c>
+    /// blocks), so an injected inline script or <c>on*</c> handler does not run
+    /// (issue #4020). <c>'unsafe-inline'</c> is retained for <c>style-src</c> only,
+    /// because interactive components emit inline <c>style</c> attributes; a strict
+    /// style policy would break the running console. <c>connect-src 'self'</c> permits the same-origin SignalR
+    /// WebSocket that carries the interactive circuit. <c>img-src</c> admits
+    /// <c>data:</c> for app icons.
+    /// <para>
+    /// <c>frame-src 'self'</c> is how the console frames Lattice App UIs, and it is
+    /// deliberately paired with <c>X-Frame-Options: DENY</c> on every response
+    /// except the app frame bootstrap route (epic #3807, E4). A CSP source cannot
+    /// name a path without also naming a host, and naming the host would make this
+    /// header per-request rather than static, so the path restriction is enforced
+    /// by the pairing instead: a frame that navigates itself anywhere else on this
+    /// origin reaches a response that refuses to be framed. <c>frame-src</c> alone
+    /// also keeps every other origin out of any frame the console hosts.
+    /// </para>
     /// </summary>
     internal const string ContentSecurityPolicyValue =
         "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline'; " +
+        "script-src 'self'; " +
         "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data:; " +
         "font-src 'self' data:; " +
         "connect-src 'self'; " +
+        "frame-src 'self'; " +
         "frame-ancestors 'none'; " +
         "base-uri 'self'; " +
         "form-action 'self'";

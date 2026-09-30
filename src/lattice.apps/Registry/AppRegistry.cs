@@ -120,7 +120,7 @@ internal sealed class AppRegistry : IAppRegistry
         // when the source cannot supply the exact version; activation, which needs the manifest
         // anyway, is authoritative and claims then.
         var claims = request is not null
-            ? await PlanClaimsAsync(tenant, slug, request.Identity.Version, cancellationToken).ConfigureAwait(false)
+            ? await PlanClaimsAsync(tenant, slug, request.Identity.Version, request.Identity.Provenance.Source, cancellationToken).ConfigureAwait(false)
             : null;
         var claimant = request is not null ? new AppTreeOwner(tenant, slug, request.Identity.Provenance.Publisher) : default;
 
@@ -139,6 +139,15 @@ internal sealed class AppRegistry : IAppRegistry
                     current,
                     AppRegistryTransitionError.ConcurrencyConflict,
                     $"The installed version is no longer '{expected}'; re-read the app and retry the transition.");
+            }
+
+            if (request?.ExpectedRevision is { } expectedRevision
+                && (current is null || current.Revision != expectedRevision))
+            {
+                return AppRegistryTransitionResult.Rejected(
+                    current,
+                    AppRegistryTransitionError.ConcurrencyConflict,
+                    "The app's install record changed after it was read; re-read the app and retry the transition.");
             }
 
             var decision = AppLifecycle.Evaluate(current, action);
@@ -197,16 +206,17 @@ internal sealed class AppRegistry : IAppRegistry
     }
 
     /// <summary>
-    /// Resolves the exact version being consented to and plans its tree claims, or returns
+    /// Resolves the exact version being consented to, from the source its provenance names, and plans its tree claims, or returns
     /// <c>null</c> when the source cannot supply that version.
     /// </summary>
     private async Task<AppTreeClaimPlan[]?> PlanClaimsAsync(
         TenantId tenant,
         AppSlug slug,
         AppVersion version,
+        string? sourceKey,
         CancellationToken cancellationToken)
     {
-        var resolved = await _source.ResolveAsync(slug, version, cancellationToken).ConfigureAwait(false);
+        var resolved = await _source.ResolveFromAsync(slug, version, sourceKey, cancellationToken).ConfigureAwait(false);
         return resolved.IsResolved
             && resolved.Manifest is { } manifest
             && manifest.Identity.Slug == slug
@@ -324,6 +334,8 @@ internal sealed class AppRegistry : IAppRegistry
                 StateChangedAtUtc = stateChangedAt,
                 ConsentedAtUtc = now,
                 ConsentedBy = actor,
+                ConsentedBridge = request.BridgeConsent
+                    ?? (action == AppLifecycleAction.Upgrade ? current?.ConsentedBridge : null),
             };
         }
 

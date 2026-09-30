@@ -1,0 +1,8 @@
+<span class="@CellClass">
+    <code id="@_id" class="lt-mono-cell__value" title="@(Truncate ? Value : null)">@Value</code>
+    <button type="button"
+            class="lt-mono-cell__copy"
+            aria-describedby="@_id"
+            @onclick="CopyAsync">@CopyLabel</button>
+    <span class="lt-visually-hidden" role="status">@_announcement</span>
+</span>

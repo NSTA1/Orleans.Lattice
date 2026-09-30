@@ -103,6 +103,15 @@ internal sealed class DefaultExplorerTenantIdentityResolver(
             return;
         }
 
+        // A different identity inherits nothing from the previous one - not even
+        // for the calls that establish its own tenant, which would otherwise assert
+        // the previous identity's tenant and be answered (or refused) under it.
+        if (_hasEstablished && !string.Equals(_establishedFor, _session.Username, StringComparison.Ordinal))
+        {
+            _context.ActiveTenant = null;
+            _provisional = null;
+        }
+
         _establishedFor = _session.Username;
         _hasEstablished = true;
         _context.ActiveTenant = await EstablishAsync(cancellationToken).ConfigureAwait(false);

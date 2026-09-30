@@ -1,0 +1,53 @@
+@page "/cluster"
+@page "/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}"
+@page "/t/{tenant}/cluster"
+@page "/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}"
+@inherits ExplorerPage
+
+@*
+    Every Cluster address lands here and is read once, by ClusterAddresses, into
+    the page it names. A tenant-rooted address shows only that tenant's own trees
+    and storage; the scope reaches every page and link through a cascade.
+*@
+
+@* Keyed on the scope, so moving between /cluster and /t/{tenant}/cluster builds each page afresh. *@
+<CascadingValue @key="@(Address.Tenant ?? string.Empty)" Name="@ClusterScope.CascadeName" Value="@Address.Tenant">
+@switch (_location)
+{
+    case { Kind: ClusterPageKind.Overview }:
+        <ClusterOverview />
+        break;
+
+    case { Kind: ClusterPageKind.Trees }:
+        <ClusterTreeList />
+        break;
+
+    case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Overview } tree:
+        <ClusterTreePage TreeId="@tree.TreeId" Tab="@Address.GetQuery(ClusterAddresses.TabQuery)" @key="tree.TreeId" />
+        break;
+
+    case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Tools } tree:
+        <ClusterToolsPage TreeId="@tree.TreeId" @key="tree.TreeId" />
+        break;
+
+    case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Reshard } tree:
+        <ClusterReshardPage TreeId="@tree.TreeId" @key="tree.TreeId" />
+        break;
+
+    case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Resize } tree:
+        <ClusterResizePage TreeId="@tree.TreeId" @key="tree.TreeId" />
+        break;
+
+    case { Kind: ClusterPageKind.Tree, View: ClusterTreeView.Snapshot } tree:
+        <ClusterSnapshotPage TreeId="@tree.TreeId" @key="tree.TreeId" />
+        break;
+
+    case { Kind: ClusterPageKind.Wal } wal:
+        <ClusterWalPage TreeId="@wal.TreeId" Partition="@wal.Partition" Target="@wal.Target" />
+        break;
+
+    case { Kind: ClusterPageKind.Orphans } orphans:
+        <ClusterOrphansPage TreeId="@orphans.TreeId" @key="orphans.TreeId" />
+        break;
+}
+</CascadingValue>

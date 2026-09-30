@@ -7,12 +7,14 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
 /// <summary>Registers and maps the single app-control gRPC endpoint.</summary>
-public static class LatticeAppsApiGrpcServiceCollectionExtensions
+public static partial class LatticeAppsApiGrpcServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the binding with default-deny authorization. Supply Orleans serialization
     /// and an ILatticeAppsControl implementation separately. Repeated registration preserves
-    /// custom collaborators and does not duplicate the interceptor.
+    /// custom collaborators and does not duplicate the interceptor. The UpdateRoleBindings RPC is
+    /// served by a registered ILatticeAppRoleBindings, or by the ILatticeAppsControl when it also
+    /// implements that interface, and answers Unimplemented otherwise.
     /// </summary>
     public static IServiceCollection AddLatticeAppsApiGrpc(
         this IServiceCollection services, Action<LatticeAppsApiGrpcOptions>? configure = null)

@@ -1,0 +1,111 @@
+@page "/access/explain"
+@page "/t/{tenant}/access/explain"
+@inherits ExplorerPage
+
+@*
+    Policy introspection: whether a subject may perform an operation over a
+    scope, and a subject's effective permissions. Both render the server's
+    answer as it arrives; the precedence order of matched rules is a reading aid.
+*@
+
+<PageTitle>Explain access - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Ask why a user or group is allowed or denied an operation, or list every rule that applies to them.</p>
+<AccessNav Current="@AccessRoutes.ExplainSegment" Tenant="@Address.Tenant" />
+
+<form class="lt-access-form" @onsubmit="ExplainAsync" novalidate>
+    <AccessSubjectPicker @ref="_subjectPicker"
+                         Label="Subject"
+                         Kind="_kind"
+                         KindChanged="@(kind => _kind = kind)"
+                         Id="@_subject"
+                         IdChanged="@(value => _subject = value)"
+                         Error="@_subjectError"
+                         DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                         DirectoryExplanation="@_model?.DirectoryExplanation" />
+    <LtSelect Label="Operation" Options="OperationOptions" Value="@_operation" ValueChanged="@(value => _operation = value)" />
+    <LtSelect Label="Scope" Options="ScopeOptions" Value="@_scopeKind" ValueChanged="@(value => _scopeKind = value)" />
+    @if (_scopeKind != AccessRuleDraft.ClusterScope)
+    {
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="@(value => _tree = value)" Error="@_treeError" Source="@Suggestions.Trees" Noun="tree" />
+    }
+    @if (_scopeKind is AccessRuleDraft.PrefixScope or AccessRuleDraft.KeyScope)
+    {
+        <LtTextInput Label="@(_scopeKind == AccessRuleDraft.KeyScope ? "Key" : "Key prefix")" Mono="true" Value="@_keyOrPrefix" ValueChanged="@(value => _keyOrPrefix = value)" Error="@_keyError" />
+    }
+    <div class="lt-access-form__actions">
+        <LtButton Type="LtButtonType.Submit" Disabled="_running">Explain</LtButton>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="EffectivePermissionsAsync" Disabled="_running">Effective permissions</LtButton>
+    </div>
+</form>
+
+@if (_running)
+{
+    <LtSkeleton Lines="4" Label="Asking the cluster" />
+}
+else if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The cluster could not answer")" HeadingLevel="2">
+        @failure.Message
+    </LtEmptyState>
+}
+else if (_explanation is { } explanation)
+{
+    <section class="lt-access-section" aria-labelledby="lt-access-verdict" aria-live="polite">
+        <div class="lt-access-verdict">
+            <h2 id="lt-access-verdict" class="lt-access-verdict__title">@(explanation.Allowed ? "Allowed" : "Denied")</h2>
+            <LtStatusPill State="@(explanation.Allowed ? LtStateRole.Enabled : LtStateRole.Failed)" Text="@(explanation.Allowed ? "Allowed" : "Denied")" />
+        </div>
+        <LtDefinitionList>
+            <LtDefinition Term="Subject" Mono="true">@explanation.SubjectId</LtDefinition>
+            <LtDefinition Term="Operation">@AccessRuleFormat.OperationsLabel(explanation.Operation)</LtDefinition>
+            <LtDefinition Term="Scope" Mono="true">@AccessRuleFormat.ScopeLabel(explanation.Scope)</LtDefinition>
+            @if (!string.IsNullOrEmpty(explanation.Reason))
+            {
+                <LtDefinition Term="Reason">@explanation.Reason</LtDefinition>
+            }
+            <LtDefinition Term="With no matching rule">@AccessRuleFormat.EffectLabel(explanation.DefaultEffect)</LtDefinition>
+            @if (explanation.Filtered)
+            {
+                <LtDefinition Term="Filtered">A range read would be narrowed to the keys the subject may see.</LtDefinition>
+            }
+        </LtDefinitionList>
+        <h3 class="lt-access-section__title">Groups</h3>
+        @GroupLinks(explanation.GroupIds)
+        <p class="lt-access-caveat">Groups are resolved from the membership directory alone. Groups a live caller's token asserts are not included, so a real caller's decision can differ.</p>
+        <AccessRuleTable Rules="_matched" Caption="Matched rules, in precedence order" EmptyText="No rule matched; the default applied." Tenant="@Address.Tenant" />
+    </section>
+}
+else if (_permissions is { } permissions)
+{
+    <section class="lt-access-section" aria-labelledby="lt-access-permissions" aria-live="polite">
+        <h2 id="lt-access-permissions" class="lt-access-section__title">Effective permissions for <span class="lt-access-mono">@permissions.SubjectId</span></h2>
+        <h3 class="lt-access-section__title">Groups</h3>
+        @GroupLinks(permissions.GroupIds)
+        <AccessRuleTable Rules="_matched" Caption="Rules that apply, in precedence order" EmptyText="No rule applies to this subject." Tenant="@Address.Tenant" />
+        @if (_outOfScope > 0)
+        {
+            <p class="lt-access-caveat" data-lt-cluster-wide-rules="true">@OutOfScopeText <a href="@ClusterWidePermissionsHref">See them on the cluster-wide page</a>.</p>
+        }
+    </section>
+}
+
+@code {
+    private RenderFragment GroupLinks(IReadOnlyList<string> groups) => __builder =>
+    {
+        @if (groups.Count == 0)
+        {
+            <p class="lt-access-fieldset__hint">No groups.</p>
+        }
+        else
+        {
+            <ul class="lt-access-links">
+                @foreach (var group in groups)
+                {
+                    <li @key="group"><a href="@GroupHref(group)">group:@group</a></li>
+                }
+            </ul>
+        }
+    };
+}

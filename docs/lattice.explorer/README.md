@@ -1,60 +1,122 @@
 # Orleans.Lattice.Explorer
 
-An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.md) cluster - browse trees and materialised views, and administer backups and access control, entirely over the cluster's gRPC APIs.
+A web console for a running [Orleans.Lattice](../../README.md) cluster. It browses
+data, runs Lattice Apps, and administers access, schema, tenancy, replication,
+backups, telemetry and the cluster itself, entirely over the cluster's gRPC APIs.
 
 ## What is it?
 
-`Orleans.Lattice.Explorer.Web` is the embeddable hosting library for the Explorer console. It talks to a cluster only through the read-only state API and the auth, backup, schema, tenant-administration, and telemetry gRPC bindings, so it never joins the cluster's Orleans membership and never holds a mutation path into the data plane beyond what those control facades already expose. It adds:
+`Orleans.Lattice.Explorer.Web` is the embeddable hosting library for the Explorer.
+The console reaches a cluster only through the cluster's public facades, so it
+never joins Orleans membership. Out of the box it gives you:
 
-- **A read-only tree browser** - the catalog of trees, materialised views, and tag indexes, each tree's shard-root structure, key-ordered entry scans (a live cursor by default, or an opt-in consistent snapshot) and single-key record inspection, live change observation, per-key revision history, the strict-mode dead-letter queue, tag-index membership browsing, and per-tree metrics, all over the [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) gRPC surface.
-- **Capability-gated admin areas** - a Backups area over the backup control API, an Access (membership and access-control) area over the auth control API, Tenant administration (platform-operator tenant management) and My tenant (tenant self-service) areas over the tenant-administration API, and a Telemetry area over the telemetry API. Each area opens only when its access gate confirms the connected endpoint offers it and the signed-in principal may use it; an area the caller may not use stays visible but demoted, and one the cluster does not serve renders no entry - except Access, whose gate treats an auth control facade the cluster does not serve as a denial and demotes the entry instead.
-- **A Schema plugin** - management over the schema control API. It ships as its own package but is withheld by default because its versioning UI cannot yet express what differs between schema versions: a head surfaces it by calling `AddExplorerSchemaPlugin()`, and renders no Schema tab by not calling it.
-- **Auth-aware sign-in** - a pluggable `IExplorerAuthMethod` model (Basic, [Entra](connecting-to-an-auth-enabled-state-api.md) via the optional companion package, or a custom method) that attaches the resulting credential - a Basic `authorization` header, or a bearer token it acquires and refreshes - to every call to an auth-enabled State API.
-- **Two hosting shapes from one code path** - run the bundled standalone `Orleans.Lattice.Explorer.WebHost` process, or embed the console in your own ASP.NET application; both are built on the same `AddLatticeExplorerWeb` / `MapLatticeExplorer` pair, so they cannot drift.
+- **Nine native areas.** Data, Apps, Access, Schema, Tenancy, Replication,
+  Backups, Telemetry and Cluster are compiled into the console. Each one probes
+  the facade it needs and shows itself only to a caller who can use it.
+- **The address is the navigation.** Every page has one canonical, lower-case
+  address. The address line shows it as a chain of nodes you can type into, with
+  completions from every area and a command palette. A directory spine on the
+  left lists the areas you can reach.
+- **Lattice Apps as first-class citizens.** Browse app sources, review consent,
+  and install, upgrade, disable and uninstall apps as native pages. An app's own
+  UI runs in a sandboxed, credential-free frame that reaches the cluster only
+  through the cluster's app bridge.
+- **The documentation site's visual world.** The console is drawn in the same
+  order-diagram language as the documentation site: the Paper and Board themes,
+  a separate contrast axis, two densities, and the marker node for "you are
+  here".
+- **Phone-first-class.** Reading and simple actions work at 360px wide: tables
+  become two-line rows with detail sheets, the spine becomes a slide-in sheet, and
+  the header folds into one menu.
+- **Auth-aware sign-in.** A pluggable `IExplorerAuthMethod` model (Basic,
+  [Entra](connecting-to-an-auth-enabled-state-api.md) through the companion
+  packages, or your own) attaches its credential to every call the console makes.
+- **Two hosting shapes from one code path.** Run the standalone
+  `Orleans.Lattice.Explorer.WebHost` process, or embed the console in your own
+  ASP.NET Core application. Both use the same `AddLatticeExplorerWeb` and
+  `MapLatticeExplorer` pair, so they cannot drift.
 
-`Orleans.Lattice.Explorer.Web` is the single package a consumer references; the shared explorer libraries it composes restore transitively.
+`Orleans.Lattice.Explorer.Web` is the single package a consumer references. The
+libraries it composes, `Orleans.Lattice.Explorer.Core`,
+`Orleans.Lattice.Explorer.UI` and `Orleans.Lattice.Explorer.AppKit`, restore
+transitively.
 
 ## Core properties
 
-- **Read-only over the data plane.** The console observes cluster state and drives only the backup, access, schema, and tenant-administration *control* facades; the telemetry facade is only queried. There is no direct write, delete, split, or reconfigure path into a tree's data. Some control operations do change tree data, but only as that facade's own authorized operation: restoring a backup, deleting a tenant (which cascades to every tree it owns), and schema remediation that re-stamps stored values.
-- **Out-of-cluster by construction.** The Explorer reaches a cluster purely over its gRPC endpoints, so it can be deployed and scaled independently and never taxes Orleans membership or the silo's activation budget.
-- **Fail-closed and capability-gated.** Each plugin declares an access gate resolving one of four states. `Allowed` renders normally; `AuthenticationRequired` stays prominent and clickable, inviting sign-in; `Denied` renders **visible but demoted**, grouped below a divider and stating the permission it needs and who to ask; `Unavailable` renders no entry, with the absence explained in a capabilities affordance. The gating is advisory and the server remains the sole enforcement point, which is exactly why a denied area is shown rather than hidden - see [Navigation visibility policy](navigation-visibility-policy.md). A plugin leaves no trace at all - neither a rail entry nor a mention in the capabilities affordance - only when the head did not register it: registration is the whole of the opt-in, and there is no per-area option flag.
-- **Head-agnostic core.** The connection, configuration, session, authentication, tenant-scoping, and navigation services live in `Orleans.Lattice.Explorer.Core` and depend only on the public read-only state-API gRPC client, so every head renders the same behaviour. The four-state access model the areas are gated by lives in `Orleans.Lattice.Explorer.Plugins.Abstractions`.
-- **Embeddable without wiring.** The shared UI ships its static web assets at `_content/Orleans.Lattice.Explorer.UI/`, served automatically by a published host (a host run from its build output outside the Development environment adds one call - see [Package shape](running-the-explorer.md#package-shape)); a host mounts the whole console with two extension calls under a configurable base path.
+- **Out-of-cluster by construction.** The console reaches a cluster only over
+  its gRPC endpoint, so it can be deployed and scaled on its own and costs the
+  silos nothing but the calls it makes.
+- **Every change is a facade operation.** The console has no private path into a
+  tree. Anything that changes state, such as a restore, a tenant deletion, a
+  schema remediation, a reshard or an app writing through the bridge, is that
+  facade's own authorised operation, and the cluster authorises every call.
+- **Fail-closed areas.** An area that cannot prove you may see it is hidden, and
+  its address renders the not-found page. Probes are time-boxed, so one slow
+  facade never stalls the console. See [Area availability](area-availability.md).
+- **One credential per circuit.** Every facade rides one channel for the browser
+  circuit, built from the configured endpoint and the signed-in credential. It is
+  rebuilt when the connection settings or the sign-in change.
+- **Answers never outlive their caller.** Everything the console remembers from
+  the cluster within a circuit is filed under the caller who read it: the
+  sign-in, the endpoint and the asserted tenant. A sign-in, a sign-out or a
+  connection change drops it, and the page is built afresh, so an answer read for
+  one caller is never shown to the next. See
+  [Tenant scope](tenant-scope.md#every-call-carries-the-tenant).
+- **No extension points but apps.** There is no plugin model and no public API to
+  register an area. The only way a third party puts UI into the console is a
+  [Lattice App](lattice-apps.md), and an app's UI never sees a credential.
+- **Embeddable without wiring.** The UI ships its static web assets at
+  `_content/Orleans.Lattice.Explorer.UI/`, served automatically by a published
+  host. A host run from its build output outside the Development environment adds
+  one call, `UseStaticWebAssets()` (see
+  [Static web assets in a thin host](running-the-explorer.md#static-web-assets-in-a-thin-host)).
+  A host mounts the whole console with two extension calls under a configurable
+  base path.
 
 ## Features
 
 | Feature | Surface | Summary |
 |---|---|---|
-| Tree browser | State-API gRPC surface | Catalog (trees, views, and tag indexes), shard structure, live or consistent-snapshot entry scans, single-key inspection, change feed, per-key revision history, strict-mode dead letters, tag-index browsing, and per-tree metrics. |
-| Backups area | Backup control API | Capability-gated capture (single-tree or multi-tree set, full or incremental), recurring schedules, restore (non-destructive repair or point-in-time replace), catalog listing with incremental chains collapsed to one row, deletion, and backup health monitoring over the [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) binding. See [Managing backups](managing-backups.md). |
-| Access area | Auth control API | Capability-gated membership and policy administration and decision explanation over the [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) binding. |
-| Schema plugin | Schema control API | Schema policy, dead letters, versioning, and remediation. Ships withheld; surface it with `AddExplorerSchemaPlugin()`. |
-| Tenant administration area | Tenant-administration API | Platform-operator management of every tenant - lifecycle, quotas, allowed regions, admin subjects, and cross-tenant grants - over the [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) binding. Unavailable on a cluster without the tenancy add-on. |
-| My tenant area | Tenant-administration API | Tenant-administrator self-service: the tenant's overview, members, quota, regions, sharing, and a metrics section. See [Tenant scope](tenant-scope.md). |
-| Telemetry area | Telemetry API | Time-series panels built from the queries the cluster's [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) facade offers the caller. Unavailable when the cluster serves no telemetry facade or offers the caller no queries. |
-| Auth-aware sign-in | `IExplorerAuthMethod` | Pluggable login (Basic, Entra, or custom) that attaches its credential - a Basic header or a bearer token - to every call to an auth-enabled State API. |
-| Standalone or embedded hosting | `AddLatticeExplorerWeb` / `MapLatticeExplorer` | One code path for the bundled `WebHost` process and for embedding in an existing ASP.NET app, under a configurable base path. |
+| Data | [State API](../lattice.api.state/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
+| Apps | [App control, catalogue, workspace and bridge](../lattice.api.apps/README.md) | Your apps, the source catalogue, consent review, lifecycle, each app's own pages, and its sandboxed UI. See [Lattice Apps in the Explorer](lattice-apps.md). |
+| Access | [Auth control API](../lattice.api.auth/README.md) | Rules, groups and decision explanation. See [Managing access](managing-access.md). |
+| Schema | [Schema control API](../lattice.api.schema/README.md) | Policy, version configuration, compliance scans, remediation and schema dead letters. See [Managing schema](managing-schema.md). |
+| Tenancy | [Tenant administration API](../lattice.api.tenantadmin/README.md) | The operator's tenant directory and each tenant's members, quota, regions and sharing. See [Tenant scope](tenant-scope.md). |
+| Replication | [Replication API](../lattice.api.replication/README.md) | The estate map, peer link health, enrolled trees, and enabling or disabling replication for a tree. See [The Explorer areas](areas.md#replication). |
+| Backups | [Backup control API](../lattice.api.backup/README.md) | The backup catalogue, capture, restore, schedules, health and catalogue maintenance. See [Managing backups](managing-backups.md). |
+| Telemetry | [Telemetry API](../lattice.api.telemetry/README.md) | Boards of charts and tables built from the queries the cluster offers the caller. See [The Explorer areas](areas.md#telemetry). |
+| Cluster | [Tree administration API](../lattice.api.treeadmin/README.md) | The estate, regions, every tree's configuration, shards, storage and lifecycle, reshard, resize, snapshot, WAL placement and orphaned-leaf repair. See [The Explorer areas](areas.md#cluster). |
+| Navigation | Address line, palette and spine | Canonical addresses, completions, commands, tenancy re-rooting. See [The Explorer navigation model](navigation-model.md). |
+| Sign-in | `IExplorerAuthMethod` | Basic, Entra or custom sign-in that attaches its credential to every call. See [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md). |
+| Hosting | `AddLatticeExplorerWeb` / `MapLatticeExplorer` | One code path for the standalone head and for embedding, under a configurable base path. See [Running and hosting the Explorer](running-the-explorer.md). |
 
 ## Quick Start
 
-Run the bundled standalone head - the `Orleans.Lattice.Explorer.WebHost` process is built on the two extension calls below (its `Program` adds only the standard exception-handler, HSTS, HTTPS-redirection, and antiforgery middleware):
+Run the bundled standalone head: the `Orleans.Lattice.Explorer.WebHost` process is
+built on the two extension calls below, plus the standard exception-handler,
+HSTS, HTTPS-redirection and antiforgery middleware.
 
 ```csharp verify
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Web;
 
 var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeExplorerWeb();
 
 var app = builder.Build();
+app.UseAntiforgery();
 app.MapLatticeExplorer();
 app.Run();
 ```
 
-Embed the console in an existing ASP.NET application, mounted under a subpath and seeded with a target endpoint so there is no interactive first-run step:
+To embed the console in an existing ASP.NET Core application, mount it under a
+subpath and seed it with a configuration document, so there is no interactive
+first-run step:
 
 ```csharp verify
-using Orleans.Lattice.Explorer.Schema;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Web;
 
 var builder = WebApplication.CreateBuilder();
@@ -64,43 +126,46 @@ builder.Services.AddLatticeExplorerWeb(options =>
     options.ConfigFilePath = "explorer-config.json";
 });
 
-// The Schema area is an opt-in plugin: registering it is the whole of the
-// opt-in, and a head that does not register it renders no Schema area.
-builder.Services.AddExplorerSchemaPlugin();
-
 var app = builder.Build();
+app.UseAntiforgery();
 app.MapLatticeExplorer();
+app.Run();
 ```
 
-See [Running and hosting the Explorer](running-the-explorer.md) for the full hosting, deployment, and subpath-mounting guidance, and [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) for wiring sign-in.
+There is nothing to register per area: every area is compiled in and decides for
+itself whether you may see it. The [Explorer sample](../../samples/Explorer/README.md)
+co-hosts a single-silo cluster with the facades most areas need, and the
+[task-board sample app](../../samples/Explorer/Apps/TaskBoard/README.md).
+
+See [Running and hosting the Explorer](running-the-explorer.md) for the full
+hosting, deployment and subpath guidance, and
+[Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)
+for wiring sign-in.
 
 ## Reference
 
 ### Using the console
 
-- [The Explorer navigation model](navigation-model.md) - the four navigation tiers, why primary navigation is a left rail, and how a URL addresses a view.
-- [Navigation visibility policy](navigation-visibility-policy.md) - why areas you cannot open are shown and demoted rather than hidden, and why that is a usability policy and not a security control.
-- [What the Explorer remembers](what-the-explorer-remembers.md) - the preference contract: what is remembered, at what scope, and how to reset it.
-- [Tenant scope](tenant-scope.md) - the tenant lens, the tenant administration area, and the self-service area, and how the picker adapts to what you can reach.
-- [Theming and density](theming-and-density.md) - the available themes, the separate contrast axis, density, and how a choice is applied at first paint.
+- [The Explorer navigation model](navigation-model.md) - the address grammar, the address line, completions, the command palette, the directory spine and tenancy re-rooting.
+- [Area availability](area-availability.md) - how each area decides whether you may see it, and why hidden areas are left out rather than demoted.
+- [The Explorer areas](areas.md) - every area's pages, addresses, query keys, actions and commands.
+- [Lattice Apps in the Explorer](lattice-apps.md) - the Apps area, the sandboxed app frame, and writing an app UI.
+- [Managing access](managing-access.md), [Managing schema](managing-schema.md) and [Managing backups](managing-backups.md) - the Access, Schema and Backups areas in depth.
+- [Tenant scope](tenant-scope.md) - tenancy in the console and the Tenancy area.
+- [What the Explorer remembers](what-the-explorer-remembers.md) - the preference contract: what is remembered, where, and how to reset it.
+- [Theming and density](theming-and-density.md) - the themes, the contrast axis, density, and how a choice is applied at first paint.
 - [Accessibility conformance](accessibility-conformance.md) - what the console targets, how that is verified, and the known limitations.
 
 ### Hosting and administration
 
-- [Running and hosting the Explorer](running-the-explorer.md) - standalone and embedded hosting, package shape, and deployment without taxing cluster scaling.
-- [Multi-replica and failover hosting](multi-replica-hosting.md) - opt-in durable auth state (shared Data Protection key ring, estate-global token cache) and graceful re-authentication for a multi-replica deployment.
-- [Configuration](configuration.md) - every public options property, its type, and its default, plus the launcher environment variables, the persisted configuration document, and the connection settings.
-- [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) - selecting a login method and attaching its credential.
+- [Running and hosting the Explorer](running-the-explorer.md) - standalone and embedded hosting, package shape, the app frame route and security headers.
+- [Configuration](configuration.md) - every public options property, its type and its default, plus the launcher environment variables, the persisted configuration document and the connection settings.
+- [Multi-replica and failover hosting](multi-replica-hosting.md) - durable auth state and graceful re-authentication for a multi-replica deployment.
+- [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) - selecting a sign-in method and attaching its credential.
 - [Adding a custom auth method](adding-a-custom-auth-method.md) - implementing `IExplorerAuthMethod` for a bespoke sign-in.
-- [Managing backups from the Explorer](managing-backups.md) - the Backups area and its capability gating.
-- [Managing access control from the Explorer](managing-access.md) - the Access area and its capability gating.
-- [Managing schema from the Explorer](managing-schema.md) - the Schema plugin, withheld by default.
-- [Writing an Explorer plugin](writing-a-plugin.md) - the extension model: adding a tab as its own package, with its own domain contract, access gate, and styling.
 
 ## See also
 
-- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) - the optional Microsoft Entra ID interactive (desktop or device-code) login provider for the console.
-- [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md) - the optional hosted-web (OpenID Connect) Entra sign-in provider for a Blazor Server head.
-- [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) - the read-only state API the tree browser reads from.
-- [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) and [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the control facades the Backups and Access areas drive.
-- [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) and [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) - the facades the Tenant administration, My tenant, and Telemetry areas drive.
+- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) - the optional Microsoft Entra ID interactive (desktop or device-code) sign-in provider.
+- [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md) - the optional hosted-web (OpenID Connect) Entra sign-in provider.
+- [Installable apps](../lattice.apps/README.md) - the Lattice Apps model the Apps area administers.

@@ -3,7 +3,8 @@
 The MCP tool surface for [installable apps](../lattice.apps/README.md): every
 enabled app's tools are advertised on the single
 [Lattice MCP endpoint](../lattice.api.mcp/README.md), namespaced by the app's slug
-and gated per caller by the grants the app's roles compile to.
+and gated per caller by the app's role bindings: a caller sees a tool when a group it
+belongs to is bound to the tool's role, unless a deny takes the role away.
 
 ## What is it?
 
@@ -78,13 +79,22 @@ registration would let a second contribution shadow the first.
 ## Authorization
 
 Like every other Lattice MCP tool, app tools are offered only to an authenticated
-caller. Every app tool is advertised to a caller only when the shared access gate allows
-the caller **every** operation of the tool's declared role on at least one of that
-role's scopes. Only an unfiltered allow holds an operation: a key-filtered allow, which
-admits only some keys of the scope, never does, on a prefix scope as on a tree scope.
-The scopes are resolved exactly as the role compiler resolves them -
-the app's own `a/{app}/{tree}`, an adopted tree, or another app's tree - and composed
-for the caller's active tenant. Because the session's tool collection serves both
+caller. An app role is **held by binding**: a caller holds the tool's declared role when
+its transitive group closure contains a membership group the install binds to that role,
+and the role's compiled `app:{slug}:` rules confer at least one operation and one scope.
+Rights the caller holds through any other rule never make it hold an app role, so a
+broad operator grant does not reveal an app's tools.
+
+The shared access gate is asked only after the binding holds, and only to take the role
+away. For each of the role's operations it is asked on each of the role's scopes, in the
+scope's own shape; the role stays held when on at least one scope the gate refuses none
+of its operations. A key-filtered answer is tested at a representative key of the scope
+(the key itself, the prefix itself, or the empty key for a whole tree), so it can only
+narrow, never grant. An explicit deny on a bound member, on the role's trees or
+cluster-wide, therefore withholds the tool; a deny narrower than the scope leaves the
+role held and is enforced by the data path when the tool reads or writes. The scopes are
+resolved exactly as the role compiler resolves them - the app's own `a/{app}/{tree}`, an
+adopted tree, or another app's tree - and composed for the caller's active tenant. Because the session's tool collection serves both
 `tools/list` and `tools/call`, a tool withheld at advertisement is unreachable at
 invocation, and the decision is checked again at invocation against the current
 registry state, so disabling an app or revoking a grant takes effect mid-session.

@@ -1,46 +1,55 @@
 # Orleans.Lattice.Explorer.Entra.Web configuration
 
-The package has a single public options type, `ExplorerEntraWebOptions`, bound through `AddLatticeExplorerEntraWebAuth(configure)`, plus the `ExplorerWebTokenCacheKind` enum.
+`Orleans.Lattice.Explorer.Entra.Web` exposes one options type,
+`ExplorerEntraWebOptions`, and one public enum, `ExplorerWebTokenCacheKind`.
+The options are configured through `AddLatticeExplorerEntraWebAuth(configure)`
+and validated during registration.
 
 ## `ExplorerEntraWebOptions`
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| `Instance` | `string` | `DefaultInstance` (`https://login.microsoftonline.com/`) | The Entra authority instance. |
-| `TenantId` | `string?` | `null` | The directory (tenant) id the console signs users in against. **Required.** |
-| `ClientId` | `string?` | `null` | The application (client) id of the Explorer console's own confidential web app registration - the one holding the OIDC redirect URIs, not the State API resource app. **Required.** |
-| `ClientSecret` | `string?` | `null` | Optional secret for the confidential client. Leave unset to use a secret-less credential (federated managed-identity assertion or certificate) supplied through `ConfigureMicrosoftIdentityOptions` - the recommended production configuration. |
-| `CallbackPath` | `string` | `DefaultCallbackPath` (`/signin-oidc`) | The OIDC authorization-code callback path. |
-| `SignedOutCallbackPath` | `string` | `DefaultSignedOutCallbackPath` (`/signout-callback-oidc`) | The OIDC signed-out callback path. |
-| `Scopes` | `IList<string>` | empty | The scopes requested for the downstream State API (for example `api://{tenantId}/{app}-silo/.default`). When empty, the provider resolves the scope at sign-in time from the audience the State API advertises, appending `/.default` when the advertised value is a bare resource id. |
-| `TokenCache` | `ExplorerWebTokenCacheKind` | `InMemory` | Which token cache backs Microsoft.Identity.Web. Select `Distributed` and register a shared `IDistributedCache` on a multi-replica host. |
-| `RequireAuthenticatedUser` | `bool` | `true` | When true, installs a fallback authorization policy so an unauthenticated request to any endpoint is challenged into the OIDC redirect. Set false to manage authorization yourself. |
-| `AutoSignIn` | `bool` | `true` | When true, a Blazor Server circuit handler completes the State API sign-in automatically for an already browser-authenticated user. Set false to always require the manual dialog click. |
-| `ConfigureMicrosoftIdentityOptions` | `Action<MicrosoftIdentityOptions>?` | `null` | Escape hatch to configure the underlying `MicrosoftIdentityOptions` directly - for example to attach federated managed-identity client credentials for secret-less auth, or adjust the OIDC events. Invoked after the values above are applied. |
-| `ConfigureCookieOptions` | `Action<CookieAuthenticationOptions>?` | `null` | Optional callback to configure the cookie authentication options (session lifetime, cookie name). Invoked after Microsoft.Identity.Web applies its defaults. |
-| `ReauthChallengePath` | `string?` | `DefaultReauthPattern` (`/explorer-entra/reauth`) | The path the core Explorer's re-authentication interstitial navigates to when the credential latches into its revoked state. Registered as the core `ExplorerReauthOptions.ChallengePath` so the core UI can drive a forced-interactive sign-in without taking a dependency on this package. Set to `null` to leave the core default (a plain reload) in place. Point `MapLatticeExplorerEntraWebReauth` at the same path. |
-| `SignOutPath` | `string?` | `DefaultSignOutPattern` (`/explorer-entra/signout`) | The path the Explorer's "Sign out" button posts to for a full federated sign-out (drop the API credential, clear the OIDC cookie, and end the Entra session). Registered as the core `ExplorerSignOutOptions.FederatedSignOutPath` so the core UI posts here without taking a dependency on this package. Set to `null` to leave the core default (a local-only sign-out that only drops the API credential) in place. Point `MapLatticeExplorerEntraWebSignOut` at the same path. |
+| `Instance` | `string` | `DefaultInstance` (`https://login.microsoftonline.com/`) | Entra authority instance. |
+| `TenantId` | `string?` | `null` | Directory tenant id the console signs users in against. Required. |
+| `ClientId` | `string?` | `null` | Application id of the Explorer console's confidential web app registration. Required. |
+| `ClientSecret` | `string?` | `null` | Optional confidential-client secret. Leave unset when credentials are supplied through `ConfigureMicrosoftIdentityOptions`. |
+| `CallbackPath` | `string` | `DefaultCallbackPath` (`/signin-oidc`) | OIDC authorization-code callback path. Required to be non-blank. |
+| `SignedOutCallbackPath` | `string` | `DefaultSignedOutCallbackPath` (`/signout-callback-oidc`) | OIDC signed-out callback path. |
+| `Scopes` | `IList<string>` | Empty | Downstream State API scopes. When empty, the auth method resolves the scope from the State API advertised audience and appends `/.default` when needed. |
+| `TokenCache` | `ExplorerWebTokenCacheKind` | `InMemory` | Microsoft.Identity.Web token-cache backing. Use `Distributed` with a shared `IDistributedCache` for multi-replica hosting. |
+| `RequireAuthenticatedUser` | `bool` | `true` | Installs a fallback authorization policy that challenges unauthenticated requests into OIDC. Set `false` to manage HTTP authorization yourself. |
+| `AutoSignIn` | `bool` | `true` | Enables the best-effort circuit handler that signs in to the State API automatically for an already browser-authenticated user. |
+| `ReauthChallengePath` | `string?` | `DefaultReauthPattern` (`/explorer-entra/reauth`) | Path published to `ExplorerReauthOptions.ChallengePath` for the session-expired interstitial. Set `null` to leave the core default reload behaviour in place. Map `MapLatticeExplorerEntraWebReauth` at the same path. |
+| `SignOutPath` | `string?` | `DefaultSignOutPattern` (`/explorer-entra/signout`) | Path published to `ExplorerSignOutOptions.FederatedSignOutPath` so the identity menu performs full federated sign-out. Set `null` to leave local-only sign-out in place. Map `MapLatticeExplorerEntraWebSignOut` at the same path. |
+| `ConfigureMicrosoftIdentityOptions` | `Action<MicrosoftIdentityOptions>?` | `null` | Callback invoked after the option values above are copied to Microsoft.Identity.Web options. Use it for advanced OIDC events or secret-less credentials. |
+| `ConfigureCookieOptions` | `Action<CookieAuthenticationOptions>?` | `null` | Callback invoked after Microsoft.Identity.Web applies cookie defaults. Use it for session lifetime or cookie-name changes. |
 
 ### Constants
 
-- `const string DefaultInstance = "https://login.microsoftonline.com/"`
-- `const string DefaultCallbackPath = "/signin-oidc"`
-- `const string DefaultSignedOutCallbackPath = "/signout-callback-oidc"`
+| Constant | Value |
+|---|---|
+| `DefaultInstance` | `https://login.microsoftonline.com/` |
+| `DefaultCallbackPath` | `/signin-oidc` |
+| `DefaultSignedOutCallbackPath` | `/signout-callback-oidc` |
 
 ### Validation
 
-The options are validated at registration time (`AddLatticeExplorerEntraWebAuth` calls the configure delegate then validates). A missing `Instance`, `TenantId`, `ClientId`, or `CallbackPath` throws `InvalidOperationException` with an actionable message.
+Registration throws `InvalidOperationException` when `Instance`, `TenantId`,
+`ClientId`, or `CallbackPath` is blank. It throws `ArgumentNullException` when
+the service collection or configure callback is null.
 
 ## `ExplorerWebTokenCacheKind`
 
 | Member | Meaning |
 |---|---|
-| `InMemory` | A per-process in-memory token cache. Correct for a single-replica host. The cache is per process, so on a multi-replica host a user's cached token is not shared across replicas: a circuit on a cold replica cannot silently acquire a downstream token (it holds a valid session cookie but no redeemed code), so acquisition there fails until a fresh authorization code is redeemed on that replica - for example through the forced-interactive re-authentication endpoint. Use `Distributed` with a shared `IDistributedCache` for seamless failover. |
-| `Distributed` | A Microsoft.Identity.Web distributed token cache over the registered `IDistributedCache`. Register a shared cache (for example `Orleans.Lattice.Caching.AzureBlob`) so a multi-replica host shares one token cache and tokens survive a replica restart. |
+| `InMemory` | Per-process Microsoft.Identity.Web token cache. Correct for a single replica. A cold replica in a multi-replica deployment cannot read tokens acquired elsewhere. |
+| `Distributed` | Microsoft.Identity.Web distributed token cache over the registered `IDistributedCache`. Use one shared cache for every replica and region that must survive failover without re-authentication. |
 
 ## Secret-less production configuration
 
-Prefer a federated managed-identity credential over a client secret. Leave `ClientSecret` unset and attach the credential through the escape hatch.
+Prefer a secret-less credential over a client secret when your hosting platform
+supports it. Leave `ClientSecret` unset and attach the credential through
+`ConfigureMicrosoftIdentityOptions`.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -63,13 +72,9 @@ builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 
 ## Estate-global token cache
 
-The `Distributed` token cache backs Microsoft.Identity.Web with the registered
-`IDistributedCache`. On a multi-replica or geo-distributed estate, register one
-shared cache and point **every** region at a single estate-global container.
-Because the on-behalf-of token an operator acquired on one replica is then
-visible to every other replica, a request routed to a cold replica - or to a
-different region after a failover - finds the cached token and acquisition
-succeeds instead of failing for want of a redeemed authorization code.
+For multi-replica or geo-distributed hosting, select `Distributed` and register
+one shared `IDistributedCache`. Point every region at the same estate-global
+cache so a token acquired by one replica can be used by another after failover.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -78,9 +83,7 @@ using Orleans.Lattice.Explorer.Entra.Web;
 
 var builder = WebApplication.CreateBuilder();
 
-// Register one IDistributedCache pointed at a single estate-global container,
-// shared by every replica in every region (for example
-// Orleans.Lattice.Caching.AzureBlob over one estate-global blob container).
+// Register one IDistributedCache shared by every Explorer replica before this.
 builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 {
     options.TenantId = "00000000-0000-0000-0000-000000000000";
@@ -89,28 +92,20 @@ builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 });
 ```
 
-Pair the estate-global token cache with a
+Pair the distributed token cache with a
 [shared Data Protection key ring](../lattice.explorer/multi-replica-hosting.md#durable-auth-state-a-shared-data-protection-key-ring)
-so the session cookie is decryptable on every replica too.
+so every replica can decrypt the browser session cookie too.
 
 ## Forced-interactive re-authentication
 
-A token can expire or be revoked while an operator is signed in (a
-conditional-access change, a password reset), or a request can land on a replica
-whose cache cannot satisfy it. Microsoft.Identity.Web then raises a re-auth
-signal, which this package translates into a typed
-`ExplorerWebReauthRequiredException`. During silent renewal of an existing
-sign-in that latches the credential as revoked, and the core Explorer traps the
-revoked state and shows a "Your session expired" interstitial whose
-**Sign in again** button navigates to a forced-interactive sign-in. (The initial token
-acquisition of a new sign-in is outside that latch path, so the exception
-surfaces directly there.)
+When Microsoft.Identity.Web cannot acquire a token silently, the package throws
+`ExplorerWebReauthRequiredException`. During renewal of an existing sign-in, the
+auth method latches the credential as revoked. The session chrome then shows the
+`Your session expired` interstitial, whose **Sign in again** button navigates to
+`ReauthChallengePath`.
 
-Map the re-authentication endpoint so that navigation redeems a **new**
-authorization code even when a valid session cookie already exists - which is
-what repopulates the receiving replica's token cache. A plain page refresh sees
-the still-valid cookie and never redeems a fresh code; a `prompt=login`
-challenge forces the redemption.
+Map the endpoint so that navigation redeems a new authorization code even when a
+valid browser cookie already exists.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -127,16 +122,28 @@ builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 
 var app = builder.Build();
 
-// The interstitial's path is wired automatically from ReauthChallengePath; map
-// the endpoint at that same path (the default is /explorer-entra/reauth).
 app.MapLatticeExplorerEntraWebReauth();
 app.MapLatticeExplorerEntraWebSignOut();
 ```
 
-The endpoint honours a caller-supplied `returnUrl` query parameter, but only
-when it is a **local** path: an absolute or protocol-relative URL is rejected and
-the browser returns to `/`, so the endpoint cannot be abused as an open
-redirect. Pass `select_account` for the `prompt` argument to let the operator
-pick a different account, or a custom pattern to relocate the endpoint (keep
-`ReauthChallengePath` in sync so the interstitial navigates to the same path).
+The re-authentication endpoint honours `returnUrl` only when it is a local path;
+absolute and protocol-relative URLs return to `/`. Pass `select_account` as the
+`prompt` argument when operators should choose a different account. If you change
+the pattern, keep `ReauthChallengePath` in sync.
 
+## Federated sign-out and CSP
+
+`SignOutPath` defaults to `/explorer-entra/signout`. When present, registration
+publishes it to the Explorer core so the identity menu posts there. The endpoint
+validates antiforgery, clears the local State API credential, clears the cookie,
+and signs out of Entra.
+
+The registration also adds the configured `Instance` origin to the Explorer web
+head's `form-action` CSP sources when it parses as an HTTP or HTTPS URI. A
+malformed value contributes nothing, so the policy fails closed.
+
+## See also
+
+- [API reference](api.md)
+- [Architecture](architecture.md)
+- [Multi-replica and failover hosting](../lattice.explorer/multi-replica-hosting.md)

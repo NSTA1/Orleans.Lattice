@@ -14,4 +14,9 @@ public sealed record AppInstallRequest
     [Id(2)] public ImmutableArray<AppRoleBindingDescriptor> RoleBindings { get; init; } = [];
     /// <summary>The explicit operator-approved ceiling; scope references never carry composed physical ids.</summary>
     [Id(3)] public required AppCapabilityCeilingDescriptor Ceiling { get; init; }
+    /// <summary>
+    /// The key of the source to install from, or null to resolve the slug across every
+    /// source; an ambiguous slug then fails rather than choosing a source.
+    /// </summary>
+    [Id(4)] public string? SourceKey { get; init; }
 }

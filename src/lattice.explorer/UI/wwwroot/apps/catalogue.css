@@ -1,0 +1,320 @@
+/*
+  Apps area - catalogue, consent review and lifecycle (issue #3818).
+
+  Linked by the Apps pages themselves (AppsCatalogueAssets.Stylesheet), so it loads only
+  where the Apps area renders. Every class here is lt-apps-*; everything else on the
+  pages is a design-system primitive. No colour literal, no width query (the compact
+  form reads the layout's cascaded width band), no shadow, and the marker paints only
+  the current tab and the current install step, each paired with weight.
+*/
+
+.lt-apps-tabs {
+  display: flex;
+  gap: var(--lt-space-5);
+  margin-block: var(--lt-space-3) var(--lt-space-4);
+  border-block-end: 1px solid var(--lt-rule);
+  overflow-x: auto;
+}
+
+.lt-apps-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--lt-op-control-height);
+  padding-block-end: var(--lt-space-1);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+  text-decoration: none;
+  white-space: nowrap;
+  border-block-end: 3px solid transparent;
+}
+
+.lt-apps-tabs__link:hover {
+  color: var(--lt-ink);
+}
+
+.lt-apps-tabs__link[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+  border-block-end-color: var(--lt-marker);
+}
+
+.lt-apps-tabs__link:focus-visible,
+.lt-apps-link:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+.lt-apps-link {
+  color: var(--lt-link);
+}
+
+.lt-apps-filter {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-1);
+}
+
+.lt-apps-count {
+  margin-inline-start: auto;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+/* A source key is one token: it never breaks at its hyphen. */
+.lt-apps-source {
+  white-space: nowrap;
+}
+
+/* The source selector's description wraps under it rather than widening the toolbar (not in the compact form, where the toolbar stacks). */
+.lt-apps-source-field {
+  max-inline-size: 18rem;
+  min-inline-size: 0;
+}
+
+.lt-apps-source-field select {
+  inline-size: 100%;
+}
+
+/* A row's actions stay on one line; the app column gives way instead. */
+.lt-apps-actions.lt-apps-actions--row {
+  flex-wrap: nowrap;
+}
+
+.lt-apps-hint {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+/* The catalogue's note under its toolbar stands clear of the listing below it,
+   which on a phone opens with the "Sort by" label. */
+.lt-apps-search-note {
+  margin-block-end: var(--lt-space-4);
+}
+
+.lt-apps-app {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lt-space-3);
+  min-inline-size: 0;
+}
+
+.lt-apps-app__text {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-app__name {
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-app__summary,
+.lt-apps-app__note {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-body);
+}
+
+.lt-apps-icon {
+  flex: none;
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  object-fit: contain;
+}
+
+.lt-apps-icon--large {
+  inline-size: 3rem;
+  block-size: 3rem;
+}
+
+.lt-apps-icon--monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-xs);
+}
+
+.lt-apps-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  align-items: center;
+}
+
+.lt-apps-more {
+  display: flex;
+  justify-content: center;
+  margin-block: var(--lt-space-4);
+}
+
+.lt-apps-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-section {
+  margin-block: var(--lt-space-5);
+  padding-block-start: var(--lt-space-3);
+  border-block-start: 1px solid var(--lt-rule);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-section__title {
+  margin: 0 0 var(--lt-space-3);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-description {
+  margin: 0 0 var(--lt-space-3);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-list {
+  margin: 0;
+  padding-inline-start: var(--lt-space-4);
+}
+
+.lt-apps-list > li + li {
+  margin-block-start: var(--lt-space-1);
+}
+
+.lt-apps-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-inline-start: var(--lt-diagram-edge-width) solid var(--lt-diagram-edge);
+  margin-inline-start: var(--lt-space-2);
+}
+
+.lt-apps-chain__stop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--lt-space-2);
+  padding-block: var(--lt-space-1);
+  padding-inline-start: var(--lt-space-3);
+  margin-inline-start: calc(var(--lt-diagram-node-size) / -2 - var(--lt-diagram-edge-width) / 2);
+  min-inline-size: 0;
+}
+
+.lt-apps-chain__path {
+  font-family: var(--lt-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-chain__detail {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-apps-flag {
+  color: var(--lt-warning);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-attention {
+  margin-block: var(--lt-space-4);
+  padding: var(--lt-space-3) var(--lt-space-4);
+  border: 1px solid var(--lt-op-state-drift);
+  border-radius: var(--lt-radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-attention__title {
+  margin: 0 0 var(--lt-space-2);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-error {
+  margin-block: var(--lt-space-3);
+  padding: var(--lt-space-3) var(--lt-space-4);
+  border: 1px solid var(--lt-danger);
+  border-radius: var(--lt-radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-status {
+  margin-block: var(--lt-space-3);
+  color: var(--lt-ink);
+}
+
+.lt-apps-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2) var(--lt-space-4);
+  list-style: none;
+  margin: var(--lt-space-3) 0 var(--lt-space-4);
+  padding: 0;
+  font-size: var(--lt-text-sm);
+}
+
+.lt-apps-steps__step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  color: var(--lt-ink-2);
+}
+
+.lt-apps-steps__step[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-steps__step[aria-current] .lt-node {
+  background: var(--lt-marker);
+  border: var(--lt-diagram-ring-width) solid var(--lt-diagram-join-ring);
+}
+
+.lt-apps-fieldset {
+  margin: 0 0 var(--lt-space-4);
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.lt-apps-fieldset__legend {
+  margin-block-end: var(--lt-space-2);
+  padding: 0;
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: var(--lt-space-1) var(--lt-space-4);
+}
+
+.lt-apps-binding {
+  display: grid;
+  gap: var(--lt-space-2);
+  margin-block-end: var(--lt-space-4);
+  min-inline-size: 0;
+}
+
+.lt-apps-binding__role {
+  font-family: var(--lt-font-mono);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-apps-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

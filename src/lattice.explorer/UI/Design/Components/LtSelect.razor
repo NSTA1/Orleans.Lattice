@@ -1,0 +1,18 @@
+<div class="lt-field">
+    <label class="lt-field__label" for="@_id">@Label</label>
+    <select @attributes="AdditionalAttributes"
+            id="@_id"
+            class="lt-select"
+            disabled="@Disabled"
+            aria-describedby="@(Hint is null ? null : HintId)"
+            @onchange="HandleChangeAsync">
+        @foreach (var option in Options)
+        {
+            <option @key="option.Value" value="@option.Value" disabled="@option.Disabled" selected="@IsSelected(option)">@option.Text</option>
+        }
+    </select>
+    @if (Hint is not null)
+    {
+        <p id="@HintId" class="lt-field__hint">@Hint</p>
+    }
+</div>

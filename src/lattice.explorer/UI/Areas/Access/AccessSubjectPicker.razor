@@ -1,0 +1,24 @@
+@*
+    The subject picker: a User / Group choice and the id as a type-ahead
+    combobox over the cluster's identity directory, listing matching principals
+    by id with their display name (rendered as text) beside it. With a
+    directory only a listed principal is accepted; without one the picker is a
+    plain id box and says the id is not validated.
+*@
+<div class="lt-access-form__row">
+    @if (AllowKindChange)
+    {
+        <LtSelect Label="@($"{Label} kind")" Options="KindOptions" Value="@KindValue" ValueChanged="OnKindChangedAsync" />
+    }
+    <LtComboBox @ref="_box"
+                Label="@Label"
+                Value="@Id"
+                ValueChanged="OnIdChangedAsync"
+                OnChoose="OnChooseAsync"
+                Source="@Source"
+                Mode="@(DirectoryAvailable ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest)"
+                Noun="@KindWord"
+                Error="@Error"
+                Hint="@IdHint"
+                Disabled="Disabled" />
+</div>

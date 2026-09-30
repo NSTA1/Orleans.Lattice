@@ -1,0 +1,44 @@
+@if (!Capabilities.CanViewDiagnostics)
+{
+    <p class="lt-cluster-note">Your identity cannot read this tree's storage.</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Storage use">
+        @if (_stats.IsLoading)
+        {
+            <LtSkeleton Lines="4" Label="Loading storage use" />
+        }
+        else if (_stats.Value is { } stats)
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Leaf state">@ClusterFormat.Bytes(stats.LeafStateBytes)</LtDefinition>
+                <LtDefinition Term="Snapshots">@ClusterFormat.Bytes(stats.SnapshotBytes)</LtDefinition>
+                <LtDefinition Term="Retained WAL">@ClusterFormat.Bytes(stats.WalRetainedBytes)</LtDefinition>
+                <LtDefinition Term="Total">@ClusterFormat.Bytes(stats.TotalBytes)@(stats.PartialStorage ? " (partial: some shards did not answer)" : string.Empty)</LtDefinition>
+            </LtDefinitionList>
+        }
+        else
+        {
+            <p class="lt-cluster-error" role="alert">@_stats.Error</p>
+        }
+    </section>
+
+    <section class="lt-cluster-section" aria-labelledby="lt-cluster-wal-placement">
+        <h2 class="lt-cluster-heading" id="lt-cluster-wal-placement">WAL placement</h2>
+        @if (_placement.IsLoading)
+        {
+            <LtSkeleton Lines="3" Label="Loading WAL placement" />
+        }
+        else if (_placement.Value is { } placement)
+        {
+            <p class="lt-cluster-note">Placement version @ClusterFormat.Count(placement.Version); default provider <span class="lt-shell-mono">@DefaultKey(placement)</span>.</p>
+            <ClusterWalPartitions Partitions="placement.Partitions" />
+        }
+        else
+        {
+            <p class="lt-cluster-error" role="alert">@_placement.Error</p>
+        }
+        <p class="lt-cluster-note"><a class="lt-cluster-link" href="@WalHref">Audit and move WAL partitions</a></p>
+    </section>
+}

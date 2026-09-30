@@ -1,0 +1,91 @@
+@page "/t/{tenant}/tenancy"
+@page "/t/{tenant}/tenancy/{p1}"
+@inherits ExplorerPage
+
+@*
+    My tenant: the workspace of the tenant the address is rooted at, for its
+    admins and for platform operators. Overview, members, quota, regions and
+    sharing.
+*@
+
+<PageTitle>@($"Tenant {TenantId} - Orleans.Lattice Explorer")</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@TenantId</h1>
+<p class="lt-shell-page-lede">
+    Your tenant's workspace: who administers it, its use against quota, where it is resident, and what it shares.
+    @if (_standing is { IsOperator: true })
+    {
+        <a href="@Href(TenancyRoutes.Directory)">All tenants</a>
+    }
+</p>
+<TenancyNav Tenant="@TenantId" Own="true" Current="@Section" />
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "This tenant could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions>
+            @if (failure.IsRetryable)
+            {
+                <LtButton OnClick="LoadAsync">Try again</LtButton>
+            }
+        </Actions>
+    </LtEmptyState>
+}
+else if (_standing is not { } standing)
+{
+    <LtSkeleton Lines="6" Label="Loading your tenant" />
+}
+else if (Section == TenancyRoutes.MembersSegment)
+{
+    <TenancyMembers TenantId="@TenantId" />
+}
+else if (Section == TenancyRoutes.QuotaSegment)
+{
+    <TenancyQuota TenantId="@TenantId" CanEdit="false" />
+}
+else if (Section == TenancyRoutes.RegionsSegment)
+{
+    <TenancyRegions TenantId="@TenantId" CanAuthorize="@standing.IsOperator" />
+}
+else if (Section == TenancyRoutes.SharingSegment)
+{
+    <TenancyGrants TenantId="@TenantId" OpenOfferOnLoad="@OfferRequested" />
+}
+else if (_status is not { } status)
+{
+    <LtSkeleton Lines="6" Label="Loading your tenant" />
+}
+else
+{
+    <LtDefinitionList>
+        <LtDefinition Term="State"><LtStatusPill State="@TenancyFormat.TenantStateRole(status.Status)" Text="@TenancyFormat.TenantStateLabel(status.Status)" /></LtDefinition>
+        <LtDefinition Term="Kind">@(status.IsDefault ? "The reserved default tenant, which owns the cluster's un-prefixed trees" : "Tenant")</LtDefinition>
+        <LtDefinition Term="Your standing">@(standing.IsOperator ? "Platform operator" : "Admin subject of this tenant")</LtDefinition>
+        <LtDefinition Term="Resident in" Mono="true"><a href="@Href(TenancyRoutes.MyTenant(TenantId, TenancyRoutes.RegionsSegment))" aria-label="@($"Resident in: {TenancyFormat.ResidencyText(status.Regions)}. Open the regions of tenant {TenantId}")">@TenancyFormat.ResidencyText(status.Regions)</a></LtDefinition>
+        <LtDefinition Term="Allowed" Mono="true"><a href="@Href(TenancyRoutes.MyTenant(TenantId, TenancyRoutes.RegionsSegment))" aria-label="@($"Allowed: {TenancyFormat.RegionList(TenancyFormat.AllowedRegions(status.Regions))}. Open the regions of tenant {TenantId}")">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(status.Regions))</a></LtDefinition>
+        <LtDefinition Term="Quota use">@(_quota ?? "Unknown")</LtDefinition>
+        <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@AppsText</a></LtDefinition>
+    </LtDefinitionList>
+    @if (status.Status == TenantLifecycleStatus.Suspended)
+    {
+        <p class="lt-tenancy-note">This tenant is suspended: its trees refuse reads and writes until a platform operator resumes it.</p>
+    }
+    @if (TenancyFormat.IsServedNowhere(status.Regions))
+    {
+        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: it has residency set and none of its regions is Online yet.</p>
+    }
+
+    @if (_others.Count > 0)
+    {
+        <section class="lt-tenancy-section" aria-labelledby="tenancy-others-heading">
+            <h2 class="lt-tenancy-section__title" id="tenancy-others-heading">Your other tenants</h2>
+            <ul class="lt-tenancy-links">
+                @foreach (var other in _others)
+                {
+                    <li><a href="@Href(TenancyRoutes.MyTenant(other.TenantId))">@other.TenantId</a> <span class="lt-tenancy-quiet">@TenancyFormat.TenantStateLabel(other.Status)</span></li>
+                }
+            </ul>
+        </section>
+    }
+}

@@ -1,0 +1,1701 @@
+/*
+ * Orleans.Lattice Explorer - the design primitives, in the Operate register.
+ *
+ * Drawn in the documentation site's notation (DESIGN.md): nodes, spines,
+ * chains and joins in hairlines; booktabs tables; one outlined button; inputs
+ * on sunken paper. The rules that bind every primitive here:
+ *
+ *   - The One Marker Rule. Yellow (--lt-marker, --lt-op-row-current) means only
+ *     "you are here" or "selected": the current stop, the current chain link,
+ *     the active tab, the current row, a pressed toggle.
+ *   - The Marker Is Never Alone Rule. Every marked state is also a ring, a
+ *     heavier weight, or text, so it survives greyscale and forced colours.
+ *   - The Hairline Rule. Depth is 1px rules and sunken paper. Only surfaces that
+ *     float above the page - a dialog, a toast - take --lt-shadow.
+ *   - No second accent, no cards, no icon tiles.
+ *
+ * No width query appears here; widths belong to lattice-breakpoints.css.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+/* ==========================================================================
+   1. Utilities and focus
+   ========================================================================== */
+
+/*
+ * Links in running content - a key in a table, an address on the not-found page -
+ * take the documentation site's link ink on both materials. Both rules have zero
+ * specificity, so every primitive that styles a link (a button, a chain node, a
+ * spine stop) still wins, and the hover rule, being later, wins over the base
+ * one. Without them an unclassed link fell back to the browser's #0000ee, which
+ * measures 1.9:1 on Board.
+ */
+:where(.lt-viewport a) {
+  color: var(--lt-link);
+}
+
+:where(.lt-viewport a:hover) {
+  color: var(--lt-link-hover);
+}
+
+.lt-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.lt-btn:focus-visible,
+.lt-input:focus-visible,
+.lt-select:focus-visible,
+.lt-check__box:focus-visible,
+.lt-switch:focus-visible,
+.lt-spine__link:focus-visible,
+.lt-chain__text:focus-visible,
+.lt-tabs__tab:focus-visible,
+.lt-tabs__panel:focus-visible,
+.lt-table-frame:focus-visible,
+.lt-table__sort:focus-visible,
+.lt-mono-cell__copy:focus-visible,
+.lt-combobox__remove:focus-visible,
+.lt-table-list__open:focus-visible,
+.lt-dialog:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+.lt-kbd {
+  display: inline-block;
+  min-width: 1.35em;
+  padding: 0 0.35rem;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface);
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-xs);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ==========================================================================
+   2. Button - one outlined button, and its quiet and destructive weights
+   ========================================================================== */
+
+/* One style for anything drawn as a button, whether it is a <button> or an <a>
+   that navigates: an anchor keeps no link underline and sizes its border into
+   the same control height as a native button. */
+.lt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--lt-space-2);
+  box-sizing: border-box;
+  min-height: var(--lt-op-control-height);
+  padding: 0 0.95rem;
+  border: 1px solid var(--lt-ink);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-strong);
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.lt-btn:hover {
+  background: var(--lt-marker-soft);
+}
+
+.lt-btn:active,
+.lt-btn[aria-pressed="true"] {
+  background: var(--lt-marker);
+  color: var(--lt-marker-ink);
+}
+
+.lt-btn--quiet {
+  border-color: var(--lt-rule-strong);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-btn--quiet:hover {
+  color: var(--lt-ink);
+}
+
+.lt-btn--destructive {
+  border-color: var(--lt-danger);
+  color: var(--lt-danger);
+}
+
+.lt-btn--destructive:hover {
+  background: var(--lt-surface-sunken);
+}
+
+.lt-btn--destructive:active {
+  background: var(--lt-danger);
+  color: var(--lt-surface);
+}
+
+.lt-btn:disabled,
+.lt-btn:disabled:hover {
+  border-color: var(--lt-rule-strong);
+  background: var(--lt-surface);
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   3. Fields - text input, search, select, checkbox, switch
+   ========================================================================== */
+
+.lt-field {
+  display: grid;
+  gap: var(--lt-space-1);
+  min-width: 0;
+}
+
+.lt-field__label {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-field__hint {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-field__error {
+  margin: 0;
+  color: var(--lt-danger);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-field__error-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.1em;
+  height: 1.1em;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.85em;
+  line-height: 1;
+}
+
+.lt-input,
+.lt-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--lt-op-control-height);
+  padding: 0 0.65rem;
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+}
+
+.lt-input::placeholder {
+  color: var(--lt-ink-3);
+  opacity: 1;
+}
+
+.lt-input--mono {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+}
+
+.lt-input[aria-invalid="true"] {
+  border-color: var(--lt-danger);
+  border-width: 1.5px;
+}
+
+.lt-input:disabled,
+.lt-select:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+.lt-input[readonly] {
+  background: var(--lt-surface);
+}
+
+.lt-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.lt-search__input {
+  padding-inline-end: 2.25rem;
+}
+
+.lt-search__input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.lt-search__hint {
+  position: absolute;
+  inset-inline-end: 0.6rem;
+  pointer-events: none;
+}
+
+.lt-select {
+  appearance: none;
+  padding-inline-end: 2rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--lt-ink-2) 50%),
+    linear-gradient(135deg, var(--lt-ink-2) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1rem) 50%,
+    calc(100% - 0.7rem) 50%;
+  background-size: 0.3rem 0.3rem;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+.lt-check {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--lt-space-2);
+  align-items: center;
+}
+
+.lt-check__box {
+  appearance: none;
+  position: relative;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  border: 1.5px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface);
+  cursor: pointer;
+}
+
+.lt-check__box:checked {
+  border-color: var(--lt-ink);
+  background: var(--lt-ink);
+}
+
+.lt-check__box:checked::after {
+  content: "";
+  position: absolute;
+  left: 0.26rem;
+  top: 0.06rem;
+  width: 0.28rem;
+  height: 0.55rem;
+  border: solid var(--lt-surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.lt-check__box:disabled {
+  border-color: var(--lt-rule-strong);
+  cursor: not-allowed;
+}
+
+.lt-check__label {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  cursor: pointer;
+}
+
+.lt-check__hint,
+.lt-switch__hint {
+  grid-column: 2;
+}
+
+.lt-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  min-height: var(--lt-op-control-height);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--lt-ink);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+  text-align: start;
+  cursor: pointer;
+}
+
+.lt-switch__track {
+  position: relative;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 2.125rem;
+  height: 1.25rem;
+  border: 1.5px solid var(--lt-op-control-border);
+  border-radius: 999px;
+  background: var(--lt-surface-sunken);
+  transition: background-color var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.lt-switch__thumb {
+  position: absolute;
+  top: 50%;
+  left: 0.15rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--lt-op-control-border);
+  transform: translateY(-50%);
+  transition: transform var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.lt-switch[aria-checked="true"] .lt-switch__track {
+  border-color: var(--lt-op-switch-on);
+  background: var(--lt-op-switch-on);
+}
+
+.lt-switch[aria-checked="true"] .lt-switch__thumb {
+  background: var(--lt-surface);
+  transform: translate(0.875rem, -50%);
+}
+
+.lt-switch__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-switch__state {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-switch[aria-checked="true"] .lt-switch__state {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-switch:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+/*
+ * The combobox: a field whose input offers the existing values that match what
+ * is typed. The listbox is drawn as the address line draws its suggestions - a
+ * hollow node and the value in mono, the highlighted option on the marker band
+ * with an ink bar and a heavier weight. It floats over the page, but it is
+ * drawn with a hairline rule, not a shadow (the Hairline Rule).
+ */
+.lt-combobox {
+  min-width: 0;
+}
+
+.lt-combobox__control {
+  position: relative;
+  min-width: 0;
+}
+
+/* A field that can list values carries the select's own arrow while idle -
+   the same size, place and ink - so it reads as a picker before anything is
+   typed; it turns while the list is open. It is filled in the text colour, so
+   forced colours keep it. */
+.lt-combobox__control--picker > .lt-input {
+  padding-inline-end: 2rem;
+}
+
+.lt-combobox__chevron {
+  position: absolute;
+  top: calc(var(--lt-op-control-height) / 2);
+  inset-inline-end: 0.7rem;
+  width: 0.6rem;
+  height: 0.3rem;
+  color: var(--lt-ink-2);
+  fill: currentColor;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.lt-combobox__control[data-lt-open] > .lt-combobox__chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+/* A multi-value field is one control: the chosen values and the input share a
+   single sunken frame, the values set off by hairlines, the input taking the
+   rest of the row. The frame, not the borderless input, shows an error. */
+.lt-combobox__control--tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: calc(var(--lt-op-control-height) + 2px);
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-combobox__control--tokens.lt-combobox__control--picker {
+  padding-inline-end: 2rem;
+}
+
+.lt-combobox__control--tokens > .lt-combobox__chevron {
+  top: calc(var(--lt-op-control-height) / 2 + 1px);
+}
+
+.lt-combobox__control--tokens > .lt-input {
+  flex: 1 1 8rem;
+  width: auto;
+  padding-inline-end: 0.65rem;
+  border: 0;
+  background: transparent;
+}
+
+.lt-combobox__control--tokens > .lt-input:focus-visible {
+  outline-offset: calc(-1 * var(--lt-op-focus-ring-width));
+}
+
+.lt-combobox__control--invalid {
+  border-color: var(--lt-danger);
+  border-width: 1.5px;
+}
+
+.lt-combobox__list {
+  position: absolute;
+  top: calc(100% + var(--lt-space-1));
+  inset-inline: 0;
+  z-index: 950;
+  box-sizing: border-box;
+  max-height: min(20rem, 60vh);
+  margin: 0;
+  padding: var(--lt-space-1) 0;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+}
+
+.lt-combobox__option {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  padding: 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+  cursor: pointer;
+}
+
+.lt-combobox__option:hover {
+  background: var(--lt-op-row-hover);
+  color: var(--lt-ink);
+}
+
+.lt-combobox__option[aria-selected="true"] {
+  background: var(--lt-op-row-current);
+  box-shadow: inset 3px 0 0 var(--lt-ink);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-combobox__value {
+  min-width: 0;
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-combobox__value--mono,
+.lt-combobox__chip-value--mono {
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+}
+
+.lt-combobox__detail {
+  margin-inline-start: auto;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-body);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+.lt-combobox__note {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-style: italic;
+}
+
+.lt-combobox__flag {
+  margin: 0;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+/* LtNameInput: a new thing's name. Its note and flag read as the combobox's do. */
+.lt-name-input__note {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-style: italic;
+}
+
+.lt-name-input__flag {
+  margin: 0;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-combobox__chips {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-combobox__chip {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: var(--lt-op-control-height);
+  border-inline-end: 1px solid var(--lt-rule-strong);
+  color: var(--lt-ink);
+}
+
+.lt-combobox__chip-value {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding-inline-start: 0.65rem;
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-combobox__remove {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--lt-op-control-height);
+  padding: 0;
+  border: 0;
+  border-radius: var(--lt-radius-md);
+  background: none;
+  color: var(--lt-ink-2);
+  cursor: pointer;
+}
+
+.lt-combobox__remove:hover {
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
+}
+
+.lt-combobox__remove:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+.lt-combobox__remove-mark {
+  width: 0.625rem;
+  height: 0.625rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+/* ==========================================================================
+   4. The notation - node, spine, chain, mark
+   ========================================================================== */
+
+.lt-node {
+  display: inline-block;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: var(--lt-diagram-node-size);
+  height: var(--lt-diagram-node-size);
+  border-radius: 50%;
+  background: var(--lt-diagram-node);
+  vertical-align: middle;
+}
+
+.lt-node--hollow {
+  border: var(--lt-diagram-ring-width) solid var(--lt-diagram-node-ring);
+  background: var(--lt-diagram-node-hollow);
+}
+
+.lt-node--concurrent {
+  background: var(--lt-diagram-concurrent);
+}
+
+.lt-node--join {
+  width: calc(var(--lt-diagram-node-size) + 2px);
+  height: calc(var(--lt-diagram-node-size) + 2px);
+  border: var(--lt-diagram-ring-width) solid var(--lt-diagram-join-ring);
+  background: var(--lt-diagram-join);
+}
+
+.lt-node--large {
+  width: var(--lt-diagram-node-size-lg);
+  height: var(--lt-diagram-node-size-lg);
+}
+
+.lt-node--join.lt-node--large {
+  width: calc(var(--lt-diagram-node-size-lg) + 2px);
+  height: calc(var(--lt-diagram-node-size-lg) + 2px);
+}
+
+.lt-spine-nav {
+  min-width: 0;
+}
+
+.lt-spine {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-spine::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--lt-op-row-height) / 2);
+  bottom: calc(var(--lt-op-row-height) / 2);
+  left: calc(var(--lt-space-2) + 4.5px - var(--lt-diagram-edge-width) / 2);
+  width: var(--lt-diagram-edge-width);
+  background: var(--lt-diagram-edge);
+}
+
+.lt-spine__stop {
+  position: relative;
+}
+
+.lt-spine__link {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  padding-inline: var(--lt-space-2);
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  text-decoration: none;
+}
+
+.lt-spine__link .lt-node {
+  margin-inline: 1px;
+}
+
+.lt-spine__link .lt-node--join {
+  margin-inline: 0;
+}
+
+.lt-spine__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-spine__link:hover {
+  color: var(--lt-ink);
+}
+
+.lt-spine__link[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-chain-nav {
+  min-width: 0;
+}
+
+.lt-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: var(--lt-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--lt-text-sm);
+}
+
+.lt-chain--mono {
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+}
+
+.lt-chain__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  min-width: 0;
+}
+
+.lt-chain__link + .lt-chain__link::before {
+  content: "";
+  width: 1.25rem;
+  height: var(--lt-diagram-edge-width);
+  margin-inline: var(--lt-space-2) 0;
+  background: var(--lt-diagram-edge);
+}
+
+.lt-chain__text {
+  overflow-wrap: anywhere;
+  color: var(--lt-ink-2);
+  text-decoration: none;
+}
+
+a.lt-chain__text:hover {
+  color: var(--lt-ink);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.lt-chain__text--current {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-mark {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.lt-mark__edge {
+  stroke: var(--lt-ink);
+}
+
+.lt-mark__node {
+  fill: var(--lt-ink);
+}
+
+.lt-mark__bottom {
+  fill: var(--lt-surface);
+  stroke: var(--lt-ink);
+}
+
+.lt-mark__join {
+  fill: var(--lt-marker);
+  stroke: var(--lt-diagram-join-ring);
+}
+
+/* ==========================================================================
+   5. Status pill - a state is its text, its glyph, and only then its colour
+   ========================================================================== */
+
+.lt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.375rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: 999px;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.lt-pill__glyph::before {
+  font-size: 0.95em;
+  line-height: 1;
+}
+
+.lt-pill__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lt-pill[data-lt-state="neutral"] .lt-pill__glyph {
+  display: none;
+}
+
+.lt-pill[data-lt-state="installed"] {
+  color: var(--lt-op-state-installed);
+  font-weight: var(--lt-op-state-installed-weight);
+}
+
+.lt-pill[data-lt-state="installed"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-installed-glyph);
+}
+
+.lt-pill[data-lt-state="enabled"] {
+  color: var(--lt-op-state-enabled);
+  font-weight: var(--lt-op-state-enabled-weight);
+}
+
+.lt-pill[data-lt-state="enabled"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-enabled-glyph);
+}
+
+.lt-pill[data-lt-state="disabled"] {
+  color: var(--lt-op-state-disabled);
+  font-weight: var(--lt-op-state-disabled-weight);
+}
+
+.lt-pill[data-lt-state="disabled"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-disabled-glyph);
+}
+
+.lt-pill[data-lt-state="uninstalled"] {
+  color: var(--lt-op-state-uninstalled);
+  font-weight: var(--lt-op-state-uninstalled-weight);
+}
+
+.lt-pill[data-lt-state="uninstalled"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-uninstalled-glyph);
+}
+
+.lt-pill[data-lt-state="drift"] {
+  color: var(--lt-op-state-drift);
+  font-weight: var(--lt-op-state-drift-weight);
+}
+
+.lt-pill[data-lt-state="drift"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-drift-glyph);
+}
+
+.lt-pill[data-lt-state="healthy"] {
+  color: var(--lt-op-state-healthy);
+  font-weight: var(--lt-op-state-healthy-weight);
+}
+
+.lt-pill[data-lt-state="healthy"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-healthy-glyph);
+}
+
+.lt-pill[data-lt-state="lagging"] {
+  color: var(--lt-op-state-lagging);
+  font-weight: var(--lt-op-state-lagging-weight);
+}
+
+.lt-pill[data-lt-state="lagging"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-lagging-glyph);
+}
+
+.lt-pill[data-lt-state="stalled"] {
+  color: var(--lt-op-state-stalled);
+  font-weight: var(--lt-op-state-stalled-weight);
+}
+
+.lt-pill[data-lt-state="stalled"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-stalled-glyph);
+}
+
+.lt-pill[data-lt-state="failed"] {
+  color: var(--lt-op-state-failed);
+  font-weight: var(--lt-op-state-failed-weight);
+}
+
+.lt-pill[data-lt-state="failed"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-failed-glyph);
+}
+
+.lt-pill[data-lt-state="unknown"] {
+  color: var(--lt-op-state-unknown);
+  font-weight: var(--lt-op-state-unknown-weight);
+}
+
+.lt-pill[data-lt-state="unknown"] .lt-pill__glyph::before {
+  content: var(--lt-op-state-unknown-glyph);
+}
+
+/* ==========================================================================
+   6. Data - booktabs table, definition list, mono cell
+   ========================================================================== */
+
+.lt-table-frame {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.lt-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-top: 1.5px solid var(--lt-ink);
+  border-bottom: 1.5px solid var(--lt-ink);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+}
+
+.lt-table__caption {
+  caption-side: top;
+  padding-bottom: var(--lt-space-2);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+  text-align: start;
+}
+
+.lt-table__header {
+  height: var(--lt-op-row-height);
+  padding: 0 var(--lt-op-cell-padding-x);
+  border-bottom: 1px solid var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+  text-align: start;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.lt-table__cell {
+  height: var(--lt-op-row-height);
+  padding: 0 var(--lt-op-cell-padding-x);
+  border-bottom: 1px solid var(--lt-rule);
+  font-weight: inherit;
+  text-align: start;
+  vertical-align: middle;
+}
+
+.lt-table__row:last-child > .lt-table__cell {
+  border-bottom: 0;
+}
+
+.lt-table__cell--end {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+/* An id is never broken mid-token: a mono cell keeps its value on one line and
+   cuts one too long for the column with an ellipsis, the full value being the
+   cell's tooltip. The cell's padding keeps a link's focus ring inside the clip. */
+.lt-table__cell--mono {
+  max-inline-size: 18rem;
+  overflow: hidden;
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-table__row:hover {
+  background: var(--lt-op-row-hover);
+}
+
+.lt-table__row[aria-current] {
+  background: var(--lt-op-row-current);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-table__row[aria-current] > :first-child {
+  box-shadow: inset 3px 0 0 var(--lt-marker);
+}
+
+.lt-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lt-table__sort:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.lt-table__sort-mark::after {
+  content: "\2195";
+  color: var(--lt-ink-3);
+  font-weight: var(--lt-weight-body);
+}
+
+.lt-table__sort[data-lt-sort="ascending"] .lt-table__sort-mark::after {
+  content: "\2191";
+  color: var(--lt-ink);
+}
+
+.lt-table__sort[data-lt-sort="descending"] .lt-table__sort-mark::after {
+  content: "\2193";
+  color: var(--lt-ink);
+}
+
+/* A table with no rows shows its empty state alone: no column headers over
+   nothing, and no booktabs rules framing an empty body. */
+.lt-table-empty {
+  min-width: 0;
+}
+
+.lt-table__empty {
+  padding-block: var(--lt-space-3);
+  color: var(--lt-ink-2);
+}
+
+.lt-table__empty > .lt-empty {
+  padding-block: var(--lt-space-3);
+}
+
+.lt-dl {
+  margin: 0;
+}
+
+.lt-dl__row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 14rem) minmax(0, 1fr);
+  gap: var(--lt-space-4);
+  padding: var(--lt-space-2) 0;
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-dl__row:last-child {
+  border-bottom: 0;
+}
+
+.lt-dl__term {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-dl__value {
+  margin: 0;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  overflow-wrap: anywhere;
+}
+
+.lt-dl__value--mono {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+}
+
+.lt-mono-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.lt-mono-cell__value {
+  min-width: 0;
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
+.lt-mono-cell--truncate .lt-mono-cell__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-mono-cell__copy {
+  flex-shrink: 0;
+  min-height: 1.5rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface);
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-label);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.lt-mono-cell:hover .lt-mono-cell__copy,
+.lt-mono-cell__copy:focus-visible {
+  opacity: 1;
+}
+
+.lt-mono-cell__copy:hover {
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
+}
+
+@media (hover: none) {
+  .lt-mono-cell__copy {
+    opacity: 1;
+  }
+}
+
+/* The table's compact form, below the small breakpoint: a list of two-line
+   rows between the booktabs rules, each a full-width button that opens the
+   row's detail sheet. Every row is at least a 44px touch target. */
+.lt-table-list {
+  min-width: 0;
+}
+
+.lt-table-list__sort {
+  margin-block-end: var(--lt-space-3);
+}
+
+.lt-table-list__rows {
+  margin: 0;
+  padding: 0;
+  border-top: 1.5px solid var(--lt-ink);
+  border-bottom: 1.5px solid var(--lt-ink);
+  list-style: none;
+}
+
+.lt-table-list__row + .lt-table-list__row {
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-table-list__open {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--lt-space-2) var(--lt-space-3);
+  border: 0;
+  background: transparent;
+  color: var(--lt-ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.lt-table-list__row[aria-current] .lt-table-list__open {
+  background: var(--lt-op-row-current);
+  box-shadow: inset 3px 0 0 var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-compact-row {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.lt-compact-row__primary {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-label);
+  overflow-wrap: anywhere;
+}
+
+.lt-compact-row__primary--mono {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+}
+
+.lt-compact-row__secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-1) var(--lt-space-3);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-body);
+}
+
+.lt-compact-row__field {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-compact-row__term {
+  color: var(--lt-ink-3);
+}
+
+/* ==========================================================================
+   7. Tabs
+   ========================================================================== */
+
+.lt-tabs {
+  min-width: 0;
+}
+
+/* A tab row never wraps: one wider than its column scrolls inside its own frame
+   (the responsive contract), and the tabs' script keeps the active tab in view.
+   The marker bar sits on the tab's own lower edge, inside the frame, so the
+   scrolling frame never clips it, and a focused tab's ring is drawn inside the
+   tab for the same reason. */
+.lt-tabs__list {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--lt-space-5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--lt-rule);
+  scrollbar-width: thin;
+}
+
+.lt-tabs__tab {
+  position: relative;
+  flex-shrink: 0;
+  min-height: 2.5rem;
+  padding: 0 var(--lt-space-1);
+  border: 0;
+  background: none;
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-label);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lt-tabs__tab:focus-visible {
+  outline-offset: calc(-1 * var(--lt-op-focus-ring-width));
+}
+
+.lt-tabs__tab:hover {
+  color: var(--lt-ink);
+}
+
+.lt-tabs__tab[aria-selected="true"] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-tabs__tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--lt-marker);
+}
+
+.lt-tabs__tab:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+.lt-tabs__panel {
+  padding-top: var(--lt-space-5);
+}
+
+/* ==========================================================================
+   8. Feedback - dialog, destructive confirmation, toasts, empty, skeleton
+   ========================================================================== */
+
+.lt-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: var(--lt-space-4);
+  background: var(--lt-op-scrim);
+}
+
+.lt-dialog__sentinel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.lt-dialog {
+  box-sizing: border-box;
+  width: min(34rem, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  padding: var(--lt-space-5);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+  box-shadow: var(--lt-shadow);
+  color: var(--lt-ink);
+}
+
+.lt-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--lt-space-4);
+}
+
+.lt-dialog__title {
+  margin: 0;
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+  line-height: var(--lt-leading-tight);
+}
+
+.lt-dialog__description {
+  margin: var(--lt-space-2) 0 0;
+  color: var(--lt-ink-2);
+}
+
+.lt-dialog__body {
+  margin-top: var(--lt-space-4);
+}
+
+.lt-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--lt-space-3);
+  margin-top: var(--lt-space-5);
+}
+
+/* A sheet: the same dialog, full height on one inline edge. It takes the full
+   width of a narrow screen, and keeps the dialog's focus trap and return. */
+.lt-dialog-layer--sheet {
+  place-items: stretch;
+  padding: 0;
+}
+
+.lt-dialog--sheet {
+  width: min(30rem, 100%);
+  height: 100%;
+  max-height: none;
+  border-block: 0;
+  border-radius: 0;
+}
+
+.lt-dialog--start {
+  justify-self: start;
+  border-inline-start: 0;
+}
+
+.lt-dialog--end {
+  justify-self: end;
+  border-inline-end: 0;
+}
+
+.lt-confirm {
+  display: grid;
+  gap: var(--lt-space-3);
+}
+
+.lt-confirm__consequence {
+  color: var(--lt-ink-2);
+}
+
+.lt-confirm__instruction {
+  margin: 0;
+}
+
+.lt-confirm__name {
+  padding: 0.1em 0.35em;
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-inline-code-bg);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-size: 0.9em;
+  font-weight: var(--lt-weight-strong);
+  overflow-wrap: anywhere;
+}
+
+.lt-toasts {
+  position: fixed;
+  inset-inline-end: var(--lt-space-5);
+  bottom: var(--lt-space-5);
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: var(--lt-space-2);
+  width: min(24rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.lt-toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--lt-space-3);
+  padding: var(--lt-space-3) var(--lt-space-4);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+  box-shadow: var(--lt-shadow);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  pointer-events: auto;
+}
+
+.lt-toast__tone {
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-toast[data-lt-tone="info"] .lt-toast__tone {
+  color: var(--lt-info);
+}
+
+.lt-toast[data-lt-tone="success"] .lt-toast__tone {
+  color: var(--lt-success);
+}
+
+.lt-toast[data-lt-tone="warning"] .lt-toast__tone {
+  color: var(--lt-warning);
+}
+
+.lt-toast[data-lt-tone="danger"] .lt-toast__tone {
+  color: var(--lt-danger);
+}
+
+.lt-toast__message {
+  overflow-wrap: anywhere;
+}
+
+.lt-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lt-space-4);
+  padding: var(--lt-space-6) 0;
+}
+
+.lt-empty > .lt-node {
+  margin-top: 0.5rem;
+}
+
+.lt-empty__content {
+  min-width: 0;
+  max-width: 42rem;
+}
+
+.lt-empty__title {
+  margin: 0 0 var(--lt-space-2);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+  line-height: var(--lt-leading-tight);
+}
+
+.lt-empty__body {
+  color: var(--lt-ink-2);
+}
+
+.lt-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-3);
+  margin-top: var(--lt-space-4);
+}
+
+.lt-skeleton {
+  display: grid;
+  gap: var(--lt-space-2);
+}
+
+.lt-skeleton__line {
+  display: block;
+  height: 0.75rem;
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+  animation: lt-skeleton-pulse 1.4s var(--lt-ease-out) infinite alternate;
+}
+
+.lt-skeleton__line:nth-of-type(3n + 1) {
+  width: 92%;
+}
+
+.lt-skeleton__line:nth-of-type(3n + 2) {
+  width: 76%;
+}
+
+.lt-skeleton__line:nth-of-type(3n) {
+  width: 58%;
+}
+
+@keyframes lt-skeleton-pulse {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.55;
+  }
+}
+
+/* Progress: an ink bar on a hairline track, its phase and percentage written
+   above it. A small total is cut into one segment per unit, as nodes on a
+   chain; an unknown total hatches the track and writes no percentage. */
+.lt-progress {
+  display: grid;
+  gap: var(--lt-space-2);
+  max-inline-size: var(--lt-measure);
+  margin-block: var(--lt-space-4);
+}
+
+.lt-progress__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--lt-space-2) var(--lt-space-4);
+}
+
+.lt-progress__phase {
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-progress__figure {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-progress__track {
+  position: relative;
+  display: block;
+  block-size: 0.625rem;
+  overflow: hidden;
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-progress__fill {
+  display: block;
+  block-size: 100%;
+  background: var(--lt-op-switch-on);
+  transition: inline-size var(--lt-duration-slow) var(--lt-ease-out);
+}
+
+.lt-progress__ticks {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(100% / var(--lt-progress-segments) - 2px),
+    var(--lt-surface) calc(100% / var(--lt-progress-segments) - 2px),
+    var(--lt-surface) calc(100% / var(--lt-progress-segments)));
+}
+
+.lt-progress[data-lt-progress="indeterminate"] .lt-progress__track {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--lt-rule-strong) 0,
+      var(--lt-rule-strong) 2px,
+      transparent 2px,
+      transparent 8px),
+    var(--lt-surface-sunken);
+  background-size: 11.3px 11.3px, auto;
+  animation: lt-progress-hatch 1.6s linear infinite;
+}
+
+.lt-progress__detail {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes lt-progress-hatch {
+  from {
+    background-position: 0 0, 0 0;
+  }
+
+  to {
+    background-position: 11.3px 0, 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lt-progress__fill {
+    transition: none;
+  }
+
+  .lt-progress[data-lt-progress="indeterminate"] .lt-progress__track {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   9. Forced colours - the platform's palette replaces ours; keep every cue
+   ========================================================================== */
+
+@media (forced-colors: active) {
+  .lt-node {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .lt-node--hollow {
+    border-color: CanvasText;
+    background: Canvas;
+  }
+
+  .lt-node--join {
+    border-color: CanvasText;
+    background: Highlight;
+  }
+
+  .lt-tabs__tab[aria-selected="true"]::after,
+  .lt-switch[aria-checked="true"] .lt-switch__track {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .lt-switch__track,
+  .lt-check__box,
+  .lt-pill {
+    border-color: CanvasText;
+  }
+
+  .lt-check__box:checked {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    background: Highlight;
+  }
+
+  .lt-check__box:checked::after {
+    border-color: HighlightText;
+  }
+
+  .lt-table__row[aria-current] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .lt-combobox__option[aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .lt-combobox__list {
+    border-color: CanvasText;
+  }
+
+  .lt-progress__track {
+    border-color: CanvasText;
+  }
+
+  .lt-progress__fill {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .lt-progress__ticks {
+    forced-color-adjust: none;
+    background: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(100% / var(--lt-progress-segments) - 2px),
+      Canvas calc(100% / var(--lt-progress-segments) - 2px),
+      Canvas calc(100% / var(--lt-progress-segments)));
+  }
+
+  .lt-progress[data-lt-progress="indeterminate"] .lt-progress__track {
+    forced-color-adjust: none;
+    background: repeating-linear-gradient(-45deg, CanvasText 0, CanvasText 2px, Canvas 2px, Canvas 8px);
+  }
+}

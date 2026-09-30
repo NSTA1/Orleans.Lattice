@@ -25,4 +25,16 @@ internal static class SourceTestManifests
 
     public static InImageAppRegistration Registration(string slug, FakeAppAssembly assembly) =>
         new(AppSlug.Parse(slug), assembly, ResourceName);
+
+    public static string Sha256(byte[] content) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(content));
+
+    public static AppManifest Manifest(string slug, string version) => new()
+    {
+        Identity = new() { Slug = AppSlug.Parse(slug), Version = AppVersion.Parse(version) },
+        Trees = [],
+        Roles = [],
+        Subscriptions = [],
+        McpTools = [],
+    };
 }

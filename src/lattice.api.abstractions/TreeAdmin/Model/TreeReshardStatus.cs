@@ -10,8 +10,9 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <para>
 /// Reshard is online and self-completing (it grows the tree to the requested
 /// physical shard count via reminder-anchored splits and then clears itself),
-/// so this status intentionally surfaces the observable idle/in-flight signal
-/// and the map fan-out rather than the coordinator's internal phase machine.
+/// so this status surfaces the observable idle/in-flight signal, the map
+/// fan-out, and the target and starting counts that fan-out is measured
+/// against, rather than the coordinator's internal phase machine.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -51,7 +52,27 @@ public sealed record TreeReshardStatus
     /// <summary>
     /// The target physical shard count requested by the reshard trigger that
     /// produced this status, or <see langword="null"/> for a standalone status
-    /// read (the coordinator's in-flight target is not publicly surfaced).
+    /// read. The coordinator's in-flight target is reported on every read as
+    /// <see cref="TargetShardCount"/>.
     /// </summary>
     [Id(5)] public int? RequestedShardCount { get; init; }
+
+    /// <summary>
+    /// The physical shard count the running reshard grows the tree to, read from
+    /// the reshard coordinator's persisted intent - reported on every status read,
+    /// unlike <see cref="RequestedShardCount"/>, which only echoes a trigger's
+    /// argument. <see langword="null"/> when nothing is in flight, or when the
+    /// status comes from a build that does not report it.
+    /// </summary>
+    [Id(6)] public int? TargetShardCount { get; init; }
+
+    /// <summary>
+    /// The physical shard count the tree had when the running reshard started,
+    /// or <see langword="null"/> when nothing is in flight or it was not recorded
+    /// (a reshard started by an earlier build). The reshard's progress is
+    /// <see cref="CurrentPhysicalShardCount"/> minus this, out of
+    /// <see cref="TargetShardCount"/> minus this: each split adds one physical
+    /// shard to the map once it has durably committed.
+    /// </summary>
+    [Id(7)] public int? StartPhysicalShardCount { get; init; }
 }

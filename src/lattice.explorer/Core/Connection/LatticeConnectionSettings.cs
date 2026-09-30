@@ -41,6 +41,19 @@ public sealed record LatticeConnectionSettings
     public IReadOnlyDictionary<string, string>? TransportHeaders { get; init; }
 
     /// <summary>
+    /// The live source of the tenant this connection asserts on every call,
+    /// through the <see cref="LatticeActiveTenantAssertion.DefaultHeaderName"/>
+    /// header. It is read per call, never when the channel is built, so a tenant
+    /// switch changes the next call without rebuilding anything. When it is set,
+    /// the connection owns that header: any value for it among
+    /// <see cref="TransportHeaders"/> is replaced by the provider's answer, and
+    /// dropped when the provider asserts none. <see langword="null"/> (the
+    /// default) asserts no tenant and leaves every call exactly as a tenant-unaware
+    /// client sends it.
+    /// </summary>
+    public ILatticeActiveTenantProvider? ActiveTenantProvider { get; init; }
+
+    /// <summary>
     /// How long a connection may keep failing transiently before degrading to
     /// <see cref="LatticeConnectionState.Faulted"/> (the visual disconnected state).
     /// The window starts at the first transient connection failure of a call, a live

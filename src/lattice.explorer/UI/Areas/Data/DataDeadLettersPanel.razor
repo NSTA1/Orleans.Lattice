@@ -1,0 +1,92 @@
+@*
+    Dead letters: the tree's strict-mode dead-letter queue - every value schema
+    enforcement diverted instead of writing - with its reason, source and time,
+    paged, and the selected entry inspected below. Read only: nothing here
+    replays or removes an entry.
+*@
+
+@if (Workspace is not null)
+{
+    <div class="lt-toolbar">
+        <LtButton OnClick="ReloadAsync" Disabled="@_loading">Refresh</LtButton>
+        <span class="lt-data-toolbar__status" role="status">@CountText</span>
+    </div>
+
+    @if (_error is not null)
+    {
+        <LtEmptyState Title="The dead letters did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_loading && _entries.Count == 0)
+    {
+        <LtSkeleton Lines="5" Label="Loading the dead letters" />
+    }
+    else if (_entries.Count == 0)
+    {
+        <LtEmptyState Title="No dead letters" HeadingLevel="2">
+            No value written to this tree has been diverted by schema enforcement.
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtTable TItem="DeadLetterEntry"
+                 Items="@_entries"
+                 Caption="Dead letters"
+                 CaptionHidden="true"
+                 IsCurrent="@(entry => ReferenceEquals(entry, _selected))"
+                 DetailTitle="@(entry => DataKeysPanel.Clip(entry.Key))">
+            <ChildContent>
+                <LtColumn TItem="DeadLetterEntry" Context="entry" Title="Key" RowHeader="true" Mono="true">
+                    <button type="button" class="lt-data-link" @onclick="() => Select(entry)" aria-pressed="@(ReferenceEquals(entry, _selected) ? "true" : "false")">@DataKeysPanel.Clip(entry.Key)</button>
+                </LtColumn>
+                <LtColumn TItem="DeadLetterEntry" Title="Reason" Value="@(entry => entry.Reason)" />
+                <LtColumn TItem="DeadLetterEntry" Title="Source" Value="@(entry => SourceText(entry.Source))" SortBy="@(entry => SourceText(entry.Source))" />
+                <LtColumn TItem="DeadLetterEntry" Title="Diverted" Value="@(entry => DataFormat.Time(entry.TimestampUtc))" SortBy="@(entry => entry.TimestampUtc)" />
+                <LtColumn TItem="DeadLetterEntry" Title="Size" Align="LtColumnAlign.End" Value="@(entry => DataValueRendering.Size(entry.ValueByteLength))" SortBy="@(entry => entry.ValueByteLength)" />
+            </ChildContent>
+            <CompactRow Context="entry">
+                <LtCompactRow Mono="true">
+                    <Primary>@DataKeysPanel.Clip(entry.Key)</Primary>
+                    <Secondary>@entry.Reason</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <Detail Context="entry">
+                @RenderInspection(entry)
+            </Detail>
+        </LtTable>
+
+        @if (_continuation is not null)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_loading" OnClick="LoadMoreAsync">Load more dead letters</LtButton>
+        }
+
+        @if (_selected is { } selected)
+        {
+            <section class="lt-data-entry" aria-label="Dead letter">
+                <h2 class="lt-data-section-title">Dead letter</h2>
+                @RenderInspection(selected)
+            </section>
+        }
+    }
+}
+
+@code {
+    private RenderFragment RenderInspection(DeadLetterEntry entry) => __builder =>
+    {
+        var rendered = DataValueRendering.Render(entry.Value, entry.Truncated, DataValueRenderer.Auto);
+        <LtDefinitionList>
+            <LtDefinition Term="Key" Mono="true">@entry.Key</LtDefinition>
+            <LtDefinition Term="Reason">@entry.Reason</LtDefinition>
+            <LtDefinition Term="Source">@SourceText(entry.Source)</LtDefinition>
+            <LtDefinition Term="Diverted">@DataFormat.Time(entry.TimestampUtc)</LtDefinition>
+            <LtDefinition Term="Size">@DataValueRendering.Size(entry.ValueByteLength)</LtDefinition>
+        </LtDefinitionList>
+        @if (rendered.Note is { } note)
+        {
+            <p class="lt-data-note">@note</p>
+        }
+        <pre class="lt-data-value" tabindex="0" aria-label="@($"Rejected value, as {rendered.FormatText}")">@Clip(rendered.Content)</pre>
+    };
+}

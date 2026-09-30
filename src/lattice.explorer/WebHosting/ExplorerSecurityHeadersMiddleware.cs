@@ -73,6 +73,11 @@ internal sealed class ExplorerSecurityHeadersMiddleware
             headers.ContentSecurityPolicy = _contentSecurityPolicy;
         }
 
+        // Every response gets DENY here, the app frame bootstrap route included: the
+        // path alone is not trusted, because a co-hosted route or fallback could answer
+        // under it. The ONE exemption (epic #3807, E4) is lifted by the frame route's own
+        // endpoint when it serves a file, so it applies only to a response that endpoint
+        // produced (issue #4020).
         if (StringValues.IsNullOrEmpty(headers.XFrameOptions))
         {
             headers.XFrameOptions = ExplorerSecurityHeaders.FrameOptions;

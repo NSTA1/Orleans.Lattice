@@ -1,0 +1,51 @@
+@*
+    A booktabs table of authorization rules. Each rule links to its page; an
+    app-owned rule names its owning app and links to that app's roles, where it
+    is actually changed. Below the small breakpoint it is a list of two-line rows
+    opening a detail sheet.
+*@
+<LtTable TItem="LatticeAuthorizationRule"
+         Items="Rules"
+         Caption="@Caption"
+         CaptionHidden="CaptionHidden"
+         RowKey="RowKey"
+         DetailTitle="@(rule => rule.RuleId)">
+    <ChildContent>
+        <LtColumn TItem="LatticeAuthorizationRule" Title="Rule" RowHeader="true" Mono="true" SortBy="@(rule => rule.RuleId)">
+            <a href="@RuleHref(context)">@context.RuleId</a>
+        </LtColumn>
+        <LtColumn TItem="LatticeAuthorizationRule" Title="Effect" Value="@(rule => AccessRuleFormat.EffectLabel(rule.Effect))" SortBy="@(rule => rule.Effect)" />
+        <LtColumn TItem="LatticeAuthorizationRule" Title="Subject" Mono="true" Value="@(rule => AccessRuleFormat.SubjectLabel(rule.Subject))" SortBy="@(rule => AccessRuleFormat.SubjectLabel(rule.Subject))" />
+        <LtColumn TItem="LatticeAuthorizationRule" Title="Scope" Mono="true" Value="@(rule => AccessRuleFormat.ScopeLabel(rule.Scope))" SortBy="@(rule => AccessRuleFormat.ScopeLabel(rule.Scope))" />
+        <LtColumn TItem="LatticeAuthorizationRule" Title="Operations" Value="@(rule => AccessRuleFormat.OperationsLabel(rule.Operations))" />
+        <LtColumn TItem="LatticeAuthorizationRule" Title="Owner">
+            @if (AccessAppRule.TryParse(context.RuleId, out var owner))
+            {
+                @if (owner.HasSlug)
+                {
+                    <a href="@AppRolesHref(owner.Slug)">app @owner.Slug</a>
+                }
+                else
+                {
+                    <span>an app</span>
+                }
+            }
+            else
+            {
+                <span>Authored</span>
+            }
+        </LtColumn>
+    </ChildContent>
+    <EmptyContent>
+        <span>@EmptyText</span>
+    </EmptyContent>
+    <CompactRow>
+        <LtCompactRow Mono="true">
+            <Primary>@context.RuleId</Primary>
+            <Secondary>@CompactSummary(context)</Secondary>
+        </LtCompactRow>
+    </CompactRow>
+    <DetailActions>
+        <a class="lt-btn" href="@RuleHref(context)">Open rule</a>
+    </DetailActions>
+</LtTable>

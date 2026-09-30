@@ -1,0 +1,11 @@
+{
+  "name": "storage",
+  "description": "The app tries to read and write the Explorer's local and session storage, IndexedDB, cookies, and the parent's storage.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toast":"Hostile: local=blocked session=blocked idb=blocked cookie=blocked parent=blocked"}
+}

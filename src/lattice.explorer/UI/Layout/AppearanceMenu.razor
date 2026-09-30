@@ -1,0 +1,24 @@
+@*
+    The header's appearance menu: a disclosure button and, while open, the
+    appearance choices on a hairline-framed panel.
+*@
+
+<div class="lt-shell-menu-host">
+    <button type="button"
+            class="lt-btn lt-btn--quiet lt-shell-header__control"
+            aria-expanded="@(_open ? "true" : "false")"
+            aria-controls="@_panelId"
+            aria-label="@AccessibleName"
+            data-lt-command="@ChromeCommands.AppearanceMenuId"
+            @onclick="Toggle"
+            @ref="_toggle">
+        @Label
+    </button>
+
+    @if (_open)
+    {
+        <div id="@_panelId" class="lt-shell-menu" role="group" aria-label="Appearance" @onkeydown="OnKeyDownAsync">
+            <AppearanceControls />
+        </div>
+    }
+</div>

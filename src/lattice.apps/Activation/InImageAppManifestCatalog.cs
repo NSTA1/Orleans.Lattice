@@ -36,7 +36,7 @@ internal sealed class InImageAppManifestCatalog
 
             try
             {
-                var pending = source.ResolveAsync(registration.Slug);
+                var pending = source.ResolveFromAsync(registration.Slug, version: null, InImageAppSource.SourceKey);
                 if (!pending.IsCompletedSuccessfully)
                 {
                     continue;

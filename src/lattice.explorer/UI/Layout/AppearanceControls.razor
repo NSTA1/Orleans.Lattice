@@ -1,0 +1,46 @@
+@*
+    The appearance choices: the material (System, Paper, Board), the contrast
+    overlay and the density. Each choice is a toggle button whose pressed state
+    is the marker paired with aria-pressed, and each carries the data-lt-command
+    of the palette command that makes the same choice. The header shows them in
+    its appearance menu; below the small breakpoint they sit in the overflow menu.
+*@
+
+<div class="lt-shell-appearance">
+    <div class="lt-shell-appearance__group" role="group" aria-labelledby="@(_id + "-theme")">
+        <span id="@(_id + "-theme")" class="lt-shell-appearance__label">Theme</span>
+        <div class="lt-shell-appearance__options">
+            @foreach (var (theme, text) in Themes)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet"
+                          Pressed="@(Appearance.Theme == theme)"
+                          OnClick="@(() => Appearance.SetThemeAsync(theme))"
+                          data-lt-command="@ChromeCommands.ThemeId(theme)">@text</LtButton>
+            }
+        </div>
+    </div>
+    <div class="lt-shell-appearance__group" role="group" aria-labelledby="@(_id + "-contrast")">
+        <span id="@(_id + "-contrast")" class="lt-shell-appearance__label">Contrast</span>
+        <div class="lt-shell-appearance__options">
+            @foreach (var (contrast, text) in Contrasts)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet"
+                          Pressed="@(Appearance.Contrast == contrast)"
+                          OnClick="@(() => Appearance.SetContrastAsync(contrast))"
+                          data-lt-command="@ChromeCommands.ContrastId(contrast)">@text</LtButton>
+            }
+        </div>
+    </div>
+    <div class="lt-shell-appearance__group" role="group" aria-labelledby="@(_id + "-density")">
+        <span id="@(_id + "-density")" class="lt-shell-appearance__label">Density</span>
+        <div class="lt-shell-appearance__options">
+            @foreach (var (density, text) in Densities)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet"
+                          Pressed="@(Appearance.Density == density)"
+                          OnClick="@(() => Appearance.SetDensityAsync(density))"
+                          data-lt-command="@ChromeCommands.DensityId(density)">@text</LtButton>
+            }
+        </div>
+    </div>
+</div>

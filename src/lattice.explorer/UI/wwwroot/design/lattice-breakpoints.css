@@ -1,0 +1,56 @@
+/*
+ * Orleans.Lattice Explorer - the Shell's breakpoint layer.
+ *
+ * The ONE Shell stylesheet allowed to name a layout width
+ * (ShellBreakpointHygieneTests enforces it). Everything else refers to a width
+ * by name, through the utilities below or through LtBreakpoints in .NET.
+ *
+ *   compact   narrower than 768px  - the spine becomes a slide-in panel;
+ *   medium    768px to 1199px      - the spine narrows;
+ *   expanded  1200px and wider.
+ *
+ * The widths follow the documentation site's layout (DESIGN.md, "Layout"). They
+ * are size-container queries against the Shell root (.lt-viewport), not
+ * viewport media queries, so the layout answers to the width the Shell is
+ * actually given.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+:root {
+  --lt-op-breakpoint-medium: 768px;
+  --lt-op-breakpoint-expanded: 1200px;
+}
+
+.lt-viewport {
+  container: lt-viewport / inline-size;
+}
+
+@container lt-viewport (width < 768px) {
+  .lt-medium-up,
+  .lt-expanded-up {
+    display: none !important;
+  }
+}
+
+@container lt-viewport (width >= 768px) {
+  .lt-only-compact {
+    display: none !important;
+  }
+}
+
+@container lt-viewport (width < 1200px) {
+  .lt-expanded-up {
+    display: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

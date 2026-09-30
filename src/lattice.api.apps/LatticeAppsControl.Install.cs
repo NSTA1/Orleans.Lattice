@@ -12,6 +12,13 @@ internal sealed partial class LatticeAppsControl
     /// new version's trees and grants take effect. Installing the version already
     /// installed is refused: consent changes go through
     /// <see cref="UpdateConsentAsync"/>.
+    /// <para>
+    /// The version resolves from the source <see cref="AppInstallRequest.SourceKey"/> names, or from the one
+    /// source that offers the slug when it is null; a slug several sources offer is then refused rather than
+    /// resolved from either, and the install's provenance records the answering source. A fresh install records
+    /// consent to the bridge grants the manifest requests; an upgrade keeps the consented grants, so an upgrade
+    /// that requests more cannot activate until <see cref="UpdateConsentAsync"/> re-consents them.
+    /// </para>
     /// </remarks>
     public async Task<AppLifecycleResult> InstallAsync(AppInstallRequest request, CancellationToken cancellationToken = default)
     {
@@ -60,16 +67,8 @@ internal sealed partial class LatticeAppsControl
 
         await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
 
-        var resolved = await _source.ResolveAsync(slug, version, cancellationToken).ConfigureAwait(false);
-        if (resolved.Status is AppSourceStatus.NotFound or AppSourceStatus.VersionMismatch)
-        {
-            throw AppsControlFailures.SourceNotFound(slug, version);
-        }
-
-        if (!resolved.IsResolved || resolved.Manifest is not { } manifest)
-        {
-            throw AppsControlFailures.SourceUnusable(slug, resolved);
-        }
+        var resolved = await _source.ResolveFromAsync(slug, version, request.SourceKey, cancellationToken).ConfigureAwait(false);
+        var manifest = AppsControlFailures.RequireResolved(slug, version, resolved);
 
         ThrowIfUndeclaredRoles(manifest, bindings);
 
@@ -88,6 +87,13 @@ internal sealed partial class LatticeAppsControl
 
         var current = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
         var upgrading = current is { State: not AppRegistryLifecycleState.Uninstalled } && current.Version != version;
+
+        // A fresh install consents to the bridge grants the reviewed manifest requests; an upgrade keeps the
+        // grants already consented, so one that requests more cannot activate until it is re-consented.
+        if (!upgrading)
+        {
+            installRequest = installRequest with { BridgeConsent = AppUiBridgeRequest.FromManifest(manifest) };
+        }
 
         // The upgrade is pinned to the version just read, so an upgrade racing this one is
         // refused rather than silently overwritten.
@@ -115,6 +121,7 @@ internal sealed partial class LatticeAppsControl
         var version = AppsControlMapping.ParseVersion(request.Version, nameof(request));
         var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
         var ceiling = AppsControlMapping.ToEngineCeiling(request.Ceiling, tenant);
+        var bridgeConsent = AppsPresentationMapping.ToEngineConsent(request.BridgeGrants);
 
         await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
 
@@ -132,8 +139,9 @@ internal sealed partial class LatticeAppsControl
         }
 
         // A same-version upgrade replaces the ceiling (re-pinning it to the version) and keeps
-        // identity, bindings and state. It is pinned to the version just read, so an upgrade that
-        // lands in between is refused (ConcurrencyConflict) instead of being rolled back.
+        // identity, bindings and state. It is pinned to the version and the revision just read, so
+        // an upgrade or a role re-binding that lands in between is refused (ConcurrencyConflict)
+        // instead of being rolled back.
         var transition = await _registry.UpgradeAsync(
             new AppRegistryInstallRequest
             {
@@ -142,6 +150,8 @@ internal sealed partial class LatticeAppsControl
                 Ceiling = ceiling,
                 RoleBindings = current.RoleBindings,
                 ExpectedVersion = current.Version,
+                ExpectedRevision = current.Revision,
+                BridgeConsent = bridgeConsent,
             },
             cancellationToken).ConfigureAwait(false);
         if (!transition.Succeeded || transition.Record is not { } record)

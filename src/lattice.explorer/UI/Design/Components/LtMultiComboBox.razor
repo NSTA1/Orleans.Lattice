@@ -1,0 +1,48 @@
+@*
+    A multi-value combobox: the values already chosen as removable chips and the
+    same type-ahead input to add the next one, drawn inside one frame.
+*@
+<LtComboBox @ref="_box"
+            Label="@Label"
+            Value="@_text"
+            ValueChanged="OnTextChangedAsync"
+            OnCommit="AddAsync"
+            Source="@Source"
+            Mode="@Mode"
+            Noun="@Noun"
+            Mono="@Mono"
+            Hint="@Hint"
+            Error="@(Error ?? _error)"
+            Placeholder="@Placeholder"
+            Disabled="@Disabled"
+            Limit="@Limit"
+            Leading="@Chips"
+            data-lt-enter="add" />
+
+@code {
+    // Always set, even with nothing chosen yet, so the field keeps one frame
+    // around the chips and the input and never changes shape as values arrive.
+    private RenderFragment Chips => __builder =>
+    {
+        @if (_values.Count > 0)
+        {
+            <ul class="lt-combobox__chips" aria-label="@($"{Label}, chosen")">
+                @foreach (var value in _values)
+                {
+                    <li class="lt-combobox__chip" @key="value">
+                        <span class="@ChipValueClass">@value</span>
+                        <button type="button"
+                                class="lt-combobox__remove"
+                                aria-label="@($"Remove {value}")"
+                                disabled="@Disabled"
+                                @onclick="@(() => RemoveAsync(value))">
+                            <svg class="lt-combobox__remove-mark" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+                                <path d="M2 2 L8 8 M8 2 L2 8" />
+                            </svg>
+                        </button>
+                    </li>
+                }
+            </ul>
+        }
+    };
+}

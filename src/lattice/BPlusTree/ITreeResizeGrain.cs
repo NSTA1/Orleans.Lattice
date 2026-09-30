@@ -124,4 +124,16 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// <param name="physicalTreeId">The physical tree id to look for.</param>
     [Orleans.Concurrency.AlwaysInterleave]
     Task<bool> ReferencesPhysicalTreeAsync(string physicalTreeId);
+
+    /// <summary>
+    /// Reports how far the resize has durably got, in the work units
+    /// <see cref="ResizeProgress"/> describes. During the
+    /// <see cref="State.ResizePhase.Snapshot"/> phase the copied shards are read
+    /// from the snapshot coordinator's own durable progress. Answers from the
+    /// resize state as last persisted, like every interleaved read on this
+    /// coordinator, so it never runs ahead of work a reactivated coordinator would
+    /// resume from. A pure read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ResizeProgress> GetProgressAsync();
 }

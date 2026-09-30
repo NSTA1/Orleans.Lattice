@@ -6,8 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Orleans.Lattice.Explorer.UI</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.UI</PackageId>
-    <Version>9.4.2</Version>
-    <Description>Shared Razor component class library (RCL) for the Orleans.Lattice Explorer: the routable pages, layout, navigation, detail, and authentication components rendered identically by every explorer head, plus the packaged static web assets (the lattice-shell.css shell stylesheet, the lattice-appearance.css and lattice-appearance.js appearance assets that apply the operator's theme and density choice, and the favicon). Served by a referencing app at _content/Orleans.Lattice.Explorer.UI.</Description>
+    <Version>10.0.0</Version>
+    <Description>The Orleans.Lattice Explorer UI: a Razor class library for everything outside a Lattice App's frame - the navigation and session chrome, the shell-owned native areas (Data, Apps, Access, Schema, Tenancy, Replication, Backups, Telemetry and Cluster), the order-diagram design system in its Operate register, the credential-aware transport adapters, and the app frame host and bridge broker. Its static assets are served from _content/Orleans.Lattice.Explorer.UI. Nothing in it is an extension point: areas are compiled in, and the only third-party UI surface is a sandboxed Lattice App frame.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
@@ -16,37 +16,45 @@
   </ItemGroup>
 
   <ItemGroup>
-    <SupportedPlatform Include="browser" />
-  </ItemGroup>
-
-  <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Web" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
   </ItemGroup>
 
+  <!--
+    Every project reference the Explorer UI needs. Areas bind to the transport-neutral contracts in
+    lattice.api.abstractions; the gRPC client packages back the Explorer's own
+    credential-aware transport adapters (T1). AppKit is referenced only so its
+    static web assets flow to a head that references the UI.
+  -->
   <ItemGroup>
-    <ProjectReference Include="..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
     <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
-    <ProjectReference Include="..\Plugins\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\AppKit\Orleans.Lattice.Explorer.AppKit.csproj" />
+    <ProjectReference Include="..\..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\..\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.telemetry.grpc\Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.apps.grpc\Orleans.Lattice.Api.Apps.Grpc.csproj" />
   </ItemGroup>
 
   <!--
-    The per-selection plugin set the shared UI composes for a head through
-    AddExplorerSelectionPlugins. Each is an independent package that could be
-    referenced on its own instead; this reference exists only so the shared UI
-    can offer the one-call composite.
+    wwwroot/design/ carries byte-identical copies of the documentation site's
+    tokens.css, fonts, font licences and favicon (epic #3807, E10). They are
+    real files, not build-time links or staged copies: the static web asset
+    runtime resolves every asset as its project's content root plus a relative
+    path, so a file that lives anywhere else is served as an empty 200 under
+    `dotnet run` and every token is undefined. docs-site/template/public/ stays
+    the one source of truth, and ShellTokenParityTests fails the build the
+    moment a copy's bytes differ from it.
   -->
-  <ItemGroup>
-    <ProjectReference Include="..\Plugins\Selection\Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
-    <ProjectReference Include="..\Plugins\Metrics\Orleans.Lattice.Explorer.Plugins.Metrics.csproj" />
-    <ProjectReference Include="..\Plugins\Topology\Orleans.Lattice.Explorer.Plugins.Topology.csproj" />
-    <ProjectReference Include="..\Plugins\Data\Orleans.Lattice.Explorer.Plugins.Data.csproj" />
-    <ProjectReference Include="..\Plugins\History\Orleans.Lattice.Explorer.Plugins.History.csproj" />
-    <ProjectReference Include="..\Plugins\DeadLetter\Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj" />
-    <ProjectReference Include="..\Plugins\TagIndex\Orleans.Lattice.Explorer.Plugins.TagIndex.csproj" />
-  </ItemGroup>
 
 </Project>

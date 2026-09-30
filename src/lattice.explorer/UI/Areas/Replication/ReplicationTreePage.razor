@@ -1,0 +1,61 @@
+@page "/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@page "/t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@inherits ExplorerPage
+@implements IDisposable
+
+@*
+    /replication/trees/{tree-path}: one tree's links, per peer and direction,
+    with its enrolment and owner. The page re-reads on a cadence while it is
+    visible and stops the moment the tab is hidden, resuming (with an
+    immediate read) when it returns.
+*@
+
+<PageTitle>@TreeId - Replication - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@TreeId</h1>
+<p class="lt-shell-page-lede">
+    @if (_entry is { } entry)
+    {
+        @(entry.Enabled ? "Replicated" : "Not replicated")
+        <text> - </text>
+        @ReplicationFormat.MergeMode(entry.Mode)
+        <text> - </text>
+        @($"{ReplicationFormat.Source(entry.Source)} enrolment")
+    }
+    else
+    {
+        <text>Not in the enrolment you may manage.</text>
+    }
+    @if (_appSlug is { } slug)
+    {
+        <text> - owned by </text><a href="@AppHref(slug)">app <span class="lt-shell-mono">@slug</span></a>
+    }
+</p>
+
+<ReplicationSections />
+
+@if (_links is null && _fault is null)
+{
+    <LtSkeleton Lines="4" Label="Reading this tree's links" />
+}
+else if (_links is null)
+{
+    <LtEmptyState Title="This tree's links could not be read" HeadingLevel="2">
+        @_fault!.Message
+    </LtEmptyState>
+}
+else
+{
+    <div class="lt-replication-status">
+        <span>@StatusLine</span>
+    </div>
+    @if (_refreshFault is not null)
+    {
+        <p class="lt-replication-note">The last refresh failed: @_refreshFault.Message These links are from the previous read.</p>
+    }
+    <ReplicationLinkTable Links="@_links"
+                          ShowTree="false"
+                          Caption="@($"Links of {TreeId}, one per peer and direction")"
+                          CaptionHidden="true"
+                          EmptyText="This tree has no replication links yet." />
+}

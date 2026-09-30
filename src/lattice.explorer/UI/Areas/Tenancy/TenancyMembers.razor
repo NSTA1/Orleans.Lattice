@@ -1,0 +1,78 @@
+@*
+    One tenant's admin subjects: who may administer it, with add and a
+    confirmed remove that never leaves the tenant without an admin.
+*@
+<section class="lt-tenancy-section" aria-labelledby="@HeadingId">
+    <div class="lt-tenancy-section__head">
+        <h2 class="lt-tenancy-section__title" id="@HeadingId">Admin subjects</h2>
+        @if (_subjects is not null)
+        {
+            <span class="lt-tenancy-count" role="status">@CountText</span>
+        }
+    </div>
+    <p class="lt-tenancy-note">An admin subject may administer tenant <code class="lt-tenancy-mono">@TenantId</code>: its members, residency and grants.</p>
+
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Admin subjects could not be read")" HeadingLevel="3">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions>
+                @if (failure.IsRetryable)
+                {
+                    <LtButton OnClick="LoadAsync">Try again</LtButton>
+                }
+            </Actions>
+        </LtEmptyState>
+    }
+    else if (_subjects is null)
+    {
+        <LtSkeleton Lines="4" Label="Loading admin subjects" />
+    }
+    else
+    {
+        <form class="lt-toolbar lt-tenancy-add" @onsubmit="AddAsync" novalidate>
+            <LtComboBox @ref="_subjectBox" Label="Subject id" Value="@_newSubject" ValueChanged="@(value => _newSubject = value)" Error="@_addError" Placeholder="user or group id" Source="@Suggestions.Principals" Noun="subject" />
+            <LtButton Type="LtButtonType.Submit" Disabled="_busy">Add admin subject</LtButton>
+        </form>
+
+        <LtTable TItem="string" Items="_subjects" Caption="@($"Admin subjects of tenant {TenantId}")" CaptionHidden="true" RowKey="@(subject => subject)" DetailTitle="@(subject => subject)">
+            <ChildContent>
+                <LtColumn TItem="string" Title="Subject" RowHeader="true" Mono="true" SortBy="@(subject => subject)" Value="@(subject => subject)" />
+                <LtColumn TItem="string" Title="Actions" Align="LtColumnAlign.End">
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_busy || IsLast)" OnClick="@(() => AskRemove(context))" aria-label="@($"Remove {context}")">Remove</LtButton>
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent>
+                <span>No admin subject is recorded. A platform operator can still administer the tenant.</span>
+            </EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context</Primary>
+                    <Secondary>@(IsLast ? "The last admin subject" : "Admin subject")</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <Detail>
+                <LtDefinitionList>
+                    <LtDefinition Term="Subject" Mono="true">@context</LtDefinition>
+                </LtDefinitionList>
+            </Detail>
+            <DetailActions>
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(_busy || IsLast)" OnClick="@(() => AskRemove(context))">Remove</LtButton>
+            </DetailActions>
+        </LtTable>
+        @if (IsLast)
+        {
+            <p class="lt-tenancy-note">A tenant keeps at least one admin subject. Add the replacement before removing the last one.</p>
+        }
+    }
+</section>
+
+<LtConfirmDestructive Open="@(_removing is not null)"
+                      OpenChanged="@(open => { if (!open) { _removing = null; } })"
+                      Title="Remove an admin subject"
+                      ObjectKind="subject"
+                      ObjectName="@(_removing ?? string.Empty)"
+                      ConfirmText="Remove"
+                      OnConfirm="RemoveAsync">
+    <p><code class="lt-tenancy-mono">@_removing</code> will no longer be able to administer tenant <code class="lt-tenancy-mono">@TenantId</code>.</p>
+</LtConfirmDestructive>

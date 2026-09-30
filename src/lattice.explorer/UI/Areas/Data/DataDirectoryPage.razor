@@ -1,0 +1,147 @@
+@page "/data"
+@page "/t/{tenant}/data"
+@inherits ExplorerPage
+
+@*
+    The Data directory: every tree and view the caller can reach, drawn as one
+    booktabs table - logical name (never a physical id), kind, owning app, shard
+    count, lifecycle, and a view's source. With tenancy on, the trees and
+    prefixes other tenants share with the tenant through a grant it approved
+    follow its own trees, each with its owner and what the grant allows. A
+    filter or column that cannot apply to this listing is left out: no sharing
+    at the reserved default tenant, no App column when no tree belongs to an
+    app, no Source column when there is no view. The
+    catalogue is read once per circuit, filtered here, and virtualised, so
+    thousands of trees stay usable. Below the small breakpoint the table becomes
+    two-line rows with a detail sheet, and the toolbar stacks.
+*@
+
+<PageTitle>Data - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Data</h1>
+<p class="lt-shell-page-lede">@Lede</p>
+@if (Directory.SharingNote is { } sharingNote)
+{
+    <p class="lt-data-note" role="note">@sharingNote</p>
+}
+
+<div class="lt-toolbar">
+    <div class="lt-data-toolbar__grow">
+        <LtSearchInput Label="Filter trees and views"
+                       Placeholder="Filter by name or app"
+                       Value="@_filter"
+                       ValueChanged="OnFilterChanged" />
+    </div>
+    @if (UseKindSelect)
+    {
+        <LtSelect Label="Show" Options="@KindOptions" Value="@_kind" ValueChanged="SetKind" />
+    }
+    else
+    {
+        <div class="lt-data-segmented" role="group" aria-label="Show">
+            @foreach (var option in KindOptions)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet"
+                          Pressed="@(_kind == option.Value)"
+                          OnClick="() => SetKind(option.Value)">@option.Text</LtButton>
+            }
+        </div>
+    }
+    <LtButton data-lt-command="@DataArea.RefreshCommandId" OnClick="RefreshAsync">Refresh</LtButton>
+    <span class="lt-data-toolbar__status" role="status">@CountText</span>
+</div>
+
+@if (_error is not null)
+{
+    <LtEmptyState Title="The directory did not load" HeadingLevel="2">
+        <ChildContent>@_error</ChildContent>
+        <Actions><LtButton OnClick="RefreshAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_entries is null)
+{
+    <LtSkeleton Lines="8" Label="Loading trees and views" />
+}
+else if (_entries.Count == 0)
+{
+    <LtEmptyState Title="No trees yet" HeadingLevel="2">
+        There is no tree or view you can reach here. A tree appears as soon as something writes to it.
+    </LtEmptyState>
+}
+else
+{
+    @* Keyed on the column set: a column that comes or goes is laid out in its place, never appended at the end. *@
+    <LtTable TItem="DataTreeEntry"
+             @key="ColumnSet"
+             Items="@_visible"
+             Caption="Trees and views"
+             CaptionHidden="true"
+             Virtualize="true"
+             RowKey="@(entry => entry.StateId)"
+             DetailTitle="@(entry => entry.DisplayName)">
+        <ChildContent>
+            <LtColumn TItem="DataTreeEntry" Context="entry" Title="Name" RowHeader="true" Mono="true" SortBy="@(entry => entry.DisplayName)">
+                @if (entry.Kind == DataTreeKind.Prefix)
+                {
+                    <span>@entry.DisplayName</span>
+                }
+                else
+                {
+                    <a href="@Navigator.Canonicalize(entry.Address).ToHref()">@entry.DisplayName</a>
+                }
+            </LtColumn>
+            <LtColumn TItem="DataTreeEntry" Title="Kind" Value="@(entry => entry.KindText)" SortBy="@(entry => entry.KindText)" />
+            @if (Directory.SharingApplies)
+            {
+                <LtColumn TItem="DataTreeEntry" Context="entry" Title="Shared by" Mono="true" SortBy="@(entry => entry.SharedBy)">
+                    @if (entry.SharedBy is { } owner)
+                    {
+                        <span>@owner</span>
+                    }
+                </LtColumn>
+            }
+            @if (_anyApp)
+            {
+                <LtColumn TItem="DataTreeEntry" Context="entry" Title="App" SortBy="@(entry => entry.AppSlug)">
+                    @if (entry.AppSlug is { } slug)
+                    {
+                        <a class="lt-shell-mono" href="@AppHref(slug)">@slug</a>
+                    }
+                </LtColumn>
+            }
+            <LtColumn TItem="DataTreeEntry" Title="Shards" Align="LtColumnAlign.End" Value="@(entry => entry.ShardCount)" SortBy="@(entry => entry.ShardCount)" />
+            <LtColumn TItem="DataTreeEntry" Context="entry" Title="Status" SortBy="@(entry => StatusText(entry))">
+                <LtStatusPill State="@StatusRole(entry)" Text="@StatusText(entry)" />
+            </LtColumn>
+            @if (_anySource)
+            {
+                <LtColumn TItem="DataTreeEntry" Context="entry" Title="Source" Mono="true" SortBy="@(entry => entry.SourceLogicalId)">
+                    @if (entry.SourceLogicalId is not null && SourceOf(entry) is { } source)
+                    {
+                        <a href="@Navigator.Canonicalize(source.Address).ToHref()">@source.LogicalId</a>
+                    }
+                </LtColumn>
+            }
+        </ChildContent>
+        <CompactRow Context="entry">
+            <LtCompactRow Mono="true">
+                <Primary>@entry.DisplayName</Primary>
+                <Secondary>@CompactSummary(entry)</Secondary>
+                <State><LtStatusPill State="@StatusRole(entry)" Text="@StatusText(entry)" /></State>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions Context="entry">
+            @if (entry.Kind == DataTreeKind.Prefix)
+            {
+                <span>Open a tree under this prefix by its full id in the address line.</span>
+            }
+            else
+            {
+                <a class="lt-btn" href="@Navigator.Canonicalize(entry.Address).ToHref()">Open @entry.DisplayName</a>
+            }
+        </DetailActions>
+        <EmptyContent>
+            <span>Nothing matches the filter.</span>
+        </EmptyContent>
+    </LtTable>
+}

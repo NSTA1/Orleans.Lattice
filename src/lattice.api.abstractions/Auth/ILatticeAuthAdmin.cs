@@ -109,6 +109,11 @@ public interface ILatticeAuthAdmin
     Task<bool> RemoveRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default);
 
     /// <summary>Reads one page of every rule in the store, ordered by <c>(governed tree id, rule id)</c>.</summary>
+    /// <remarks>
+    /// With <see cref="AuthPageRequest.ActiveTenantOnly"/> set, the listing is
+    /// narrowed to the rules governing the caller's active tenant's own trees, and
+    /// the page names that tenant in <see cref="AuthRulePage.Tenant"/>.
+    /// </remarks>
     /// <param name="request">Paging request (page size and continuation cursor). Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the scan.</param>
     Task<AuthRulePage> ListRulesAsync(AuthPageRequest request, CancellationToken cancellationToken = default);

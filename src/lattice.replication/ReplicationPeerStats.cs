@@ -48,7 +48,7 @@ public enum ReplicationContactDirection
 /// is overridable to support deterministic tests of
 /// <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>.
 /// </remarks>
-public class ReplicationPeerStats
+public partial class ReplicationPeerStats
 {
     // The four observable gauges declared on LatticeReplicationMetrics.Meter
     // are registered exactly once per process. Their callbacks read from the

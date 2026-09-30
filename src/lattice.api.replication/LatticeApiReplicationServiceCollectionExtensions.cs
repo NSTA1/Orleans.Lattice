@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Replication;
 /// <c>Orleans.Lattice.Api.Replication</c> replication control facade on an
 /// Orleans silo.
 /// </summary>
-public static class LatticeApiReplicationServiceCollectionExtensions
+public static partial class LatticeApiReplicationServiceCollectionExtensions
 {
     /// <summary>
     /// Adds the transport-agnostic replication control facade to the silo:

@@ -49,4 +49,11 @@ internal sealed class TreeReshardState
     /// fold - including the retirement of its donor's storage - has finished.
     /// </summary>
     [Id(6)] public List<int> ConsolidationDonorShardIndices { get; set; } = [];
+
+    /// The number of distinct physical shards the tree's <see cref="ShardMap"/>
+    /// named when the current or most recent reshard started, so its progress can
+    /// be measured from where it began rather than from zero. Legacy persisted
+    /// state decodes the missing slot to <c>0</c>, which means "not recorded".
+    /// </summary>
+    [Id(7)] public int StartShardCount { get; set; }
 }

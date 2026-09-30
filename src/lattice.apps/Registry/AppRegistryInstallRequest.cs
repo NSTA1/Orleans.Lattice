@@ -35,4 +35,24 @@ public sealed record AppRegistryInstallRequest
     /// would otherwise roll back an upgrade that landed after the read.
     /// </summary>
     [Id(4)] public AppVersion? ExpectedVersion { get; init; }
+
+    /// <summary>
+    /// The consented app UI bridge grants to record, or <c>null</c> to leave them as they are: an upgrade
+    /// keeps the grants the current record carries, and an install records none. Consent is never widened
+    /// implicitly, so an upgrade that requests more than the kept grants cannot activate until it is
+    /// re-consented.
+    /// </summary>
+    [Id(5)] public AppUiBridgeRequest? BridgeConsent { get; init; }
+
+    /// <summary>
+    /// The record revision the caller read when it decided this transition, or <c>null</c> to not
+    /// pin it. When set, the transition is applied only while the live record still carries exactly
+    /// this <see cref="AppRegistryRecord.Revision"/>, compared inside the registry's
+    /// optimistic-concurrency loop; otherwise it is rejected with
+    /// <see cref="AppRegistryTransitionError.ConcurrencyConflict"/> and nothing changes. A
+    /// re-consent that carries fields over from its read (the role bindings kept by a consent
+    /// update, the ceiling kept by a role re-binding) sets it, so it can never write back a value
+    /// another transition replaced after the read.
+    /// </summary>
+    [Id(6)] public long? ExpectedRevision { get; init; }
 }

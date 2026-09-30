@@ -516,6 +516,72 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeResizeStatus_progress_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            Phase = TreeResizePhase.RejectOldShards,
+            CompletedUnits = 9,
+            TotalUnits = 11,
+        });
+        var unknown = RoundTrip(new TreeResizeStatus { TreeId = "orders", InProgress = true, Phase = TreeResizePhase.Undo });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Phase, Is.EqualTo(TreeResizePhase.RejectOldShards));
+            Assert.That(copy.CompletedUnits, Is.EqualTo(9));
+            Assert.That(copy.TotalUnits, Is.EqualTo(11));
+            Assert.That(unknown.Phase, Is.EqualTo(TreeResizePhase.Undo));
+            Assert.That(unknown.TotalUnits, Is.Null, "an unknown total stays unknown across the wire");
+        });
+    }
+
+    [Test]
+    public void TreeSnapshotStatus_progress_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeSnapshotStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            Phase = TreeSnapshotPhase.UnlockSource,
+            CopiedShardCount = 3,
+            ShardCount = 8,
+        });
+        var idle = RoundTrip(new TreeSnapshotStatus { TreeId = "orders" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Phase, Is.EqualTo(TreeSnapshotPhase.UnlockSource));
+            Assert.That(copy.CopiedShardCount, Is.EqualTo(3));
+            Assert.That(copy.ShardCount, Is.EqualTo(8));
+            Assert.That(idle.Phase, Is.Null);
+            Assert.That(idle.ShardCount, Is.Null);
+        });
+    }
+
+    [Test]
+    public void TreeReshardStatus_progress_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeReshardStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentPhysicalShardCount = 5,
+            TargetShardCount = 8,
+            StartPhysicalShardCount = 2,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TargetShardCount, Is.EqualTo(8));
+            Assert.That(copy.StartPhysicalShardCount, Is.EqualTo(2));
+            Assert.That(copy.RequestedShardCount, Is.Null);
+        });
+    }
+
+    [Test]
     public void TreeAdminWalMovePlanRequest_round_trips()
     {
         var copy = RoundTrip(new TreeAdminWalMovePlanRequest

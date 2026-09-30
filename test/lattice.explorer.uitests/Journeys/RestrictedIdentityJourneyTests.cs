@@ -1,137 +1,59 @@
-using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using static Microsoft.Playwright.Assertions;
 
 namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 
 /// <summary>
-/// <b>Journey: restricted identity.</b> A reader who holds none of the administrative
-/// grants must be able to see that those areas exist and what to do about them - not
-/// find them silently missing, and not be invited into a surface that will refuse.
+/// A user with narrow rights: the directory shows only the areas they may use, the
+/// command palette never offers a way into a hidden area, and a hidden area's address -
+/// typed or followed - is a page that does not exist.
 /// </summary>
-/// <remarks>
-/// <para>
-/// The epic's approved policy is that a refusal is <i>visible but demoted</i>, below a
-/// divider, with a stated remedy - never merely greyed out and never simply gone. Grey
-/// tells a person nothing; absence tells them the feature does not exist and sends them
-/// to support asking why. Demotion with a remedy tells them what to ask for and who to
-/// ask.
-/// </para>
-/// <para>
-/// The remedy is the gate's, not the surface's: it names the missing permission and the
-/// audience who issues it, rather than repeating the area label the caller can already
-/// read. That is asserted here on the one area whose gate can report facts without a
-/// cluster - see <see cref="JourneyLedgerGate"/> for why the shipped areas cannot.
-/// </para>
-/// </remarks>
 [TestFixture]
 [Category("UI")]
-[Category("Integration")]
-public sealed class RestrictedIdentityJourneyTests : JourneyTestBase
+public sealed class RestrictedIdentityJourneyTests : UiTestBase
 {
-    [Test]
-    public async Task A_refused_area_is_demoted_below_a_divider_rather_than_hidden()
-    {
-        var page = await OpenAtAsync("", ExpandedWidth);
-        await ExplorerShell.SignInAsync(page, JourneyWorld.DataReader);
-        await JourneyShell.AssertRailSettledAsync(page);
-
-        // Visible: it is in the rail, in the demoted group.
-        await Assertions
-            .Expect(JourneyShell.DemotedEntry(page, JourneyLedgerPlugin.AreaLabel))
-            .ToHaveCountAsync(1);
-
-        // Demoted: the group is announced as a group and is preceded by a separator, so
-        // the demotion is structural rather than a visual convention a screen-reader
-        // user cannot perceive.
-        await Assertions.Expect(page.Locator(JourneyShell.DemotedDividerSelector)).ToBeVisibleAsync();
-        await Assertions
-            .Expect(page.Locator(JourneyShell.DemotedGroupSelector))
-            .ToHaveAttributeAsync("aria-label", new Regex(".+"));
-    }
+    private static readonly string[] HiddenFromAlice = ["access", "schema", "tenancy", "telemetry", "cluster"];
 
     [Test]
-    public async Task A_refused_area_states_the_permission_and_the_audience_rather_than_its_own_name()
+    public async Task A_restricted_user_sees_only_their_stops_and_cannot_reach_a_hidden_area()
     {
-        var page = await OpenAtAsync("", ExpandedWidth);
-        await ExplorerShell.SignInAsync(page, JourneyWorld.DataReader);
-        await JourneyShell.AssertRailSettledAsync(page);
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, "/", WorldIdentities.Alice);
+        await Expect(Shell.Stop(page, "data")).ToBeVisibleAsync();
 
-        var entry = JourneyShell.DemotedEntry(page, JourneyLedgerPlugin.AreaLabel);
-        await Assertions.Expect(entry).ToHaveCountAsync(1);
+        var stops = await Shell.Directory(page).Locator("a[data-lt-command]").EvaluateAllAsync<string[]>("links => links.map(l => l.getAttribute('data-lt-command'))");
+        Assert.That(stops, Is.EqualTo(new[] { "go.home", "go.data", "go.apps", "go.replication", "go.backups" }),
+            "The directory shows a restricted user exactly the areas they may use, in directory order.");
 
-        // The disclosure is a real focusable trigger, not a hover tooltip, so a keyboard
-        // or screen-reader user can reach the remedy at all.
-        var trigger = entry.Locator("button.lx-help-trigger");
-        await Assertions.Expect(trigger).ToBeVisibleAsync();
-        await trigger.ClickAsync();
-        await Assertions.Expect(trigger).ToHaveAttributeAsync("aria-expanded", "true");
+        // The palette offers nothing in a hidden area.
+        await Shell.OpenAddressLineAsync(page);
+        await Shell.AddressInput(page).FillAsync(">");
+        await Expect(Shell.Suggestions(page).Filter(new() { HasText = "Go to Data" })).ToHaveCountAsync(1);
+        var commands = await Shell.Suggestions(page).AllInnerTextsAsync();
+        foreach (var hidden in new[] { "Access", "Schema", "Tenancy", "Telemetry", "Cluster", "access rule", "Create a group", "Reshard", "compliance", "WAL" })
+        {
+            Assert.That(commands, Has.None.Contains(hidden), $"The palette offers a restricted user '{hidden}'.");
+        }
 
-        // And the remedy names the grant and who issues it. A remedy composed from the
-        // area label would say "ask for access to Ledger", which tells the caller only
-        // what they just clicked.
-        await Assertions.Expect(entry).ToContainTextAsync(JourneyLedgerGate.Permission);
-        await Assertions.Expect(entry).ToContainTextAsync(JourneyLedgerGate.Audience);
-    }
+        // Nor does a typed command for one.
+        await Shell.AddressInput(page).FillAsync(">Go to Access");
+        await Expect(Shell.Suggestions(page)).ToHaveCountAsync(0);
 
-    [Test]
-    public async Task A_refused_area_is_not_offered_as_something_to_open()
-    {
-        var page = await OpenAtAsync("", ExpandedWidth);
-        await ExplorerShell.SignInAsync(page, JourneyWorld.DataReader);
-        await JourneyShell.AssertRailSettledAsync(page);
+        // A typed address for a hidden area goes nowhere useful.
+        await Shell.AddressInput(page).FillAsync("/access");
+        await page.Keyboard.PressAsync("Enter");
+        await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
 
-        // Precondition: the area is genuinely present and refused, so the absence below
-        // is about how it is offered rather than about it having vanished.
-        await Assertions
-            .Expect(JourneyShell.DemotedEntry(page, JourneyLedgerPlugin.AreaLabel))
-            .ToHaveCountAsync(1);
-
-        // Never invited in: it is not a tab, so there is nothing to activate and no
-        // disabled control to puzzle over. A disabled tab would also remove the rail's
-        // roving-tabindex owner if every tab were disabled.
-        await Assertions
-            .Expect(page.GetByRole(AriaRole.Tab, new PageGetByRoleOptions
+        // And every hidden area's address, followed directly, is the not-found page.
+        foreach (var key in HiddenFromAlice)
+        {
+            var area = ExplorerAreas.Get(key);
+            foreach (var path in new[] { area.PrimaryPath, area.DeepPath })
             {
-                Name = JourneyLedgerPlugin.AreaLabel,
-                Exact = true,
-            }))
-            .ToHaveCountAsync(0);
-    }
-
-    [Test]
-    public async Task The_same_area_opens_for_an_identity_that_holds_the_grant()
-    {
-        // The converse, and it is what makes the three cases above assertions about the
-        // gate rather than about an area that is simply always refused.
-        var page = await OpenAtAsync("", ExpandedWidth);
-        await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
-
-        await Assertions
-            .Expect(JourneyShell.DemotedEntry(page, JourneyLedgerPlugin.AreaLabel))
-            .ToHaveCountAsync(0);
-
-        await JourneyShell.OpenAreaAsync(page, JourneyLedgerPlugin.AreaLabel);
-        await Assertions
-            .Expect(page.GetByRole(AriaRole.Heading, new PageGetByRoleOptions
-            {
-                Name = JourneyLedgerView.Heading,
-                Exact = true,
-            }))
-            .ToBeVisibleAsync();
-    }
-
-    [Test]
-    public async Task A_reader_can_still_do_the_work_the_product_is_for()
-    {
-        // A restricted identity that can see nothing is not "correctly gated", it is
-        // broken. The reader must still reach the catalog and open a tree.
-        var page = await OpenAtAsync("", ExpandedWidth);
-        await ExplorerShell.SignInAsync(page, JourneyWorld.DataReader);
-
-        await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
-        await Assertions
-            .Expect(page.Locator(JourneyShell.DetailStripSelector + " [role=tab][aria-selected='true']"))
-            .ToHaveTextAsync("Data");
+                await Shell.GotoAsync(page, world.Head, path);
+                await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
+                await Expect(Shell.Stop(page, key)).ToHaveCountAsync(0);
+            }
+        }
     }
 }
-

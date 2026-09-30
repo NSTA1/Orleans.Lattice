@@ -19,6 +19,7 @@ internal sealed class LatticeAppsGrpcMethods
     public Method<AppConsentUpdate, AppConsentReport> UpdateConsent { get; }
     public Method<AppsEmptyRequest, LatticeAppsCapabilities> GetCapabilities { get; }
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
+    public Method<AppRoleBindingsUpdate, AppRoleBindingsReport> UpdateRoleBindings { get; }
 
     public LatticeAppsGrpcMethods(IServiceProvider serializers)
     {
@@ -33,6 +34,7 @@ internal sealed class LatticeAppsGrpcMethods
         UpdateConsent = Create<AppConsentUpdate, AppConsentReport>(nameof(UpdateConsent), serializers);
         GetCapabilities = Create<AppsEmptyRequest, LatticeAppsCapabilities>(nameof(GetCapabilities), serializers);
         GetAuthScheme = Create<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(nameof(GetAuthScheme), serializers);
+        UpdateRoleBindings = Create<AppRoleBindingsUpdate, AppRoleBindingsReport>(nameof(UpdateRoleBindings), serializers);
     }
 
     private static Method<TRequest, TResponse> Create<TRequest, TResponse>(string name, IServiceProvider serializers)

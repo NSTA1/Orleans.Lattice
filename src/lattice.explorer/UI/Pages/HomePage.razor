@@ -1,0 +1,50 @@
+@page "/"
+@page "/t/{tenant}"
+@inherits ExplorerPage
+
+@*
+    Home: the estate overview. Each shown area is a stop on a spine with its
+    one-line status beneath its name - drawn as a spine, never as cards. The
+    statuses arrive independently, each time-boxed, so a slow area never holds
+    back the others.
+*@
+
+<PageTitle>Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Estate</h1>
+<p class="lt-shell-page-lede">Every area you can reach, and how each is doing.</p>
+
+@if (!CurrentLocation.EntriesLoaded)
+{
+    <LtSkeleton Lines="5" Label="Loading the estate" />
+}
+else if (CurrentLocation.Entries.Count == 0)
+{
+    <LtEmptyState Title="Nothing to show yet" HeadingLevel="2">
+        No area is available to you. Connect to a cluster, or sign in with an identity that holds a grant.
+    </LtEmptyState>
+}
+else
+{
+    <ul class="lt-spine lt-shell-estate">
+        @foreach (var entry in CurrentLocation.Entries)
+        {
+            <li class="lt-spine__stop lt-shell-estate__stop" @key="entry.Area.Key">
+                <a class="lt-spine__link lt-shell-estate__link" href="@AreaHref(entry)">
+                    <LtNode Kind="LtNodeKind.Hollow" />
+                    <span class="lt-shell-estate__text">
+                        <span class="lt-shell-estate__name">@entry.Area.DisplayName</span>
+                        @if (!entry.IsVisible)
+                        {
+                            <span class="lt-shell-estate__status lt-shell-estate__status--unavailable">@entry.Availability.Reason</span>
+                        }
+                        else if (_statuses.TryGetValue(entry.Area.Key, out var status) && status is not null)
+                        {
+                            <span class="lt-shell-estate__status">@status</span>
+                        }
+                    </span>
+                </a>
+            </li>
+        }
+    </ul>
+}

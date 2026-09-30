@@ -82,4 +82,28 @@ public sealed record BackupCatalogRequest
     /// <see cref="OrderByCreatedDescending"/> is set.
     /// </summary>
     [Id(6)] public string? CreatedPrefix { get; init; }
+
+    /// <summary>
+    /// Whether the listing is narrowed to the backups of trees the caller's active
+    /// tenant owns. <see langword="false"/> (the default) lists every backup the
+    /// caller may read, exactly as before.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The tenant is never taken from the request: it is the active tenant the
+    /// server resolves for the call - the caller's <c>lattice-active-tenant</c>
+    /// assertion, re-validated against the caller's own membership, or the
+    /// reserved default tenant when the call asserts none. It matters most for the
+    /// default tenant: a platform operator asserting no tenant may read every
+    /// tenant's backups, and this narrows the listing to the default tenant's own
+    /// (bare) trees. A backup of a platform tree belongs to no tenant.
+    /// </para>
+    /// <para>
+    /// The narrowing happens before the page is cut, so every page but the last is
+    /// full. The answering page names the tenant in
+    /// <see cref="BackupCatalogPage.Tenant"/>; a server that predates this member
+    /// ignores it and answers the unnarrowed listing with no tenant.
+    /// </para>
+    /// </remarks>
+    [Id(7)] public bool ActiveTenantOnly { get; init; }
 }

@@ -67,7 +67,7 @@ public sealed class AppControlContractTests
         Assert.Multiple(() =>
         {
             Assert.That(ApiAppsTypeAliases.AliasPrefix, Is.EqualTo("oia."));
-            Assert.That(aliases, Has.Length.EqualTo(19));
+            Assert.That(aliases, Has.Length.EqualTo(41));
             Assert.That(aliases.Distinct().Count(), Is.EqualTo(aliases.Length));
             Assert.That(aliases, Is.All.StartsWith(ApiAppsTypeAliases.AliasPrefix));
             Assert.That(aliases.Select(a => a.Length), Is.All.LessThanOrEqualTo(6));

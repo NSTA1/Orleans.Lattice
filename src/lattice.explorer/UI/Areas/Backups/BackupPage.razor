@@ -1,0 +1,196 @@
+@page "/backups/{p1}"
+@page "/t/{tenant}/backups/{p1}"
+@inherits ExplorerPage
+@*
+    /backups/{id}: one backup. Its description and restore chain, the app that
+    owns its tree, its latest health, its artifacts for export, and - each
+    behind the capability probe and a type-the-name confirmation - restore and
+    delete. A restore runs as a staged operation with its own status page.
+*@
+
+<PageTitle>@(_manifest is null ? "Backup" : BackupsFormat.Name(_manifest)) - Orleans.Lattice Explorer</PageTitle>
+
+@if (_error is { } error)
+{
+    <h1 class="lt-shell-page-title">Backup</h1>
+    <BackupsNav />
+    <p class="lt-backups-error" role="alert">@error</p>
+    <LtButton OnClick="ReloadAsync">Try again</LtButton>
+}
+else if (_manifest is not { } manifest || _tree is not { } tree)
+{
+    <h1 class="lt-shell-page-title">Backup</h1>
+    <BackupsNav />
+    <LtSkeleton Lines="6" Label="Loading the backup" />
+}
+else
+{
+    <h1 class="lt-shell-page-title">@BackupsFormat.Name(manifest)</h1>
+    <p class="lt-shell-page-lede">
+        @BackupsFormat.Kind(manifest.Kind) backup of <BackupTreeLabel TreeId="@manifest.Scope.TreeId" AppLabel="@_app?.Label" />, captured @BackupsFormat.Time(manifest.CreatedAtUtc).
+    </p>
+    <BackupsNav />
+
+    <LtDefinitionList>
+        <LtDefinition Term="Backup id"><LtMonoCell Value="@manifest.Id" CopyLabel="Copy id" /></LtDefinition>
+        <LtDefinition Term="Tree"><BackupTreeLabel TreeId="@manifest.Scope.TreeId" AppLabel="@_app?.Label" /></LtDefinition>
+        <LtDefinition Term="Scope">@BackupsFormat.Scope(manifest.Scope)</LtDefinition>
+        <LtDefinition Term="Kind">@BackupsFormat.Kind(manifest.Kind)</LtDefinition>
+        <LtDefinition Term="Captured" Mono="true">@BackupsFormat.Time(manifest.CreatedAtUtc)</LtDefinition>
+        @if (manifest.BaseBackupId is { } baseId)
+        {
+            <LtDefinition Term="Built on"><a class="lt-backups-link lt-backups-mono" href="@Href(BackupsAddresses.Backup(baseId))">@BackupsFormat.ShortId(baseId)</a></LtDefinition>
+        }
+        @if (manifest.SetName is { Length: > 0 } setName)
+        {
+            <LtDefinition Term="Backup set">@setName</LtDefinition>
+        }
+        @if (manifest.CapturingClusterId is { Length: > 0 } cluster)
+        {
+            <LtDefinition Term="Captured on" Mono="true">@cluster</LtDefinition>
+        }
+        <LtDefinition Term="Size">@BackupsFormat.Bytes(manifest.ContentDescriptors.Sum(content => content.ByteLength)) in @manifest.ContentDescriptors.Count @(manifest.ContentDescriptors.Count == 1 ? "artifact" : "artifacts")</LtDefinition>
+        @if (_healthAvailable)
+        {
+            <LtDefinition Term="Health">
+                <BackupHealthPill Report="@_health" Pending="@_healthPending" />
+                <a class="lt-backups-link" href="@Href(BackupsAddresses.HealthOf(manifest.Id))">Check or configure health</a>
+            </LtDefinition>
+        }
+    </LtDefinitionList>
+
+    @if (tree.IsAppTree)
+    {
+        <section class="lt-backups-section" aria-labelledby="lt-backups-app-title">
+            <h2 id="lt-backups-app-title" class="lt-backups-section__title">Owning app</h2>
+            <p class="lt-backups-status">
+                The tree <span class="lt-backups-mono">@tree.Name</span> belongs to the app <strong>@(_app?.Label ?? tree.AppSlug)</strong>@(_app is { DisplayName: { Length: > 0 } } ? " (" + tree.AppSlug + ")" : string.Empty).
+            </p>
+            @if (_app is { } app && app.IsRebuildable(tree.Name))
+            {
+                <p class="lt-backups-note">The app declares this tree rebuildable: it can re-derive the tree's contents from other data, so re-deriving may replace a restore.</p>
+            }
+        </section>
+    }
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-chain-title">
+        <h2 id="lt-backups-chain-title" class="lt-backups-section__title">Restore chain</h2>
+        <p class="lt-backups-note">A restore replays these backups in order, oldest first.</p>
+        <ol class="lt-backups-list">
+            @foreach (var id in _chain)
+            {
+                <li class="lt-backups-list__item" @key="id">
+                    @if (string.Equals(id, manifest.Id, StringComparison.Ordinal))
+                    {
+                        <span>@BackupsFormat.ShortId(id) (this backup)</span>
+                    }
+                    else
+                    {
+                        <a class="lt-backups-link" href="@Href(BackupsAddresses.Backup(id))">@BackupsFormat.ShortId(id)</a>
+                    }
+                </li>
+            }
+        </ol>
+    </section>
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-artifacts-title">
+        <h2 id="lt-backups-artifacts-title" class="lt-backups-section__title">Artifacts</h2>
+        @if (_exportError is { } exportError)
+        {
+            <p class="lt-backups-error" role="alert">@exportError</p>
+        }
+        <LtTable TItem="BackupContentDescriptor"
+                 Items="@manifest.ContentDescriptors"
+                 Caption="The backup's artifacts"
+                 CaptionHidden="true"
+                 RowKey="content => content.ArtifactId">
+            <ChildContent>
+                <LtColumn TItem="BackupContentDescriptor" Title="Artifact" RowHeader="true" Mono="true" Value="content => content.ArtifactId" />
+                <LtColumn TItem="BackupContentDescriptor" Title="Size" Align="LtColumnAlign.End" Value="content => BackupsFormat.Bytes(content.ByteLength)" SortBy="content => content.ByteLength" />
+                <LtColumn TItem="BackupContentDescriptor" Title="Chunks" Align="LtColumnAlign.End" Value="content => content.ChunkCount" />
+                <LtColumn TItem="BackupContentDescriptor" Title="Export">
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_exporting is not null)" OnClick="() => ExportAsync(context.ArtifactId)" aria-label="@("Export artifact " + context.ArtifactId)">@(_exporting == context.ArtifactId ? "Exporting" : "Export")</LtButton>
+                </LtColumn>
+            </ChildContent>
+            <DetailActions>
+                <LtButton Disabled="@(_exporting is not null)" OnClick="() => ExportAsync(context.ArtifactId)">Export artifact</LtButton>
+            </DetailActions>
+            <EmptyContent>
+                <p class="lt-backups-note">This backup has no artifacts.</p>
+            </EmptyContent>
+        </LtTable>
+    </section>
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-restore-title">
+        <h2 id="lt-backups-restore-title" class="lt-backups-section__title">Restore</h2>
+        @if (_capabilities is null)
+        {
+            <LtSkeleton Lines="2" Label="Checking what you may do" />
+        }
+        else if (!_capabilities.CanRestore)
+        {
+            <p class="lt-backups-note">You may not restore this backup's tree.</p>
+        }
+        else
+        {
+            <form class="lt-backups-form" @onsubmit="RequestRestore">
+                <LtComboBox Label="Restore into tree" Value="@_target" ValueChanged="value => _target = value" Source="@Suggestions.Trees" Mode="LtComboBoxMode.Suggest" Noun="tree" ExistingMessage="This tree exists: restoring replaces what it holds." Hint="The backup's own tree by default; a new name restores into a new tree." Error="@_targetError" />
+                <LtSelect Label="Restore mode" Options="@ModeOptions" Value="@_mode" ValueChanged="value => _mode = value" Hint="@ModeHint" />
+                @if (_chain.Count > 1)
+                {
+                    <LtSelect Label="Restore point" Options="@PointOptions" Value="@_point" ValueChanged="value => _point = value" Hint="Restore the tree as it stood at an earlier backup in the chain." />
+                }
+                @if (_extensionsServed)
+                {
+                    <LtCheckbox Label="Restore from the backup store alone (cold restore)" Checked="@_cold" CheckedChanged="value => _cold = value" Hint="For a cluster that lost its catalogue: reads the backup from the store rather than the catalogue." />
+                }
+                <div class="lt-backups-actions">
+                    <LtButton Variant="LtButtonVariant.Destructive" Type="LtButtonType.Submit">Restore...</LtButton>
+                </div>
+            </form>
+        }
+    </section>
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-delete-title">
+        <h2 id="lt-backups-delete-title" class="lt-backups-section__title">Delete</h2>
+        @if (_capabilities is null)
+        {
+            <LtSkeleton Lines="1" Label="Checking what you may do" />
+        }
+        else if (!_capabilities.CanDelete)
+        {
+            <p class="lt-backups-note">You may not delete this backup.</p>
+        }
+        else
+        {
+            @if (_deleteError is { } deleteError)
+            {
+                <p class="lt-backups-error" role="alert">@deleteError</p>
+            }
+            <p class="lt-backups-note">Deleting removes the backup from the catalogue and the backup store. Artifacts another backup shares are kept.</p>
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmDelete = true">Delete backup...</LtButton>
+        }
+    </section>
+
+    <LtConfirmDestructive @bind-Open="_confirmRestore"
+                          Title="Restore this backup?"
+                          ObjectKind="tree"
+                          ObjectName="@(_target?.Trim() ?? string.Empty)"
+                          ConfirmText="Restore"
+                          OnConfirm="RestoreAsync">
+        <p>@RestoreConsequence</p>
+        @if (RebuildableOwner is { } owner)
+        {
+            <p>The app @owner.Label declares this tree rebuildable, so re-deriving it may be a better choice than restoring.</p>
+        }
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive @bind-Open="_confirmDelete"
+                          Title="Delete this backup?"
+                          ObjectKind="backup"
+                          ObjectName="@BackupsFormat.Name(manifest)"
+                          ConfirmText="Delete"
+                          OnConfirm="DeleteAsync">
+        <p>This removes the backup from the catalogue and the backup store, and deletes the artifacts no other backup shares. Any incremental backup built on this one can no longer be restored. This cannot be undone.</p>
+    </LtConfirmDestructive>
+}

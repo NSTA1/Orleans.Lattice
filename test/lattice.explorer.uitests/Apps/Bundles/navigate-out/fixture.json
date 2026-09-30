@@ -1,0 +1,11 @@
+{
+  "name": "navigate-out",
+  "description": "The app navigates its own frame to an Explorer page outside the bootstrap path.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"context.read"}],
+  "expect": {"failure":"Reloaded","toast":null,"escapeRequested":true,"escapeRendered":false}
+}

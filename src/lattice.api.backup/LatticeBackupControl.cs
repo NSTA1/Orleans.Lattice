@@ -247,6 +247,19 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             ? _options.DefaultListPageSize
             : Math.Min(request.PageSize, _options.MaxListPageSize);
 
+        // Narrowed to the caller's resolved active tenant on request: the tenant
+        // is never read from the request, and a denied assertion fails closed.
+        // Filtering inside the visibility predicate keeps every page full.
+        Func<BackupScopeSelector, CancellationToken, ValueTask<bool>> isVisible = IsReadAuthorizedAsync;
+        string? narrowedTo = null;
+        if (request.ActiveTenantOnly)
+        {
+            var tenant = await ResolveActiveTenantAsync(cancellationToken).ConfigureAwait(false);
+            narrowedTo = tenant.Value;
+            isVisible = (scope, ct) => IsOwnedBy(scope.TreeId, tenant)
+                ? IsReadAuthorizedAsync(scope, ct)
+                : new ValueTask<bool>(false);
+        }
         // Newest-first / filtered listing is served from the backup-catalog index
         // (with a full-scan fallback); the default listing keeps the legacy
         // ascending-by-backup-id order and streams the catalog directly.
@@ -269,8 +282,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
 
             var query = new BackupCatalogIndexQuery(_catalog, _sink, _viewFactory);
             return await query
-                .QueryAsync(request, pageSize, IsReadAuthorizedAsync, cancellationToken)
-                .ConfigureAwait(false);
+                .QueryAsync(request, pageSize, isVisible, cancellationToken)
+                .ConfigureAwait(false) with { Tenant = narrowedTo };
         }
 
         var token = request.PageToken;
@@ -288,7 +301,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             // Manifest-derived scope: the stored id is already effective, so it is
             // gated as-is and never re-composed (re-composing would re-attribute
             // another tenant's manifest to the current caller).
-            if (!await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            if (!await isVisible(manifest.Scope, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -313,7 +326,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             entries.Add(manifest);
         }
 
-        return new BackupCatalogPage { Entries = entries, NextPageToken = nextPageToken };
+        return new BackupCatalogPage { Entries = entries, NextPageToken = nextPageToken, Tenant = narrowedTo };
     }
 
     /// <inheritdoc />
@@ -1017,8 +1030,43 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// pass either a manifest-derived scope (already effective) or a scope already
     /// composed at method entry.
     /// </remarks>
-    private ValueTask<bool> IsReadAuthorizedAsync(
-        BackupScopeSelector scope,
+    /// <summary>
+    /// Whether a backup of <paramref name="treeId"/> belongs to
+    /// <paramref name="tenant"/>: its tree is one of that tenant's own. A backup of
+    /// a platform tree belongs to no tenant.
+    /// </summary>
+    /// <param name="treeId">The backup's (effective) scope tree id.</param>
+    /// <param name="tenant">The tenant.</param>
+    internal static bool IsOwnedBy(string? treeId, TenantId tenant)
+    {
+        if (string.IsNullOrEmpty(treeId))
+        {
+            return false;
+        }
+
+        var owner = LatticeTenantTrees.GetOwner(treeId);
+        return owner.IsTenantOwned && owner.Tenant.Equals(tenant);
+    }
+
+    /// <summary>
+    /// Resolves the tenant the call acts as: the caller's validated active-tenant
+    /// assertion, or the reserved default tenant when there is none. An assertion
+    /// the caller may not make is refused, never defaulted.
+    /// </summary>
+    private async ValueTask<TenantId> ResolveActiveTenantAsync(CancellationToken cancellationToken)
+    {
+        var tenant = _tenantResolver.TryResolveCurrent(out var warm)
+            ? warm
+            : await _tenantResolver.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+        if (tenant.Value is null)
+        {
+            throw new LatticeTenantAccessDeniedException();
+        }
+
+        return tenant;
+    }
+
+    private ValueTask<bool> IsReadAuthorizedAsync(        BackupScopeSelector scope,
         CancellationToken cancellationToken) =>
         IsBackupAuthorizedAsync(scope, cancellationToken);
 

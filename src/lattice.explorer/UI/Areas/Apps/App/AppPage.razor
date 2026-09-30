@@ -1,0 +1,344 @@
+@page "/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@page "/t/{tenant}/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@namespace Orleans.Lattice.Explorer.UI.Areas.Apps.App
+@inherits ExplorerPage
+@using Orleans.Lattice.Api.Apps
+@using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue
+@using Orleans.Lattice.Explorer.UI.Framing
+@using Orleans.Lattice.Explorer.UI.Layout
+@using Orleans.Lattice.Explorer.UI.Pages
+@implements IDisposable
+
+@*
+    An installed app's manifest-derived page (A2, issue #3819): /apps/{slug}/{section}.
+    Everything an app supplies - its name, summary, description, categories, tool
+    descriptions - is untrusted and rendered as text only; its icon is a data: URI in an
+    img, which cannot run script. A caller who holds neither a role in the app nor
+    AppInstall sees not found for the whole subtree, as for an app that does not exist.
+    A section the caller may not use is absent, never disabled.
+*@
+
+<link rel="stylesheet" href="@AppPagesAssets.Stylesheet" />
+
+@if (_settling && (_load is null || _load.Kind == AppPageLoadKind.NotFound))
+{
+    <PageTitle>Apps - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">The app is starting</h1>
+    <div role="status">
+        <LtEmptyState Title="Just changed" HeadingLevel="2">
+            <ChildContent>This app was installed or enabled a moment ago, and the cluster is still catching up. This page reads it again on its own.</ChildContent>
+            <Actions><LtButton OnClick="RetryAsync">Retry now</LtButton></Actions>
+        </LtEmptyState>
+    </div>
+}
+else if (_load is null)
+{
+    <PageTitle>Apps - Orleans.Lattice Explorer</PageTitle>
+    <LtSkeleton Lines="4" Label="Loading the app" />
+}
+else if (_load.Kind == AppPageLoadKind.Unavailable)
+{
+    <PageTitle>Apps - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">This app could not be loaded</h1>
+    <div role="alert">
+        <LtEmptyState Title="The cluster did not answer" HeadingLevel="2">
+            <ChildContent>Nothing could be read about this app. Check the connection, then try again.</ChildContent>
+            <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    </div>
+}
+else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && IsSectionAddress && Tab == AppPageTabs.Open && !enabled.CanOpen)
+{
+    @* The administrative read proves the install exists, so this is not "nothing here": the caller's own access is what is missing, or has not caught up yet. *@
+    <PageTitle>@enabled.DisplayName - Apps - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">@enabled.DisplayName is not open to you yet</h1>
+    <div role="status">
+        <LtEmptyState Title="No access to its interface" HeadingLevel="2">
+            <ChildContent>The app is enabled, but its interface opens only for someone who holds one of its roles. Access follows a moment after the app is enabled or a role is bound to one of your groups; if you hold no role in it, it stays closed.</ChildContent>
+            <Actions>
+                <LtButton OnClick="RetryAsync">Retry</LtButton>
+                <a class="lt-btn lt-btn--quiet" href="@Href(AppPageAddresses.Page(Address.Tenant, Slug, AppPageTabs.Overview))">Overview</a>
+            </Actions>
+        </LtEmptyState>
+    </div>
+}
+else if (_load.Model is not { } model || !IsSectionAddress || !AppPageTabs.IsOffered(model, Tab))
+{
+    <NotFoundPage />
+}
+else
+{
+    <PageTitle>@model.DisplayName - Apps - Orleans.Lattice Explorer</PageTitle>
+
+    <div class="lt-app-head">
+        @if (model.IconDataUri is { } icon)
+        {
+            <img class="lt-app-head__icon" src="@icon" alt="" width="40" height="40" />
+        }
+        else
+        {
+            <span class="lt-app-head__icon lt-app-head__monogram" aria-hidden="true">@AppsPresentation.Monogram(model.Slug)</span>
+        }
+        <div class="lt-app-head__text">
+            <h1 class="lt-shell-page-title">@model.DisplayName</h1>
+            <p class="lt-app-head__meta">
+                <code class="lt-shell-mono">a/@model.Slug</code>
+                <span>version <code class="lt-shell-mono">@model.Version</code></span>
+                <LtStatusPill State="@StateRole(model.State)" Text="@AppPageText.State(model.State)" />
+                @if (model.Drift is { HasDrift: true })
+                {
+                    <LtStatusPill State="LtStateRole.Drift" Text="Consent drift" />
+                }
+            </p>
+            @if (!string.IsNullOrWhiteSpace(model.Presentation?.Summary))
+            {
+                <p class="lt-shell-page-lede">@model.Presentation!.Summary</p>
+            }
+        </div>
+    </div>
+
+    <div class="lt-app-sections">
+        <LtTabs @key="model" Label="App sections" ActiveId="@Tab" ActiveIdChanged="SelectSection">
+            @foreach (var section in AppPageTabs.For(model))
+            {
+                <LtTab @key="section" Id="@section" Title="@AppPageTabs.Title(section)">
+                    @switch (section)
+                    {
+                        case AppPageTabs.Overview:
+                            @RenderOverview(model)
+                            break;
+                        case AppPageTabs.Trees:
+                            @RenderTrees(model)
+                            break;
+                        case AppPageTabs.Roles:
+                            @RenderRoles(model)
+                            break;
+                        case AppPageTabs.Tools:
+                            @RenderTools(model)
+                            break;
+                        case AppPageTabs.Subscriptions:
+                            @RenderSubscriptions(model)
+                            break;
+                        case AppPageTabs.Replication:
+                            @RenderReplication(model)
+                            break;
+                        case AppPageTabs.Consent:
+                            @RenderConsent(model)
+                            break;
+                        case AppPageTabs.Open:
+                            <AppFrame AppSlug="@model.Slug"
+                                      Path="@FramePath"
+                                      OnNavSync="HandleNavSync"
+                                      LeaveHref="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Overview))" />
+                            break;
+                    }
+                </LtTab>
+            }
+        </LtTabs>
+    </div>
+}
+
+@code {
+    private RenderFragment RenderOverview(AppPageModel model) => @<text>
+        @if (!string.IsNullOrWhiteSpace(model.Presentation?.Description))
+        {
+            <p class="lt-app-description">@model.Presentation!.Description</p>
+        }
+        <LtDefinitionList>
+            <LtDefinition Term="Version" Mono="true">@model.Version</LtDefinition>
+            <LtDefinition Term="Source" Mono="@(model.SourceKey is not null)">@(model.SourceKey ?? "Not recorded")</LtDefinition>
+            <LtDefinition Term="State"><LtStatusPill State="@StateRole(model.State)" Text="@AppPageText.State(model.State)" /></LtDefinition>
+            <LtDefinition Term="Your roles" Mono="@(!model.CallerRoleNames.IsDefaultOrEmpty)">
+                @(model.CallerRoleNames.IsDefaultOrEmpty ? "You hold no role in this app." : string.Join(", ", model.CallerRoleNames))
+            </LtDefinition>
+            <LtDefinition Term="User interface">@(model.Ui is null ? "This app ships no UI." : "This app ships a UI.")</LtDefinition>
+            @if (!string.IsNullOrWhiteSpace(model.Presentation?.PublisherDisplayName))
+            {
+                <LtDefinition Term="Publisher">@model.Presentation!.PublisherDisplayName</LtDefinition>
+            }
+            @if (model.Presentation is { Categories.IsDefaultOrEmpty: false } presentation)
+            {
+                <LtDefinition Term="Categories">@string.Join(", ", presentation.Categories)</LtDefinition>
+            }
+            @if (!string.IsNullOrWhiteSpace(model.Presentation?.DocumentationUrl))
+            {
+                <LtDefinition Term="Documentation">
+                    @if (SafeLink(model.Presentation!.DocumentationUrl) is { } link)
+                    {
+                        <a href="@link" rel="noopener noreferrer nofollow">@model.Presentation.DocumentationUrl</a>
+                    }
+                    else
+                    {
+                        @model.Presentation.DocumentationUrl
+                    }
+                </LtDefinition>
+            }
+            @if (model.Admin is { } admin)
+            {
+                <LtDefinition Term="Provenance" Mono="true">@Provenance(admin.Provenance)</LtDefinition>
+            }
+        </LtDefinitionList>
+        @if (model.CanOpen)
+        {
+            <p class="lt-app-actions">
+                <a class="lt-btn" href="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Open))">Open @model.DisplayName</a>
+            </p>
+        }
+    </text>;
+
+    private RenderFragment RenderTrees(AppPageModel model) => @<text>
+        <h2 class="lt-app-section-title">Trees</h2>
+        <LtTable TItem="AppPageTree" Items="model.Trees" Caption="Trees" CaptionHidden="true" RowKey="tree => tree.Name"
+                 DetailTitle="tree => tree.Name">
+            <ChildContent>
+                <LtColumn TItem="AppPageTree" Title="Tree" RowHeader="true" Mono="true" SortBy="tree => tree.Name" Value="tree => tree.Name">
+                    <a href="@Href(AppPageAddresses.DataTree(Address.Tenant, model.Slug, context.Name))">@context.Name</a>
+                </LtColumn>
+                <LtColumn TItem="AppPageTree" Title="Adopted" Value="@(tree => tree.Adopted ? "Adopted" : "Owned")" />
+                <LtColumn TItem="AppPageTree" Title="Shards" Align="LtColumnAlign.End" Value="tree => AppPageText.Declared(tree.ShardCount)" />
+                <LtColumn TItem="AppPageTree" Title="Retention" Value="tree => AppPageText.Retention(tree.SoftDeleteDuration)" />
+                <LtColumn TItem="AppPageTree" Title="Leaf keys" Align="LtColumnAlign.End" Value="tree => AppPageText.Declared(tree.MaxLeafKeys)" />
+                <LtColumn TItem="AppPageTree" Title="Internal children" Align="LtColumnAlign.End" Value="tree => AppPageText.Declared(tree.MaxInternalChildren)" />
+                <LtColumn TItem="AppPageTree" Title="WAL partitions" Align="LtColumnAlign.End" Value="tree => AppPageText.Declared(tree.WalPartitions)" />
+                <LtColumn TItem="AppPageTree" Title="Rebuildable" Value="@(tree => tree.Rebuildable ? "Yes" : "No")" />
+            </ChildContent>
+            <EmptyContent>This app declares no trees.</EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context.Name</Primary>
+                    <Secondary>@TreeSummary(context)</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions>
+                <a class="lt-btn" href="@Href(AppPageAddresses.DataTree(Address.Tenant, model.Slug, context.Name))">Open in Data</a>
+            </DetailActions>
+        </LtTable>
+    </text>;
+
+    private RenderFragment RenderRoles(AppPageModel model) => @<text>
+        <h2 class="lt-app-section-title">Your roles</h2>
+        <LtTable TItem="AppRoleDescriptor" Items="model.CallerRoles" Caption="Your roles" CaptionHidden="true" RowKey="role => role.Name">
+            <ChildContent>
+                <LtColumn TItem="AppRoleDescriptor" Title="Role" RowHeader="true" Mono="true" SortBy="role => role.Name" Value="role => role.Name" />
+                <LtColumn TItem="AppRoleDescriptor" Title="Operations" Value="role => AppPageText.Operations(role.Operations)" />
+                <LtColumn TItem="AppRoleDescriptor" Title="Scopes" Mono="true" Value="role => Scopes(role, model.Slug)" />
+            </ChildContent>
+            <EmptyContent>You hold no role in this app.</EmptyContent>
+        </LtTable>
+        @if (model.Admin is { } admin)
+        {
+            <h2 class="lt-app-section-title">Declared roles</h2>
+            <LtTable TItem="AppRoleDescriptor" Items="admin.Roles" Caption="Declared roles" CaptionHidden="true" RowKey="role => role.Name">
+                <ChildContent>
+                    <LtColumn TItem="AppRoleDescriptor" Title="Role" RowHeader="true" Mono="true" SortBy="role => role.Name" Value="role => role.Name" />
+                    <LtColumn TItem="AppRoleDescriptor" Title="Bound group" Mono="true" Value="role => BoundGroups(admin, role.Name)" />
+                    <LtColumn TItem="AppRoleDescriptor" Title="Operations" Value="role => AppPageText.Operations(role.Operations)" />
+                    <LtColumn TItem="AppRoleDescriptor" Title="Scopes" Mono="true" Value="role => Scopes(role, model.Slug)" />
+                </ChildContent>
+                <EmptyContent>This app declares no roles.</EmptyContent>
+            </LtTable>
+            @if (model.IsAppInstallHolder && !admin.Roles.IsDefaultOrEmpty)
+            {
+                <p class="lt-app-actions">
+                    <a class="lt-btn" href="@Href(AppPageAddresses.Reconsent(Address.Tenant, model.SourceKey, model.Slug))" data-lt-rebind="true">Change role bindings</a>
+                </p>
+            }
+        }
+    </text>;
+
+    private RenderFragment RenderTools(AppPageModel model) => @<text>
+        <h2 class="lt-app-section-title">MCP tools</h2>
+        <LtTable TItem="AppMcpToolDescriptor" Items="model.McpTools" Caption="MCP tools" CaptionHidden="true" RowKey="tool => tool.Name">
+            <ChildContent>
+                <LtColumn TItem="AppMcpToolDescriptor" Title="Tool" RowHeader="true" Mono="true" SortBy="tool => tool.Name" Value="tool => ToolName(model.Slug, tool)" />
+                <LtColumn TItem="AppMcpToolDescriptor" Title="Required role" Mono="true" Value="tool => tool.Role" />
+                <LtColumn TItem="AppMcpToolDescriptor" Title="Description" Value="tool => tool.Description" />
+            </ChildContent>
+            <EmptyContent>This app declares no MCP tools.</EmptyContent>
+        </LtTable>
+    </text>;
+
+    private RenderFragment RenderSubscriptions(AppPageModel model) => @<text>
+        <h2 class="lt-app-section-title">Change-feed subscriptions</h2>
+        <LtTable TItem="AppSubscriptionDescriptor" Items="model.Subscriptions" Caption="Change-feed subscriptions" CaptionHidden="true" RowKey="subscription => subscription.Name">
+            <ChildContent>
+                <LtColumn TItem="AppSubscriptionDescriptor" Title="Subscription" RowHeader="true" Mono="true" SortBy="subscription => subscription.Name" Value="subscription => subscription.Name" />
+                <LtColumn TItem="AppSubscriptionDescriptor" Title="Observes" Mono="true" Value="subscription => AppPageText.SubscriptionSource(subscription, model.Slug)" />
+                <LtColumn TItem="AppSubscriptionDescriptor" Title="Key prefix" Mono="true" Value="@(subscription => subscription.KeyPrefix ?? "every key")" />
+                <LtColumn TItem="AppSubscriptionDescriptor" Title="Owner" Value="@(subscription => subscription.App is null || subscription.App == model.Slug ? "This app" : "Another app")" />
+            </ChildContent>
+            <EmptyContent>This app declares no change-feed subscriptions.</EmptyContent>
+        </LtTable>
+    </text>;
+
+    private RenderFragment RenderReplication(AppPageModel model) => @<text>
+        <h2 class="lt-app-section-title">Replication intent</h2>
+        <LtTable TItem="AppReplicationDescriptor" Items="model.Replication" Caption="Replication intent" CaptionHidden="true" RowKey="intent => intent.Tree">
+            <ChildContent>
+                <LtColumn TItem="AppReplicationDescriptor" Title="Tree" RowHeader="true" Mono="true" SortBy="intent => intent.Tree" Value="intent => intent.Tree" />
+                <LtColumn TItem="AppReplicationDescriptor" Title="Merge mode" Mono="true" Value="intent => intent.MergeMode" />
+            </ChildContent>
+            <EmptyContent>This app declares no replication intent.</EmptyContent>
+        </LtTable>
+        <p class="lt-app-actions">
+            <a class="lt-btn" href="@Href(AppPageAddresses.Replication(Address.Tenant, model.Slug))">See replication for this app</a>
+        </p>
+    </text>;
+
+    private RenderFragment RenderConsent(AppPageModel model) => @<text>
+        <h2 class="lt-app-section-title">Consent against the installed manifest</h2>
+        @if (model.Drift is not { } drift)
+        {
+            <LtEmptyState Title="The consent could not be read" HeadingLevel="3">
+                Its drift against the installed manifest cannot be judged. Try again later.
+            </LtEmptyState>
+        }
+        else if (drift.HasDrift)
+        {
+            <div role="status">
+                <p><LtStatusPill State="LtStateRole.Drift" Text="Consent drift" /></p>
+                <ul class="lt-app-findings">
+                    @foreach (var finding in drift.Findings)
+                    {
+                        <li>@finding</li>
+                    }
+                </ul>
+            </div>
+            <p class="lt-app-actions">
+                <a class="lt-btn" href="@Href(AppPageAddresses.Reconsent(Address.Tenant, model.SourceKey, model.Slug))">Review and re-consent</a>
+            </p>
+        }
+        else
+        {
+            <p><LtStatusPill State="LtStateRole.Healthy" Text="The consent covers the installed manifest" /></p>
+        }
+
+        @if (model.Consent is { } consent)
+        {
+            <h2 class="lt-app-section-title">Consented ceiling</h2>
+            <LtDefinitionList>
+                <LtDefinition Term="Consented version" Mono="true">@consent.Version</LtDefinition>
+                <LtDefinition Term="Allowed operations">@AppPageText.Operations(consent.Ceiling.AllowedOperations)</LtDefinition>
+            </LtDefinitionList>
+
+            <h2 class="lt-app-section-title">Approved exception scopes</h2>
+            <LtTable TItem="AppExceptionScope" Items="consent.Ceiling.ApprovedExceptionScopes" Caption="Approved exception scopes" CaptionHidden="true">
+                <ChildContent>
+                    <LtColumn TItem="AppExceptionScope" Title="@("Outside a/" + model.Slug + "/")" RowHeader="true" Mono="true" Value="scope => AppPageText.ExceptionTarget(scope)" />
+                    <LtColumn TItem="AppExceptionScope" Title="Extent" Mono="true" Value="scope => AppPageText.ExceptionExtent(scope)" />
+                </ChildContent>
+                <EmptyContent>No exception scopes are approved: the app reaches only its own namespace.</EmptyContent>
+            </LtTable>
+
+            <h2 class="lt-app-section-title">Consented bridge operations</h2>
+            <LtTable TItem="AppUiBridgeGrantDescriptor" Items="consent.BridgeGrants ?? []" Caption="Consented bridge operations" CaptionHidden="true">
+                <ChildContent>
+                    <LtColumn TItem="AppUiBridgeGrantDescriptor" Title="Operation" RowHeader="true" Mono="true" Value="grant => grant.Operation" />
+                    <LtColumn TItem="AppUiBridgeGrantDescriptor" Title="Lets its UI" Value="grant => AppPageText.BridgeOperation(grant.Operation)" />
+                    <LtColumn TItem="AppUiBridgeGrantDescriptor" Title="Reach" Value="grant => AppPageText.BridgeReach(grant)" />
+                </ChildContent>
+                <EmptyContent>@(consent.BridgeGrants is null ? "No bridge operations were ever consented." : "No bridge operations are consented.")</EmptyContent>
+            </LtTable>
+        }
+    </text>;
+}

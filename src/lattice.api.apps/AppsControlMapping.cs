@@ -208,6 +208,18 @@ internal static class AppsControlMapping
     };
 
     /// <summary>
+    /// The provenance whose publisher the tree ownership probe claims as. The version a live install
+    /// holds is judged as that install, because its claims (taken at install and re-verified at every
+    /// activation) are held under the provenance its record carries; any other version is judged as
+    /// the publisher the source vouches for, which is who an install or upgrade of it would claim as.
+    /// </summary>
+    /// <param name="liveRecord">The live registry record of the described version, or null when no live install holds it.</param>
+    /// <param name="sourceProvenance">The provenance the source reported.</param>
+    /// <returns>The provenance to probe ownership as.</returns>
+    public static AppProvenance OwnershipProbeProvenance(AppRegistryRecord? liveRecord, AppProvenance sourceProvenance) =>
+        liveRecord?.Provenance ?? sourceProvenance;
+
+    /// <summary>
     /// Builds the wire descriptor of a manifest. Every tree reference in a
     /// manifest is already app-local; a reference to this app is echoed without
     /// an app qualifier.
@@ -267,6 +279,9 @@ internal static class AppsControlMapping
                 Version = s.Version,
                 StrictIngest = s.StrictIngest,
             }),
+            Presentation = AppsPresentationMapping.ToWirePresentation(manifest.Presentation),
+            Ui = AppsPresentationMapping.ToWireUi(manifest),
+            SourceKey = provenance.Source,
         };
     }
 
@@ -404,7 +419,7 @@ internal static class AppsControlMapping
         };
     }
 
-    private static ImmutableArray<AppRoleDescriptor> MapRoles(AppRoleDeclaration[]? roles, AppSlug self)
+    internal static ImmutableArray<AppRoleDescriptor> MapRoles(AppRoleDeclaration[]? roles, AppSlug self)
     {
         if (roles is null || roles.Length == 0)
         {
@@ -438,7 +453,7 @@ internal static class AppsControlMapping
         return builder.MoveToImmutable();
     }
 
-    private static ImmutableArray<AppSubscriptionDescriptor> MapSubscriptions(
+    internal static ImmutableArray<AppSubscriptionDescriptor> MapSubscriptions(
         AppSubscriptionDeclaration[]? subscriptions,
         AppSlug self)
     {
@@ -483,7 +498,7 @@ internal static class AppsControlMapping
         return null;
     }
 
-    private static ImmutableArray<TOut> Map<TIn, TOut>(TIn[]? source, Func<TIn, TOut> map)
+    internal static ImmutableArray<TOut> Map<TIn, TOut>(TIn[]? source, Func<TIn, TOut> map)
     {
         if (source is null || source.Length == 0)
         {

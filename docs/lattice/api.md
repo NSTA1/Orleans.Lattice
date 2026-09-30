@@ -1803,7 +1803,9 @@ error surface, and runnable samples see
 | `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, string startInclusive, string endExclusive, ILatticeSerializer<T> serializer, CancellationToken = default)` |
 
 Supporting public types: `LatticePredicateTranslator`,
-`LatticePredicateNode`, `LatticePredicateNodeKind`, `LatticeConstant`,
+`LatticePredicateNode`, `LatticePredicateNodeKind`, `LatticeValueKind` (the kinds a
+[structural `TypeOf` test](predicated-operations.md#structural-predicate-kinds)
+checks for), `LatticeConstant`,
 `LatticeConstantKind`, `LatticeComparisonOperator`, `LatticeBooleanOperator`,
 `LatticeStringMethod`, `LatticePredicateContext`,
 `ILatticePredicateSerializer`, the `AtomicWriteOutcome` enum

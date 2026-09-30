@@ -7,7 +7,7 @@
     <RootNamespace>Orleans.Lattice.Explorer.Core</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Core</PackageId>
     <Version>9.4.2</Version>
-    <Description>Head-agnostic core of the Orleans.Lattice Explorer: the read-only state-API connection seam, configuration store, session, sign-in and credential seam, tenant-aware view scoping, shared vocabulary, and the catalog / metrics / topology / data / dead-letter / history navigation services shared by every explorer head. Its only cluster dependency is the public read-only state-API gRPC client.</Description>
+    <Description>Head-agnostic core of the Orleans.Lattice Explorer: the read-only state-API connection seam, configuration store, session, sign-in and credential seam, tenant-aware view scoping, shared vocabulary, and the catalog / metrics / data / dead-letter / history services the Explorer's web head composes. Its only cluster dependency is the public read-only state-API gRPC client.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
@@ -24,7 +24,7 @@
     The explorer core's only direct cluster dependency is the public read-only
     state API gRPC client. Do not add direct references to Orleans.Lattice core
     or any grain interface here - cluster access in this layer should flow through
-    the client/abstraction packages so plugins and heads keep a transport seam.
+    the client/abstraction packages so the head keeps a transport seam.
   -->
   <ItemGroup>
     <ProjectReference Include="..\..\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />

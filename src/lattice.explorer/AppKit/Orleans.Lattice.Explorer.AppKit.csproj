@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Orleans.Lattice.Explorer.AppKit</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.AppKit</PackageId>
+    <Version>9.8.0</Version>
+    <Description>The Orleans.Lattice Explorer AppKit: the static assets that run inside a Lattice App's sandboxed frame - the app-agnostic bootstrap document, its loader, the in-frame lattice API, the kit stylesheet and fonts, and the frame protocol schema - plus AppKitProtocol, the protocol's .NET constants for a host that speaks it. It has no project dependencies; the Explorer serves its assets under appkit/v1/ from _content/Orleans.Lattice.Explorer.AppKit.</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!--
+    Static web assets only, and deliberately dependency-free. Everything in this
+    package runs inside an untrusted, opaque-origin frame (epic #3807, E4), so it
+    must never grow a reference to the Shell, Explorer.Core, or any cluster
+    client. The protocol version is the path segment: a breaking change to the
+    frame protocol ships beside the old one as appkit/v2/, never over it.
+  -->
+
+  <!--
+    wwwroot/appkit/v1/ carries byte-identical copies of the documentation site's
+    tokens.css, fonts and font licences (epic #3807, E10; issue #3814), because a
+    frame's opaque origin can reach only the kit path and fonts load with CORS.
+    They are real files rather than build-time links or staged copies: the
+    static web asset runtime resolves every asset as its project's content root
+    plus a relative path, so a file kept anywhere else is served empty at
+    runtime. docs-site/template/public/ stays the one source of truth, and
+    AppKitStylesheetTests fails the build the moment a copy drifts from it.
+  -->
+
+</Project>

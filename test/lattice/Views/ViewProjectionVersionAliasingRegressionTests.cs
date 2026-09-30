@@ -124,4 +124,21 @@ public class ViewProjectionVersionAliasingRegressionTests
 
         Assert.That(versionA, Is.Not.EqualTo(versionB));
     }
+
+    [Test]
+    public void Each_projection_version_distinguishes_type_tests_of_different_kinds()
+    {
+        var number = LatticePredicateNode.TypeOf("a", LatticeValueKind.Number);
+        var text = LatticePredicateNode.TypeOf("a", LatticeValueKind.String);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new PredicateLatticeViewProjection(number).ProjectionVersion,
+                Is.Not.EqualTo(new PredicateLatticeViewProjection(text).ProjectionVersion));
+            Assert.That(new LatticeFoldProjection(_ => "g", () => [], (acc, _, _, _) => acc, "fold-v1", number).ProjectionVersion,
+                Is.Not.EqualTo(new LatticeFoldProjection(_ => "g", () => [], (acc, _, _, _) => acc, "fold-v1", text).ProjectionVersion));
+            Assert.That(new AggregationLatticeViewProjection(AggregationKind.Count, _ => "g", "sel-v1", filter: number).ProjectionVersion,
+                Is.Not.EqualTo(new AggregationLatticeViewProjection(AggregationKind.Count, _ => "g", "sel-v1", filter: text).ProjectionVersion));
+        });
+    }
 }

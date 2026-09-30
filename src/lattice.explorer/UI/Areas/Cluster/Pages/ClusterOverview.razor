@@ -1,0 +1,93 @@
+<PageTitle>Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Cluster</h1>
+<p class="lt-shell-page-lede">The estate this Explorer is connected to, the regions it replicates with, and where to administer each tree.</p>
+
+<section class="lt-cluster-section" aria-labelledby="lt-cluster-estate">
+    <h2 class="lt-cluster-heading" id="lt-cluster-estate">Estate</h2>
+    @if (_info.IsLoading)
+    {
+        <LtSkeleton Lines="2" Label="Loading the cluster's identity" />
+    }
+    else if (_info.Value is { } info)
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="Cluster id" Mono="true">@info.ClusterId</LtDefinition>
+            <LtDefinition Term="Service id" Mono="true">@info.ServiceId</LtDefinition>
+        </LtDefinitionList>
+    }
+    else
+    {
+        <p class="lt-cluster-error" role="alert">@_info.Error</p>
+    }
+
+    @if (_usage.IsLoading)
+    {
+        <LtSkeleton Lines="3" Label="Loading storage use" />
+    }
+    else if (_usage.Value is { } usage)
+    {
+        var figures = Figures(usage);
+        <LtDefinitionList>
+            <LtDefinition Term="@(Scope is { } owner ? $"Trees of tenant {owner}" : "Trees")">@ClusterFormat.Count(figures.Trees)</LtDefinition>
+            <LtDefinition Term="Stored">@ClusterFormat.Bytes(figures.Total)</LtDefinition>
+            <LtDefinition Term="Leaf state">@ClusterFormat.Bytes(figures.LeafState)</LtDefinition>
+            <LtDefinition Term="Snapshots">@ClusterFormat.Bytes(figures.Snapshots)</LtDefinition>
+            <LtDefinition Term="Retained WAL">@ClusterFormat.Bytes(figures.Wal)</LtDefinition>
+            <LtDefinition Term="Measured">@(usage.Deep ? "Re-measured by a leaf walk" : "From the cached WAL poll") at @ClusterFormat.Instant(usage.SampledAt)@(usage.Partial ? ", partial" : string.Empty)</LtDefinition>
+        </LtDefinitionList>
+        <div class="lt-toolbar">
+            <LtButton OnClick="RefreshUsageAsync">Refresh</LtButton>
+            @if (Scope is null && _info.Value is { ClusterId.Length: > 0 })
+            {
+                <LtButton data-lt-cluster="measure" OnClick="() => _confirmDeep = true">Re-measure every shard...</LtButton>
+            }
+        </div>
+    }
+    else
+    {
+        <p class="lt-cluster-error" role="alert">@_usage.Error</p>
+    }
+</section>
+
+@if (Scope is { } tenant)
+{
+    <p class="lt-cluster-note" data-lt-cluster-wide="true">The figures are tenant @tenant's own trees. Regions, WAL placement and orphaned leaves belong to the whole cluster. <a class="lt-cluster-link" href="@ClusterWideHref">See the cluster-wide overview</a>.</p>
+}
+else
+{
+<section class="lt-cluster-section" aria-labelledby="lt-cluster-regions-heading">
+    <h2 class="lt-cluster-heading" id="lt-cluster-regions-heading">Regions</h2>
+    <ClusterRegionDiagram />
+</section>
+}
+
+<section class="lt-cluster-section" aria-labelledby="lt-cluster-administer">
+    <h2 class="lt-cluster-heading" id="lt-cluster-administer">Administer</h2>
+    <ul class="lt-spine lt-cluster-stops">
+        @foreach (var (text, detail, address) in VisibleStops)
+        {
+            <li class="lt-spine__stop">
+                <a class="lt-spine__link lt-cluster-stops__link" href="@Href(address)">
+                    <LtNode Kind="LtNodeKind.Hollow" />
+                    <span class="lt-cluster-stops__text">
+                        <span class="lt-cluster-stops__name">@text</span>
+                        <span class="lt-cluster-stops__detail">@detail</span>
+                    </span>
+                </a>
+            </li>
+        }
+    </ul>
+</section>
+
+@if (_info.Value is { } confirmed)
+{
+    <LtConfirmDestructive @bind-Open="_confirmDeep"
+                          Title="Re-measure every shard"
+                          ObjectKind="cluster"
+                          ObjectName="@confirmed.ClusterId"
+                          ConfirmText="Re-measure"
+                          OnConfirm="MeasureDeeplyAsync">
+        <p>This walks every leaf of every shard of every tree to re-measure storage. It is expensive on a large estate and changes nothing.</p>
+    </LtConfirmDestructive>
+}

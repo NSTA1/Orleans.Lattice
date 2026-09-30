@@ -169,6 +169,7 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
     private readonly ILatticeAuthAdmin _admin;
     private readonly ILatticeAuthApiCredentialBridge _credentialBridge;
     private readonly ILogger<LatticeAuthApiGrpcService> _logger;
+    private readonly string? _activeTenantHeaderName;
 
     /// <summary>
     /// Initialises the service. The <paramref name="methods"/> parameter is
@@ -183,7 +184,8 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
         LatticeAuthApiGrpcMethods methods,
         ILatticeAuthAdmin admin,
         ILatticeAuthApiCredentialBridge credentialBridge,
-        ILogger<LatticeAuthApiGrpcService> logger)
+        ILogger<LatticeAuthApiGrpcService> logger,
+        Microsoft.Extensions.Options.IOptions<LatticeAuthApiGrpcOptions>? options = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(admin);
@@ -193,7 +195,22 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
         _admin = admin;
         _credentialBridge = credentialBridge;
         _logger = logger;
+        _activeTenantHeaderName = options is null
+            ? LatticeActiveTenantAssertion.DefaultHeaderName
+            : options.Value.ActiveTenantHeaderName;
     }
+
+    /// <summary>
+    /// Lifts the caller's asserted active tenant onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for one call. Only a rule listing
+    /// narrowed to the active tenant asks for it: every other auth call is
+    /// cluster-wide, and its behaviour does not change with the header.
+    /// </summary>
+    private IDisposable? StampActiveTenant(ServerCallContext context)
+        => LatticeActiveTenantAssertion.Stamp(
+            context,
+            static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
+            _activeTenantHeaderName);
 
     /// <summary>
     /// Bridges the caller identity on <paramref name="context"/> into the ambient
@@ -296,7 +313,7 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
 
     /// <inheritdoc />
     public override Task<AuthRulePage> ListRules(AuthPageRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (admin, req, ct) => admin.ListRulesAsync(req, ct));
+        => InvokeAsync(request, context, static (admin, req, ct) => admin.ListRulesAsync(req, ct), stampActiveTenant: request?.ActiveTenantOnly == true);
 
     /// <inheritdoc />
     public override Task<AuthRulePage> ListRulesForTree(AuthTreeRulesPage request, ServerCallContext context)
@@ -329,12 +346,14 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
-        Func<ILatticeAuthAdmin, TRequest, CancellationToken, Task<TResponse>> handler)
+        Func<ILatticeAuthAdmin, TRequest, CancellationToken, Task<TResponse>> handler,
+        bool stampActiveTenant = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var tenantScope = stampActiveTenant ? StampActiveTenant(context) : null;
 
         try
         {
@@ -343,6 +362,11 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
         catch (RpcException)
         {
             throw;
+        }
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            // The caller asserted a tenant it may not act as: refused, never defaulted.
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (LatticeAuthorizationDeniedException ex)
         {

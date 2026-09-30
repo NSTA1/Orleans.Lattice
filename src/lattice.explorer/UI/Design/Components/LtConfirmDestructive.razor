@@ -1,0 +1,26 @@
+<LtDialog Open="Open"
+          OpenChanged="HandleOpenChangedAsync"
+          Title="@Title"
+          Alert="true"
+          AutoFocus="false"
+          ShowClose="false"
+          ReturnFocus="ReturnFocus">
+    <form class="lt-confirm" @onsubmit="ConfirmAsync">
+        @if (ChildContent is not null)
+        {
+            <div class="lt-confirm__consequence">@ChildContent</div>
+        }
+        <p class="lt-confirm__instruction">
+            Type <code class="lt-confirm__name">@ObjectName</code> to confirm.
+        </p>
+        <LtTextInput @ref="_input"
+                     Label="@($"{Capitalise(ObjectKind)} name")"
+                     Mono="true"
+                     Value="@_typed"
+                     ValueChanged="HandleTypedAsync" />
+        <div class="lt-dialog__actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync">Cancel</LtButton>
+            <LtButton Variant="LtButtonVariant.Destructive" Type="LtButtonType.Submit" Disabled="@(!Matches)">@ConfirmText</LtButton>
+        </div>
+    </form>
+</LtDialog>

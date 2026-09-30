@@ -16,8 +16,10 @@ public sealed class AppSourceResult
         AppProvenance? provenance = null,
         IAppActivationHandle? activation = null,
         AppVersion? requestedVersion = null,
-        AppVersion? availableVersion = null)
+        AppVersion? availableVersion = null,
+        IReadOnlyList<string>? sourceKeys = null)
     {
+        SourceKeys = sourceKeys ?? [];
         Status = status;
         Slug = slug;
         Errors = errors;
@@ -54,6 +56,12 @@ public sealed class AppSourceResult
 
     /// <summary>The version the source holds, on a <see cref="AppSourceStatus.VersionMismatch"/>; otherwise null.</summary>
     public AppVersion? AvailableVersion { get; }
+
+    /// <summary>
+    /// The keys of every source that offers the slug, in composition order, on an
+    /// <see cref="AppSourceStatus.Ambiguous"/>; otherwise empty.
+    /// </summary>
+    public IReadOnlyList<string> SourceKeys { get; }
 
     /// <summary>Read-only diagnostics; empty when resolved and non-empty otherwise.</summary>
     public IReadOnlyList<AppManifestError> Errors { get; }
@@ -115,4 +123,50 @@ public sealed class AppSourceResult
     public static AppSourceResult DuplicateRegistration(AppSlug slug) =>
         new(AppSourceStatus.DuplicateRegistration, slug,
             [new("duplicate", "$.identity.slug", $"App '{slug}' is registered more than once with this source.")]);
+
+    /// <summary>Creates an outcome for a named source that is not part of the composed source set.</summary>
+    /// <param name="slug">The requested slug.</param>
+    /// <param name="sourceKey">The source key that was named.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceKey"/> is <c>null</c>.</exception>
+    public static AppSourceResult UnknownSource(AppSlug slug, string sourceKey)
+    {
+        ArgumentNullException.ThrowIfNull(sourceKey);
+        return new(AppSourceStatus.NotFound, slug,
+            [new("unknown-source", "$.source", $"No app source '{sourceKey}' is configured.")]);
+    }
+
+    /// <summary>Creates an outcome for a slug offered by more than one source when no source key was named.</summary>
+    /// <param name="slug">The requested slug.</param>
+    /// <param name="sourceKeys">The keys of every source that offers the slug; at least two, copied.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceKeys"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="sourceKeys"/> has fewer than two keys or contains null.</exception>
+    public static AppSourceResult Ambiguous(AppSlug slug, IReadOnlyList<string> sourceKeys)
+    {
+        ArgumentNullException.ThrowIfNull(sourceKeys);
+        if (sourceKeys.Count < 2)
+            throw new ArgumentException("An ambiguous outcome requires at least two source keys.", nameof(sourceKeys));
+        var copy = new string[sourceKeys.Count];
+        for (var i = 0; i < copy.Length; i++)
+            copy[i] = sourceKeys[i] ?? throw new ArgumentException("Source keys cannot contain null.", nameof(sourceKeys));
+        return new(AppSourceStatus.Ambiguous, slug,
+            [new("ambiguous", "$.source",
+                $"App '{slug}' is offered by more than one source ({string.Join(", ", copy)}); name the source to install from.")],
+            sourceKeys: copy);
+    }
+
+    /// <summary>Creates an outcome for a source set that is misconfigured and will not resolve.</summary>
+    /// <param name="slug">The requested slug.</param>
+    /// <param name="errors">The non-empty diagnostics describing the misconfiguration; copied.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="errors"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="errors"/> is empty or contains null.</exception>
+    public static AppSourceResult SourceMisconfigured(AppSlug slug, IReadOnlyList<AppManifestError> errors)
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+        if (errors.Count == 0)
+            throw new ArgumentException("A misconfigured-source outcome requires at least one error.", nameof(errors));
+        var copy = new AppManifestError[errors.Count];
+        for (var i = 0; i < copy.Length; i++)
+            copy[i] = errors[i] ?? throw new ArgumentException("Errors cannot contain null.", nameof(errors));
+        return new(AppSourceStatus.SourceMisconfigured, slug, copy);
+    }
 }

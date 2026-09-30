@@ -102,6 +102,9 @@ internal static class TypeAliases
     internal const string ResizePhase = "ol.rp";
     internal const string TreeResizeUndoState = "ol.tru";
     internal const string ResizeUndoProgress = "ol.rup";
+    internal const string ResizeProgress = "ol.rzg";
+    internal const string SnapshotProgress = "ol.sng";
+    internal const string ReshardProgress = "ol.rxg";
     internal const string TreeRegistryEntry = "ol.tre";
     internal const string TreeSnapshotState = "ol.tss";
     internal const string SnapshotPhase = "ol.snp";
@@ -299,6 +302,7 @@ internal static class TypeAliases
     internal const string LatticeComparisonOperator = "ol.pco";
     internal const string LatticeBooleanOperator = "ol.pbo";
     internal const string LatticeStringMethod = "ol.psm";
+    internal const string LatticeValueKind = "ol.pvk";
 
     // Raw-entry bulk load (snapshot TTL preservation)
     internal const string LwwEntry = "ol.lwe";

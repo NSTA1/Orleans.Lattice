@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.Mcp.Apps;
 /// <summary>
 /// The app tool surface: the <see cref="ILatticeApiMcpAppToolSource"/> that advertises
 /// every enabled app's tools on the single Lattice MCP endpoint under the mandatory
-/// <c>{slug}_{tool}</c> namespace, gated per tool through the shared access gate.
+/// <c>{slug}_{tool}</c> namespace, gated per tool by the role the tool declares.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,15 +29,17 @@ namespace Orleans.Lattice.Api.Mcp.Apps;
 /// <para>
 /// <b>Per session.</b> Under the caller's bridged credential and asserted active tenant
 /// the source resolves the caller's tenant and subject, then offers each tool of the
-/// tenant's installs whose declared role the caller holds (see <see cref="AppMcpRoleGate"/>
-/// for the exact rule). Only prebuilt tool instances are selected; nothing is
-/// re-materialised per session.
+/// tenant's installs whose declared role the caller holds by binding - it is a member of a
+/// group the install binds to the role, and the shared access gate does not refuse it with
+/// an explicit deny (see <see cref="AppMcpRoleGate"/>). Only prebuilt tool instances are
+/// selected; nothing is re-materialised per session.
 /// </para>
 /// <para>
-/// <b>Fail-closed.</b> Without a registry projection, an app source, an access gate or
-/// any provider the source offers nothing. A denied tenant resolution offers nothing. A
-/// transient backend fault surfaces as a retryable discovery error rather than a falsely
-/// narrow tool list; any other fault offers nothing and is logged.
+/// <b>Fail-closed.</b> Without a registry projection, an app source, an access gate or any
+/// provider the source offers nothing, and a caller without a resolved membership holds no
+/// role. A denied tenant resolution offers nothing. A transient backend fault surfaces as a
+/// retryable discovery error rather than a falsely narrow tool list; any other fault
+/// offers nothing and is logged.
 /// </para>
 /// </remarks>
 internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
@@ -58,8 +60,8 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
     /// <param name="logger">The logger activation failures are reported to.</param>
     /// <param name="projection">The app registry projection, or <c>null</c> when none is registered.</param>
     /// <param name="appSource">The app source manifests resolve through, or <c>null</c> when none is registered.</param>
-    /// <param name="gate">The shared access gate, or <c>null</c> when none is registered.</param>
-    /// <param name="membership">The membership context callers resolve through, or <c>null</c>.</param>
+    /// <param name="gate">The shared access gate, which can only refuse a role the binding confers, or <c>null</c> when none is registered (the source then offers nothing).</param>
+    /// <param name="membership">The membership context callers resolve through, or <c>null</c> (every caller is then anonymous and holds no role).</param>
     /// <param name="tenantResolver">The active-tenant resolver, or <c>null</c> (every caller is then in the default tenant).</param>
     /// <param name="tenantBridge">The MCP active-tenant bridge, or <c>null</c>.</param>
     public AppMcpToolSource(
@@ -147,7 +149,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
                     }
                     else
                     {
-                        allowed = await app.Roles[role].IsHeldAsync(_gate!, subject, cancellationToken).ConfigureAwait(false);
+                        allowed = await AppMcpRoleGate.IsHeldAsync(app.Roles[role], _gate!, subject, cancellationToken).ConfigureAwait(false);
                         if (role < 32)
                         {
                             evaluated |= 1u << role;
@@ -217,7 +219,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
 
             var subject = await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
                 .ConfigureAwait(false);
-            return await app.Roles[current.RoleIndex].IsHeldAsync(_gate!, subject, cancellationToken).ConfigureAwait(false);
+            return await AppMcpRoleGate.IsHeldAsync(app.Roles[current.RoleIndex], _gate!, subject, cancellationToken).ConfigureAwait(false);
         }
         catch (LatticeTenantAccessDeniedException)
         {
@@ -271,34 +273,26 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
         AppMcpToolCatalog previous,
         CancellationToken cancellationToken)
     {
-        var activations = new Dictionary<(AppSlug Slug, AppVersion Version), AppMcpToolActivation>();
+        var activations = new Dictionary<(AppSlug Slug, AppVersion Version, string Source), AppMcpToolActivation>();
         var byTenant = new Dictionary<TenantId, List<AppMcpInstalledApp>>();
         foreach (var record in snapshot.Records)
         {
-            if (record.State != AppRegistryLifecycleState.Enabled || !record.IsCeilingPinnedToVersion)
+            if (!AppRoleGrantEvaluator.IsEvaluated(record))
                 continue;
 
-            var key = (record.Slug, record.Version);
+            var key = (record.Slug, record.Version, record.Provenance.Source);
             if (!activations.TryGetValue(key, out var activation))
             {
                 activation = previous.Activations.TryGetValue(key, out var prior) && prior.Succeeded
                     ? prior
-                    : await ActivateAsync(record.Slug, record.Version, cancellationToken).ConfigureAwait(false);
+                    : await ActivateAsync(record, cancellationToken).ConfigureAwait(false);
                 activations.Add(key, activation);
             }
 
             if (!activation.Succeeded || activation.Tools.Length == 0)
                 continue;
 
-            var manifest = activation.Manifest!;
-            var roles = new AppMcpRoleGate[manifest.Roles.Length];
-            for (var i = 0; i < roles.Length; i++)
-            {
-                var role = manifest.Roles[i];
-                roles[i] = new AppMcpRoleGate(
-                    role.Operations,
-                    AppMcpScopeResolver.Resolve(record.Slug, role, manifest.Trees, record.Tenant));
-            }
+            var roles = AppRoleGrantEvaluator.CompileRoles(record, activation.Manifest!);
 
             if (!byTenant.TryGetValue(record.Tenant, out var apps))
                 byTenant.Add(record.Tenant, apps = []);
@@ -312,12 +306,14 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
         return new AppMcpToolCatalog(snapshot.Epoch, frozen, activations);
     }
 
-    private async ValueTask<AppMcpToolActivation> ActivateAsync(AppSlug slug, AppVersion version, CancellationToken cancellationToken)
+    private async ValueTask<AppMcpToolActivation> ActivateAsync(AppRegistryRecord record, CancellationToken cancellationToken)
     {
+        var slug = record.Slug;
+        var version = record.Version;
         AppSourceResult result;
         try
         {
-            result = await _appSource!.ResolveAsync(slug, version, cancellationToken).ConfigureAwait(false);
+            result = await _appSource!.ResolveInstalledAsync(record, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException
             && !LatticeApiMcpDiscoveryFaultClassifier.IsTransientBackendFault(ex))

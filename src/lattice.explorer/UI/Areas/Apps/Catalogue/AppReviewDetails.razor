@@ -1,0 +1,272 @@
+@*
+    The pre-install review, the signature moment: identity and provenance, what the
+    app creates (drawn as a chain under the structural a/{slug}/ namespace), what it
+    asks for (roles, the ceiling it needs, and anything outside a/{slug}/ marked as
+    an exception), its UI and bridge operations in plain language, and its
+    replication, schema, change feeds and MCP tools. Every app-supplied string is
+    rendered as text only.
+*@
+@if (Flow?.Descriptor is { } app)
+{
+    var slug = app.Slug;
+    var presentation = app.Presentation;
+    var owned = app.Trees.Where(tree => tree.AdoptedTreeId is null).ToArray();
+    var adopted = app.Trees.Where(tree => tree.AdoptedTreeId is not null).ToArray();
+    var outside = AppConsentAnalysis.RequiredScopes(app);
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-identity">
+        <h2 id="lt-apps-identity" class="lt-apps-section__title">Identity and provenance</h2>
+        @if (!string.IsNullOrWhiteSpace(presentation?.Description))
+        {
+            <p class="lt-apps-description" data-lt-app-text="description">@presentation.Description</p>
+        }
+        <LtDefinitionList>
+            <LtDefinition Term="Slug" Mono="true">@slug</LtDefinition>
+            <LtDefinition Term="Version" Mono="true">@app.Version</LtDefinition>
+            <LtDefinition Term="Source">@SourceText</LtDefinition>
+            <LtDefinition Term="Publisher">@app.Provenance.Publisher</LtDefinition>
+            @if (!string.IsNullOrWhiteSpace(presentation?.PublisherDisplayName))
+            {
+                <LtDefinition Term="Publisher display name">@presentation.PublisherDisplayName</LtDefinition>
+            }
+            @if (!string.IsNullOrWhiteSpace(app.Provenance.Reference))
+            {
+                <LtDefinition Term="Reference" Mono="true">@app.Provenance.Reference</LtDefinition>
+            }
+            <LtDefinition Term="Provenance">@VerificationText</LtDefinition>
+            @if (AppsPresentation.CategoriesText(presentation?.Categories ?? []) is { Length: > 0 } categories)
+            {
+                <LtDefinition Term="Categories">@categories</LtDefinition>
+            }
+            @if (!string.IsNullOrWhiteSpace(presentation?.DocumentationUrl))
+            {
+                <LtDefinition Term="Documentation" Mono="true">@presentation.DocumentationUrl</LtDefinition>
+            }
+        </LtDefinitionList>
+    </section>
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-creates">
+        <h2 id="lt-apps-creates" class="lt-apps-section__title">What it creates</h2>
+        @if (owned.Length == 0)
+        {
+            <p class="lt-apps-hint">It creates no tree of its own.</p>
+        }
+        else
+        {
+            <ul class="lt-apps-chain" aria-label="@($"Trees under a/{slug}/")">
+                <li class="lt-apps-chain__stop">
+                    <LtNode Kind="LtNodeKind.Filled" />
+                    <span class="lt-apps-chain__path">a/@(slug)/</span>
+                    <span class="lt-apps-chain__detail">its structural namespace</span>
+                </li>
+                @foreach (var tree in owned)
+                {
+                    <li class="lt-apps-chain__stop" @key="tree.Name">
+                        <LtNode Kind="LtNodeKind.Hollow" />
+                        <span class="lt-apps-chain__path">@AppsPresentation.TreePath(slug, tree.Name)</span>
+                        <span class="lt-apps-chain__detail">@TreeDetail(tree)@(Flow.IsManaging && string.IsNullOrWhiteSpace(tree.OwnershipConflict) ? ", owned by this install" : string.Empty)</span>
+                        @if (!string.IsNullOrWhiteSpace(tree.OwnershipConflict))
+                        {
+                            <span class="lt-apps-flag">@(Flow.IsManaging ? "Ownership not confirmed: activation checks it again" : "Cannot be owned: install is refused")</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+        @if (adopted.Length > 0)
+        {
+            <h3 class="lt-apps-section__title">Adopted trees - exceptions outside a/@(slug)/</h3>
+            <ul class="lt-apps-list">
+                @foreach (var tree in adopted)
+                {
+                    <li @key="tree.Name">
+                        <span class="lt-shell-mono">@tree.AdoptedTreeId</span> as <span class="lt-shell-mono">@tree.Name</span>
+                        <span class="lt-apps-flag">Exception: needs an approved scope, and survives uninstall</span>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-asks">
+        <h2 id="lt-apps-asks" class="lt-apps-section__title">What it asks for</h2>
+        <p>The capability ceiling it needs: <strong>@AppsPresentation.OperationsText(AppConsentAnalysis.RequiredOperations(app))</strong>.</p>
+        @if (Flow.Consent is { } consent)
+        {
+            <p>The ceiling consented for v@(consent.Version): <strong>@AppsPresentation.OperationsText(consent.Ceiling.AllowedOperations)</strong>.</p>
+        }
+        <LtTable TItem="AppRoleDescriptor" Items="app.Roles" Caption="Roles it declares" RowKey="role => role.Name">
+            <ChildContent>
+                <LtColumn TItem="AppRoleDescriptor" Title="Role" Mono="true" RowHeader="true" Value="role => role.Name" />
+                <LtColumn TItem="AppRoleDescriptor" Title="Operations" Value="role => AppsPresentation.OperationsText(role.Operations)" />
+                <LtColumn TItem="AppRoleDescriptor" Title="Scopes">
+                    <ul class="lt-apps-list">
+                        @foreach (var scope in context.Scopes)
+                        {
+                            <li>
+                                <span class="lt-shell-mono">@AppsPresentation.ScopeText(scope, slug)</span>
+                                @if (AppConsentAnalysis.IsOutsideNamespace(scope, slug))
+                                {
+                                    <span class="lt-apps-flag"> outside a/@(slug)/</span>
+                                }
+                            </li>
+                        }
+                    </ul>
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent>It declares no role.</EmptyContent>
+        </LtTable>
+        @if (outside.Length > 0)
+        {
+            <h3 class="lt-apps-section__title">Exception scopes it needs approved</h3>
+            <ul class="lt-apps-list">
+                @foreach (var scope in outside)
+                {
+                    <li><span class="lt-shell-mono">@AppsPresentation.ScopeText(scope)</span> <span class="lt-apps-flag">outside a/@(slug)/</span></li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-ui">
+        <h2 id="lt-apps-ui" class="lt-apps-section__title">UI</h2>
+        @if (app.Ui is { } ui)
+        {
+            <p>It ships a UI that runs in a sandboxed frame. It can reach the cluster only through the bridge operations it asks for, and never with your credentials:</p>
+            @if (ui.Bridge.IsDefaultOrEmpty)
+            {
+                <p class="lt-apps-hint">Nothing: it asks for no bridge operation.</p>
+            }
+            else
+            {
+                <ul class="lt-apps-list">
+                    @foreach (var grant in AppsPresentation.OrderBridge(ui.Bridge))
+                    {
+                        <li>
+                            @AppsPresentation.BridgeLabel(grant)
+                            @if (!AppsPresentation.IsKnownBridgeOperation(grant.Operation))
+                            {
+                                <span class="lt-apps-flag"> not recognised by this Explorer</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+        else
+        {
+            <p>It ships no UI; its pages are drawn by the Explorer from its manifest.</p>
+        }
+    </section>
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-integration">
+        <h2 id="lt-apps-integration" class="lt-apps-section__title">Replication, schema, change feeds and tools</h2>
+        <LtDefinitionList>
+            <LtDefinition Term="Replication">
+                @if (app.Replication.IsDefaultOrEmpty)
+                {
+                    <span>None requested</span>
+                }
+                else
+                {
+                    <ul class="lt-apps-list">
+                        @foreach (var replication in app.Replication)
+                        {
+                            <li><span class="lt-shell-mono">@AppsPresentation.TreePath(slug, replication.Tree)</span> as @replication.MergeMode</li>
+                        }
+                    </ul>
+                }
+            </LtDefinition>
+            <LtDefinition Term="Schema">
+                @if (app.Schema.IsDefaultOrEmpty)
+                {
+                    <span>None declared</span>
+                }
+                else
+                {
+                    <ul class="lt-apps-list">
+                        @foreach (var schema in app.Schema)
+                        {
+                            <li><span class="lt-shell-mono">@AppsPresentation.TreePath(slug, schema.Tree)</span>: @schema.Family v@(schema.Version)@(schema.StrictIngest ? ", strict ingest" : string.Empty)</li>
+                        }
+                    </ul>
+                }
+            </LtDefinition>
+            <LtDefinition Term="Change feeds">
+                @if (app.Subscriptions.IsDefaultOrEmpty)
+                {
+                    <span>None</span>
+                }
+                else
+                {
+                    <ul class="lt-apps-list">
+                        @foreach (var subscription in app.Subscriptions)
+                        {
+                            <li>
+                                <span class="lt-shell-mono">@subscription.Name</span> observes
+                                <span class="lt-shell-mono">@AppsPresentation.TreePath(subscription.App ?? slug, subscription.Tree)@(subscription.KeyPrefix is { } prefix ? $", keys starting \"{prefix}\"" : string.Empty)</span>
+                                @if (subscription.App is { } other && !string.Equals(other, slug, StringComparison.Ordinal))
+                                {
+                                    <span class="lt-apps-flag"> another app: @other</span>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+            </LtDefinition>
+            <LtDefinition Term="MCP tools">
+                @if (app.McpTools.IsDefaultOrEmpty)
+                {
+                    <span>None</span>
+                }
+                else
+                {
+                    <ul class="lt-apps-list">
+                        @foreach (var tool in app.McpTools)
+                        {
+                            <li><span class="lt-shell-mono">@(slug)_@(tool.Name)</span> (role <span class="lt-shell-mono">@tool.Role</span>): @tool.Description</li>
+                        }
+                    </ul>
+                }
+            </LtDefinition>
+        </LtDefinitionList>
+    </section>
+}
+
+@code {
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+
+    private string SourceText => Flow!.Source is { } source
+        ? $"{source.DisplayName} ({source.Key}, {AppsPresentation.SourceHints(source)})"
+        : Flow.Key.SourceKey;
+
+    private string VerificationText => Flow!.RequiresAcquisition
+        ? "Verified: acquired from its source and checked against its manifest digests before this review."
+        : Flow.Source?.Kind == AppSourceSummaryKind.Static
+            ? "Shipped in the silo image, so it is as trusted as the deployment. The publisher is descriptive, not a trust claim."
+            : "Not verified: provenance is descriptive metadata, never a trust claim.";
+
+    private static string TreeDetail(AppTreeDescriptor tree)
+    {
+        var parts = new List<string>(3);
+        if (tree.Rebuildable)
+        {
+            parts.Add("rebuildable");
+        }
+
+        if (tree.ShardCount is { } shards)
+        {
+            parts.Add($"{shards} shards");
+        }
+
+        parts.Add(tree.SoftDeleteDuration is { } retention
+            ? $"kept {Retention(retention)} after uninstall"
+            : "kept for the cluster's soft-delete window after uninstall");
+        return string.Join(", ", parts);
+    }
+
+    internal static string Retention(TimeSpan retention) => retention.TotalDays >= 1
+        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{retention.TotalDays:0.#} days")
+        : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{retention.TotalHours:0.#} hours");
+}

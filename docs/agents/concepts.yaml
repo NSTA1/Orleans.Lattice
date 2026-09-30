@@ -318,14 +318,14 @@ concepts:
   - id: app-mcp-tool
     name: "App MCP tool"
     category: mcp
-    definition: "An app MCP tool is a manifest-declared app-local tool implementation advertised as a namespaced MCP tool only for enabled apps whose role gate the caller holds."
+    definition: "An app MCP tool is a manifest-declared app-local tool implementation advertised as a namespaced MCP tool only for enabled apps whose declared role the caller holds by binding and is not denied."
     packages:
       - "Orleans.Lattice.Api.Mcp.Apps"
     capability_boundary:
       in_scope:
         - statement: "Tool names are composed as slug, underscore, and app-local tool name."
           source: "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.Compose"
-        - statement: "Advertisement and invocation both re-check the caller against the declared role through the shared access gate."
+        - statement: "Advertisement and invocation both re-check that the caller holds the declared role by binding; the shared access gate is consulted only after the binding holds, and only to refuse."
           source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
       out_of_scope:
         - statement: "App MCP tools do not appear in the lattice_capabilities report."
@@ -1226,6 +1226,8 @@ concepts:
       in_scope:
         - statement: "Only matching keys or values cross the wire."
           source: "FEATURES.md"
+        - statement: "Structural node kinds (TypeOf, Length, Every, Self) test a value's shape and are built on LatticePredicateNode directly, not translated from a lambda."
+          source: "docs/lattice/predicated-operations.md"
       out_of_scope:
         - statement: "Does not run arbitrary client-side code outside the documented expression surface."
           source: "docs/lattice/predicated-operations.md"

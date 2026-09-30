@@ -9,8 +9,23 @@ internal sealed class LatticeAppsGrpcService(
     ILatticeAppsApiCredentialBridge credentialBridge,
     ILatticeAppsApiAuthSchemeSource authSchemeSource,
     IOptions<LatticeAppsApiGrpcOptions> options,
-    ILogger<LatticeAppsGrpcService> logger)
+    ILogger<LatticeAppsGrpcService> logger,
+    ILatticeAppRoleBindings? roleBindings = null)
 {
+    // A host whose app-control facade predates role re-binding leaves it unregistered; the
+    // RPC then answers Unimplemented rather than failing the whole service's activation.
+    private readonly ILatticeAppRoleBindings? _roleBindings = roleBindings ?? control as ILatticeAppRoleBindings;
+
+    public Task<AppRoleBindingsReport> UpdateRoleBindings(AppRoleBindingsUpdate request, ServerCallContext context)
+    {
+        if (_roleBindings is not { } bindings)
+        {
+            throw new RpcException(new Status(StatusCode.Unimplemented, "App role re-binding is not served by this host."));
+        }
+
+        return InvokeAsync(request, context, bindings, static (b, r, ct) => b.UpdateRoleBindingsAsync(r, ct));
+    }
+
     public Task<AppLifecycleResult> Install(AppInstallRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (c, r, ct) => c.InstallAsync(r, ct));
 
@@ -59,9 +74,14 @@ internal sealed class LatticeAppsGrpcService(
         => LatticeActiveTenantAssertion.Stamp(
             context, static (c, name) => c.RequestHeaders.GetValue(name), options.Value.ActiveTenantHeaderName);
 
-    private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
+    private Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request, ServerCallContext context,
         Func<ILatticeAppsControl, TRequest, CancellationToken, Task<TResponse>> handler)
+        => InvokeAsync(request, context, control, handler);
+
+    private async Task<TResponse> InvokeAsync<TFacade, TRequest, TResponse>(
+        TRequest request, ServerCallContext context, TFacade facade,
+        Func<TFacade, TRequest, CancellationToken, Task<TResponse>> handler)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
@@ -69,7 +89,7 @@ internal sealed class LatticeAppsGrpcService(
         {
             using var credentialScope = LatticeCredentialContext.With(credentialBridge.Resolve(context));
             using var tenantScope = StampActiveTenant(context);
-            return await handler(control, request, context.CancellationToken).ConfigureAwait(false);
+            return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

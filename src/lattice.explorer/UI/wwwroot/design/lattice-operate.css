@@ -1,0 +1,179 @@
+/*
+ * Orleans.Lattice Explorer - the Operate register's tokens.
+ *
+ * The Explorer draws in the documentation site's world (DESIGN.md, "the order
+ * diagram") and loads the site's own tokens.css, linked at build time. This
+ * file adds only what an operator console needs and a reading site does not:
+ *
+ *   - density: row and control heights, comfortable (44px, a touch target)
+ *     and compact (28px, never below the 24px WCAG 2.2 minimum);
+ *   - the focus ring;
+ *   - the current-row band and the control boundary colour;
+ *   - the lifecycle and health state roles, each a colour AND a glyph, so no
+ *     state is carried by colour alone;
+ *   - a high-contrast overlay for Paper and for Board.
+ *
+ * Every text colour here clears WCAG 2.2 AA (4.5:1) on every surface it can sit
+ * on, and every boundary, ring and indicator clears the 3:1 non-text minimum.
+ * The high-contrast overlay clears AAA (7:1) for text and 4.5:1 for non-text.
+ * ShellTextContrastTests and ShellNonTextContrastTests measure all of it from
+ * this file, so a retune that gives a ratio back fails the build.
+ *
+ * Selection: the theme is data-bs-theme="light|dark" on the document element
+ * (as on the documentation site), the density is data-lt-density, and the
+ * contrast overlay is data-lt-contrast="more|standard", falling back to the
+ * platform's prefers-contrast when unset.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+:root,
+[data-bs-theme="light"] {
+  /* --- Density ------------------------------------------------------- */
+  --lt-op-row-height-comfortable: 2.75rem;   /* 44px: the touch-target floor */
+  --lt-op-row-height-compact: 1.75rem;       /* 28px, above the 24px WCAG 2.2 target minimum */
+  --lt-op-control-height-comfortable: 2.75rem;
+  --lt-op-control-height-compact: 1.75rem;
+  --lt-op-cell-padding-x-comfortable: 0.75rem;
+  --lt-op-cell-padding-x-compact: 0.5rem;
+  --lt-op-row-height: var(--lt-op-row-height-comfortable);
+  --lt-op-control-height: var(--lt-op-control-height-comfortable);
+  --lt-op-cell-padding-x: var(--lt-op-cell-padding-x-comfortable);
+
+  /* --- Focus ----------------------------------------------------------- */
+  --lt-op-focus-ring-color: var(--lt-focus);
+  --lt-op-focus-ring-width: 2px;
+  --lt-op-focus-ring-offset: 2px;
+
+  /* --- Surfaces and boundaries -----------------------------------------
+   * row-current  the soft marker band behind the current row, opaque so its
+   *              contrast can be measured;
+   * row-hover    a hovered row;
+   * control-border  the boundary of an input, checkbox or switch, which a
+   *              reader must perceive to find the control (3:1 minimum);
+   * selected-ring   the ring that pairs with the marker (ink on paper);
+   * switch-on    the filled track of a switch that is on.
+   */
+  --lt-op-row-current: #fff1bf;
+  --lt-op-row-hover: var(--lt-surface-sunken);
+  --lt-op-control-border: #6f7784;
+  --lt-op-selected-ring: var(--lt-diagram-join-ring);
+  --lt-op-switch-on: var(--lt-ink);
+  --lt-op-scrim: rgba(21, 25, 31, 0.36);   /* behind a dialog; translucent, never measured as a text surface */
+
+  /* --- State roles ------------------------------------------------------
+   * Lifecycle: installed, enabled, disabled, uninstalled, drift.
+   * Health:    healthy, lagging, stalled, failed, unknown.
+   * Each role is a colour, a glyph (a CSS string, drawn aria-hidden beside
+   * the state's text) and a weight. The glyphs are distinct across all ten.
+   */
+  --lt-op-state-installed: var(--lt-ink-2);
+  --lt-op-state-installed-glyph: "\25CB";
+  --lt-op-state-installed-weight: var(--lt-weight-label);
+
+  --lt-op-state-enabled: var(--lt-success);
+  --lt-op-state-enabled-glyph: "\25CF";
+  --lt-op-state-enabled-weight: var(--lt-weight-label);
+
+  --lt-op-state-disabled: var(--lt-ink-3);
+  --lt-op-state-disabled-glyph: "\2298";
+  --lt-op-state-disabled-weight: var(--lt-weight-label);
+
+  --lt-op-state-uninstalled: var(--lt-ink-3);
+  --lt-op-state-uninstalled-glyph: "\2205";
+  --lt-op-state-uninstalled-weight: var(--lt-weight-body);
+
+  --lt-op-state-drift: var(--lt-warning);
+  --lt-op-state-drift-glyph: "\2260";
+  --lt-op-state-drift-weight: var(--lt-weight-strong);
+
+  --lt-op-state-healthy: var(--lt-success);
+  --lt-op-state-healthy-glyph: "\25C9";
+  --lt-op-state-healthy-weight: var(--lt-weight-label);
+
+  --lt-op-state-lagging: var(--lt-warning);
+  --lt-op-state-lagging-glyph: "\25D0";
+  --lt-op-state-lagging-weight: var(--lt-weight-label);
+
+  --lt-op-state-stalled: var(--lt-danger);
+  --lt-op-state-stalled-glyph: "\2016";
+  --lt-op-state-stalled-weight: var(--lt-weight-strong);
+
+  --lt-op-state-failed: var(--lt-danger);
+  --lt-op-state-failed-glyph: "\00D7";
+  --lt-op-state-failed-weight: var(--lt-weight-strong);
+
+  --lt-op-state-unknown: var(--lt-ink-3);
+  --lt-op-state-unknown-glyph: "?";
+  --lt-op-state-unknown-weight: var(--lt-weight-label);
+}
+
+[data-bs-theme="dark"] {
+  --lt-op-row-current: #242718;   /* the chalk marker at 9% over the slate */
+  --lt-op-control-border: #7f8d85;
+  --lt-op-scrim: rgba(0, 0, 0, 0.6);
+}
+
+/* --- Density ----------------------------------------------------------- */
+
+[data-lt-density="compact"] {
+  --lt-op-row-height: var(--lt-op-row-height-compact);
+  --lt-op-control-height: var(--lt-op-control-height-compact);
+  --lt-op-cell-padding-x: var(--lt-op-cell-padding-x-compact);
+}
+
+/* --- High contrast ------------------------------------------------------
+ * A full step more, not the same palette under another name: text at 7:1 and
+ * boundaries at 4.5:1 on every surface. The attribute overlays apply when the
+ * reader chooses "more"; the media-query copies apply the same values when the
+ * platform asks and the reader has not chosen "standard". The two copies are
+ * held identical by ShellTextContrastTests.
+ */
+
+:root:not([data-bs-theme="dark"])[data-lt-contrast="more"] {
+  --lt-ink-2: #2f3540;
+  --lt-ink-3: #3f4652;
+  --lt-rule-strong: #8a929e;
+  --lt-link: #1a2890;
+  --lt-focus: #1a2890;
+  --lt-warning: #6b4000;
+  --lt-danger: #8c1a12;
+  --lt-success: #135a26;
+  --lt-op-control-border: #5d6573;
+}
+
+[data-bs-theme="dark"][data-lt-contrast="more"] {
+  --lt-ink-2: #c4cdc7;
+  --lt-ink-3: #b3beb7;
+  --lt-rule-strong: #5b6961;
+  --lt-warning: #f7c79d;
+  --lt-danger: #ffbdb5;
+  --lt-success: #bfe6ab;
+  --lt-info: #c3cdff;
+  --lt-op-control-border: #8f9c94;
+}
+
+@media (prefers-contrast: more) {
+  :root:not([data-bs-theme="dark"]):not([data-lt-contrast="standard"]) {
+    --lt-ink-2: #2f3540;
+    --lt-ink-3: #3f4652;
+    --lt-rule-strong: #8a929e;
+    --lt-link: #1a2890;
+    --lt-focus: #1a2890;
+    --lt-warning: #6b4000;
+    --lt-danger: #8c1a12;
+    --lt-success: #135a26;
+    --lt-op-control-border: #5d6573;
+  }
+
+  [data-bs-theme="dark"]:not([data-lt-contrast="standard"]) {
+    --lt-ink-2: #c4cdc7;
+    --lt-ink-3: #b3beb7;
+    --lt-rule-strong: #5b6961;
+    --lt-warning: #f7c79d;
+    --lt-danger: #ffbdb5;
+    --lt-success: #bfe6ab;
+    --lt-info: #c3cdff;
+    --lt-op-control-border: #8f9c94;
+  }
+}

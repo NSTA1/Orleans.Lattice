@@ -19,6 +19,21 @@
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
 
+  <!--
+    Apps/ holds sample apps as their own projects and test/ holds this sample's
+    smoke tests; keep this host's default globs out of both.
+  -->
+  <ItemGroup>
+    <Compile Remove="Apps/**;test/**" />
+    <Content Remove="Apps/**;test/**" />
+    <None Remove="Apps/**;test/**" />
+    <EmbeddedResource Remove="Apps/**;test/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Samples.Explorer.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
   </ItemGroup>
@@ -37,9 +52,23 @@
     <ProjectReference Include="..\..\src\lattice.api.schema\Orleans.Lattice.Api.Schema.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
-    <!-- The Schema area ships as its own plugin package; the sample registers it
-         only when LATTICE_EXPLORER_ENABLE_SCHEMA=true (see Program.cs). -->
-    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.apps\Orleans.Lattice.Apps.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.apps\Orleans.Lattice.Api.Apps.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.apps.grpc\Orleans.Lattice.Api.Apps.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.treeadmin\Orleans.Lattice.Api.TreeAdmin.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.replication\Orleans.Lattice.Api.Replication.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
+    <!-- The task-board pilot app (P1): a manifest and UI bundle embedded in its own class library. -->
+    <ProjectReference Include="Apps\TaskBoard\src\TaskBoard.csproj" />
   </ItemGroup>
 
 </Project>

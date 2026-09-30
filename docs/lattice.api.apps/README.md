@@ -30,8 +30,10 @@ siloBuilder.AddLatticeApps();
 siloBuilder.AddLatticeAppsApi();
 ```
 
-`AddLatticeAppsApi` registers `ILatticeAppsControl` as a singleton. Calling it
-before `AddLatticeApps` fails fast.
+`AddLatticeAppsApi` registers `ILatticeAppsControl` as a singleton, and the same
+facade as the `ILatticeAppRoleBindings` singleton (see
+[Re-binding roles](#re-binding-roles)). Calling it before `AddLatticeApps` fails
+fast.
 
 ## Verbs
 
@@ -46,6 +48,32 @@ before `AddLatticeApps` fails fast.
 | `GetConsentAsync(slug)` | The ceiling pinned to the installed version, or `null` when the app is not installed. |
 | `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. If that re-application fails, the failure is thrown with a note that the consent itself was recorded; a failure the consent or manifest causes, such as a ceiling excess, also withdraws the app's grants. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
+
+### Re-binding roles
+
+`ILatticeAppRoleBindings` is a separate contract beside `ILatticeAppsControl`, so the
+control contract is unchanged. Its one verb,
+`UpdateRoleBindingsAsync(AppRoleBindingsUpdate)`, replaces every role-to-group binding
+of an installed app and returns an `AppRoleBindingsReport`: the slug, the installed
+version, the recorded bindings and the lifecycle state.
+
+- **Full replacement, group-only.** The update names the slug, the exact installed
+  version and the complete bindings. A role it leaves out ends up bound to no group.
+  Each binding must name a role the installed manifest declares, no role may appear
+  twice, and a role is bound to a membership group, never to a user.
+- **Pinned.** A version mismatch is refused. The change is also pinned to the install
+  revision just read, so a concurrent re-binding, consent update, upgrade or enable
+  refuses this one instead of being rolled back. An install whose consent was never
+  recorded for the installed version must be re-consented first.
+- **Nothing else moves.** The consent, the ceiling, the bridge consent and the
+  lifecycle state are kept, and a disabled or merely installed app is never enabled.
+- **Re-applied when enabled.** An enabled app is re-applied, so its compiled role
+  rules are replaced and a removed binding leaves no stale grant. If that fails, the
+  failure is thrown with a note that the bindings themselves were recorded.
+
+It authorizes `AppInstall` over the cluster-wide scope before reading anything, like
+every control verb (see [Authorization](#authorization)), and it follows the same
+[no physical ids](#no-physical-ids-on-the-wire) rule.
 
 Lifecycle results report the slug, version, resulting `AppLifecycleState` and whether
 anything changed. A lifecycle mutation only ever returns `Installed`, `Enabled`,
@@ -138,6 +166,79 @@ version is a `KeyNotFoundException`, a denied call is a
 `LatticeTenantAccessDeniedException`, and a failed precondition or activation is an
 `InvalidOperationException`. A replaced exception also keeps a cancellation or timeout
 category, and becomes an `InvalidOperationException` when it had any other type.
+
+## Catalogue, workspace and bridge
+
+Beside the control facade, the package implements three more contracts from
+`Orleans.Lattice.Api.Apps`. They serve the [Explorer](../lattice.explorer/README.md)'s
+Apps area and the untrusted app UIs it frames, and any other client can use them.
+`AddLatticeAppsApi` registers `ILatticeAppCatalog` and `ILatticeAppWorkspace` beside
+`ILatticeAppsControl`. `AddLatticeAppBridgeApi` registers `ILatticeAppBridge`, and
+registers the control facade too:
+
+```csharp verify
+using Orleans.Lattice.Apps;
+using Orleans.Lattice.Api.Apps;
+
+siloBuilder.AddLatticeApps();
+siloBuilder.AddLatticeAppBridgeApi(options => options.RateLimitPermitLimit = 200);
+```
+
+| Contract | Who may call it | What it serves |
+|---|---|---|
+| `ILatticeAppCatalog` | Callers holding `AppInstall` over `LatticeScope.ClusterWide()`, the same gate as the control facade | The configured app sources (`ListSourcesAsync`); what each source offers, joined with the active tenant's installs (`ListAvailableAsync`, filtered by source key, text, and `All`, `Installed`, `Available` or `Updates`); a pre-install description of an exact source version (`DescribeFromSourceAsync`); the pre-install icon (`GetIconAsync`). |
+| `ILatticeAppWorkspace` | Any caller who holds at least one role of an enabled install in the active tenant: a group it belongs to is bound to the role, and no deny takes the role away | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
+| `ILatticeAppBridge` | Per operation (see below) | Get, scan, set and delete on an app's own logical trees, on behalf of that app's UI. |
+
+A caller that fails the gate learns nothing. The catalogue refuses the call before
+it reads any source or the registry. The workspace answers as if the app did not
+exist. The workspace description excludes the ceiling, the approved exception
+scopes, consent history, role-to-group bindings and every physical tree id: those
+remain behind `AppInstall` on the control facade. Its `Ui.Bridge` is not the
+manifest's bare request: it carries only the grants the operator consented to that
+the installed manifest still requests, which is exactly what the bridge admits, so
+a client launching the UI is never offered an unconsented grant.
+
+When the same slug is offered by more than one source, the catalogue lists one row
+per source. An install names its source with `AppInstallRequest.SourceKey`. Without
+a key, an ambiguous slug is refused rather than resolved to either source. `Updates`
+means a newer version from the **same** source the install came from.
+
+### The bridge
+
+`ILatticeAppBridge` is the single place where data access by an app UI is enforced.
+A target is `AppBridgeTarget(AppSlug, InstallRevision, LogicalTree)`. No overload
+accepts a physical tree id. Each call runs these steps in order, and each fails
+closed:
+
+1. **The install.** It must be enabled in the caller's active tenant with its
+   ceiling pinned to its version, and `InstallRevision` must match. A frame
+   launched before an upgrade, a disable or an uninstall therefore stops working,
+   and the call is denied exactly as for an app that does not exist.
+2. **Bridge consent.** The operation must be covered for the logical tree both by
+   the install's **consented** bridge grants (see
+   [presentation and UI](../lattice.apps/README.md#presentation-and-ui)) and by the
+   installed manifest's own request.
+3. **Tree resolution.** This happens on the server. A declared tree composes to
+   `a/{slug}/{tree}`, and then per tenant. An adopted tree uses its adopted id. An
+   undeclared name is not found.
+4. **App-owned grants only.** The caller must match an app-owned compiled rule for
+   this slug (`app:{slug}:` ids) that allows the concrete operation (`Read`,
+   `RangeRead`, `Write` or `Delete`) on the concrete key or prefix, with the ceiling
+   re-checked. The caller's other rules are deliberately not consulted. This is
+   what stops a user's broad operator rights from flowing into an app's UI. A reader
+   who is also a cluster operator still cannot write through a viewer role. A scan
+   needs `RangeRead`, because that is what the data path enforces. A role whose UI
+   scans must therefore request `RangeRead`, and the ceiling must allow it.
+5. **Execution.** The call runs under the caller's own identity and tenant, so
+   ordinary data-plane authorization also applies.
+
+Before these steps, the request is validated and the caller is resolved and rate
+limited. Values are bounded (64 KiB each, and a scan page of at most 200 entries
+whose encoded response is at most 1 MiB), and each caller and slug pair is rate
+limited (`LatticeAppBridgeOptions`: 100 permits per second by default). Failures are the closed `AppBridgeFailure` set: `Denied`,
+`NotFound`, `Invalid`, `TooLarge`, `Conflict` and `Unavailable`. They are carried by
+`AppBridgeException` with a fixed, sanitised message.
 
 ## See also
 

@@ -1,0 +1,91 @@
+@*
+    Dead letters: the tree's strict-mode dead-letter queue - every value strict
+    ingest diverted instead of applying - counted on arrival and listed on
+    demand, because the queue can be large. Read only: nothing here replays or
+    removes an entry. Previews are shown as text only.
+*@
+
+@if (Workspace is not null)
+{
+    @if (!Workspace.Grants.ViewDeadLetters)
+    {
+        <LtEmptyState Title="You may not read this tree's dead letters" HeadingLevel="2">
+            Reading the dead letters needs read authority on the tree.
+        </LtEmptyState>
+    }
+    else
+    {
+        <div class="lt-toolbar lt-schema-actions">
+            <span class="lt-schema-status" role="status">@CountText</span>
+            @if (_entries is null)
+            {
+                <LtButton OnClick="LoadAsync" Disabled="@(_loading || _count == 0)">Load dead letters</LtButton>
+            }
+            else
+            {
+                <LtButton OnClick="ReloadAsync" Disabled="@_loading">Refresh</LtButton>
+            }
+        </div>
+
+        @if (_error is not null)
+        {
+            <LtEmptyState Title="The dead letters did not load" HeadingLevel="2">
+                <ChildContent>@_error</ChildContent>
+                <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+            </LtEmptyState>
+        }
+        else if (_loading && _entries is null)
+        {
+            <LtSkeleton Lines="4" Label="Reading the dead letters" />
+        }
+        else if (_count == 0 && _entries is null)
+        {
+            <LtEmptyState Title="No dead letters" HeadingLevel="2">
+                Strict ingest has diverted no value written to this tree.
+            </LtEmptyState>
+        }
+        else if (_entries is { Count: 0 })
+        {
+            <LtEmptyState Title="No dead letters" HeadingLevel="2">
+                Strict ingest has diverted no value written to this tree.
+            </LtEmptyState>
+        }
+        else if (_entries is { } entries)
+        {
+            <LtTable TItem="LatticeSchemaDeadLetterEntry"
+                     Items="@entries"
+                     Caption="@($"Dead letters of {Workspace.TreeId}")"
+                     CaptionHidden="true"
+                     DetailTitle="@(entry => entry.Key)">
+                <ChildContent>
+                    <LtColumn TItem="LatticeSchemaDeadLetterEntry" Title="Key" RowHeader="true" Mono="true" Value="@(entry => Clip(entry.Key))" SortBy="@(entry => entry.Key)" />
+                    <LtColumn TItem="LatticeSchemaDeadLetterEntry" Title="Reason" Value="@(entry => entry.Reason)" />
+                    <LtColumn TItem="LatticeSchemaDeadLetterEntry" Title="Source" Value="@(entry => SchemaFormat.Source(entry.Source))" SortBy="@(entry => SchemaFormat.Source(entry.Source))" />
+                    <LtColumn TItem="LatticeSchemaDeadLetterEntry" Title="Diverted" Value="@(entry => SchemaFormat.Time(entry.TimestampUtc))" SortBy="@(entry => entry.TimestampUtc)" />
+                    <LtColumn TItem="LatticeSchemaDeadLetterEntry" Title="Size" Align="LtColumnAlign.End" Value="@(entry => SchemaFormat.Size(entry.ValueByteLength))" SortBy="@(entry => entry.ValueByteLength)" />
+                </ChildContent>
+                <CompactRow Context="entry">
+                    <LtCompactRow Mono="true">
+                        <Primary>@Clip(entry.Key)</Primary>
+                        <Secondary>@entry.Reason</Secondary>
+                    </LtCompactRow>
+                </CompactRow>
+                <Detail Context="entry">
+                    <LtDefinitionList>
+                        <LtDefinition Term="Key" Mono="true">@entry.Key</LtDefinition>
+                        <LtDefinition Term="Reason">@entry.Reason</LtDefinition>
+                        <LtDefinition Term="Source">@SchemaFormat.Source(entry.Source)</LtDefinition>
+                        <LtDefinition Term="Diverted">@SchemaFormat.Time(entry.TimestampUtc)</LtDefinition>
+                        <LtDefinition Term="Size">@SchemaFormat.Size(entry.ValueByteLength)</LtDefinition>
+                    </LtDefinitionList>
+                    <pre class="lt-schema-value" tabindex="0" aria-label="The rejected value's first bytes">@SchemaFormat.Preview(entry.ValuePreview)</pre>
+                </Detail>
+            </LtTable>
+
+            @if (_more)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="LoadMoreAsync" Disabled="@_loading">Load more dead letters</LtButton>
+            }
+        }
+    }
+}

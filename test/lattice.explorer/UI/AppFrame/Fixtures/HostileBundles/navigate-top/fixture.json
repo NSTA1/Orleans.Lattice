@@ -1,0 +1,11 @@
+{
+  "name": "navigate-top",
+  "description": "The app tries to navigate the Explorer page itself.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toast":"Hostile: top-navigation-blocked","explorerUrlUnchanged":true}
+}

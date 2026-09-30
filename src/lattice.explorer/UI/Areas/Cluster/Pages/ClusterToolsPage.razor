@@ -1,0 +1,121 @@
+<PageTitle>Admin tools @TreeId - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<ClusterTreeHeader TreeId="@TreeId" Heading="Admin tools">Out-of-cycle maintenance for one tree: trigger a compaction pass, read a shard's projection digest, or stream a bulk load into an empty tree.</ClusterTreeHeader>
+
+@if (_accessLoad.IsLoading)
+{
+    <LtSkeleton Lines="3" Label="Loading what you may do" />
+}
+else if (!_access.CanAdministerTree && !_access.CanViewDiagnostics && !_access.CanBulkLoad)
+{
+    <LtEmptyState Title="No tool you can use" HeadingLevel="2">Your identity holds no admin, read or bulk-load grant over this tree.</LtEmptyState>
+}
+else
+{
+    @if (_access.CanAdministerTree)
+    {
+        <section class="lt-cluster-section" aria-labelledby="lt-cluster-compaction">
+            <h2 class="lt-cluster-heading" id="lt-cluster-compaction">Compaction</h2>
+            <p class="lt-cluster-note">Reaps tombstones and expired entries on one shard now, bypassing the background cooldown. Live data is never touched.</p>
+            <form class="lt-cluster-form" @onsubmit="ReviewCompaction" aria-label="Trigger compaction">
+                <LtTextInput Label="Shard" Mono="true" @bind-Value="_compactionShard" Error="@_compactionError" Hint="@ShardHint" inputmode="numeric" />
+                <div class="lt-cluster-form__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Compact...</LtButton>
+                </div>
+            </form>
+            @if (_compaction is { } compaction)
+            {
+                <p class="lt-cluster-result" role="status">@(compaction.Accepted ? $"Compaction accepted for shard {compaction.ShardIndex}." : $"Shard {compaction.ShardIndex} did not accept a pass: compaction is disabled for the tree, or a pass is already running.")</p>
+            }
+        </section>
+    }
+
+    @if (_access.CanViewDiagnostics)
+    {
+        <section class="lt-cluster-section" aria-labelledby="lt-cluster-digest">
+            <h2 class="lt-cluster-heading" id="lt-cluster-digest">Projection digest</h2>
+            <p class="lt-cluster-note">A content hash of one shard's committed state, for comparing replicas without shipping the data.</p>
+            <form class="lt-cluster-form" @onsubmit="ReadDigestAsync" aria-label="Read projection digest">
+                <LtTextInput Label="Shard" Mono="true" @bind-Value="_digestShard" Error="@_digestError" Hint="@ShardHint" inputmode="numeric" />
+                <div class="lt-cluster-form__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Read digest</LtButton>
+                </div>
+            </form>
+            @if (_digest is { } digest)
+            {
+                <LtDefinitionList>
+                    <LtDefinition Term="Shard">@digest.ShardIndex</LtDefinition>
+                    <LtDefinition Term="Hash" Mono="true">@digest.HashHex</LtDefinition>
+                    <LtDefinition Term="Entries">@ClusterFormat.Count(digest.EntryCount)</LtDefinition>
+                    <LtDefinition Term="Checkpoint offset">@ClusterFormat.Count(digest.CheckpointOffset)</LtDefinition>
+                    <LtDefinition Term="Version">@ClusterFormat.Count(digest.Version)</LtDefinition>
+                </LtDefinitionList>
+            }
+        </section>
+    }
+
+    @if (_access.CanBulkLoad)
+    {
+        <section class="lt-cluster-section" aria-labelledby="lt-cluster-bulk">
+            <h2 class="lt-cluster-heading" id="lt-cluster-bulk">Bulk load</h2>
+            <p class="lt-cluster-note">Streams entries into an empty tree in ascending chunks. A tree that already holds keys or tombstones is refused.</p>
+            @switch (_bulk)
+            {
+                case BulkStage.Compose:
+                    <form class="lt-cluster-form" @onsubmit="ReviewBulk" aria-label="Compose a bulk load">
+                        <label class="lt-cluster-textarea" for="lt-cluster-bulk-input">
+                            <span class="lt-cluster-textarea__label">Entries, one key=value per line</span>
+                            <textarea id="lt-cluster-bulk-input" class="lt-cluster-textarea__input" rows="8" spellcheck="false" aria-describedby="lt-cluster-bulk-hint" @bind="_bulkText"></textarea>
+                            <span class="lt-cluster-textarea__hint" id="lt-cluster-bulk-hint">Keys in strictly ascending ordinal order, no repeats; the first = splits key from value; values are stored as UTF-8.</span>
+                        </label>
+                        @if (_bulkError is { } bulkError)
+                        {
+                            <p class="lt-cluster-error" role="alert">@bulkError</p>
+                        }
+                        <div class="lt-cluster-form__actions">
+                            <LtButton Type="LtButtonType.Submit">Review</LtButton>
+                        </div>
+                    </form>
+                    break;
+
+                case BulkStage.Review:
+                    <p>Load @ClusterFormat.Plural(_entries.Count, "entry", "entries") into <span class="lt-shell-mono">@TreeId</span>, from <span class="lt-shell-mono">@_entries[0].Key</span> to <span class="lt-shell-mono">@_entries[^1].Key</span>, in @ClusterFormat.Plural(ChunkCount, "chunk").</p>
+                    <div class="lt-cluster-form__actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _bulk = BulkStage.Compose">Back</LtButton>
+                        <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmBulk = true">Bulk load...</LtButton>
+                    </div>
+                    break;
+
+                case BulkStage.Loading:
+                    <p class="lt-cluster-result" role="status">Loading: chunk @(_nextChunk + 1) of @ChunkCount.</p>
+                    break;
+
+                case BulkStage.Failed:
+                    <p class="lt-cluster-error" role="alert">@_bulkError</p>
+                    <p class="lt-cluster-note">@ClusterFormat.Plural(_nextChunk, "chunk") of @ChunkCount acknowledged. Resuming re-sends from the first unacknowledged chunk under the same operation.</p>
+                    <div class="lt-cluster-form__actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="ResetBulk">Start over</LtButton>
+                        <LtButton OnClick="RunBulkAsync">Resume</LtButton>
+                    </div>
+                    break;
+
+                case BulkStage.Done:
+                    <p class="lt-cluster-result" role="status">Bulk load committed: the tree holds @ClusterFormat.Plural(_bulkKeys, "live key").</p>
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="ResetBulk">Load more</LtButton>
+                    break;
+            }
+        </section>
+    }
+
+    <LtConfirmDestructive @bind-Open="_confirmCompaction"
+                          Title="Trigger compaction" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Compact"
+                          OnConfirm="CompactAsync">
+        <p>Runs a tombstone-compaction pass on shard @_compactionIndex now. It reaps only deleted and expired entries, but it is extra work for the shard while it runs.</p>
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive @bind-Open="_confirmBulk"
+                          Title="Bulk load" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Bulk load"
+                          OnConfirm="RunBulkAsync">
+        <p>Writes @ClusterFormat.Plural(_entries.Count, "entry", "entries") into the tree. Each chunk is durable as soon as it is acknowledged.</p>
+    </LtConfirmDestructive>
+}

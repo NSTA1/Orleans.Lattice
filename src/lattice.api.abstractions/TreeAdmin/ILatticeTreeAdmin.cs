@@ -358,8 +358,9 @@ public interface ILatticeTreeAdmin
     /// after authorizing whole-tree <see cref="LatticeOperation.Read"/> fail-closed.
     /// A pure read with no side effects. It reports the logical tree: a live resized
     /// tree reads as not deleted while its old copy is retired, an aliased tree that
-    /// was deleted reports its logical deletion, and for a tree created again under a
-    /// purged id it reports the purged tree, while the tree itself is live.
+    /// was deleted reports its logical deletion, and a tree created again under a
+    /// purged id reads as the live tree it now is (the completed purge's record no
+    /// longer applies to it).
     /// </summary>
     /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -536,8 +537,9 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Reads the online-reshard status of <paramref name="treeId"/> - whether a
-    /// reshard is in flight and the tree's current physical shard fan-out as observed
-    /// from its <c>ShardMap</c> - after authorizing whole-tree
+    /// reshard is in flight, the tree's current physical shard fan-out as observed
+    /// from its <c>ShardMap</c>, and, while one runs, the target and starting counts
+    /// that fan-out is measured against - after authorizing whole-tree
     /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
     /// effects.
     /// </summary>
@@ -606,7 +608,10 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Reads the online-resize status of <paramref name="treeId"/> - whether a resize
-    /// is in flight, whether an accepted undo is still unwinding, and the tree's
+    /// is in flight, whether an accepted undo is still unwinding, the resize's durable
+    /// progress (<see cref="TreeResizeStatus.Phase"/>,
+    /// <see cref="TreeResizeStatus.CompletedUnits"/> of
+    /// <see cref="TreeResizeStatus.TotalUnits"/>), and the tree's
     /// current B+ node capacity as observed from its
     /// registry configuration - after authorizing whole-tree
     /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
@@ -656,7 +661,10 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Reads the snapshot status of <paramref name="treeId"/> - whether a snapshot is
-    /// in flight for the source tree - after authorizing whole-tree
+    /// in flight for the source tree and, while one is, its durable progress
+    /// (<see cref="TreeSnapshotStatus.Phase"/> and
+    /// <see cref="TreeSnapshotStatus.CopiedShardCount"/> of
+    /// <see cref="TreeSnapshotStatus.ShardCount"/>) - after authorizing whole-tree
     /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
     /// effects.
     /// </summary>

@@ -23,4 +23,32 @@ public enum LatticeAppsApiOperation
     UpdateConsent = 8,
     /// <summary>Probe advisory permissions.</summary>
     GetCapabilities = 9,
+    /// <summary>List the configured app sources (catalogue).</summary>
+    ListSources = 10,
+    /// <summary>List the apps the sources make available (catalogue).</summary>
+    ListAvailable = 11,
+    /// <summary>Describe an app version from a source before install (catalogue).</summary>
+    DescribeFromSource = 12,
+    /// <summary>Read an app version's icon from a source before install (catalogue).</summary>
+    GetSourceIcon = 13,
+    /// <summary>Probe advisory catalogue permissions.</summary>
+    GetCatalogCapabilities = 14,
+    /// <summary>List the caller's apps (workspace).</summary>
+    ListMyApps = 15,
+    /// <summary>Describe one of the caller's apps (workspace).</summary>
+    DescribeMyApp = 16,
+    /// <summary>Read one of the caller's apps' icon (workspace).</summary>
+    GetMyAppIcon = 17,
+    /// <summary>Read one UI bundle asset of one of the caller's apps (workspace).</summary>
+    GetUiAsset = 18,
+    /// <summary>Read one key of an app-owned tree through the app bridge.</summary>
+    BridgeGet = 19,
+    /// <summary>Scan one page of an app-owned tree through the app bridge.</summary>
+    BridgeScan = 20,
+    /// <summary>Write one key of an app-owned tree through the app bridge.</summary>
+    BridgeSet = 21,
+    /// <summary>Delete one key of an app-owned tree through the app bridge.</summary>
+    BridgeDelete = 22,
+    /// <summary>Replace an installed app's version-pinned role-to-group bindings.</summary>
+    UpdateRoleBindings = 23,
 }

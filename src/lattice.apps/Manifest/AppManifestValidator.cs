@@ -3,7 +3,7 @@ using Orleans.Lattice.Auth;
 namespace Orleans.Lattice.Apps;
 
 /// <summary>Pure manifest validation; invalid declarations become diagnostics, never startup exceptions.</summary>
-public static class AppManifestValidator
+public static partial class AppManifestValidator
 {
     internal static readonly LatticeOperation RoleOperations =
         Enum.GetValues<LatticeOperation>()
@@ -237,6 +237,9 @@ public static class AppManifestValidator
                 if (tool.Role is null || !roles.Contains(tool.Role))
                     Error("reference", path + ".role", "The tool's role must be declared by this app.");
             }
+
+        var uiAssets = ValidateUi(manifest.Ui, trees, errors);
+        ValidatePresentation(manifest.Presentation, uiAssets, errors);
 
         if (previous is not null)
         {

@@ -1,0 +1,187 @@
+@*
+    History. With a key: the key's revisions as a timeline drawn on a spine -
+    newest first by default - with a line diff between retained values, CRDT
+    member changes, retention changes and the history bound, older revisions on
+    demand, a live tail of new revisions, and ?at= to see the key as it stood at
+    a point in time (the revision then in effect is the marked one). With only
+    a prefix: a live tail of every change under it. With neither: a way to pick
+    a key.
+*@
+
+@if (Workspace is not null)
+{
+    @if (Workspace.Key is null && string.IsNullOrEmpty(Workspace.Prefix))
+    {
+        <LtEmptyState Title="Choose a key" HeadingLevel="2">
+            <ChildContent>
+                History is kept per key. Name a key here, or open one from the Keys tab. With a prefix set, this tab follows every change under it.
+                <form class="lt-toolbar" @onsubmit="ShowKey" @onsubmit:preventDefault>
+                    <div class="lt-data-toolbar__grow">
+                        <LtComboBox Label="Key" Value="@_keyInput" ValueChanged="value => _keyInput = value" Source="@_keySource" Mode="LtComboBoxMode.Suggest" Noun="key" ExistingMessage="This key is in the tree now." />
+                    </div>
+                    <LtButton Type="LtButtonType.Submit" Disabled="@string.IsNullOrEmpty(_keyInput)">Show history</LtButton>
+                </form>
+            </ChildContent>
+        </LtEmptyState>
+    }
+    else if (Workspace.Key is null)
+    {
+        <h2 class="lt-data-section-title">Changes under <span class="lt-shell-mono">@Workspace.Prefix</span></h2>
+        <p class="lt-data-note">Revision history is kept per key; this follows new changes to any key under the prefix. Open a key for its revisions.</p>
+        @LiveNote
+        @if (_prefixChanges.Count == 0)
+        {
+            <p class="lt-data-note" role="status">@(_following ? "Waiting for the next change." : "Not following changes.")</p>
+        }
+        else
+        {
+            <ol class="lt-data-timeline" aria-label="Changes under the prefix, newest first">
+                @foreach (var change in _prefixChanges)
+                {
+                    <li class="lt-data-timeline__rev" @key="change">
+                        <span class="lt-data-timeline__head">
+                            <LtNode Kind="LtNodeKind.Hollow" />
+                            <span class="lt-data-timeline__time">@DataFormat.Time(change.Hlc)</span>
+                            <span>@ChangeText(change.Kind)</span>
+                            <a class="lt-shell-mono" href="@Workspace.Href(Workspace.With(ExplorerAddress.KeyQuery, change.Key))">@DataKeysPanel.Clip(change.Key)</a>
+                        </span>
+                    </li>
+                }
+            </ol>
+        }
+    }
+    else
+    {
+        <h2 class="lt-data-section-title">History of <span class="lt-shell-mono">@DataKeysPanel.Clip(Workspace.Key)</span></h2>
+        <form class="lt-toolbar" @onsubmit="ApplyAt" @onsubmit:preventDefault>
+            <LtTextInput Label="As of (UTC)" Mono="true" Hint="@AtHint" Value="@_atInput" ValueChanged="value => _atInput = value" Error="@_atError" />
+            <LtButton Type="LtButtonType.Submit">Show as of</LtButton>
+            @if (_at is not null)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="ClearAt">Latest</LtButton>
+            }
+            <LtSwitch Label="Newest first" Checked="@_newestFirst" CheckedChanged="SetNewestFirst" />
+            @if (_client is not null && _followOffered && _at is null)
+            {
+                <LtSwitch Label="Follow new revisions" Checked="@_live" CheckedChanged="SetLive" />
+            }
+            <span class="lt-data-toolbar__status" role="status">@CountText</span>
+        </form>
+        @LiveNote
+
+        @if (_at is { } at)
+        {
+            <p class="lt-data-note">Showing the key as it stood at @DataFormat.Time(at). The marked revision was in effect then.</p>
+        }
+
+        @if (_error is not null)
+        {
+            <LtEmptyState Title="The history did not load" HeadingLevel="3">
+                <ChildContent>@_error</ChildContent>
+                <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+            </LtEmptyState>
+        }
+        else if (_timeline is null)
+        {
+            <LtSkeleton Lines="5" Label="Loading the history" />
+        }
+        else
+        {
+            @if (BoundNote is { } bound)
+            {
+                <p class="lt-data-note">@bound</p>
+            }
+
+            @if (MetadataOnlyNote is { } metadataOnly)
+            {
+                @* Said once for the timeline, not under every revision it applies to. *@
+                <p class="lt-data-note">@metadataOnly</p>
+            }
+
+            @if (!_timeline.HasRows)
+            {
+                <LtEmptyState Title="No revisions" HeadingLevel="3">
+                    @(_timeline.Status == StateQueryStatus.Found ? "No revision of this key is retained." : "This key has no history in this tree.")
+                </LtEmptyState>
+            }
+            else
+            {
+                <ol class="lt-data-timeline" aria-label="@(_newestFirst ? "Revisions, newest first" : "Revisions, oldest first")">
+                    @foreach (var row in _timeline.Rows)
+                    {
+                        var current = IsInEffect(row);
+                        @if (row.RetentionChange is { } change)
+                        {
+                            <li class="lt-data-timeline__divider">@change.Label()</li>
+                        }
+                        <li class="lt-data-timeline__rev" aria-current="@(current ? "true" : null)">
+                            <span class="lt-data-timeline__head">
+                                <LtNode Kind="@(current ? LtNodeKind.Join : LtNodeKind.Filled)" Label="@(current ? "In effect at this time" : null)" />
+                                <span class="lt-data-timeline__time">@DataFormat.Time(row.Hlc)</span>
+                                <span class="lt-data-timeline__kind">@RowKindText(row)</span>
+                                @if (row.OriginClusterId is { } origin)
+                                {
+                                    <span class="lt-data-timeline__meta">from <span class="lt-shell-mono">@origin</span></span>
+                                }
+                                @if (row.RenderMode is HistoryRowRenderMode.ValueDiff or HistoryRowRenderMode.MetadataOnly)
+                                {
+                                    <span class="lt-data-timeline__meta">@DataValueRendering.Size(row.ValueLength)</span>
+                                }
+                            </span>
+                            @RenderBody(row)
+                        </li>
+                    }
+                </ol>
+                @if (_continuation is not null)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_loading" OnClick="LoadOlderAsync">Load older revisions</LtButton>
+                }
+            }
+        }
+    }
+}
+
+@code {
+    private RenderFragment? LiveNote => _liveNote is null ? null : __builder =>
+    {
+        <div class="lt-data-note" role="status">
+            <span>@_liveNote</span>
+            @if (_liveRestartable)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="RestartLive">Restart live updates</LtButton>
+            }
+        </div>
+    };
+
+    private RenderFragment RenderBody(HistoryRevisionRow row) => __builder =>
+    {
+        switch (row.RenderMode)
+        {
+            case HistoryRowRenderMode.ValueDiff when row.Diff.Count > 0:
+                <pre class="lt-data-diff" tabindex="0" aria-label="Changes from the previous retained value">@foreach (var line in row.Diff)
+                {<span class="@DiffClass(line.Kind)">@DiffPrefix(line.Kind)@line.Text
+</span>}</pre>
+                break;
+            case HistoryRowRenderMode.ValueDiff when row.Value is { } value:
+                <pre class="lt-data-value" tabindex="0" aria-label="Value">@value.Content</pre>
+                break;
+            case HistoryRowRenderMode.MetadataOnly:
+                // Its kind already reads "(metadata only)"; the timeline's note says what that means.
+                break;
+            case HistoryRowRenderMode.CrdtMembers:
+                <ul class="lt-data-members">
+                    @foreach (var member in row.MemberChanges)
+                    {
+                        <li class="lt-shell-mono">@(member.Kind == CrdtMemberChangeKind.Added ? "+ " : "- ")@member.ElementText</li>
+                    }
+                </ul>
+                break;
+            case HistoryRowRenderMode.RangeTombstone:
+                <p class="lt-data-note">Every key up to <span class="lt-shell-mono">@row.EndKey</span> was deleted.</p>
+                break;
+            case HistoryRowRenderMode.LiveTail:
+                <p class="lt-data-note">A live change. Its value arrives with the durable revision.</p>
+                break;
+        }
+    };
+}

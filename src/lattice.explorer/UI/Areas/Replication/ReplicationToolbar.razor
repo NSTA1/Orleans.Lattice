@@ -1,0 +1,16 @@
+@*
+    The area's filters - health, peer region and owning app - as selects in the
+    shared toolbar, which stacks at the compact width. Each choice rewrites the
+    address (?health=, ?region=, ?app=) in place, so a filtered view is a link
+    another operator can open, and the Apps area can link here with ?app=.
+*@
+
+<div class="lt-toolbar lt-replication-toolbar" role="group" aria-label="Filter replication links">
+    <LtSelect Label="Health" Options="@HealthOptions" Value="@HealthValue" ValueChanged="SetHealthAsync" />
+    <LtSelect Label="Peer region" Options="@RegionOptions" Value="@RegionValue" ValueChanged="SetRegionAsync" />
+    <LtSelect Label="App" Options="@AppOptions" Value="@AppValue" ValueChanged="SetAppAsync" />
+    @if (Filter.IsActive)
+    {
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="ClearAsync">Clear filters</LtButton>
+    }
+</div>

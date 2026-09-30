@@ -48,6 +48,17 @@ The package is the engine. Operators reach it through companion packages:
   individual users. Role hierarchy is expressed by nesting groups in
   [`Orleans.Lattice.Membership`](../lattice.membership/README.md), so the manifest
   has no inheritance construct and compilation is a flat, total function.
+- **A binding grants a role; a deny can only take it away.** A caller holds an app
+  role exactly when it is a member (directly or through nested groups) of a group the
+  install binds to that role, the role's compiled rules confer something within the
+  ceiling, and the access gate does not explicitly deny the caller the role. The gate
+  is asked only once the binding holds, so rights the caller holds through any other
+  rule never make it hold an app role. The app workspace (and so the roles an app's
+  UI is told), the app MCP tools and the app bridge all apply this one rule - the
+  bridge through its data-path calls, which run under the caller's own identity, so a
+  denied read reports nothing and a denied write is refused - and a caller is never
+  shown a control the bridge then refuses. Re-binding a role moves it on the next
+  evaluation.
 - **Capability ceiling.** Every install records a ceiling of allowed operations and
   operator-approved exception scopes, pinned to the installed version. Every
   compiled rule is checked against it; a manifest that asks for more fails
@@ -460,16 +471,123 @@ code is already present by package reference, so its handle loads nothing. Unkno
 slugs, version mismatches, invalid manifests, identity mismatches and duplicate
 registrations are returned as structured results (`AppSourceStatus`), never thrown.
 
-`InImageAppSource` is the only implementation in this version. It resolves apps
-that ship in the image by ordinary package reference and are registered with
-`AddLatticeApp`; each manifest is parsed once and cached. Its provenance is
-`in-image`, with the registration's `Publisher` (`first-party` unless the
-registration sets another). The seam is designed so that a future
-runtime source - one that acquires apps after deployment - is a provider swap; the
-XML documentation on `IAppSource` states what such a source must additionally
-guarantee (signature verification against a pinned publisher key, allow-listing by
-slug, version and digest, and manifest-before-code).
+Sources are **named and enumerable**. `IAppCatalogSource` (namespace
+`Orleans.Lattice.Apps.Sources`) extends `IAppSource` with three members:
 
+- `Descriptor`: a stable key, a display name, a kind (`Static` or `Dynamic`) and
+  capabilities (`Enumerate`, `Search`, `MultipleVersions`, `RequiresAcquisition`).
+- `ListAsync`: a paged listing of what the source offers. It is built without
+  loading app code.
+- `OpenAssetAsync`: returns a bundle asset only when its SHA-256 matches the digest
+  the manifest pins.
+
+`AddLatticeApps()` composes every registered catalogue source into an `AppSourceSet`,
+which is registered as the single `IAppSource`. Register further sources with
+`AddLatticeAppSource<TSource>()`. `AppSourceSet` has these rules:
+
+- A resolution **without** a source key succeeds only when exactly one source offers
+  the slug. Otherwise it returns `Ambiguous` with the offering source keys, and never
+  picks one.
+- Activation re-resolves an install through the source key recorded in its
+  provenance, so a second source offering the same slug cannot disturb an installed
+  app.
+- Duplicate source keys (or a source with no descriptor) are recorded at
+  composition time, never thrown. Every resolution then fails as
+  `SourceMisconfigured`, so the problem surfaces at activation, never at silo
+  start. A resolved result whose provenance names a key other than the answering
+  source's is refused the same way, so a source cannot vouch for another.
+
+`InImageAppSource` is the only implementation in this version. Its key is
+`in-image`, its kind is `Static`, and it offers `Enumerate` only. Its provenance is
+`in-image` with the registration's `Publisher` (`first-party` unless the
+registration sets another), and each manifest is parsed once and cached. It lists
+exactly the apps registered with `AddLatticeApp`, in slug order. It serves UI assets from
+embedded resources named `{manifestResourceNamespace}.ui.{path}`, or from an
+explicit prefix passed to the `AddLatticeApp` overload that takes one, with every
+`/` in the path mapped to `.`.
+
+The seam is designed so that a runtime source (a NuGet feed, a blob container, a
+container registry) is a provider swap. The XML documentation on `IAppSource` and
+`IAppCatalogSource` states what such a source must also guarantee:
+
+- signature verification against a pinned publisher key;
+- allow-listing by slug, version and digest;
+- manifest before code;
+- bounded, cancellable acquisition;
+- asset digests re-verified at every open.
+
+## Presentation and UI
+
+Two optional manifest sections describe how an app appears in the
+[Explorer](../lattice.explorer/lattice-apps.md). Both are inspectable before any app
+code loads.
+
+`presentation` holds the following fields:
+
+- `displayName` (required when the section is present);
+- `summary`;
+- `description`;
+- `icon` (a bundle path and SHA-256, SVG, PNG or WebP);
+- `categories`;
+- `documentationUrl` (https only);
+- `publisherDisplayName`.
+
+Presentation text is untrusted. Consumers render it as text, never as HTML or
+markdown, and show the icon only through `<img>`. The validator rejects control
+characters (a multi-line field may keep tabs and line breaks) and bidirectional
+overrides. The publisher display name is descriptive
+only, and never used for trust.
+
+`ui` describes an untrusted UI bundle, format v1:
+
+```json
+"ui": {
+  "entry": "index.html",
+  "styles": ["app.css"],
+  "scripts": [{ "path": "app.mjs", "module": true }],
+  "assets": [
+    { "path": "index.html", "mediaType": "text/html", "digest": "<sha-256>" },
+    { "path": "app.css", "mediaType": "text/css", "digest": "<sha-256>" },
+    { "path": "app.mjs", "mediaType": "text/javascript", "digest": "<sha-256>" }
+  ],
+  "bundleDigest": "<sha-256>",
+  "bridge": [
+    { "operation": "context.read" },
+    { "operation": "data.read", "trees": ["contacts"] },
+    { "operation": "data.write", "trees": ["contacts"] }
+  ],
+  "minProtocol": 1
+}
+```
+
+The bundle rules:
+
+- **Entry.** The entry is an HTML **fragment** that the frame inserts into its body.
+  It may not contain `<script`, `<html` or `<head`.
+- **Scripts.** Scripts are self-contained. A module may import only `blob:` URLs it
+  obtained at runtime.
+- **Assets.** Every file is listed with a digest. There are at most 256 assets, each
+  at most 2 MiB, and 16 MiB in total. The media types are restricted to HTML, CSS,
+  JavaScript, SVG, PNG, WebP, WOFF2 and JSON.
+- **Bundle digest.** `bundleDigest` is the SHA-256 over the sorted `path` and
+  `digest` pairs (`AppUiBundle.ComputeBundleDigest`). The validator recomputes it.
+
+`bridge` requests operations from the closed vocabulary in `AppUiBridgeOperations`:
+
+- `context.read` and `context.user`;
+- `data.read`, `data.write` and `data.delete`;
+- `nav.sync` and `ui.notify`.
+
+The `data.*` operations may name specific declared trees; one that omits `trees`
+covers every declared tree. Only data operations may name trees, and an empty
+list is rejected.
+
+The requested grants are part of what an install consents to. When a fresh install
+records its consent, it records `AppUiBridgeRequest.FromManifest`. An upgrade that
+**adds** a grant fails activation with `BridgeConsentRequired` until the consent is
+updated. Removing a grant never needs consent. The grants gate the
+[bridge](../lattice.api.apps/README.md#the-bridge), and the cluster enforces them
+there, never in the browser.
 ## Change-feed subscriptions
 
 A manifest `subscriptions` entry observes committed mutations on one of the app's

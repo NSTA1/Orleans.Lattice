@@ -1,0 +1,96 @@
+<LtDialog Open="true"
+          Placement="Placement"
+          OpenChanged="HandleOpenChangedAsync"
+          Title="Sign in"
+          Description="@Description">
+    @if (_choice is null)
+    {
+        <LtSkeleton Lines="2" Label="Finding the sign-in methods this endpoint accepts" />
+    }
+    else if (_choice.IsUnsupported)
+    {
+        <p>
+            This endpoint asks for @(_choice.UnsupportedSchemes.Count == 1 ? "the sign-in method" : "one of the sign-in methods")
+            <code class="lt-mono-cell__value">@string.Join(", ", _choice.UnsupportedSchemes)</code>,
+            and no sign-in provider registered with this Explorer can service it. Register the matching
+            provider package (for example Orleans.Lattice.Explorer.Entra for Entra ID) and reconnect.
+        </p>
+        <div class="lt-dialog__actions">
+            <LtButton OnClick="CloseAsync">Close</LtButton>
+        </div>
+    }
+    else
+    {
+        @foreach (var method in _choice.Methods)
+        {
+            var headingId = _id + "-" + method.SchemeId;
+            <section aria-labelledby="@(ShowHeadings ? headingId : null)">
+                @if (ShowHeadings)
+                {
+                    <h3 id="@headingId">@method.DisplayName</h3>
+                }
+                @if (method.UsesPassword && Options.UseServerFormPost)
+                {
+                    <form class="lt-confirm" method="post" action="@Options.LoginPath" data-enhance="false">
+                        <AntiforgeryToken />
+                        @PasswordFields(false)
+                        <div class="lt-dialog__actions">
+                            <LtButton Type="LtButtonType.Submit">Sign in</LtButton>
+                        </div>
+                    </form>
+                }
+                else if (method.UsesPassword)
+                {
+                    <form class="lt-confirm" @onsubmit="SignInWithPasswordAsync">
+                        @PasswordFields(true)
+                        <div class="lt-dialog__actions">
+                            <LtButton Type="LtButtonType.Submit" Disabled="_busy">@(_busy ? "Signing in" : "Sign in")</LtButton>
+                        </div>
+                    </form>
+                }
+                else
+                {
+                    <p class="lt-field__hint">A browser window or a device-code prompt may open to complete the sign-in.</p>
+                    <div class="lt-dialog__actions">
+                        <LtButton Disabled="_busy" OnClick="() => SignInWithMethodAsync(method)">Continue with @method.DisplayName</LtButton>
+                    </div>
+                }
+            </section>
+        }
+
+        @if (_error is not null)
+        {
+            <p class="lt-field__error" role="alert"><span class="lt-field__error-mark" aria-hidden="true">!</span> @_error</p>
+        }
+    }
+</LtDialog>
+
+@code {
+    private RenderFragment PasswordFields(bool bound) => __builder =>
+    {
+        <div class="lt-field">
+            <label class="lt-field__label" for="@UsernameId">Username</label>
+            @if (bound)
+            {
+                <input id="@UsernameId" class="lt-input" type="text" name="username" autocomplete="username" spellcheck="false"
+                       value="@_username" @oninput="OnUsernameInput" />
+            }
+            else
+            {
+                <input id="@UsernameId" class="lt-input" type="text" name="username" autocomplete="username" spellcheck="false" required />
+            }
+        </div>
+        <div class="lt-field">
+            <label class="lt-field__label" for="@PasswordId">Password</label>
+            @if (bound)
+            {
+                <input id="@PasswordId" class="lt-input" type="password" name="password" autocomplete="current-password"
+                       value="@_password" @oninput="OnPasswordInput" />
+            }
+            else
+            {
+                <input id="@PasswordId" class="lt-input" type="password" name="password" autocomplete="current-password" />
+            }
+        </div>
+    };
+}

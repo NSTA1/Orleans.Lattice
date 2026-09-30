@@ -1,36 +1,32 @@
 # Adding a custom auth method
 
-The Explorer's login challenge is a provider model. Every sign-in mechanism -
-Basic, Entra, or one you write - is an `IExplorerAuthMethod`. A custom method
-plugs in through dependency injection and drives its own challenge end to end
-without any change to the Explorer core.
+The Explorer sign-in challenge is provider based. A sign-in mechanism is an
+`IExplorerAuthMethod`: Basic, Entra, and custom schemes all plug into the same
+contract and are selected from the auth scheme advertised by the State API.
 
-## The seam
+## The contract
 
 `IExplorerAuthMethod` has three members:
 
-- `SchemeId` - the stable scheme id your method implements. The Explorer matches
-  this against the scheme an endpoint advertises.
-- `CanHandle(advertisedScheme)` - decides whether your method services a given
-  advertised scheme. The interface has no default implementation: every method
-  implements it. The built-in methods use an ordinal, case-insensitive match
-  against `SchemeId` (Basic also accepts an empty advertisement); a custom method
-  can instead accept aliases or a family of names.
-- `ChallengeAsync(context, cancellationToken)` - runs the (possibly interactive)
-  sign-in and returns an `ExplorerAuthSignIn` carrying the credential the
-  connection attaches to every call.
+- `SchemeId` - the stable scheme id the method implements.
+- `CanHandle(advertisedScheme)` - returns whether the method can service a scheme
+  advertised by the endpoint.
+- `ChallengeAsync(context, cancellationToken)` - runs the sign-in flow and
+  returns an `ExplorerAuthSignIn` carrying the credential to apply to the
+  connection.
 
-The challenge receives an `ExplorerAuthChallengeContext`: the selected scheme,
-the public parameters the server advertised for it, any interactive inputs the
-user supplied, the endpoint address, and a `TimeProvider` to use for all
-token-expiry maths so the flow stays testable.
+`ExplorerAuthChallengeContext` supplies the selected scheme id, advertised public
+parameters, user inputs, endpoint address and `TimeProvider`. Use that clock for
+expiry decisions so token flows stay testable.
 
 ## A static-header method
 
-The simplest custom method returns a fixed header. Validate inputs, then build a
-`LatticeCallAuthentication`:
+The simplest method validates an input and returns a static header through
+`LatticeCallAuthentication`.
 
 ```csharp verify
+using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Connection;
 
@@ -68,20 +64,16 @@ public sealed class ApiKeyAuthMethod : IExplorerAuthMethod
 }
 ```
 
-The connection attaches a static credential header - `authorization` or
-`proxy-authorization` - only over an `https` endpoint, or one whose connection
-settings set `AllowUnencryptedHttp2`. For any other endpoint it refuses to send the
-credential in the clear, and the connection reports that refusal as a fault
-instead of connecting.
+The connection sends static credential headers such as `authorization` only to
+`https` endpoints, or to an endpoint whose connection settings explicitly allow
+unencrypted HTTP/2 for local development.
 
 ## A token method with transparent refresh
 
-For a short-lived token, wrap acquisition in an `ExplorerAccessTokenSource`. You
-supply the silent-renewal delegate; the source decides when to call it, refreshes
-proactively before expiry, collapses concurrent refreshes into one, and latches
-into a re-challenge state when renewal is no longer possible. Return the token
-source through `LatticeCallAuthentication.Bearer` so the connection always
-attaches a currently-valid token.
+For a short-lived token, return `LatticeCallAuthentication.Bearer` over an
+`ExplorerAccessTokenSource`. The source refreshes before expiry, collapses
+concurrent refreshes into one, and returns to the UI for re-authentication when
+silent renewal can no longer produce a token.
 
 ```csharp verify
 using Orleans.Lattice.Explorer.Core.Authentication;
@@ -100,14 +92,11 @@ public sealed class CustomTokenAuthMethod : IExplorerAuthMethod
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        // Run your interactive flow here to obtain the first token.
         var initial = await AcquireInteractiveAsync(context, cancellationToken);
 
         var source = new ExplorerAccessTokenSource(
             initial,
-            // Silent renewal: return a fresh token, or null when a renewal is no
-            // longer possible so the Explorer re-runs the interactive challenge.
-            async ct => await AcquireSilentAsync(context, ct),
+            ct => new ValueTask<ExplorerAccessToken?>(AcquireSilentAsync(context, ct)),
             context.TimeProvider);
 
         return new ExplorerAuthSignIn
@@ -119,23 +108,24 @@ public sealed class CustomTokenAuthMethod : IExplorerAuthMethod
     }
 
     private static Task<ExplorerAccessToken> AcquireInteractiveAsync(
-        ExplorerAuthChallengeContext context, CancellationToken ct) => throw new NotImplementedException();
+        ExplorerAuthChallengeContext context,
+        CancellationToken ct) => throw new NotImplementedException();
 
     private static Task<ExplorerAccessToken?> AcquireSilentAsync(
-        ExplorerAuthChallengeContext context, CancellationToken ct) => throw new NotImplementedException();
+        ExplorerAuthChallengeContext context,
+        CancellationToken ct) => throw new NotImplementedException();
 }
 ```
 
-Use `context.TimeProvider` for every expiry decision rather than reading the
-system clock directly. That keeps the refresh timing deterministic under test:
-inject a controllable `TimeProvider`, advance it past the refresh margin, and
-assert that exactly one silent renewal ran.
+Return `null` from the silent-renewal delegate when the user must complete an
+interactive sign-in again. The session chrome then shows its re-authentication
+interstitial.
 
 ## Registration
 
-Register your method alongside the built-ins with `TryAddEnumerable`. The
-Explorer discovers it through `IEnumerable<IExplorerAuthMethod>` and selects it
-whenever an endpoint advertises its scheme - no Explorer core code changes.
+Register the method in DI as an `IExplorerAuthMethod`. Stateless methods can be
+singletons. Methods that hold per-circuit user state or depend on scoped services
+should be scoped, as the shipped Entra methods are.
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;
@@ -178,37 +168,52 @@ public static class CustomAuthRegistration
 }
 ```
 
+The Explorer resolves `IEnumerable<IExplorerAuthMethod>` and chooses a method
+whose `CanHandle` accepts the advertised scheme. No Explorer core code changes
+are required.
+
 ## Re-authentication, federated sign-out and CSP
 
-Three core option types let a provider shape the UI around its sign-in without
-the core Explorer depending on it. Register your own `ExplorerReauthOptions` and
-`ExplorerSignOutOptions` instances with `AddSingleton`, exactly as the hosted-web
-Entra provider does: `AddExplorerAuth` registers their defaults with `TryAdd`, so
-your instance is the one resolved whichever is registered first.
+A provider can configure the session chrome around its sign-in without adding a
+compile-time dependency from the core Explorer to the provider package:
 
-- `ExplorerReauthOptions` - the forced-interactive challenge path the "sign in
-  again" interstitial navigates to when your token source latches as revoked.
-  Leave `ChallengePath` unset if a plain page reload is enough to recover.
-- `ExplorerSignOutOptions` - a federated sign-out endpoint for the "Sign out"
-  button, for a method whose sign-in leaves a separate browser session behind.
-- `ExplorerContentSecurityPolicyOptions` - extra `form-action` sources, needed
-  when that sign-out endpoint redirects to another origin. Contribute with
-  `services.Configure<ExplorerContentSecurityPolicyOptions>(...)`.
+- `ExplorerReauthOptions` points the `Your session expired` interstitial at a
+  forced-interactive challenge endpoint.
+- `ExplorerSignOutOptions` points the identity menu's **Sign out** button at a
+  federated sign-out endpoint.
+- `ExplorerContentSecurityPolicyOptions` contributes extra `form-action` sources
+  when that sign-out endpoint redirects to another origin.
 
-Every property and default is listed in [Configuration](configuration.md#explorerreauthoptions).
+`AddExplorerAuth` registers default options with no paths. Register provider
+instances after it, or use a provider registration method that does so for the
+host.
 
 ## Security notes
 
-- Never log the token or credential. The Explorer is a security-sensitive
-  client.
-- Keep token material in memory. The core Explorer never writes a token to its
-  configuration store; persistence of refresh material is your method's opt-in
-  decision.
-- If your scheme is advertised by the server, advertise only public parameters -
-  never a secret or signing key.
+- Never log access tokens, passwords or API keys.
+- Keep token material in memory unless your provider deliberately owns secure
+  persistence of refresh material.
+- Treat endpoint advertisements as public hints. Do not let a server-provided
+  authority or audience override values that the host configured explicitly.
+- If your provider accepts advertised parameters, validate them before opening a
+  browser or sending a credential.
+- A sign-in is bound to the endpoint it was minted for.
+  `IExplorerAuthSession.GetAuthenticationFor(endpoint)` returns the credential only
+  for that endpoint, compared ignoring case and a trailing `/`, and `null` for any
+  other. The Explorer's own transport attaches a credential only through it, so a
+  credential never reaches a new endpoint while the console is being repointed,
+  before the old sign-in is dropped. A client that builds its own channel should
+  do the same rather than read `CurrentAuthentication`. It is a default interface
+  member whose default returns `null`, so an implementation that does not record
+  the endpoint fails closed and sends no credential.
+- A sign-in whose endpoint changes while its challenge runs is refused ("The
+  endpoint changed while signing in, so the sign-in was not applied. Sign in to
+  the new endpoint.") and is neither applied nor persisted; a stored credential
+  replayed across such a change leaves the session anonymous.
 
-## Reference
+## See also
 
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)
-- `IExplorerAuthMethod`, `ExplorerAuthChallengeContext`, `ExplorerAuthSignIn`
-- `ExplorerAccessTokenSource`, `LatticeCallAuthentication`
+- [Configuration](configuration.md#explorerreauthoptions)
+- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md)
+- [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)

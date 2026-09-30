@@ -1,0 +1,58 @@
+@*
+    The top bar's tenant switcher. In the header it is a disclosure button naming
+    the active tenant that opens a hairline-framed panel holding a type-ahead
+    field that lists every tenant as soon as it has focus; stacked, in the
+    compact directory sheet, it is the field itself. It
+    renders nothing at all unless the caller may switch between two or more
+    tenants.
+*@
+
+@if (_choices.Offered)
+{
+    @if (Stacked)
+    {
+        <div class="lt-shell-tenant lt-shell-tenant--stacked">
+            <LtComboBox @ref="_field"
+                        Label="Switch tenant"
+                        Source="_choices"
+                        Noun="tenant"
+                        Limit="Limit"
+                        OpenOnFocus="true"
+                        Placeholder="@FilterPlaceholder"
+                        Hint="@ActiveHint"
+                        OnCommit="ChooseAsync"
+                        data-lt-command="@ChromeCommands.TenantSwitchId" />
+        </div>
+    }
+    else
+    {
+        <div class="lt-shell-menu-host lt-shell-tenant">
+            <button type="button"
+                    class="lt-btn lt-btn--quiet lt-shell-header__control lt-shell-tenant__toggle"
+                    aria-expanded="@(_open ? "true" : "false")"
+                    aria-controls="@_panelId"
+                    data-lt-command="@ChromeCommands.TenantSwitchId"
+                    @onclick="Toggle"
+                    @ref="_toggle">
+                <span class="lt-shell-tenant__term">Tenant</span>
+                <span class="lt-shell-tenant__value">@_choices.Active</span>
+            </button>
+
+            @if (_open)
+            {
+                <div id="@_panelId" class="lt-shell-menu lt-shell-tenant__panel" role="group" aria-label="Switch tenant">
+                    <LtComboBox @ref="_field"
+                                Label="Switch to tenant"
+                                Source="_choices"
+                                Noun="tenant"
+                                Limit="Limit"
+                                OpenOnFocus="true"
+                                Placeholder="@FilterPlaceholder"
+                                Hint="@ActiveHint"
+                                OnCommit="ChooseAsync"
+                                OnDismiss="DismissAsync" />
+                </div>
+            }
+        </div>
+    }
+}

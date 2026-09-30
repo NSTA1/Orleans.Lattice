@@ -1,0 +1,52 @@
+@using Orleans.Lattice.Explorer.UI.Suggestions
+
+@*
+    Bind roles: each role the app declares is bound to one membership group - never
+    to a user. The same step changes the installed version's bindings, where a role
+    may also be left unbound. The group is typed into a type-ahead picker that
+    suggests the directory's groups (or, without a directory, the auth store's
+    groups); it is read-only here: nothing is created or changed in the directory.
+*@
+@if (Flow?.Descriptor is { } app)
+{
+    <section class="lt-apps-section" aria-labelledby="lt-apps-bind">
+        <h2 id="lt-apps-bind" class="lt-apps-section__title">@(Flow.IsRebinding ? "Change role bindings" : "Bind roles to groups")</h2>
+        <p>Members of each group receive that role in @AppsPresentation.DisplayName(app.Presentation, app.Slug). @(Flow.IsRebinding ? "Clear a group to leave its role unbound; nobody then holds it." : "Bind every role to continue.")</p>
+        @foreach (var role in app.Roles)
+        {
+            var name = role.Name;
+            <div class="lt-apps-binding" @key="name">
+                <span class="lt-apps-binding__role">@name</span>
+                <span class="lt-apps-hint">May @AppsPresentation.OperationsText(role.Operations).</span>
+                <LtComboBox Label="@($"Group for {name}")"
+                            Value="@Flow.Bindings.GetValueOrDefault(name)"
+                            ValueChanged="value => Flow.Bind(name, value)"
+                            Source="@Suggestions.GroupsOrStoredGroups"
+                            Mode="LtComboBoxMode.Suggest"
+                            Noun="group"
+                            ExistingMessage="A group the cluster knows."
+                            Hint="A membership group id. Type part of a name or id to find one." />
+            </div>
+        }
+        @if (app.Roles.IsDefaultOrEmpty)
+        {
+            <p class="lt-apps-hint">It declares no role, so there is nothing to bind.</p>
+        }
+        <div class="lt-apps-actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="Flow.Back">Back</LtButton>
+            <LtButton OnClick="Flow.ConfirmBindings" Disabled="@(!Flow.IsRebinding && Flow.UnboundRoles.Count > 0)">Continue</LtButton>
+        </div>
+        @if (Flow.UnboundRoles.Count > 0)
+        {
+            <p class="lt-apps-hint">@(Flow.IsRebinding ? "Held by nobody" : "Still unbound"): @string.Join(", ", Flow.UnboundRoles).</p>
+        }
+    </section>
+}
+
+@code {
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
+}

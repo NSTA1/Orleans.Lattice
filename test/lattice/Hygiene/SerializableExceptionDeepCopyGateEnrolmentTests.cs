@@ -64,7 +64,6 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
     /// </summary>
     private static readonly string[] PackagesDeclaringNoSerializableException =
     [
-        "lattice.api.abstractions",
         "lattice.api.apps",
         "lattice.api.apps.grpc",
         "lattice.api.auth",

@@ -34,4 +34,10 @@ public sealed record AppDescriptor
     [Id(10)] public ImmutableArray<AppReplicationDescriptor> Replication { get; init; } = [];
     /// <summary>The optional schema declarations; empty when none are requested.</summary>
     [Id(11)] public ImmutableArray<AppSchemaDescriptor> Schema { get; init; } = [];
+    /// <summary>The described version's presentation; null when it declares none or the server predates it.</summary>
+    [Id(12)] public AppPresentationDescriptor? Presentation { get; init; }
+    /// <summary>The described version's UI bundle; null when it ships none or the server predates it.</summary>
+    [Id(13)] public AppUiDescriptor? Ui { get; init; }
+    /// <summary>The key of the source the description came from; null when not recorded or the server predates it.</summary>
+    [Id(14)] public string? SourceKey { get; init; }
 }

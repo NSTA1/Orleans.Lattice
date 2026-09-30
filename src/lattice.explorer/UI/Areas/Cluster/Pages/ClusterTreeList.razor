@@ -1,0 +1,72 @@
+<PageTitle>Trees - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Trees</h1>
+<p class="lt-shell-page-lede">@(Scope is { } tenant ? $"Every tree of tenant {tenant} by its logical name." : "Every tree in the cluster by its logical name.") App trees name the app that owns them.</p>
+
+<div class="lt-toolbar">
+    <LtSearchInput Label="Filter trees" Placeholder="Filter by name, app or tenant" @bind-Value="_filter" />
+    <LtButton OnClick="() => LoadAsync(refresh: true)" Disabled="@_trees.IsLoading">Refresh</LtButton>
+    <LtButton data-lt-command="@ClusterArea.ReshardCommandId" OnClick="OpenReshard">Reshard tree...</LtButton>
+</div>
+
+@if (_trees.IsLoading)
+{
+    <LtSkeleton Lines="6" Label="Loading trees" />
+}
+else if (_trees.Value is { } trees)
+{
+    <p class="lt-cluster-note" data-lt-cluster-count>@CountLine(trees.Count, Facades.AssertedTenant, Scope)</p>
+
+    <LtTable Items="Filtered(trees)"
+             Caption="Trees"
+             CaptionHidden="true"
+             RowKey="tree => tree.TreeId"
+             Virtualize="@(trees.Count > 200)"
+             DetailTitle="tree => tree.TreeId">
+        <ChildContent>
+            <LtColumn TItem="ClusterTreeEntry" Title="Tree" RowHeader="true" Mono="true" SortBy="tree => tree.TreeId">
+                <ClusterTreeLink TreeId="@context.TreeId" />
+            </LtColumn>
+            <LtColumn TItem="ClusterTreeEntry" Title="Owner" Value="tree => tree.Name.Ownership ?? string.Empty" SortBy="tree => tree.Name.Ownership" />
+            <LtColumn TItem="ClusterTreeEntry" Title="Shards" Align="LtColumnAlign.End" Value="tree => ClusterFormat.Count(tree.ShardCount)" SortBy="tree => tree.ShardCount" />
+            <LtColumn TItem="ClusterTreeEntry" Title="WAL partitions" Align="LtColumnAlign.End" Value="tree => ClusterFormat.Count(tree.WalPartitions)" SortBy="tree => tree.WalPartitions" />
+            <LtColumn TItem="ClusterTreeEntry" Title="State" SortBy="tree => tree.Lifecycle">
+                <LtStatusPill State="@StateOf(context)" Text="@StateText(context)" />
+            </LtColumn>
+        </ChildContent>
+        <CompactRow>
+            <LtCompactRow Mono="true">
+                <Primary>@context.TreeId</Primary>
+                <Secondary>@Summary(context)</Secondary>
+                <State><LtStatusPill State="@StateOf(context)" Text="@StateText(context)" /></State>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions>
+            <ClusterTreeLink TreeId="@context.TreeId" Text="Administer this tree" />
+        </DetailActions>
+        <EmptyContent>
+            <LtEmptyState Title="@(string.IsNullOrEmpty(_filter) ? "No trees" : "No tree matches")" HeadingLevel="2">
+                @(string.IsNullOrEmpty(_filter) ? "The cluster holds no user trees yet." : "No tree's name, app or tenant contains that text.")
+            </LtEmptyState>
+        </EmptyContent>
+    </LtTable>
+
+    @if (Catalog.Truncated)
+    {
+        <p class="lt-cluster-note">The cluster holds more trees than the Explorer lists at once; use the address line to reach one by name.</p>
+    }
+}
+else
+{
+    <p class="lt-cluster-error" role="alert">@_trees.Error</p>
+}
+
+<LtDialog @bind-Open="_reshardOpen" Title="Reshard a tree" Description="Name the tree to grow or shrink. The next page stages the reshard and follows it." Placement="@SheetPlacement">
+    <form class="lt-cluster-form" @onsubmit="ContinueReshard">
+        <LtComboBox Label="Tree" @bind-Value="_reshardTree" Error="@_reshardError" Hint="The tree's logical name, such as a/crm/orders." Source="@Suggestions.ClusterTrees" Noun="tree" />
+        <div class="lt-dialog__actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _reshardOpen = false">Cancel</LtButton>
+            <LtButton Type="LtButtonType.Submit">Continue</LtButton>
+        </div>
+    </form>
+</LtDialog>

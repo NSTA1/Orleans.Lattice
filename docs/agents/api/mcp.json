@@ -57,7 +57,7 @@
       "write_opt_in": "Mutating tool modules are contributed only by their enableWrites, enableControl, enableAdministration, enableSchemaControl, enableLifecycle, or equivalent opt-in flags.",
       "region_parameter": "CredentialStampingTool advertises an optional region string on tool calls. Facade-backed tools resolve it through the group router and reject unknown or unreachable targets fail-closed; app-contributed tools are in-process and accept only the current region.",
       "app_tool_surface": "AddAppMcpTools registers ILatticeApiMcpAppToolSource. Enabled app manifests declare app-local tools, providers implement those names, and the session advertises permitted tools as {slug}_{tool}; app tools are omitted from lattice_capabilities.",
-      "app_tool_authorization": "AppMcpToolSource offers an app tool only when the caller holds every operation in the tool's declared role on at least one resolved role scope; AppMcpNamespacedTool repeats the same check at invocation.",
+      "app_tool_authorization": "AppMcpToolSource offers an app tool only when the caller holds the tool's declared role by binding (a group in its closure is bound to the role) and the access gate, asked only after the binding holds, refuses none of the role's operations on at least one resolved role scope; the caller's other rules never add a role. AppMcpNamespacedTool repeats the same check at invocation.",
       "app_tool_pairing": "AppMcpToolActivation hard-fails an app's whole tool activation when a declared tool lacks an implementation, an implementation is undeclared, a local name is duplicated, or the slug is reserved."
     },
     "source": "src/lattice.api.mcp/Discovery/ILatticeApiMcpToolGroup.cs#ILatticeApiMcpToolGroup"

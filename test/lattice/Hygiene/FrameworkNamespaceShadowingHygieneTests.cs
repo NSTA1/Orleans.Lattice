@@ -85,8 +85,6 @@ public sealed class FrameworkNamespaceShadowingHygieneTests
                 "shadows Orleans.Configuration; shipped Explorer namespace, pre-existing",
             ["Orleans.Lattice.Explorer.Tests.Configuration"] =
                 "shadows Orleans.Configuration; test-only namespace, pre-existing",
-            ["Orleans.Lattice.Explorer.Tests.Hosting"] =
-                "shadows Orleans.Hosting; test-only namespace, pre-existing",
             ["Orleans.Lattice.Internal"] =
                 "shadows Orleans.Internal; core library internals namespace, pre-existing",
             ["Orleans.Lattice.Storage"] =

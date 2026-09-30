@@ -218,16 +218,16 @@ public sealed class RouteCaseHygieneTests
             Assert.That(templates, Does.Contain("/"), "the bare address must stay routable");
             Assert.That(
                 templates,
-                Does.Contain("/explore/{kind}/{id}/{surface}"),
-                "the deepest home-area view must be addressable");
+                Does.Contain("/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"),
+                "the deepest tree address must be routable");
             Assert.That(
                 templates,
-                Does.Contain("/area/{area}/{kind}/{id}/{surface}"),
-                "the deepest contributed-area view must be addressable");
+                Does.Contain("/t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"),
+                "the deepest tenant-rooted tree address must be routable");
             Assert.That(
                 templates,
-                Does.Contain("/reset-view"),
-                "the reset-view escape must stay reachable by address");
+                Does.Contain("/reset"),
+                "the reset escape must stay reachable by address");
             Assert.That(
                 templates.Any(static t => t.Contains("{*", StringComparison.Ordinal)),
                 Is.False,

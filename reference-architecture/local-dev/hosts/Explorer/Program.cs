@@ -4,7 +4,6 @@ using Microsoft.Identity.Abstractions;
 using Orleans.Lattice.Caching.AzureBlob;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Entra.Web;
-using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.ReferenceArchitecture.Explorer;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;
@@ -92,16 +91,6 @@ builder.Services.AddLatticeExplorerWeb(options =>
     // ignored). That is the SAME gesture used for every subsequent identity
     // switch, so the harness has one sign-in mechanism rather than two.
 });
-
-// The Schema management area is an opt-in plugin: registering it is the whole of
-// the opt-in, and a head that does not register it renders no Schema tab at all.
-// Kept behind the same configuration switch this head has always exposed, and
-// still off by default because the versioning UI cannot yet express what differs
-// between schema versions.
-if (config.GetValue("Explorer:EnableSchemaArea", false))
-{
-    builder.Services.AddExplorerSchemaPlugin();
-}
 
 // Hosted-web Entra (OpenID Connect) sign-in provider, offered alongside the
 // built-in Basic provider when Entra is enabled.

@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Orleans.Lattice.Explorer.UI.Framing;
+using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.Web.Components;
 
 namespace Orleans.Lattice.Explorer.Web;
@@ -20,7 +22,8 @@ public static class LatticeExplorerWebEndpointRouteBuilderExtensions
     /// routing under the base path configured by
     /// <see cref="LatticeExplorerWebServiceCollectionExtensions.AddLatticeExplorerWeb"/>.
     /// Registers the static assets, the <c>auth/login</c> and <c>auth/logout</c>
-    /// endpoints, and the interactive server Razor components.
+    /// endpoints, the app frame bootstrap route, and the interactive server Razor
+    /// components.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -107,9 +110,15 @@ public static class LatticeExplorerWebEndpointRouteBuilderExtensions
     {
         MapStaticAssetsIfAvailable(endpoints, services);
         endpoints.MapExplorerAuthEndpoints(options.BaseHref);
+
+        // The app frame bootstrap route. Its paths are relative to these endpoints,
+        // which are the mounted branch under a base path and the root otherwise, so
+        // the base path is always empty here.
+        endpoints.MapExplorerAppFrame(string.Empty);
+
         endpoints.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()
-            .AddAdditionalAssemblies(typeof(Orleans.Lattice.Explorer.UI._Imports).Assembly);
+            .AddAdditionalAssemblies(typeof(ShellLayout).Assembly);
     }
 
     /// <summary>

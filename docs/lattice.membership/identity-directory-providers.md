@@ -85,8 +85,8 @@ When the active provider is the no-op `NullIdentityDirectory`, no validation run
 `AddLatticeMembership()` registers `NullIdentityDirectory` as the default. Its
 `ProviderId` is `"null"`, its `SearchAsync` returns `DirectorySearchPage.Empty`,
 and its `ResolveAsync` returns `null` for every id. With the null provider active
-the Explorer reports the directory as **unavailable**: the subject picker falls
-back to a free-text box and the create form accepts the entered id verbatim
+the Explorer reports the directory as **unavailable**: the subject picker says so
+and accepts the typed id as free text, and the create form accepts it verbatim
 without validating it. A deployment that wants validated create must register a
 real provider below.
 

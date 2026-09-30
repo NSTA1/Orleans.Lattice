@@ -1,0 +1,84 @@
+@*
+    Policy: the tree's enforcement policy - its rules, applied together, and
+    strict ingest - with set (the rule builder, seeded from the current policy)
+    and clear (a destructive confirmation naming the tree).
+*@
+
+@if (Workspace is not null)
+{
+    @if (!Workspace.Grants.ViewPolicy)
+    {
+        <LtEmptyState Title="You may not read this tree's policy" HeadingLevel="2">
+            Reading a policy needs read authority on the tree.
+        </LtEmptyState>
+    }
+    else if (_error is not null)
+    {
+        <LtEmptyState Title="The policy did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (!_loaded)
+    {
+        <LtSkeleton Lines="4" Label="Reading the policy" />
+    }
+    else if (_editing)
+    {
+        <SchemaRuleBuilder Policy="@_policy" OnSave="SaveAsync" OnCancel="CancelEditor" SaveError="@_saveError" Busy="@_busy" />
+    }
+    else if (_policy is null)
+    {
+        <LtEmptyState Title="No policy" HeadingLevel="2">
+            <ChildContent>This tree accepts every value. Set a policy to validate every new write against its rules.</ChildContent>
+            <Actions>
+                @if (Workspace.Grants.ManagePolicy)
+                {
+                    <LtButton OnClick="OpenEditor">Set a policy</LtButton>
+                }
+            </Actions>
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="Rules">@SchemaFormat.Count(_policy.Rules.Count, "rule"), all of which a value must satisfy</LtDefinition>
+            <LtDefinition Term="Strict ingest">@(_policy.StrictIngest ? StrictOn : StrictOff)</LtDefinition>
+        </LtDefinitionList>
+
+        <LtTable TItem="RuleRow"
+                 Items="@_rules"
+                 Caption="@($"Rules of {Workspace.TreeId}'s policy")"
+                 CaptionHidden="true">
+            <ChildContent>
+                <LtColumn TItem="RuleRow" Title="#" Align="LtColumnAlign.End" Value="@(row => row.Number)" />
+                <LtColumn TItem="RuleRow" Title="Kind" RowHeader="true" Value="@(row => row.Kind)" />
+                <LtColumn TItem="RuleRow" Title="Requirement" Value="@(row => row.Detail)" />
+            </ChildContent>
+            <CompactRow Context="row">
+                <LtCompactRow>
+                    <Primary>@row.Number. @row.Kind</Primary>
+                    <Secondary>@row.Detail</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+        </LtTable>
+
+        @if (Workspace.Grants.ManagePolicy)
+        {
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="OpenEditor">Edit policy</LtButton>
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmClear = true" Disabled="@_busy">Clear policy</LtButton>
+            </div>
+        }
+    }
+
+    <LtConfirmDestructive Open="@_confirmClear"
+                          OpenChanged="value => _confirmClear = value"
+                          Title="Clear this tree's policy"
+                          ObjectKind="tree"
+                          ObjectName="@Workspace.TreeId"
+                          ConfirmText="Clear policy"
+                          OnConfirm="ClearAsync">
+        Every value will be accepted from now on, and strict ingest stops diverting values. The rules are not kept.
+    </LtConfirmDestructive>
+}

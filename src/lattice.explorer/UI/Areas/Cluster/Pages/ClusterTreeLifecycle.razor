@@ -1,0 +1,91 @@
+<section class="lt-cluster-section" aria-label="Deletion">
+    @if (_status.IsLoading)
+    {
+        <LtSkeleton Lines="2" Label="Loading deletion status" />
+    }
+    else if (_status.Value is { } status)
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="State">@StateText(status)</LtDefinition>
+            @if (status.DeletedAtUtc is { } deletedAt)
+            {
+                <LtDefinition Term="Deleted">@ClusterFormat.Instant(deletedAt)</LtDefinition>
+            }
+            @if (status.CanRecover && status.RecoveryDeadlineUtc is { } deadline)
+            {
+                <LtDefinition Term="Recoverable until">@ClusterFormat.Instant(deadline)</LtDefinition>
+            }
+        </LtDefinitionList>
+        @if (ClusterOperationProgress.Of(status) is { } progress)
+        {
+            <LtProgress Label="@progress.Label" Phase="@progress.Phase" Value="@progress.Value" Maximum="@progress.Maximum" Detail="@progress.Detail" />
+        }
+        @if (status.PurgeInProgress)
+        {
+            <p class="lt-cluster-note">The purge runs in the cluster and survives silo restarts. This page asks again every few seconds; you can leave and come back.</p>
+        }
+    }
+    else
+    {
+        <p class="lt-cluster-error" role="alert">@_status.Error</p>
+    }
+
+    @if (Capabilities.CanManageTreeLifecycle && _status.Value is { } current)
+    {
+        <div class="lt-toolbar">
+            @if (!current.IsDeleted)
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="delete" OnClick="() => _confirm = Verb.Delete" Disabled="@_busy">Delete tree...</LtButton>
+            }
+            @if (current.IsDeleted && current.CanRecover)
+            {
+                <LtButton data-lt-cluster="recover" OnClick="() => _confirm = Verb.Recover" Disabled="@_busy">Recover tree...</LtButton>
+            }
+            @if (current.IsDeleted && !current.PurgeComplete && !current.PurgeInProgress)
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="purge" OnClick="() => _confirm = Verb.Purge" Disabled="@_busy">Purge now...</LtButton>
+            }
+        </div>
+    }
+
+    <p class="lt-cluster-note">@PurgeRule</p>
+</section>
+
+@if (Capabilities.CanAdministerTree)
+{
+    <section class="lt-cluster-section" aria-labelledby="lt-cluster-alias">
+        <h2 class="lt-cluster-heading" id="lt-cluster-alias">Alias</h2>
+        <p class="lt-cluster-note">Point this name at another physical tree, so reads and writes routed through it reach that tree. Only one level of indirection is allowed.</p>
+        <form class="lt-cluster-form" @onsubmit="ReviewAlias" aria-label="Set alias">
+            <LtComboBox @ref="_aliasBox" Label="Target tree" @bind-Value="_aliasTarget" Error="@_aliasError" Source="@Suggestions.ClusterTrees" Noun="tree" />
+            <div class="lt-cluster-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Set alias...</LtButton>
+            </div>
+        </form>
+    </section>
+}
+
+<LtConfirmDestructive Open="@(_confirm == Verb.Delete)" OpenChanged="Close"
+                      Title="Delete tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Delete"
+                      OnConfirm="DeleteAsync">
+    <p>Soft-deletes the tree. Every read and write on it fails at once, and a hard purge is scheduled after the soft-delete window. Until then it can be recovered.</p>
+</LtConfirmDestructive>
+
+<LtConfirmDestructive Open="@(_confirm == Verb.Recover)" OpenChanged="Close"
+                      Title="Recover tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Recover"
+                      OnConfirm="RecoverAsync">
+    <p>Restores normal reads and writes on the tree and cancels its scheduled purge.</p>
+</LtConfirmDestructive>
+
+<LtConfirmDestructive Open="@(_confirm == Verb.Purge)" OpenChanged="Close"
+                      Title="Purge tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Purge"
+                      OnConfirm="PurgeAsync">
+    <p>Permanently removes every leaf and internal node of the tree and unregisters it, now, without waiting for the soft-delete window. This cannot be undone.</p>
+    <p>@PurgeRule</p>
+</LtConfirmDestructive>
+
+<LtConfirmDestructive Open="@(_confirm == Verb.Alias)" OpenChanged="Close"
+                      Title="Set alias" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Set alias"
+                      OnConfirm="SetAliasAsync">
+    <p>Reads and writes routed through <span class="lt-shell-mono">@TreeId</span> will reach <span class="lt-shell-mono">@_aliasTarget</span> instead of the tree it reaches now.</p>
+</LtConfirmDestructive>

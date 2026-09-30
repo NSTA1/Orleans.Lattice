@@ -1,14 +1,22 @@
 [
   {
     "shard": "structure",
-    "filter": "TestCategory=UI&FullyQualifiedName!~Journeys"
+    "filter": "TestCategory=UI&FullyQualifiedName!~UiTests.Accessibility.&FullyQualifiedName!~UiTests.Journeys.&FullyQualifiedName!~UiTests.Apps."
+  },
+  {
+    "shard": "accessibility",
+    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Accessibility."
   },
   {
     "shard": "journeys-a",
-    "filter": "TestCategory=UI&FullyQualifiedName~Journeys&(FullyQualifiedName~AdaptiveTenant|FullyQualifiedName~AreaContinuity|FullyQualifiedName~DeepLink|FullyQualifiedName~FailClosedRestore|FullyQualifiedName~FirstRun)"
+    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Journeys.&(FullyQualifiedName~FirstRun|FullyQualifiedName~SignIn|FullyQualifiedName~Reauthentication|FullyQualifiedName~DeepLink)"
   },
   {
     "shard": "journeys-b",
-    "filter": "TestCategory=UI&FullyQualifiedName~Journeys&FullyQualifiedName!~AdaptiveTenant&FullyQualifiedName!~AreaContinuity&FullyQualifiedName!~DeepLink&FullyQualifiedName!~FailClosedRestore&FullyQualifiedName!~FirstRun"
+    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Journeys.&FullyQualifiedName!~FirstRun&FullyQualifiedName!~SignIn&FullyQualifiedName!~Reauthentication&FullyQualifiedName!~DeepLink"
+  },
+  {
+    "shard": "apps",
+    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Apps."
   }
 ]

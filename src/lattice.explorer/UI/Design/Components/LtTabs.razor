@@ -1,0 +1,22 @@
+<CascadingValue Value="this" IsFixed="true">
+    <div class="lt-tabs">
+        <div @ref="_list" class="lt-tabs__list" role="tablist" aria-label="@Label" @onkeydown="HandleKeyDownAsync">
+            @foreach (var tab in _tabs)
+            {
+                var active = IsActive(tab);
+                <button @key="tab"
+                        @ref="_buttons[tab.Id]"
+                        type="button"
+                        role="tab"
+                        id="@TabElementId(tab)"
+                        class="lt-tabs__tab"
+                        aria-selected="@(active ? "true" : "false")"
+                        aria-controls="@(active ? PanelElementId(tab) : null)"
+                        tabindex="@(active ? 0 : -1)"
+                        disabled="@tab.Disabled"
+                        @onclick="() => ActivateAsync(tab, moveFocus: false)">@tab.Title</button>
+            }
+        </div>
+        @ChildContent
+    </div>
+</CascadingValue>

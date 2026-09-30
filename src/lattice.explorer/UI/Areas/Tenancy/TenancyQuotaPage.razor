@@ -1,0 +1,23 @@
+@page "/tenancy/{p1}/quota"
+@inherits ExplorerPage
+
+<PageTitle>@($"Quota of tenant {TenantId} - Orleans.Lattice Explorer")</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@TenantId</h1>
+<p class="lt-shell-page-lede">Administration of tenant <span class="lt-tenancy-mono">@TenantId</span>. <a href="@DirectoryHref">All tenants</a></p>
+<TenancyNav Tenant="@TenantId" Current="@TenancyRoutes.QuotaSegment" />
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "This tenant could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+    </LtEmptyState>
+}
+else if (_admitted)
+{
+    <TenancyQuota TenantId="@TenantId" CanEdit="@(!IsDefault)" />
+}
+else
+{
+    <LtSkeleton Lines="4" Label="Loading the tenant" />
+}

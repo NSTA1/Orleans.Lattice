@@ -1,0 +1,42 @@
+@implements IDisposable
+
+@if (Folded)
+{
+    <section aria-label="Connection">
+        <LtDefinitionList>
+            <LtDefinition Term="Connection"><span role="status"><LtStatusPill State="Presentation.Role" Text="@Presentation.Text" /></span></LtDefinition>
+            @if (Status.Endpoint is { Length: > 0 } endpoint)
+            {
+                <LtDefinition Term="Endpoint" Mono="true">@endpoint</LtDefinition>
+            }
+        </LtDefinitionList>
+        <div class="lt-dialog__actions">@ConnectionActions</div>
+    </section>
+}
+else
+{
+    <span role="status"><LtStatusPill State="Presentation.Role" Text="@Presentation.Text" /></span>
+    @if (Status.Endpoint is { Length: > 0 } endpoint)
+    {
+        <code class="lt-mono-cell__value">@endpoint</code>
+    }
+    @ConnectionActions
+}
+
+@code {
+    private RenderFragment ConnectionActions => __builder =>
+    {
+        @if (Status.RequiresAuthentication && !Auth.IsAuthenticated)
+        {
+            <LtButton OnClick="OpenSignIn">Sign in</LtButton>
+        }
+        @if (Explorer.IsConfigured && Status.IsDisconnected)
+        {
+            <LtButton Disabled="_reconnecting" OnClick="ReconnectAsync">@(_reconnecting ? "Reconnecting" : "Reconnect")</LtButton>
+        }
+        @if (EndpointOptions.AllowInteractiveEndpointConfiguration)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection settings</LtButton>
+        }
+    };
+}

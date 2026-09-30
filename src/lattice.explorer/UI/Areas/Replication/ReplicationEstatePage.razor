@@ -1,0 +1,60 @@
+@page "/replication"
+@page "/t/{tenant}/replication"
+@inherits ExplorerPage
+@implements IDisposable
+
+@*
+    /replication: the estate's replication as an order diagram (this region as
+    the marker node, each peer a node, each direction an edge labelled with its
+    health and backlog), and beneath it every (tree, peer, direction) link as a
+    sortable booktabs table. ?health=, ?region= and ?app= filter both.
+*@
+
+<PageTitle>Replication - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Replication</h1>
+<p class="lt-shell-page-lede">How this region's trees replicate to and from its peer regions, and how far behind each link is.</p>
+
+<ReplicationSections />
+
+@if (_estate is null && _fault is null)
+{
+    <LtSkeleton Lines="6" Label="Reading replication status" />
+}
+else if (_estate is null)
+{
+    <LtEmptyState Title="@FaultTitle" HeadingLevel="2">
+        <ChildContent>@_fault!.Message</ChildContent>
+        <Actions>
+            @if (_fault?.Kind == ReplicationFaultKind.Failed)
+            {
+                <LtButton OnClick="RefreshAsync" data-lt-command="@ReplicationArea.RefreshCommandId">Try again</LtButton>
+            }
+            <a class="lt-btn" href="@TreesHref">See enrolled trees</a>
+        </Actions>
+    </LtEmptyState>
+}
+else
+{
+    <ReplicationToolbar Regions="@_estate.PeerRegions" Apps="@_apps" />
+
+    <div class="lt-replication-status" role="status">
+        <span>@StatusLine</span>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="RefreshAsync" Disabled="_refreshing" data-lt-command="@ReplicationArea.RefreshCommandId">
+            @(_refreshing ? "Refreshing" : "Refresh")
+        </LtButton>
+    </div>
+
+    @if (_estate.Truncated)
+    {
+        <p class="lt-replication-note">The report was longer than one read follows, so only the first @ReplicationFormat.Count(_estate.Links.Count, "link is", "links are") shown. Filter by region or app to narrow it.</p>
+    }
+
+    <ReplicationMap LocalRegionId="@_estate.LocalRegionId" Links="@_filtered" Filtered="@_filter.IsActive" />
+
+    <h2 class="lt-replication-heading">Links</h2>
+    <ReplicationLinkTable Links="@_filtered"
+                          Caption="@($"Replication links of {_estate.LocalRegionId}, one per tree, peer and direction")"
+                          CaptionHidden="true"
+                          EmptyText="@(_filter.IsActive ? "No replication links match these filters." : "This region has no replication links yet.")" />
+}

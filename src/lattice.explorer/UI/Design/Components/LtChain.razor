@@ -1,0 +1,24 @@
+<nav class="lt-chain-nav" aria-label="@Label">
+    <ol class="@ListClass">
+        @for (var i = 0; i < Links.Count; i++)
+        {
+            var link = Links[i];
+            var current = i == Links.Count - 1;
+            <li class="lt-chain__link">
+                <LtNode Kind="@(current ? LtNodeKind.Join : LtNodeKind.Filled)" />
+                @if (current)
+                {
+                    <span class="lt-chain__text lt-chain__text--current" aria-current="page">@link.Text</span>
+                }
+                else if (link.Href is not null)
+                {
+                    <a class="lt-chain__text" href="@link.Href">@link.Text</a>
+                }
+                else
+                {
+                    <span class="lt-chain__text">@link.Text</span>
+                }
+            </li>
+        }
+    </ol>
+</nav>

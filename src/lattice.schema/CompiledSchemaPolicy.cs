@@ -65,4 +65,17 @@ internal sealed class CompiledSchemaPolicy
 
         return null;
     }
+
+    /// <summary>
+    /// Validates <paramref name="value"/> against the one rule at
+    /// <paramref name="index"/>.
+    /// </summary>
+    /// <param name="index">The rule's zero-based position.</param>
+    /// <param name="value">The value bytes. Must not be <c>null</c>.</param>
+    /// <returns><c>null</c> when the rule is satisfied; otherwise its failure reason.</returns>
+    public string? ValidateRule(int index, byte[] value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return _rules[index].Validate(value);
+    }
 }

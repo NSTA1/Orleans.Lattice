@@ -17,4 +17,12 @@ internal static class AppsTypeAliases
     internal const string AppManifestError = "oap.er";
     internal const string AppRoleBinding = "oap.rb";
     internal const string AppCapabilityCeiling = "oap.cc";
+    internal const string AppPresentation = "oap.pe";
+    internal const string AppIconReference = "oap.pi";
+    internal const string AppUiDeclaration = "oap.ui";
+    internal const string AppUiAsset = "oap.ua";
+    internal const string AppUiScript = "oap.us";
+    internal const string AppUiBridgeDeclaration = "oap.ub";
+    internal const string AppUiBridgeGrant = "oap.ug";
+    internal const string AppUiBridgeRequest = "oap.uq";
 }

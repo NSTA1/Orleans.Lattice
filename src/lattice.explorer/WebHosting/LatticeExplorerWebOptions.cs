@@ -63,9 +63,12 @@ public sealed class LatticeExplorerWebOptions
 
     /// <summary>
     /// When <see langword="true"/>, the browser may write the head's persisted
-    /// connection configuration through the Explorer's connection-settings dialog.
+    /// connection configuration through the Explorer's connection-settings dialog,
+    /// and the dialog offers its connection test.
     /// When <see langword="false"/> (the default), the configuration store is
-    /// read-only: the endpoint comes from the deployment instead, through
+    /// read-only and the Explorer shows the configured endpoint read-only, with no
+    /// Connection settings entry and no connection test: the endpoint comes from
+    /// the deployment instead, through
     /// <c>LATTICE_EXPLORER_ENDPOINT</c> or a pre-provisioned document named by
     /// <see cref="ConfigFilePath"/> / <c>LATTICE_EXPLORER_CONFIG</c>.
     /// </summary>
@@ -75,6 +78,9 @@ public sealed class LatticeExplorerWebOptions
     /// challenged against. Leaving browser writes open lets an unauthenticated
     /// visitor repoint the whole head at a host they control, collecting the next
     /// operator's credential and turning the server into a request-forgery relay.
+    /// The connection test is gated with it because it dials, from the head, any
+    /// address the visitor types, which would otherwise make it a host and port
+    /// probe into the head's network.
     /// Enable this only when every party who can reach the head is trusted to
     /// choose the cluster it talks to.
     /// </remarks>

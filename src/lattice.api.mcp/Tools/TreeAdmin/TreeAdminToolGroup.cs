@@ -182,7 +182,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "whether it can still be recovered. It answers without waiting for a shard's purge, from the state as "
                 + "last persisted. It reports the "
                 + "logical tree: a live resized tree reads as not deleted while its old copy is retired, and for a "
-                + "tree created again under a purged id it reports the purged tree, while the tree itself is live. "
+                + "tree created again under a purged id it reads as the live tree it now is (the completed purge's "
+                + "record no longer applies to it). "
                 + "A pure read with no side "
                 + "effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetReshardStatusAsync, "lattice_treeadmin_tree_reshard_status",

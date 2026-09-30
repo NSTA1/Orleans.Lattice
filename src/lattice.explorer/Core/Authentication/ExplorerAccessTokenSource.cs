@@ -48,7 +48,6 @@ public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, 
     private string? _currentHeader;
     private long _generation;
     private bool _revoked;
-    private bool _disposed;
 
     /// <summary>
     /// Creates a token source seeded with an initial token and the delegate that
@@ -186,14 +185,14 @@ public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, 
         => _timeProvider.GetUtcNow() >= token.ExpiresOn - _refreshMargin;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The gate is deliberately not disposed: a renewal still in flight when the owner is
+    /// disposed releases it in its <c>finally</c>, and a disposed semaphore would throw
+    /// <see cref="ObjectDisposedException"/> there (issue #4093). A <see cref="SemaphoreSlim"/>
+    /// needs disposal only once its <see cref="SemaphoreSlim.AvailableWaitHandle"/> is
+    /// allocated, which this type never does.
+    /// </remarks>
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-        _gate.Dispose();
     }
 }
