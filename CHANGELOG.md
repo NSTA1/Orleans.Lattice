@@ -24,6 +24,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Tenant switcher.** A platform operator who can reach two or more tenants gets a tenant switcher in the top bar, with a Switch tenant palette command. It lists the reachable tenants, including default, and makes the same operator-gated switch as a t/ address. ([#3962](https://github.com/NSTA1/Orleans.Lattice/issues/3962)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Core - Structural predicate kinds.** `TypeOf`, `Length`, `Every` and `Self` nodes test a value's shape: its `LatticeValueKind`, a string, array or object length, or every item of an array. They are additive on the wire; an older silo evaluates an unknown kind as false, so a rule fails closed. ([#3963](https://github.com/NSTA1/Orleans.Lattice/issues/3963)) (`Orleans.Lattice`)
+
+- **Explorer - Schema rule builder.** The Schema area composes a policy from cards over the tree's inferred shape, previews it against up to 100 sampled values with the new public `LatticeSchemaPolicyValidator`, and warns before saving a policy they would break. An Advanced view keeps the JSON. ([#3963](https://github.com/NSTA1/Orleans.Lattice/issues/3963)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Explorer.UI`)
+
 - **Core - Ownership-bounded aliasing.** An optional `ITreeOwnershipGuard` can refuse an alias that would cross tree ownership, for every alias change including resize, restore and remediation; a refusal throws `LatticeTreeOwnershipDeniedException`. ([#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)

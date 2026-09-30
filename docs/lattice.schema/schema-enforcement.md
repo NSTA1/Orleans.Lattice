@@ -77,7 +77,7 @@ value fails rejects it with that rule's reason:
 | `LatticeSchemaRule.Utf8()` | The value is well-formed UTF-8. |
 | `LatticeSchemaRule.MaxLength(n)` | The value is at most `n` bytes. |
 | `LatticeSchemaRule.Regex(pattern, memberPath?)` | The value (or a named JSON member) matches a regex. |
-| `LatticeSchemaRule.Structured(predicate)` | A JSON document satisfies a `LatticePredicateNode` (the same predicate IR used by [predicate operations](../lattice/predicated-operations.md)). |
+| `LatticeSchemaRule.Structured(predicate)` | A JSON document satisfies a `LatticePredicateNode` (the same predicate IR used by [predicate operations](../lattice/predicated-operations.md)). Besides comparisons and string tests, it can use the [structural kinds](../lattice/predicated-operations.md#structural-predicate-kinds): a type test (`TypeOf`), a length (`LengthOf`), a quantifier over an array's items (`Every`) and the current document (`Self`). |
 
 Every factory also takes an optional `description`, which replaces the rule's default
 violation reason when the rule fails. A `Regex` rule's `memberPath` is a dotted path

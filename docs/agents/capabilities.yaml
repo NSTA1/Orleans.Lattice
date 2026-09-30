@@ -890,6 +890,8 @@ capabilities:
         source: "docs/lattice.explorer/managing-access.md"
       - statement: "The Schema area drives the schema control API and delegates enforcement, versioning, and dead-letter semantics to Orleans.Lattice.Schema."
         source: "docs/lattice.explorer/managing-schema.md"
+      - statement: "The Schema area's rule builder compiles each card to a schema rule or predicate node, combines cards only with and and or, and previews a policy against a page of up to 100 sampled values evaluated locally."
+        source: "docs/lattice.explorer/managing-schema.md"
       - statement: "Per-operator auth sessions and cluster connections are scoped per Blazor Server circuit."
         source: "docs/lattice.explorer/running-the-explorer.md"
       - statement: "MapLatticeExplorer emits baseline security response headers on every Explorer response."
@@ -1940,6 +1942,10 @@ capabilities:
         source: "docs/lattice/predicated-operations.md"
       - statement: "Each member a predicate lambda names is looked up by its C# member name in the value's serialized document, exact match first and then case-insensitive; a serializer-renamed or omitted member resolves as missing, and a value that is not well-formed JSON never matches."
         source: "docs/lattice/predicated-operations.md"
+      - statement: "The structural node kinds TypeOf, Length, Every and Self are built with LatticePredicateNode factories rather than translated from a lambda, test a value's shape against LatticeValueKind, and never take the forward-only reader path."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "A silo that predates the structural kinds evaluates an unknown node kind as false and an unknown operand as missing, so a rule without Not over a structural kind fails closed during a rolling upgrade."
+        source: "docs/lattice/predicated-operations.md"
     non_guarantees:
       - statement: "A serializer that does not implement ILatticePredicateSerializer is rejected client-side with NotSupportedException before any RPC."
         source: "docs/lattice/predicated-operations.md"
@@ -2418,6 +2424,8 @@ capabilities:
         source: "docs/lattice.schema/schema-versioning.md"
       - statement: "Dead-letter entries are read-only in the current release."
         source: "docs/lattice.schema/dead-letter-queue.md"
+      - statement: "LatticeSchemaPolicyValidator evaluates a policy against a value locally, with the same rule semantics as enforcement, and never contacts the cluster."
+        source: "docs/lattice.schema/README.md"
     non_guarantees:
       - statement: "A tree with no schema policy and no version config behaves like a plain lattice."
         source: "docs/lattice.schema/README.md"
