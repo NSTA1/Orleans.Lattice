@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class TenantUsageMeteringServiceTests
+public sealed partial class TenantUsageMeteringServiceTests
 {
     private static readonly TenantId Acme = TenantId.Parse("acme");
     private static readonly TenantId Globex = TenantId.Parse("globex");

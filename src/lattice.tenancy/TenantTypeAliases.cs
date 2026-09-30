@@ -59,4 +59,16 @@ internal static class TenantTypeAliases
 
     /// <summary>Alias for <see cref="Tenancy.TenantRegionStatusSlot"/>.</summary>
     internal const string TenantRegionStatusSlot = "olt.rsl";
+
+    /// <summary>Alias for <see cref="Tenancy.TenantPolicyEpoch"/>.</summary>
+    internal const string TenantPolicyEpoch = "olt.pep";
+
+    /// <summary>Alias for <see cref="Tenancy.TenantPolicyEpochLease"/>.</summary>
+    internal const string TenantPolicyEpochLease = "olt.pel";
+
+    /// <summary>Alias for <see cref="Tenancy.ITenantPolicyEpochGrain"/>.</summary>
+    internal const string ITenantPolicyEpochGrain = "olt.peg";
+
+    /// <summary>Alias for <see cref="Tenancy.ITenantPolicyEpochObserver"/>.</summary>
+    internal const string ITenantPolicyEpochObserver = "olt.peo";
 }

@@ -60,9 +60,7 @@ public sealed class LatticeTenantPolicyEngineGrantStateTests
 
         var registry = new FakeTenantRegistry();
         registry.Records.Add(record);
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            registry,
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = TenantPolicyEpochTestCluster.Unleased(registry);
         await maintainer.EnsureWarmAsync();
         return new LatticeTenantPolicyEngine(maintainer);
     }
@@ -176,9 +174,7 @@ public sealed class LatticeTenantPolicyEngineGrantStateTests
     {
         var registry = new FakeTenantRegistry();
         registry.Records.Add(record.Clone());
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            registry,
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = TenantPolicyEpochTestCluster.Unleased(registry);
         await maintainer.EnsureWarmAsync();
         return new LatticeTenantPolicyEngine(maintainer)
             .ResolveCrossTenantGrant(Beta, Acme, Scope, TenantGrantOperations.Read);
@@ -203,9 +199,7 @@ public sealed class LatticeTenantPolicyEngineGrantStateTests
                 "acme",
                 admins: ["alice"],
                 grants: [TenantGrant("beta", Scope, TenantGrantOperations.ReadWrite)]));
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            registry,
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = TenantPolicyEpochTestCluster.Unleased(registry);
         await maintainer.EnsureWarmAsync();
         return new LatticeTenantPolicyEngine(maintainer);
     }

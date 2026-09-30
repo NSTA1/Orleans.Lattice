@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
@@ -211,32 +212,76 @@ public class RecentApplyCacheTests
     }
 
     [Test]
-    public async Task TryAdd_admits_exactly_one_winner_under_concurrent_duplicate_writers()
+    public void TryAdd_admits_exactly_one_winner_under_concurrent_duplicate_writers()
     {
         // The shadow-forward race the cache exists to close: many
         // workers race to add the same identity tuple. Exactly one
         // must succeed; the rest must observe the entry as already
         // present.
+        //
+        // The participants run on dedicated threads, not Task.Run: 16
+        // thread-pool work items all blocked in SignalAndWait deadlock
+        // a cold pool smaller than 16 threads (issue #4045, the same
+        // shape as #4034). Dedicated threads keep the genuine 16-way
+        // simultaneous release, and every wait is bounded so a
+        // regression fails fast instead of hanging the run.
+        const int concurrency = 16;
+        var budget = TimeSpan.FromSeconds(30);
         var cache = new RecentApplyCache(64);
         var entry = Entry("k", Hlc(42));
-        var winners = 0;
-        var tasks = new Task[16];
-        using var barrier = new Barrier(tasks.Length);
-        for (var i = 0; i < tasks.Length; i++)
+        var barrier = new Barrier(concurrency);
+        var observed = new bool?[concurrency];
+        var failures = new ConcurrentQueue<Exception>();
+
+        var threads = new Thread[concurrency];
+        for (var i = 0; i < concurrency; i++)
         {
-            tasks[i] = Task.Run(() =>
+            var index = i;
+            threads[i] = new Thread(() =>
             {
-                barrier.SignalAndWait();
-                if (cache.TryAdd(entry))
+                try
                 {
-                    Interlocked.Increment(ref winners);
+                    if (barrier.SignalAndWait(budget))
+                    {
+                        observed[index] = cache.TryAdd(entry);
+                    }
                 }
-            });
+                catch (Exception ex)
+                {
+                    failures.Enqueue(ex);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = $"recent-apply-race-{index}",
+            };
         }
 
-        await Task.WhenAll(tasks);
+        foreach (var thread in threads)
+        {
+            thread.Start();
+        }
 
-        Assert.That(winners, Is.EqualTo(1));
+        var deadline = DateTime.UtcNow + budget;
+        var unfinished = threads.Count(thread =>
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            return !thread.Join(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+        });
+
+        Assert.That(unfinished, Is.Zero,
+            $"every racing thread must finish within {budget.TotalSeconds}s; a hang here is a harness or cache defect, not a pass");
+
+        // Disposed only once every participant has left the barrier:
+        // disposing a Barrier with threads still inside it is undefined.
+        barrier.Dispose();
+
+        Assert.That(failures, Is.Empty,
+            "no racing thread may throw from the barrier or from TryAdd");
+        Assert.That(observed, Has.All.Not.Null,
+            "every participant must pass the barrier and call TryAdd; a null means SignalAndWait timed out");
+        Assert.That(observed.Count(admitted => admitted == true), Is.EqualTo(1),
+            "exactly one concurrent TryAdd of the same identity tuple may win");
         Assert.That(cache.Count, Is.EqualTo(1));
     }
 

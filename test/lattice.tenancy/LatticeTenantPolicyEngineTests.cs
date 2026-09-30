@@ -21,9 +21,7 @@ public sealed class LatticeTenantPolicyEngineTests
     {
         var registry = new FakeTenantRegistry();
         registry.Records.AddRange(records);
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            registry,
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = TenantPolicyEpochTestCluster.Unleased(registry);
         await maintainer.EnsureWarmAsync();
         return new LatticeTenantPolicyEngine(maintainer);
     }
@@ -33,9 +31,7 @@ public sealed class LatticeTenantPolicyEngineTests
     {
         var registry = new FakeTenantRegistry();
         registry.Records.Add(Record("acme", admins: ["alice"]));
-        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
-            registry,
-            NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var maintainer = TenantPolicyEpochTestCluster.Unleased(registry);
         var engine = new LatticeTenantPolicyEngine(maintainer);
 
         Assert.That(engine.CurrentEpoch, Is.EqualTo(0), "a cold maintainer reports epoch 0");

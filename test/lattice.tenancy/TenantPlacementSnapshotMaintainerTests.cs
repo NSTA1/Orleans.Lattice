@@ -42,7 +42,7 @@ public sealed class TenantPlacementSnapshotMaintainerTests
 
     private static TenantPlacementSnapshotMaintainer Maintainer(
         ITenantRegistry registry) =>
-        new(registry, NullLogger<TenantPlacementSnapshotMaintainer>.Instance);
+        new(registry, TimeProvider.System, NullLogger<TenantPlacementSnapshotMaintainer>.Instance);
 
 #pragma warning disable CS1998 // async iterator with no await: it aborts before yielding
     private static async IAsyncEnumerable<TenantRecord> ThrowAsync(Exception ex)
@@ -59,7 +59,16 @@ public sealed class TenantPlacementSnapshotMaintainerTests
     {
         Assert.That(
             () => new TenantPlacementSnapshotMaintainer(
-                null!, NullLogger<TenantPlacementSnapshotMaintainer>.Instance),
+                null!, TimeProvider.System, NullLogger<TenantPlacementSnapshotMaintainer>.Instance),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Ctor_null_time_provider_throws()
+    {
+        Assert.That(
+            () => new TenantPlacementSnapshotMaintainer(
+                Substitute.For<ITenantRegistry>(), null!, NullLogger<TenantPlacementSnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -69,7 +78,7 @@ public sealed class TenantPlacementSnapshotMaintainerTests
         var registry = Substitute.For<ITenantRegistry>();
 
         Assert.That(
-            () => new TenantPlacementSnapshotMaintainer(registry, null!),
+            () => new TenantPlacementSnapshotMaintainer(registry, TimeProvider.System, null!),
             Throws.ArgumentNullException);
     }
 

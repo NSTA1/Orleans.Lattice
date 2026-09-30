@@ -15,6 +15,15 @@ public sealed class GrainIndexOptions
     public static readonly TimeSpan DefaultBackfillInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
+    /// The longest <see cref="BackfillInterval"/> accepted: <c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days, the longest period a grain timer accepts.
+    /// The interval arms the backfill's pass timer, and a longer one throws
+    /// <see cref="ArgumentOutOfRangeException"/> every time the timer is armed,
+    /// so the crawl would never run.
+    /// </summary>
+    internal static readonly TimeSpan MaxBackfillInterval = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    /// <summary>
     /// The lattice tree backing the index. Defaults to the declaration's index
     /// name placed under <see cref="GrainIndexTreeNames.ReservedPrefix"/>. An
     /// override must stay inside that reserved namespace; the validator rejects
@@ -39,7 +48,8 @@ public sealed class GrainIndexOptions
 
     /// <summary>
     /// The pause between backfill passes, which paces the backfill against
-    /// foreground traffic. Must be greater than zero.
+    /// foreground traffic. Must be greater than zero and at most about 49.7 days
+    /// (<c>0xFFFFFFFE</c> milliseconds), the longest period the pass timer accepts.
     /// </summary>
     public TimeSpan BackfillInterval { get; set; } = DefaultBackfillInterval;
 
