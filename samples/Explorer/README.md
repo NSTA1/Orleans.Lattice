@@ -162,14 +162,19 @@ tenant admin sees:
   tree id, which is what the cluster's tenant gate matches. The grant is *Pending*
   until `globex` approves it.
 - **Regions**: both tenants may use `east` and `west`, under **Allowed regions
-  (set by a platform operator)**. Residency is left unconfigured, so
-  **Residency (where the tenant's data is kept)** reads *Not set* and lists both
-  regions as not resident, and the page says the tenant is served in every
-  region; Home's Tenancy line counts both tenants as having no residency set.
-  Setting residency starts a region *Provisioning*; only backfill machinery,
-  which this sample does not run, moves it on, so the Explorer asks you to
-  confirm a residency that would leave no Online region, and a region where the
-  tenant is not online refuses the tenant's replicated writes.
+  (set by a platform operator)**, and the sample shows both residency states.
+  `acme` is resident in `east` and `west`, and both regions are *Online*: the
+  seeder promotes them, as an operator of the hosting deployment would, so each
+  row reads **Served**. That is what lets acme's task board replicate, because a
+  region where the tenant is not Online refuses the tenant's replicated writes.
+  `globex` has no residency, so **Residency (where the tenant's data is kept)**
+  reads *Not set: served in every region*, and each region reads *No residency
+  set* and **Served**. Home's Tenancy line counts `globex` as the one tenant
+  with no residency set ("1 with no residency set (served in every region)"). Change a
+  residency and the page previews what applying it does, region by region. A
+  region added to a residency starts *Provisioning*, and nothing in the sample
+  promotes it, so a change that would leave a tenant served nowhere turns
+  **Apply residency** off.
 
 For the **tenant-scoped view**, restart with `--sign-in-as acme-admin`. The
 console opens at `/t/acme` with only Data, Apps, Tenancy, Replication and

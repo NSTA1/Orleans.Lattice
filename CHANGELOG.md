@@ -92,6 +92,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - Tenant residency reads as served, and a change is previewed.** Each region says whether it serves the tenant; no residency means every region. A change is previewed per region, and one leaving the tenant served nowhere turns Apply off, passing only on an explicit, confirmed path. ([#4078](https://github.com/NSTA1/Orleans.Lattice/issues/4078)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - A tenant-scoped address lists only that tenant's items.** `/t/{tenant}/access` and `/t/{tenant}/cluster` join the other areas; counts, badges, completions and pickers follow. Rule and backup listings take `ActiveTenantOnly`, narrowed to the caller's validated tenant. ([#4025](https://github.com/NSTA1/Orleans.Lattice/issues/4025)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Auth.Grpc`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Cached answers never outlive the caller who read them.** Every per-circuit memo is keyed on the sign-in, endpoint and asserted tenant, and dropped on a sign-in, sign-out or connection change; pages are rebuilt on a sign-in change, and a new identity never inherits the last one's tenant. ([#4019](https://github.com/NSTA1/Orleans.Lattice/issues/4019)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Core`)

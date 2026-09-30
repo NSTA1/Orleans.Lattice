@@ -90,27 +90,35 @@ The Tenancy area supplies the reachable-tenant list used by the directory, by th
 A tenant's Regions page, `/tenancy/{tenant}/regions` for an operator or `/t/{tenant}/tenancy/regions` in My tenant, has two labelled parts:
 
 - **Allowed regions (set by a platform operator).** The regions the tenant may use at all. Only a platform operator can change the set: saving replaces the whole set, revoking a region is confirmed, and a region the tenant is resident in cannot be revoked. Anyone else sees the set read-only, with a note saying only a platform operator can change it.
-- **Residency (where the tenant's data is kept).** The regions the tenant's admins keep its data in, chosen from the allowed set. **Resident in** reads the current residency, or `Not set`. With no residency set, the tenant is served in every region, and the page says so. Once any residency is set, the tenant is served only in regions that are Online. Each allowed region is a row with its lifecycle status and its residency control, and **Apply residency** applies the plan; **Reset** discards it.
+- **Residency (where the tenant's data is kept).** The regions the tenant's admins keep its data in, chosen from the allowed set. **Resident in** reads the current residency, or `Not set: served in every region`. With no residency set, the tenant is served in every region, and the page says so in a note: "No residency set: tenant {tenant} is served in every region." Once any residency is set, the tenant is served only in regions that are Online. **Apply residency** applies the plan; **Reset** discards it.
 
-Each status is drawn with a sentence saying what it means for the tenant:
+Each allowed region is a row of a table with the columns **Region**, **Lifecycle**, **Served here**, **Allowed** and **Residency**. **Lifecycle** is the region's residency status with a sentence saying what it means for the tenant, **Served here** says in words whether the region serves the tenant now (**Served** or **Not served**), and **Residency** is the region's residency checkbox. At the compact width each row reads its region, whether it is served and allowed, and any planned change.
 
-| Status | Meaning |
+| Lifecycle | Meaning |
 | --- | --- |
+
 | Provisioning | The region has been added and waits for a platform operator of the hosting deployment to promote it. The tenant is not served there until it is Online. |
 | Backfilling | The tenant's existing data is being copied in. It is not served there until it is Online. |
 | Online | The region serves the tenant. |
 | Draining | The region is being removed: the tenant's data there is draining, and it no longer serves the tenant. |
 | Offline | Drained; the region no longer serves the tenant. |
 | Removed | Removed from the tenant's residency. |
-| Not resident | The region is allowed but not in the residency. |
+| Not in residency | The tenant has residency, and this allowed region is outside it, so it does not serve the tenant. |
+| No residency set | The tenant has no residency, so this region serves it, as every region does. |
 
-A residency change is confirmed when it removes a region, because removing one drains the tenant's data there. It is also confirmed when it would leave the tenant with residency and no Online region: an added region starts Provisioning, so such a change stops serving the tenant anywhere until an operator of the hosting deployment promotes one of its regions. That dialog is titled **Stop serving tenant {tenant}?**, names the regions, and applies with **Apply and stop serving**. While a tenant has residency and no Online region, its Regions page, its overview and My tenant each carry a warning that it is not served anywhere.
+**Previewing a change.** Once the plan differs from the tenant's residency, a section titled **If you apply this residency** says region by region what applying it does: a region that joins the residency as Provisioning (and, for a tenant with no residency before, stops being served there until it is promoted), one that starts draining and stops being served, one that stays in the residency and is or is not still served, and one that stops being served because it is outside the new residency.
+
+A change that removes a region is confirmed, because removing one drains the tenant's data there; the dialog applies with **Drain and apply**.
+
+A change that would leave the tenant with residency and no Online region is not applied from **Apply residency**, which is turned off. The preview says the tenant would be served nowhere, names the planned regions that would not be Online (an added one starts Provisioning), and explains that a region added to the residency starts Provisioning until a platform operator of the hosting deployment promotes it to Online. It then suggests keeping a region that is already Online or asking an operator to promote one first; when no region is Online yet, it says a first residency stops serving the tenant until one is promoted, and that leaving the residency unset keeps it served in every region. It links to the [tenant lifecycle documentation](../lattice.tenancy/README.md#lifecycle-states), which describes how an operator promotes a region. The only way through is a quiet **Apply anyway and stop serving {tenant}...** button. Its confirmation, titled **Stop serving tenant {tenant}?**, restates the consequence, and its primary button is **Keep serving {tenant}**; the destructive **Stop serving {tenant}** applies it.
+
+The Explorer has no action to promote a region to Online itself, because the tenant region administration facade has no promotion call yet (issue [#4090](https://github.com/NSTA1/Orleans.Lattice/issues/4090)). While a tenant has residency and no Online region, its Regions page, its overview and My tenant each carry a warning that it is not served anywhere.
 
 **Creating a tenant with regions.** The directory's **New tenant** form can also set the new tenant's **Allowed regions** and its **Initial residency**, both optional. The residency is chosen from the allowed regions: it is disabled until one is chosen, and a region removed from the allowed set leaves the residency too. A tenant created with a residency is confirmed first, in a dialog titled **Create tenant {tenant} with no Online region?**, because each of its regions starts Provisioning and the tenant is served nowhere until one is promoted; **Back** returns to the form. The tenant is created, then its allowed regions are set, then its residency, and each step reports its own outcome, so a tenant can be created even when a region step fails. The form then opens the new tenant's Regions page, or its overview when no region was chosen.
 
 **Finding a tenant's regions.** The directory's **Resident in** column links each tenant to its Regions page, and so do the **Resident in** and **Allowed** lines of a tenant's overview and of My tenant. The directory's **Set regions...** button, and the **Set a tenant's regions** palette command, pick a tenant and open its Regions page. **Change residency** opens the scoped tenant's own Regions tab.
 
-**Home.** The Tenancy line on Home counts tenants with no residency set. For an operator it reads, for example, "12 tenants, 1 suspended, 3 with no residency set."; it reads the residency of at most 50 tenants, and with more than that the count is a lower bound, shown as "at least 3". The reserved `default` tenant has no residency and is not counted, and a tenant whose status cannot be read is skipped. A tenant admin's line adds "It has no residency set." when their tenant has none.
+**Home.** The Tenancy line on Home counts tenants with no residency set, which are served in every region. For an operator it reads, for example, "12 tenants, 1 suspended, 3 with no residency set (served in every region)."; it reads the residency of at most 50 tenants, and with more than that the count is a lower bound, shown as "at least 3". The reserved `default` tenant has no residency and is not counted, and a tenant whose status cannot be read is skipped. A tenant admin's line adds "It has no residency set, so it is served in every region." when their tenant has none.
 
 ## Trees shared through a grant
 
