@@ -1,4 +1,3 @@
-using System.Diagnostics;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
@@ -77,7 +76,7 @@ public sealed class RepoContextProvenanceExitCodeScriptTests
     [Test]
     public void The_provenance_exit_code_suite_passes()
     {
-        var shell = FindExecutable("pwsh") ?? FindExecutable("powershell");
+        var shell = ScriptSuiteProcess.FindExecutable("pwsh") ?? ScriptSuiteProcess.FindExecutable("powershell");
         if (shell is null)
         {
             Assert.Ignore("Neither pwsh nor powershell is available on this host.");
@@ -86,7 +85,7 @@ public sealed class RepoContextProvenanceExitCodeScriptTests
         // git absence is a LOUD, reported skip. The suite cannot build its sandbox without it,
         // and a guard that ran with nothing to examine while reporting green is the exact
         // false-green this bucket exists to catch.
-        if (FindExecutable("git") is null)
+        if (ScriptSuiteProcess.FindExecutable("git") is null)
         {
             Assert.Ignore("git is not available on this host, so the exit-code suite cannot build its sandbox.");
         }
@@ -114,20 +113,13 @@ public sealed class RepoContextProvenanceExitCodeScriptTests
         // Nothing enforces any of this. It is prose. No test asserts the pairing, and a future
         // edit that flips this flag, or that adds a specific-value read through -Command
         // elsewhere, will not be caught by anything. Read it as a warning, not a guarantee.
-        var psi = new ProcessStartInfo(shell!, $"-NoProfile -File \"{SuitePath}\"")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = ScriptsDirectory,
-        };
+        var (exitCode, stdout, stderr) = ScriptSuiteProcess.Run(
+            shell!,
+            SuitePath,
+            ScriptsDirectory,
+            180_000);
 
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(180_000);
-
-        if (process.ExitCode == GitAbsentExitCode && stdout.Contains("SKIPPED: git", StringComparison.Ordinal))
+        if (exitCode == GitAbsentExitCode && stdout.Contains("SKIPPED: git", StringComparison.Ordinal))
         {
             Assert.Ignore("The suite reported git absent at run time." + Environment.NewLine + stdout + stderr);
         }
@@ -153,9 +145,9 @@ public sealed class RepoContextProvenanceExitCodeScriptTests
                 + stderr);
 
         Assert.That(
-            process.ExitCode,
+            exitCode,
             Is.Zero,
-            $"the provenance exit code suite reported {process.ExitCode} failing assertion(s)."
+            $"the provenance exit code suite reported {exitCode} failing assertion(s)."
                 + Environment.NewLine
                 + stdout
                 + stderr);
@@ -175,32 +167,4 @@ public sealed class RepoContextProvenanceExitCodeScriptTests
                 + "before the last one");
     }
 
-    private static string? FindExecutable(string name)
-    {
-        var extensions = OperatingSystem.IsWindows()
-            ? new[] { ".exe", ".cmd", ".bat" }
-            : new[] { string.Empty };
-
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var extension in extensions)
-            {
-                try
-                {
-                    var candidate = Path.Combine(directory.Trim('"'), name + extension);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // A malformed PATH entry is not this fixture's problem.
-                }
-            }
-        }
-
-        return null;
-    }
 }

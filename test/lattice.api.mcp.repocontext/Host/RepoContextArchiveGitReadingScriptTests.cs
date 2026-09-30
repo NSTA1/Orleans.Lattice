@@ -1,4 +1,3 @@
-using System.Diagnostics;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
@@ -76,7 +75,7 @@ public sealed class RepoContextArchiveGitReadingScriptTests
     [Test]
     public void The_archive_git_reading_suite_passes()
     {
-        var shell = FindExecutable("pwsh") ?? FindExecutable("powershell");
+        var shell = ScriptSuiteProcess.FindExecutable("pwsh") ?? ScriptSuiteProcess.FindExecutable("powershell");
         if (shell is null)
         {
             Assert.Ignore("Neither pwsh nor powershell is available on this host.");
@@ -85,28 +84,21 @@ public sealed class RepoContextArchiveGitReadingScriptTests
         // git absence is a LOUD, reported skip. A conformance guard that ran with no git to
         // compare against would examine nothing while reporting green, so it is ignored here
         // rather than passed - and the script itself refuses to run in that state too.
-        if (FindExecutable("git") is null)
+        if (ScriptSuiteProcess.FindExecutable("git") is null)
         {
             Assert.Ignore("git is not available on this host, so the git-message conformance guard cannot run.");
         }
 
-        var psi = new ProcessStartInfo(shell!, $"-NoProfile -File \"{SuitePath}\"")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = ScriptsDirectory,
-        };
-
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(120_000);
+        var (exitCode, stdout, stderr) = ScriptSuiteProcess.Run(
+            shell!,
+            SuitePath,
+            ScriptsDirectory,
+            120_000);
 
         // A git that vanished between the check above and the run, or a hand-run on a host
         // without git, exits with the distinct skip code. Honour it as an ignore, not a
         // failure, so the reason survives instead of surfacing as a mysterious red.
-        if (process.ExitCode == GitAbsentExitCode && stdout.Contains("SKIPPED: git", StringComparison.Ordinal))
+        if (exitCode == GitAbsentExitCode && stdout.Contains("SKIPPED: git", StringComparison.Ordinal))
         {
             Assert.Ignore("The suite reported git absent at run time." + Environment.NewLine + stdout + stderr);
         }
@@ -133,9 +125,9 @@ public sealed class RepoContextArchiveGitReadingScriptTests
                 + stderr);
 
         Assert.That(
-            process.ExitCode,
+            exitCode,
             Is.Zero,
-            $"the archive git reading suite reported {process.ExitCode} failing assertion(s)."
+            $"the archive git reading suite reported {exitCode} failing assertion(s)."
                 + Environment.NewLine
                 + stdout
                 + stderr);
@@ -155,32 +147,4 @@ public sealed class RepoContextArchiveGitReadingScriptTests
                 + "before the last one");
     }
 
-    private static string? FindExecutable(string name)
-    {
-        var extensions = OperatingSystem.IsWindows()
-            ? new[] { ".exe", ".cmd", ".bat" }
-            : new[] { string.Empty };
-
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var extension in extensions)
-            {
-                try
-                {
-                    var candidate = Path.Combine(directory.Trim('"'), name + extension);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // A malformed PATH entry is not this fixture's problem.
-                }
-            }
-        }
-
-        return null;
-    }
 }
