@@ -90,6 +90,29 @@ public sealed class SessionRegistrationTests
         Assert.That(provider.GetRequiredService<SessionSignInOptions>(), Is.SameAs(head));
     }
 
+    [Test]
+    public void The_default_refuses_interactive_endpoint_configuration_and_a_head_supplied_instance_wins()
+    {
+        using var fallback = new ServiceCollection().AddLatticeExplorerShell().BuildServiceProvider();
+        var head = new SessionEndpointConfigurationOptions { AllowInteractiveEndpointConfiguration = true };
+        using var opted = new ServiceCollection().AddSingleton(head).AddLatticeExplorerShell().BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                fallback.GetRequiredService<SessionEndpointConfigurationOptions>().AllowInteractiveEndpointConfiguration,
+                Is.False,
+                "a head that has not opted in must fail closed");
+            Assert.That(opted.GetRequiredService<SessionEndpointConfigurationOptions>(), Is.SameAs(head));
+            Assert.That(Lifetime(new ServiceCollection().AddLatticeExplorerShell(), typeof(SessionEndpointConfigurationOptions)), Is.EqualTo(ServiceLifetime.Singleton));
+            Assert.That(
+                typeof(SessionEndpointConfigurationOptions).GetProperties().Where(property => property.SetMethod is { IsPublic: true } setter
+                    && !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsExternalInit))),
+                Is.Empty,
+                "the singleton must be immutable once registered");
+        });
+    }
+
     private static ServiceLifetime Lifetime(IServiceCollection services, Type type) =>
         services.Single(descriptor => descriptor.ServiceType == type).Lifetime;
 }

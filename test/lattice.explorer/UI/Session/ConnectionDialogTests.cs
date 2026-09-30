@@ -217,7 +217,7 @@ public sealed class ConnectionDialogTests : SessionTestContext
     {
         // The outcome enum is internal, so the case carries its value.
         var outcome = (ConnectionTestOutcome)outcomeValue;
-        Tester.Result = new ConnectionTestResult(outcome, outcome == ConnectionTestOutcome.Reachable ? null : "Status(StatusCode=Unavailable)");
+        Tester.Result = new ConnectionTestResult(outcome);
         var cut = Render<ConnectionDialog>();
 
         cut.Find("input.lt-input").Input("https://cluster.example:443");
@@ -233,15 +233,85 @@ public sealed class ConnectionDialogTests : SessionTestContext
     }
 
     [Test]
-    public void The_connection_test_shows_the_endpoints_own_explanation()
+    public void The_connection_test_never_shows_the_endpoints_own_status_text()
     {
-        Tester.Result = new ConnectionTestResult(ConnectionTestOutcome.Unreachable, "Connection refused.");
+        // What answered at an address the visitor chose is described in fixed words
+        // only, so the test cannot be read as a host and port scanner.
+        Tester.Result = LatticeConnectionTester.Classify(new Orleans.Lattice.Explorer.Core.Connection.LatticeConnectionStatus(
+            Orleans.Lattice.Explorer.Core.Connection.LatticeConnectionState.Faulted,
+            "https://10.0.0.5:8443",
+            "Status(StatusCode=Unavailable, Detail=\"connect to 10.0.0.5:8443 refused\")"));
+        var cut = Render<ConnectionDialog>();
+
+        cut.Find("input.lt-input").Input("https://10.0.0.5:8443");
+        TestButton(cut).Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("[role=status]").TextContent, Does.Not.Contain("StatusCode").And.Not.Contain("refused"));
+            Assert.That(
+                cut.Find("[role=status] .lt-field__hint").TextContent,
+                Is.EqualTo("No Lattice API answered at this address. Check the endpoint and its transport settings."));
+        });
+    }
+
+    [Test]
+    public void A_throwing_connection_test_never_shows_the_exceptions_text()
+    {
+        Tester.Failure = new InvalidOperationException("No such host is known. (internal-db.corp:5432)");
         var cut = Render<ConnectionDialog>();
 
         cut.Find("input.lt-input").Input("https://cluster.example:443");
         TestButton(cut).Click();
 
-        Assert.That(cut.Find("[role=status] .lt-field__hint").TextContent, Is.EqualTo("Connection refused."));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Markup, Does.Not.Contain("internal-db.corp").And.Not.Contain("No such host"));
+            Assert.That(cut.Find("[role=status] .lt-pill__text").TextContent, Is.EqualTo("Unreachable"));
+        });
+    }
+
+    [Test]
+    public void A_read_only_head_shows_the_configured_endpoint_and_offers_no_form_test_or_save()
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration("https://cluster.example:8443"));
+
+        var cut = Render<ConnectionDialog>(parameters => parameters
+            .Add(p => p.AllowCancel, true)
+            .Add(p => p.Initial, Explorer.Current));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("input"), Is.Empty, "a read-only head offers nothing to type an endpoint into");
+            Assert.That(cut.FindAll("form"), Is.Empty);
+            Assert.That(
+                cut.FindAll("button").Select(button => button.TextContent.Trim()),
+                Has.No.Member("Test connection").And.No.Member("Save and connect"));
+            Assert.That(cut.Find(".lt-dl__value--mono").TextContent, Is.EqualTo("https://cluster.example:8443"));
+            Assert.That(Tester.Tested, Is.Empty);
+            Assert.That(Explorer.Applied, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_read_only_first_run_says_where_the_endpoint_comes_from_and_cannot_be_dismissed()
+    {
+        UseReadOnlyEndpoint();
+        var cancelled = 0;
+
+        var cut = Render<ConnectionDialog>(parameters => parameters
+            .Add(p => p.AllowCancel, false)
+            .Add(p => p.OnCancelled, () => cancelled++));
+        cut.Find("[role=dialog]").KeyDown("Escape");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("input"), Is.Empty);
+            Assert.That(cut.FindAll("button"), Is.Empty);
+            Assert.That(cut.Find("[role=dialog]").TextContent, Does.Contain("LATTICE_EXPLORER_ENDPOINT"));
+            Assert.That(cancelled, Is.Zero);
+        });
     }
 
     [Test]

@@ -3,6 +3,7 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.UI.Session;
 using Orleans.Lattice.Explorer.Web;
 
 namespace Orleans.Lattice.Explorer.Tests.Web;
@@ -182,6 +183,38 @@ public class LatticeExplorerWebSecurityDefaultsTests
     [Test]
     public void Read_only_store_rejects_a_null_inner_store()
         => Assert.That(() => new ReadOnlyExplorerConfigStore(null!), Throws.ArgumentNullException);
+
+    [Test]
+    public async Task Web_head_offers_no_interactive_endpoint_configuration_or_connection_test_by_default()
+    {
+        // The connection dialog's Test connection dials, from the head, whatever a
+        // visitor typed: an anonymous host and port scanner into the head's network.
+        // The chrome is told the head refuses browser configuration, and the tester
+        // refuses to dial even if some caller reaches it.
+        await using var provider = BuildWebProvider();
+        await using var circuit = provider.CreateAsyncScope();
+
+        var options = provider.GetRequiredService<SessionEndpointConfigurationOptions>();
+        var tester = circuit.ServiceProvider.GetRequiredService<IConnectionTester>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AllowInteractiveEndpointConfiguration, Is.False);
+            Assert.That(
+                async () => await tester.TestAsync(new ExplorerConfiguration { Endpoint = "https://10.0.0.5:8443" }),
+                Throws.InvalidOperationException.With.Message.EqualTo(LatticeConnectionTester.RefusalMessage));
+        });
+    }
+
+    [Test]
+    public async Task Web_head_offers_interactive_endpoint_configuration_when_opted_in()
+    {
+        await using var provider = BuildWebProvider(options => options.AllowInteractiveEndpointConfiguration = true);
+
+        Assert.That(
+            provider.GetRequiredService<SessionEndpointConfigurationOptions>().AllowInteractiveEndpointConfiguration,
+            Is.True);
+    }
 
     [Test]
     public void Read_only_store_rejects_a_null_configuration()

@@ -28,6 +28,22 @@ public sealed class SessionOverlayTests : SessionTestContext
     }
 
     [Test]
+    public void A_read_only_first_run_shows_where_the_endpoint_comes_from_with_nothing_to_test()
+    {
+        UseReadOnlyEndpoint();
+
+        var cut = Render<SessionOverlay>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindComponent<ConnectionDialog>().Instance.AllowCancel, Is.False);
+            Assert.That(cut.FindAll("input"), Is.Empty);
+            Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Has.No.Member("Test connection"));
+            Assert.That(cut.Find("[role=dialog] h2").TextContent, Is.EqualTo("Cluster connection"));
+        });
+    }
+
+    [Test]
     public void It_initialises_the_connection_and_sign_in_sessions_once()
     {
         Render<SessionOverlay>();

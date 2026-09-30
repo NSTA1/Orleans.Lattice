@@ -23,6 +23,14 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// it, so one address configures them all.
 /// </para>
 /// <para>
+/// The form, its test and its save are offered only when the head accepts
+/// browser-driven endpoint configuration
+/// (<see cref="SessionEndpointConfigurationOptions"/>). Otherwise the dialog shows
+/// the configured endpoint read-only, because the test dials, from the head, an
+/// address the visitor typed. A test's outcome is always shown in fixed words,
+/// never the endpoint's or an exception's own text.
+/// </para>
+/// <para>
 /// On first run it is mandatory: <see cref="AllowCancel"/> is
 /// <see langword="false"/>, so it has no Cancel or Close and Escape does not
 /// dismiss it.
@@ -77,10 +85,19 @@ public partial class ConnectionDialog
     [Inject]
     private IConnectionTester Tester { get; set; } = default!;
 
+    [Inject]
+    private SessionEndpointConfigurationOptions EndpointOptions { get; set; } = default!;
+
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     private LtBreakpoint? Breakpoint { get; set; }
 
     private LtDialogPlacement Placement => SessionPresentation.DialogPlacement(Breakpoint);
+
+    /// <summary>Whether the head accepts browser-driven endpoint configuration; otherwise the dialog is read-only.</summary>
+    private bool Editable => EndpointOptions.AllowInteractiveEndpointConfiguration;
+
+    /// <summary>The endpoint a read-only dialog shows: the one it was opened with, else the session's own.</summary>
+    private string? ConfiguredEndpoint => Initial?.Endpoint is { Length: > 0 } initial ? initial : Explorer.Current?.Endpoint;
 
     private bool IsBusy => _saving || _testing;
 
@@ -138,7 +155,7 @@ public partial class ConnectionDialog
 
     private async Task TestAsync()
     {
-        if (IsBusy || !TryBuild(out var configuration))
+        if (!Editable || IsBusy || !TryBuild(out var configuration))
         {
             return;
         }
@@ -149,9 +166,11 @@ public partial class ConnectionDialog
         {
             _testResult = await Tester.TestAsync(configuration);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _testResult = new ConnectionTestResult(ConnectionTestOutcome.Unreachable, ex.Message);
+            // The exception's text describes whatever answered at the address the
+            // visitor chose, so it is never shown: the outcome's fixed words are.
+            _testResult = new ConnectionTestResult(ConnectionTestOutcome.Unreachable);
         }
         finally
         {
@@ -161,7 +180,7 @@ public partial class ConnectionDialog
 
     private async Task SaveAsync()
     {
-        if (IsBusy || !TryBuild(out var configuration))
+        if (!Editable || IsBusy || !TryBuild(out var configuration))
         {
             return;
         }

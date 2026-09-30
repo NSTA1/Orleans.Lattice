@@ -1,49 +1,73 @@
-<LtDialog Open="true"
-          Placement="Placement"
-          OpenChanged="HandleOpenChangedAsync"
-          Title="Connect to a cluster"
-          Description="Enter the address of the Lattice API endpoint this Explorer connects to."
-          ShowClose="AllowCancel"
-          DismissOnEscape="AllowCancel"
-          AutoFocus="false">
-    <form class="lt-confirm" @onsubmit="SaveAsync">
-        <LtTextInput @ref="_endpointInput"
-                     Label="Endpoint"
-                     Mono="true"
-                     Placeholder="https://host:443"
-                     Hint="Every Lattice API this Explorer uses - state, data and administration - is reached at this address."
-                     Error="@_error"
-                     Value="@_endpoint"
-                     ValueChanged="_endpointChanged" />
-        <LtCheckbox Label="Insecure loopback development mode"
-                    Hint="Anonymous and unencrypted. Allowed only for a localhost endpoint."
-                    Checked="_insecureLoopbackDev"
-                    CheckedChanged="_insecureChanged" />
-        <LtCheckbox Label="Allow unencrypted HTTP/2 (h2c)"
-                    Hint="For a plain http:// endpoint in local development. Ignored for https://."
-                    Checked="_allowUnencryptedHttp2"
-                    CheckedChanged="_h2cChanged" />
-        <div role="status">
-            @if (_testResult is { } result)
-            {
-                <LtStatusPill State="result.Role" Text="@result.Text" />
-                @if (result.Message is { Length: > 0 } message)
+@if (Editable)
+{
+    <LtDialog Open="true"
+              Placement="Placement"
+              OpenChanged="HandleOpenChangedAsync"
+              Title="Connect to a cluster"
+              Description="Enter the address of the Lattice API endpoint this Explorer connects to."
+              ShowClose="AllowCancel"
+              DismissOnEscape="AllowCancel"
+              AutoFocus="false">
+        <form class="lt-confirm" @onsubmit="SaveAsync">
+            <LtTextInput @ref="_endpointInput"
+                         Label="Endpoint"
+                         Mono="true"
+                         Placeholder="https://host:443"
+                         Hint="Every Lattice API this Explorer uses - state, data and administration - is reached at this address."
+                         Error="@_error"
+                         Value="@_endpoint"
+                         ValueChanged="_endpointChanged" />
+            <LtCheckbox Label="Insecure loopback development mode"
+                        Hint="Anonymous and unencrypted. Allowed only for a localhost endpoint."
+                        Checked="_insecureLoopbackDev"
+                        CheckedChanged="_insecureChanged" />
+            <LtCheckbox Label="Allow unencrypted HTTP/2 (h2c)"
+                        Hint="For a plain http:// endpoint in local development. Ignored for https://."
+                        Checked="_allowUnencryptedHttp2"
+                        CheckedChanged="_h2cChanged" />
+            <div role="status">
+                @if (_testResult is { } result)
                 {
-                    <p class="lt-field__hint">@message</p>
+                    <LtStatusPill State="result.Role" Text="@result.Text" />
+                    @if (result.Hint is { } hint)
+                    {
+                        <p class="lt-field__hint">@hint</p>
+                    }
                 }
-            }
-            else if (_testing)
-            {
-                <span>Testing the connection</span>
-            }
-        </div>
-        <div class="lt-dialog__actions">
-            @if (AllowCancel)
-            {
-                <LtButton Variant="LtButtonVariant.Quiet" Disabled="IsBusy" OnClick="CancelAsync">Cancel</LtButton>
-            }
-            <LtButton Disabled="IsBusy" OnClick="TestAsync">Test connection</LtButton>
-            <LtButton Type="LtButtonType.Submit" Disabled="IsBusy">@(_saving ? "Connecting" : "Save and connect")</LtButton>
-        </div>
-    </form>
-</LtDialog>
+                else if (_testing)
+                {
+                    <span>Testing the connection</span>
+                }
+            </div>
+            <div class="lt-dialog__actions">
+                @if (AllowCancel)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="IsBusy" OnClick="CancelAsync">Cancel</LtButton>
+                }
+                <LtButton Disabled="IsBusy" OnClick="TestAsync">Test connection</LtButton>
+                <LtButton Type="LtButtonType.Submit" Disabled="IsBusy">@(_saving ? "Connecting" : "Save and connect")</LtButton>
+            </div>
+        </form>
+    </LtDialog>
+}
+else
+{
+    <LtDialog Open="true"
+              Placement="Placement"
+              OpenChanged="HandleOpenChangedAsync"
+              Title="Cluster connection"
+              Description="This Explorer's endpoint is set by its deployment and cannot be changed from the browser."
+              ShowClose="AllowCancel"
+              DismissOnEscape="AllowCancel">
+        @if (ConfiguredEndpoint is { Length: > 0 } endpoint)
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Endpoint" Mono="true">@endpoint</LtDefinition>
+            </LtDefinitionList>
+        }
+        else
+        {
+            <p>No endpoint is configured. The deployment sets it through the LATTICE_EXPLORER_ENDPOINT environment variable or a pre-provisioned configuration document.</p>
+        }
+    </LtDialog>
+}

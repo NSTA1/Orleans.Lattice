@@ -34,6 +34,9 @@ else
         {
             <LtButton Disabled="_reconnecting" OnClick="ReconnectAsync">@(_reconnecting ? "Reconnecting" : "Reconnect")</LtButton>
         }
-        <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection settings</LtButton>
+        @if (EndpointOptions.AllowInteractiveEndpointConfiguration)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection settings</LtButton>
+        }
     };
 }

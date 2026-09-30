@@ -49,7 +49,8 @@ public sealed class SessionLayoutTests : ShellLayoutTestContext
         Assert.Multiple(() =>
         {
             Assert.That(Sheets(cut, "Directory"), Is.Empty);
-            Assert.That(Sheets(cut, "Connect to a cluster"), Has.Count.EqualTo(1));
+            // The Shell's default head refuses browser configuration, so the settings open read-only.
+            Assert.That(Sheets(cut, "Cluster connection"), Has.Count.EqualTo(1));
         });
     }
 
