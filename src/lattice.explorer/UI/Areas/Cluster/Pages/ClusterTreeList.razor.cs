@@ -25,6 +25,9 @@ public partial class ClusterTreeList : IDisposable
     private ClusterTreeCatalog Catalog { get; set; } = default!;
 
     [Inject]
+    private ClusterFacades Facades { get; set; } = default!;
+
+    [Inject]
     internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
@@ -126,4 +129,16 @@ public partial class ClusterTreeList : IDisposable
 
     private static string Summary(ClusterTreeEntry tree) =>
         (tree.Name.Ownership is { } owners ? owners + ", " : string.Empty) + ClusterFormat.Plural(tree.ShardCount, "shard");
+
+    /// <summary>
+    /// The sentence that counts the list, in the words the Home status and the
+    /// directory badge use, and says what it leaves out.
+    /// </summary>
+    /// <param name="count">The trees listed.</param>
+    /// <param name="assertedTenant">The tenant the circuit asserts, or <see langword="null"/>.</param>
+    /// <returns>The sentence.</returns>
+    internal static string CountLine(int count, string? assertedTenant) =>
+        ClusterTreeCatalog.NarrowingTenant(assertedTenant) is { } tenant
+            ? $"{ClusterFormat.Plural(count, "tree")} of tenant {tenant}. Other tenants' trees and system trees are not listed."
+            : $"{ClusterFormat.Plural(count, "tree")}. System trees are not listed.";
 }

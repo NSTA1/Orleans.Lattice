@@ -106,7 +106,7 @@ else
             </p>
             @if (IsListOpen || _notes.Count > 0)
             {
-                <div class="lt-shell-combobox__popup">
+                <div @attributes="PopupAttributes">
                     @if (IsListOpen)
                     {
                         <ul id="@_listboxId" class="lt-shell-combobox__list" role="listbox" aria-label="Suggestions">

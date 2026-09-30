@@ -22,18 +22,79 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
     [Test]
     public void The_address_is_a_mono_chain_whose_ancestors_are_links_and_whose_current_node_is_the_marker()
     {
-        var cut = RenderLine(Location("/data/a/crm/Orders?key=k-1"));
+        var cut = RenderLine(Location("/data/a/crm/Orders"));
 
         var nodes = cut.FindAll(".lt-chain__text");
         Assert.Multiple(() =>
         {
             Assert.That(cut.Find("nav").GetAttribute("aria-label"), Is.EqualTo("Address"));
             Assert.That(cut.Find(".lt-chain").ClassList, Does.Contain("lt-chain--mono"));
-            Assert.That(nodes.Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "data", "a", "crm", "Orders", "?key=k-1" }));
-            Assert.That(nodes.Take(5).All(node => node.LocalName == "a"), Is.True);
-            Assert.That(nodes[4].GetAttribute("href"), Is.EqualTo("data/a/crm/%4Frders"));
-            Assert.That(nodes[5].GetAttribute("aria-current"), Is.EqualTo("page"));
+            Assert.That(nodes.Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "data", "a", "crm", "Orders" }), "an area that does not group its path has one node per segment");
+            Assert.That(nodes.Take(4).All(node => node.LocalName == "a"), Is.True);
+            Assert.That(nodes[3].GetAttribute("href"), Is.EqualTo("data/a/crm"));
+            Assert.That(nodes[4].GetAttribute("aria-current"), Is.EqualTo("page"));
             Assert.That(cut.FindAll(".lt-node--join"), Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void The_query_is_never_a_node_of_the_chain()
+    {
+        var cut = RenderLine(Location("/data/factory-floor?tab=history&key=machine-003"));
+
+        var nodes = cut.FindAll(".lt-chain__text");
+        Assert.Multiple(() =>
+        {
+            Assert.That(nodes.Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "data", "factory-floor" }));
+            Assert.That(nodes[^1].GetAttribute("aria-current"), Is.EqualTo("page"), "the page itself is the current node");
+            Assert.That(cut.Markup, Does.Not.Contain("?tab="));
+        });
+    }
+
+    [Test]
+    public void An_area_that_names_a_tree_id_in_its_path_makes_the_id_one_node()
+    {
+        AddArea(new FakeArea("schema", "Schema") { ChainSpans = address => [address.Path.Count] });
+
+        var cut = RenderLine(Location("/t/acme/schema/t/acme/a/task-board/tasks?tab=policy"));
+
+        var nodes = cut.FindAll(".lt-chain__text");
+        Assert.Multiple(() =>
+        {
+            Assert.That(nodes.Select(node => node.TextContent), Is.EqualTo(new[] { "t/acme", "schema", "t/acme/a/task-board/tasks" }));
+            Assert.That(nodes[1].GetAttribute("href"), Is.EqualTo("t/acme/schema"));
+        });
+    }
+
+    [Test]
+    public void A_grouped_node_links_to_the_whole_group()
+    {
+        AddArea(new FakeArea("cluster", "Cluster") { ChainSpans = _ => [1, 3, 1] });
+
+        var cut = RenderLine(Location("/cluster/trees/t/acme/orders/resize"));
+
+        var nodes = cut.FindAll(".lt-chain__text");
+        Assert.Multiple(() =>
+        {
+            Assert.That(nodes.Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "cluster", "trees", "t/acme/orders", "resize" }));
+            Assert.That(nodes[2].GetAttribute("href"), Is.EqualTo("cluster/trees"));
+            Assert.That(nodes[3].GetAttribute("href"), Is.EqualTo("cluster/trees/t/acme/orders"));
+        });
+    }
+
+    [Test]
+    public void Spans_that_do_not_cover_the_path_fall_back_to_one_node_per_segment()
+    {
+        AddArea(new FakeArea("data", "Data") { ChainSpans = _ => [1, 5] });
+        AddArea(new FakeArea("apps", "Apps") { ChainSpans = _ => [0, 2] });
+
+        var data = RenderLine(Location("/data/a/orders"));
+        var apps = RenderLine(Location("/apps/crm/replication"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.FindAll(".lt-chain__text").Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "data", "a", "orders" }));
+            Assert.That(apps.FindAll(".lt-chain__text").Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "apps", "crm", "replication" }));
         });
     }
 
@@ -207,11 +268,11 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
         cut.Find("input").Input(">theme");
         var options = cut.FindAll("[role='option']");
         Assert.That(options, Has.Count.EqualTo(3), "the three theme commands");
+        Assert.That(ActiveOption(cut), Does.Contain("system theme"), "the list opens on its first option");
 
         cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "ArrowDown" });
-        Assert.That(ActiveOption(cut), Does.Contain("system theme"));
+        Assert.That(ActiveOption(cut), Does.Not.Contain("system theme"), "down moves to the second");
 
-        cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "ArrowDown" });
         cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "ArrowDown" });
         cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "ArrowDown" });
         Assert.That(ActiveOption(cut), Does.Contain("system theme"), "down from the last wraps to the first");

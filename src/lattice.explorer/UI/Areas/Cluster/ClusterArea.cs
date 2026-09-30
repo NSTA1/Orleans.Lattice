@@ -1,5 +1,6 @@
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
@@ -24,6 +25,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     public const string PlanWalMoveCommandId = "cluster.plan-wal-move";
 
     private readonly ClusterFacades _facades;
+    private readonly ClusterTreeCatalog _catalog;
     private AreaAvailability? _verdict;
     private ClusterStorageUsageSummary? _usage;
     private string? _verdictTenant;
@@ -39,6 +41,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         ArgumentNullException.ThrowIfNull(signals);
 
         _facades = facades;
+        _catalog = catalog;
         Completions = new ClusterCompletionSource(catalog);
         Commands =
         [
@@ -79,6 +82,9 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
 
     /// <inheritdoc />
     public IReadOnlyList<ExplorerCommand> Commands { get; }
+
+    /// <inheritdoc />
+    public IReadOnlyList<int>? GetChainSpans(ExplorerAddress address) => ClusterAddresses.ChainSpans(address);
 
     /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
@@ -141,16 +147,43 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     }
 
     /// <inheritdoc />
-    public ValueTask<string?> GetHomeStatusAsync(CancellationToken cancellationToken) =>
-        ValueTask.FromResult(_usage is { } usage && string.Equals(_verdictTenant, _facades.AssertedTenant, StringComparison.Ordinal)
-            ? $"{ClusterFormat.Plural(usage.TreeCount, "tree")}, {ClusterFormat.Bytes(usage.TotalBytes)} stored."
-            : null);
+    /// <remarks>
+    /// It counts the trees the tree list shows, and names the rest of the storage
+    /// summary's count rather than folding it in: system trees - and, under a
+    /// tenant other than the default, every other tenant's trees - are counted by
+    /// the cluster but never listed.
+    /// </remarks>
+    public async ValueTask<string?> GetHomeStatusAsync(CancellationToken cancellationToken)
+    {
+        if (CurrentUsage() is not { } usage)
+        {
+            return null;
+        }
+
+        var stored = ClusterFormat.Bytes(usage.TotalBytes);
+        var listed = await CountListedAsync(cancellationToken).ConfigureAwait(false);
+        if (listed is not { } count)
+        {
+            return $"{ClusterFormat.Plural(usage.TreeCount, "tree")} including system trees, {stored} stored.";
+        }
+
+        if (ClusterTreeCatalog.NarrowingTenant(_facades.AssertedTenant) is { } tenant)
+        {
+            return $"{ClusterFormat.Plural(count, "tree")} of tenant {tenant}, {ClusterFormat.Count(usage.TreeCount)} in the cluster, {stored} stored.";
+        }
+
+        var unlisted = usage.TreeCount - count;
+        return unlisted > 0
+            ? $"{ClusterFormat.Plural(count, "tree")}, plus {ClusterFormat.Plural(unlisted, "system tree")}, {stored} stored."
+            : $"{ClusterFormat.Plural(count, "tree")}, {stored} stored.";
+    }
 
     /// <inheritdoc />
-    public ValueTask<string?> GetDirectoryBadgeAsync(CancellationToken cancellationToken) =>
-        ValueTask.FromResult(_usage is { } usage && string.Equals(_verdictTenant, _facades.AssertedTenant, StringComparison.Ordinal)
-            ? ClusterFormat.Count(usage.TreeCount)
-            : null);
+    /// <remarks>The count of the tree list at <c>/cluster/trees</c>, so the badge and the list it leads to agree.</remarks>
+    public async ValueTask<string?> GetDirectoryBadgeAsync(CancellationToken cancellationToken) =>
+        CurrentUsage() is not null && await CountListedAsync(cancellationToken).ConfigureAwait(false) is { } count
+            ? ClusterFormat.Count(count)
+            : null;
 
     /// <inheritdoc />
     public void Dispose()
@@ -158,6 +191,28 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         if (_facades.Session is { } session)
         {
             session.ConfigurationChanged -= Forget;
+        }
+    }
+
+    private ClusterStorageUsageSummary? CurrentUsage() =>
+        _usage is { } usage && string.Equals(_verdictTenant, _facades.AssertedTenant, StringComparison.Ordinal) ? usage : null;
+
+    // The tree list's own count, read through the circuit's remembered catalogue;
+    // a failed read has no count rather than a guessed one.
+    private async ValueTask<int?> CountListedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var trees = await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+            return trees.Count;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 

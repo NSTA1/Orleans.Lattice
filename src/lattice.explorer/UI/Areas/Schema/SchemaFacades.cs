@@ -29,6 +29,12 @@ internal sealed class SchemaFacades(IServiceProvider services)
     /// </summary>
     public string? AssertedTenant => _tenant.Value?.AssertedTenant;
 
+    /// <summary>
+    /// The tenant the area's listings are for: <see langword="null"/> with tenancy
+    /// off, otherwise the asserted tenant or the reserved default one.
+    /// </summary>
+    public string? ListingTenant => ShellAssertedTenant.ListingTenantOf(_tenant.Value);
+
     /// <summary>The schema control facade (T1's adapter), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeSchemaControl? Schema => _schema.Value;
 

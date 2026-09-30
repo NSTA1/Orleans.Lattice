@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.AspNetCore.Components.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice;
@@ -76,9 +77,8 @@ public sealed class ClusterTreePageTests : ClusterTestContext
     {
         Granted = Grants.Read;
 
-        var cut = RenderAt("/cluster/trees/" + TreeId);
+        var cut = RenderAt("/cluster/trees/" + TreeId + "?tab=lifecycle");
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=tab]"), Has.Count.EqualTo(5)));
-        cut.FindAll("[role=tab]").Single(tab => tab.TextContent == "Lifecycle").Click();
 
         Assert.Multiple(() =>
         {
@@ -87,6 +87,87 @@ public sealed class ClusterTreePageTests : ClusterTestContext
             Assert.That(HasButton(cut, "Set alias..."), Is.False);
             Assert.That(cut.Markup, Does.Contain("Purge requires the TreeLifecycle grant and is not an app operation"));
         });
+    }
+
+    [Test]
+    public void A_query_string_opens_its_tab_and_never_joins_the_tree_id()
+    {
+        var notFound = 0;
+        Navigation.OnNotFound += (_, _) => notFound++;
+
+        var cut = RenderAt("/cluster/trees/factory-floor?tab=lifecycle");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("h1").TextContent.Trim(), Is.EqualTo("factory-floor"));
+            Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo("Lifecycle"));
+        });
+        Assert.Multiple(() =>
+        {
+            Assert.That(notFound, Is.Zero);
+            Admin.Received().GetTreeConfigAsync("factory-floor", Arg.Any<CancellationToken>());
+            Admin.DidNotReceive().GetTreeConfigAsync(Arg.Is<string>(id => id.Contains('?') || id.Contains("tab")), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public void An_unknown_tab_opens_the_summary()
+    {
+        var cut = RenderAt("/cluster/trees/" + TreeId + "?tab=nonsense");
+
+        cut.WaitUntil(() => Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo("Summary")));
+    }
+
+    [Test]
+    public void Choosing_a_tab_gives_it_its_own_address_and_the_summary_has_none()
+    {
+        var cut = RenderAt("/cluster/trees/" + TreeId);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=tab]"), Has.Count.EqualTo(5)));
+
+        cut.FindAll("[role=tab]").Single(tab => tab.TextContent == "Storage").Click();
+        var storage = Navigation.Uri;
+
+        var onStorage = RenderAt("/cluster/trees/" + TreeId + "?tab=storage");
+        onStorage.WaitUntil(() => Assert.That(onStorage.FindAll("[role=tab]"), Has.Count.EqualTo(5)));
+        onStorage.FindAll("[role=tab]").Single(tab => tab.TextContent == "Summary").Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(storage, Is.EqualTo(Navigation.BaseUri + "cluster/trees/t/acme/a/crm/orders?tab=storage"));
+            Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "cluster/trees/t/acme/a/crm/orders"));
+        });
+    }
+
+    [Test]
+    public void Under_another_tenant_a_bare_name_that_is_not_its_tree_says_so_rather_than_not_found()
+    {
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Connection.ILatticeActiveTenantProvider>(new Orleans.Lattice.Explorer.Tests.Connection.FakeActiveTenantProvider("globex"));
+        Admin.GetTreeConfigAsync("factory-floor", Arg.Any<CancellationToken>()).Returns(new TreeConfigurationReport { TreeId = "factory-floor", Exists = false });
+        var notFound = 0;
+        Navigation.OnNotFound += (_, _) => notFound++;
+
+        var cut = RenderAt("/cluster/trees/factory-floor?tab=lifecycle");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("Tenant globex has no tree by this name")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(notFound, Is.Zero);
+            Assert.That(cut.Find(".lt-empty a").GetAttribute("href"), Is.EqualTo("cluster/trees"));
+            Assert.That(cut.FindAll("[role=tab]"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Under_another_tenant_a_qualified_name_that_does_not_exist_is_not_found()
+    {
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Connection.ILatticeActiveTenantProvider>(new Orleans.Lattice.Explorer.Tests.Connection.FakeActiveTenantProvider("globex"));
+        Admin.GetTreeConfigAsync("t/globex/missing", Arg.Any<CancellationToken>()).Returns(new TreeConfigurationReport { TreeId = "t/globex/missing", Exists = false });
+        var notFound = 0;
+        Navigation.OnNotFound += (_, _) => notFound++;
+
+        RenderAt("/cluster/trees/t/globex/missing");
+
+        Assert.That(notFound, Is.EqualTo(1));
     }
 
     [Test]
@@ -141,10 +222,14 @@ public sealed class ClusterTreePageTests : ClusterTestContext
             Assert.That(cut.Markup, Does.Contain("None in progress."));
         });
 
-        foreach (var tab in new[] { "Configuration", "Shards", "Storage", "Lifecycle" })
+        foreach (var tab in new[] { "configuration", "shards", "storage", "lifecycle" })
         {
-            cut.FindAll("[role=tab]").Single(candidate => candidate.TextContent == tab).Click();
-            cut.WaitUntil(() => Assert.That(cut.Markup, Does.Not.Contain("orders-physical-7f3a"), tab));
+            var view = RenderAt("/cluster/trees/" + TreeId + "?tab=" + tab);
+            view.WaitUntil(() =>
+            {
+                Assert.That(view.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo(char.ToUpperInvariant(tab[0]) + tab[1..]));
+                Assert.That(view.Markup, Does.Not.Contain("orders-physical-7f3a"), tab);
+            });
         }
     }
 }

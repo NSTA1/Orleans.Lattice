@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Explorer.UI.Transport;
 using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -75,7 +76,13 @@ internal sealed class SchemaDirectory
         }
 
         var schema = _facades.RequireSchema();
-        var trees = await _catalog.GetAsync(refresh, cancellationToken).ConfigureAwait(false);
+
+        // The directory is tenant-scoped: the default tenant is handed every
+        // tenant's trees, so it lists only its own, as the Data area does.
+        var listing = _facades.ListingTenant;
+        IReadOnlyList<string> trees = (await _catalog.GetAsync(refresh, cancellationToken).ConfigureAwait(false))
+            .Where(tree => ShellAssertedTenant.Lists(listing, tree))
+            .ToArray();
         var declarations = await GetDeclarationsAsync(refresh, cancellationToken).ConfigureAwait(false);
         var inspected = trees.Count > MaximumInspected ? trees.Take(MaximumInspected).ToArray() : trees;
         var rows = new SchemaTreeRow[inspected.Count];

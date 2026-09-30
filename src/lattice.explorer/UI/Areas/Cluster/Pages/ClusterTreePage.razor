@@ -10,6 +10,15 @@ else if (_access.Value is not { } access)
     <ClusterTreeHeader TreeId="@TreeId" />
     <p class="lt-cluster-error" role="alert">@_access.Error</p>
 }
+else if (_missingUnder is { } tenant)
+{
+    <ClusterTreeHeader TreeId="@TreeId" />
+    <LtEmptyState Title="@($"Tenant {tenant} has no tree by this name")" HeadingLevel="2">
+        The Cluster area reads a tree name as the tenant you hold sees it, so this address names
+        a tree in another tenant, or none. Switch to the tenant that owns it, or
+        <a href="@Href(ClusterAddresses.Trees)">see the trees of tenant @tenant</a>.
+    </LtEmptyState>
+}
 else if (!ClusterTreeAccess.Any(access))
 {
     <ClusterTreeHeader TreeId="@TreeId" />
@@ -39,7 +48,7 @@ else
         }
     </nav>
 
-    <LtTabs Label="Tree administration" @bind-ActiveId="_tab">
+    <LtTabs Label="Tree administration" ActiveId="@ActiveTab" ActiveIdChanged="OnTabChanged">
         <LtTab Id="summary" Title="Summary">
             <ClusterTreeSummary TreeId="@TreeId" Capabilities="access" />
         </LtTab>

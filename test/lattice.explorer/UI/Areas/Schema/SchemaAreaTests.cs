@@ -18,6 +18,16 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 public sealed class SchemaAreaTests : SchemaTestContext
 {
     [Test]
+    public void A_tree_path_is_one_chain_node_whatever_its_slashes()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/t/acme/schema/t/acme/a/task-board/tasks?tab=policy")), Is.EqualTo(new[] { 5 }));
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/schema?show=all")), Is.Null);
+            Assert.That(() => Area.GetChainSpans(null!), Throws.ArgumentNullException);
+        });
+    }
+    [Test]
     public async Task It_is_visible_when_the_capability_probe_grants_anything()
     {
         var area = Area;
