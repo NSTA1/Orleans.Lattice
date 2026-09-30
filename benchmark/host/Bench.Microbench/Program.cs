@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused
+// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -326,6 +326,20 @@ if (string.Equals(suite, "aggsplice", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> aggsplice (AggregationSpliceTrimBenchmarks)");
     var aggSpliceSummary = BenchmarkRunner.Run<AggregationSpliceTrimBenchmarks>(config);
     return aggSpliceSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "aggblock", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> aggblock (AggregationBlockSpliceBenchmarks)");
+    var aggBlockSummary = BenchmarkRunner.Run<AggregationBlockSpliceBenchmarks>(config);
+    return aggBlockSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "aggshardgather", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> aggshardgather (AggregationShardGatherBenchmarks)");
+    var aggGatherSummary = BenchmarkRunner.Run<AggregationShardGatherBenchmarks>(config);
+    return aggGatherSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "aggfused", StringComparison.OrdinalIgnoreCase))

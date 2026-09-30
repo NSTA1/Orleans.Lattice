@@ -420,6 +420,8 @@ internal static class AggregationRowCodec
             var entriesStart = reader.Position;
             var matchCount = 0;
             var matchBytes = 0;
+            var firstMatchStart = 0;
+            var firstMatchEnd = 0;
             for (var i = 0; i < count; i++)
             {
                 var start = reader.Position;
@@ -435,6 +437,11 @@ internal static class AggregationRowCodec
                 {
                     matchCount++;
                     matchBytes += reader.Position - start;
+                    if (matchCount == 1)
+                    {
+                        firstMatchStart = start;
+                        firstMatchEnd = reader.Position;
+                    }
                 }
             }
 
@@ -452,6 +459,38 @@ internal static class AggregationRowCodec
             var buffer = new byte[sizeof(int) + (entriesEnd - entriesStart) - matchBytes + addedSize];
             var writer = new RowWriter(buffer);
             writer.WriteInt32(newCount);
+
+            // Pass two, block form. A row this codec produced carries a key at
+            // most once, so the surviving entries are at most two contiguous
+            // runs - those before the match and those after it - and pass one
+            // already delimited both. Copying the runs as blocks emits exactly
+            // the bytes the entry-by-entry walk below emits, without re-reading
+            // a length prefix, re-comparing a key, or re-parsing a field. The
+            // general walk is kept for the hostile row that repeats the key.
+            if (matchCount <= 1)
+            {
+                if (matchCount == 0)
+                {
+                    writer.WriteRaw(row[entriesStart..entriesEnd]);
+                }
+                else
+                {
+                    writer.WriteRaw(row[entriesStart..firstMatchStart]);
+                    if (add is { } inPlace && !moveToEnd)
+                    {
+                        WriteInverseEntry(ref writer, sourceKey, inPlace);
+                    }
+
+                    writer.WriteRaw(row[firstMatchEnd..entriesEnd]);
+                }
+
+                if (add is { } tail && (matchCount == 0 || moveToEnd))
+                {
+                    WriteInverseEntry(ref writer, sourceKey, tail);
+                }
+
+                return buffer;
+            }
 
             // Pass two: copy every surviving entry through as raw bytes, writing
             // the replacement in the first matched entry's place.
@@ -722,6 +761,8 @@ internal static class AggregationRowCodec
             var entriesStart = reader.Position;
             var matchCount = 0;
             var matchBytes = 0;
+            var firstMatchStart = 0;
+            var firstMatchEnd = 0;
             for (var i = 0; i < count; i++)
             {
                 var start = reader.Position;
@@ -733,6 +774,11 @@ internal static class AggregationRowCodec
                 {
                     matchCount++;
                     matchBytes += reader.Position - start;
+                    if (matchCount == 1)
+                    {
+                        firstMatchStart = start;
+                        firstMatchEnd = reader.Position;
+                    }
                 }
             }
 
@@ -749,6 +795,35 @@ internal static class AggregationRowCodec
             var buffer = new byte[sizeof(int) + (entriesEnd - entriesStart) - matchBytes + addedSize];
             var writer = new RowWriter(buffer);
             writer.WriteInt32(newCount);
+
+            // Pass two, block form - see SpliceInverse. The fold row's saving is
+            // strictly larger: every skipped entry also carries an opaque value
+            // payload whose length prefix the walk would read only to step over
+            // it, and whose bytes it would copy one entry at a time.
+            if (matchCount <= 1)
+            {
+                if (matchCount == 0)
+                {
+                    writer.WriteRaw(row[entriesStart..entriesEnd]);
+                }
+                else
+                {
+                    writer.WriteRaw(row[entriesStart..firstMatchStart]);
+                    if (add is { } inPlace && !moveToEnd)
+                    {
+                        WriteFoldInverseEntry(ref writer, sourceKey, inPlace);
+                    }
+
+                    writer.WriteRaw(row[firstMatchEnd..entriesEnd]);
+                }
+
+                if (add is { } tail && (matchCount == 0 || moveToEnd))
+                {
+                    WriteFoldInverseEntry(ref writer, sourceKey, tail);
+                }
+
+                return buffer;
+            }
 
             reader = new RowReader(row);
             reader.ReadBoundedCount(MinimumFoldInverseEntrySize);

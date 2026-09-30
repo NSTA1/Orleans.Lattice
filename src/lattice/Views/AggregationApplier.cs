@@ -586,19 +586,13 @@ internal sealed class AggregationApplier(
         // MaterialiseFoldAsync below. Summation is order-independent, so the
         // arbitrary iteration order of the returned rows is immaterial, and the
         // pass costs one round trip at any fanout instead of `fanout` of them.
-        var slotKeys = new List<string>(_fanout);
-        for (var slot = 0; slot < _fanout; slot++)
-        {
-            slotKeys.Add(AccumulatorKey(groupKey, slot));
-        }
+        var shards = await ReadShardsAsync(ShardFamily.Accumulator, groupKey, cancellationToken);
 
-        var shards = await store.GetManyAsync(slotKeys, cancellationToken);
-
-        // GetManyAsync omits absent keys but still returns a slot holding the
-        // empty sentinel, which ReadAccumulatorAsync treats as "no row"; keep the
-        // IsEmpty guard so the batched pass decodes exactly what the per-slot loop
-        // did.
-        foreach (var (_, bytes) in shards)
+        // A gathered slot can hold the empty sentinel, and an absent one arrives
+        // as null (a batched read omits it; an unsharded read returns null for
+        // it). ReadAccumulatorAsync treats both as "no row"; keep the guard so
+        // this pass decodes exactly what the per-slot loop did.
+        foreach (var bytes in shards)
         {
             if (bytes is null || IsEmpty(bytes))
             {
@@ -631,28 +625,18 @@ internal sealed class AggregationApplier(
         // Gather every inverse shard for the group in one batched read rather than
         // one store call per slot; min/max/set-union are order-independent, so the
         // arbitrary iteration order of the returned rows is immaterial.
-        var slotKeys = new List<string>(_fanout);
-        for (var slot = 0; slot < _fanout; slot++)
-        {
-            slotKeys.Add(InverseKey(groupKey, slot));
-        }
+        var shards = await ReadShardsAsync(ShardFamily.Inverse, groupKey, cancellationToken);
 
-        var shards = await store.GetManyAsync(slotKeys, cancellationToken);
-
-        // Walk the freshly-materialised shard map by its struct enumerator rather
-        // than through `.Values`: it is a fresh GetMany result, so every `.Values`
-        // access otherwise allocates a throwaway ValueCollection.
-        //
-        // Each shard's entries are then walked STRAIGHT OUT OF THE ROW. This pass
+        // Each shard's entries are walked STRAIGHT OUT OF THE ROW. This pass
         // reduces a shard to one extremum or a member union and never looks a
         // source key up, so the keyed Dictionary the decoder used to hand it - and
         // the freshly-decoded string it held for every source key in the shard -
         // were built only to be dropped. The cursor materialises neither, and the
         // min/max walk additionally steps over the member string it does not read.
-        foreach (var (_, bytes) in shards)
+        foreach (var bytes in shards)
         {
-            // GetManyAsync can return a slot holding the empty sentinel (and a
-            // buffered delete reads as absent), exactly as the accumulator pass
+            // A gathered slot can hold the empty sentinel, and an absent slot (or
+            // a buffered delete) arrives as null, exactly as the accumulator pass
             // above guards for. Skip those rather than handing them to the decoder.
             if (bytes is null || IsEmpty(bytes))
             {
@@ -798,25 +782,15 @@ internal sealed class AggregationApplier(
         // rather than one store call per slot; the members are re-sorted by
         // (HLC, sourceKey) below, so the arbitrary order of the returned rows
         // does not affect the folded result.
-        var slotKeys = new List<string>(_fanout);
-        for (var slot = 0; slot < _fanout; slot++)
-        {
-            slotKeys.Add(FoldInverseKey(groupKey, slot));
-        }
+        var shards = await ReadShardsAsync(ShardFamily.FoldInverse, groupKey, cancellationToken);
 
-        var shards = await store.GetManyAsync(slotKeys, cancellationToken);
-
-        // Walk the freshly-materialised shard map directly rather than through
-        // `.Values`: `shards` is a fresh GetMany result, so a `.Values` access
-        // otherwise allocates a throwaway ValueCollection wrapper per call.
-        //
         // Each shard's members are appended straight from the row. The decoder
         // used to build a keyed Dictionary per shard and this loop immediately
         // walked it back out into the flat list below, so every member paid a
         // hash and a bucket insert into a map nothing ever probed. The cursor's
         // declared entry count also lets the list grow once to the exact incoming
         // size rather than doubling into it.
-        foreach (var (_, bytes) in shards)
+        foreach (var bytes in shards)
         {
             // See MaterialiseInverseAsync: an empty-sentinel or absent slot is not
             // a decodable row.
@@ -852,6 +826,123 @@ internal sealed class AggregationApplier(
         }
 
         await store.SetAsync(groupKey, accumulator, cancellationToken);
+    }
+
+    /// <summary>Which of a group's three per-slot row families to gather.</summary>
+    private enum ShardFamily
+    {
+        Accumulator,
+        Inverse,
+        FoldInverse,
+    }
+
+    private string ShardKey(ShardFamily family, string groupKey, int slot) => family switch
+    {
+        ShardFamily.Accumulator => AccumulatorKey(groupKey, slot),
+        ShardFamily.Inverse => InverseKey(groupKey, slot),
+        _ => FoldInverseKey(groupKey, slot),
+    };
+
+    /// <summary>
+    /// Gathers a group's per-slot rows for one <paramref name="family"/>, ready to
+    /// be walked in arbitrary order.
+    /// <para>
+    /// The batched read below costs one round trip at any fanout, but it is a
+    /// batch of ONE at the default fanout of 1 - and it is the default that runs
+    /// on every contribution and every retraction of every view that has not
+    /// opted into sharding. The gather then builds a <see cref="List{T}"/> to hold
+    /// a single key and the store builds a <see cref="Dictionary{TKey,TValue}"/>
+    /// to hold a single row, both of which the walk immediately takes straight
+    /// back out and drops. Reading that one slot directly returns the same row -
+    /// a batched read omits an absent key exactly as a single read returns
+    /// <see langword="null"/> for one, and the callers already treat null and the
+    /// empty sentinel alike - for two fewer allocations per materialise.
+    /// </para>
+    /// </summary>
+    private async Task<ShardRows> ReadShardsAsync(ShardFamily family, string groupKey, CancellationToken cancellationToken)
+    {
+        if (_fanout == 1)
+        {
+            return new ShardRows(await store.GetAsync(ShardKey(family, groupKey, 0), cancellationToken));
+        }
+
+        var slotKeys = new List<string>(_fanout);
+        for (var slot = 0; slot < _fanout; slot++)
+        {
+            slotKeys.Add(ShardKey(family, groupKey, slot));
+        }
+
+        return new ShardRows(await store.GetManyAsync(slotKeys, cancellationToken));
+    }
+
+    /// <summary>
+    /// The rows <see cref="ReadShardsAsync"/> gathered, as a single allocation-free
+    /// <c>foreach</c> source over either the one unsharded row or the batched map.
+    /// Walking the map by its own struct enumerator rather than through
+    /// <c>.Values</c> keeps the batched arm free of a throwaway
+    /// <c>ValueCollection</c> per call, as the call sites did before.
+    /// </summary>
+    private readonly struct ShardRows
+    {
+        private readonly byte[]? _single;
+        private readonly Dictionary<string, byte[]>? _many;
+
+        internal ShardRows(byte[]? single)
+        {
+            _single = single;
+            _many = null;
+        }
+
+        internal ShardRows(Dictionary<string, byte[]> many)
+        {
+            _single = null;
+            _many = many;
+        }
+
+        public readonly Enumerator GetEnumerator() => new(_single, _many);
+
+        internal struct Enumerator
+        {
+            private readonly byte[]? _single;
+            private readonly bool _batched;
+            private Dictionary<string, byte[]>.Enumerator _inner;
+            private bool _yielded;
+
+            public Enumerator(byte[]? single, Dictionary<string, byte[]>? many)
+            {
+                _single = single;
+                _batched = many is not null;
+                _inner = many is null ? default : many.GetEnumerator();
+                _yielded = false;
+                Current = null;
+            }
+
+            /// <summary>The current row, which may be <see langword="null"/> for an absent slot.</summary>
+            public byte[]? Current { get; private set; }
+
+            public bool MoveNext()
+            {
+                if (_batched)
+                {
+                    if (!_inner.MoveNext())
+                    {
+                        return false;
+                    }
+
+                    Current = _inner.Current.Value;
+                    return true;
+                }
+
+                if (_yielded)
+                {
+                    return false;
+                }
+
+                _yielded = true;
+                Current = _single;
+                return true;
+            }
+        }
     }
 
     private async Task<MembershipHead?> ReadMembershipAsync(string key, CancellationToken cancellationToken)
