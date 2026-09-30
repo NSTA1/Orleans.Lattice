@@ -42,6 +42,6 @@ internal static class ReplicationPeerStatusFanOut
         }
 
         var answers = await Task.WhenAll(pending).WaitAsync(cancellationToken).ConfigureAwait(false);
-        return ReplicationPeerStatusMerge.Merge(answers, request.EffectiveLimit, request.StripPrefix);
+        return ReplicationPeerStatusMerge.Merge(answers, request.EffectiveLimit);
     }
 }

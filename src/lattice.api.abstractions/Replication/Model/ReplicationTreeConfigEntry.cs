@@ -41,7 +41,13 @@ public sealed record ReplicationTreeConfigEntry
         Ambiguous = ambiguous;
     }
 
-    /// <summary>The target tree id this entry describes.</summary>
+    /// <summary>
+    /// The effective id of the tree this entry describes: the bare name for a
+    /// default-tenant tree, and the tenant-qualified <c>t/{tenant}/{name}</c> id
+    /// for a tree of an asserted, non-default tenant. It is the id
+    /// <see cref="ReplicationPeerStatusEntry.TreeId"/> carries for the same tree,
+    /// so an enrolment joins to the tree's links on it.
+    /// </summary>
     [Id(0)] public string TreeId { get; init; }
 
     /// <summary>

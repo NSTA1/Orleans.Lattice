@@ -8,22 +8,25 @@ namespace Orleans.Lattice.Api.Replication;
 /// <summary>
 /// Encodes and decodes the opaque continuation token of
 /// <see cref="ILatticeReplicationStatus.GetPeerStatusAsync"/>. A token names the
-/// key of the last row the caller was handed - its display tree id (never the
-/// composed id), peer and direction - so resuming re-reads strictly after it.
+/// key of the last row the caller was handed - its effective tree id (the id
+/// the row was reported under), peer and direction - so resuming re-reads
+/// strictly after it.
 /// </summary>
 /// <remarks>
 /// A token is a client-supplied value, so it is treated as an assertion to
 /// validate, never as authority: it only positions the scan, and every row after
 /// it is still authorized before it is reported. Only a row the caller was
 /// already shown is ever encoded, so a token cannot disclose a tree the caller
-/// may not see. Malformed input is rejected with <see cref="ArgumentException"/>.
+/// may not see. Malformed input is rejected with <see cref="ArgumentException"/>,
+/// including a token of an earlier format version.
 /// </remarks>
 internal static class ReplicationPeerStatusContinuation
 {
     /// <summary>The longest token accepted, bounding the work a hostile token can cause.</summary>
     public const int MaxTokenLength = 4096;
 
-    private const string VersionPrefix = "1.";
+    // Version 2 dropped the tenant-rendering flag the version 1 cursor carried (#4000).
+    private const string VersionPrefix = "2.";
 
     /// <summary>Encodes <paramref name="cursor"/> as an opaque token.</summary>
     /// <param name="cursor">The key of the last row returned.</param>
@@ -32,7 +35,7 @@ internal static class ReplicationPeerStatusContinuation
     {
         var payload = string.Create(
             CultureInfo.InvariantCulture,
-            $"{cursor.Tree.Length}:{cursor.Tree}{cursor.Peer.Length}:{cursor.Peer}{(int)cursor.Direction}{(cursor.Stripped ? 1 : 0)}");
+            $"{cursor.Tree.Length}:{cursor.Tree}{cursor.Peer.Length}:{cursor.Peer}{(int)cursor.Direction}");
         return VersionPrefix + Base64Url.EncodeToString(Encoding.UTF8.GetBytes(payload));
     }
 
@@ -71,7 +74,7 @@ internal static class ReplicationPeerStatusContinuation
             || tree.Length == 0
             || !TryReadField(payload, ref position, out var peer)
             || peer.Length == 0
-            || payload.Length - position != 2)
+            || payload.Length - position != 1)
         {
             throw Malformed();
         }
@@ -82,14 +85,7 @@ internal static class ReplicationPeerStatusContinuation
             '1' => ReplicationContactDirection.Inbound,
             _ => throw Malformed(),
         };
-        var stripped = payload[position + 1] switch
-        {
-            '0' => false,
-            '1' => true,
-            _ => throw Malformed(),
-        };
-
-        return new ReplicationPeerStatusCursor(tree, stripped, peer, direction);
+        return new ReplicationPeerStatusCursor(tree, peer, direction);
     }
 
     private static bool TryReadField(string payload, ref int position, out string value)

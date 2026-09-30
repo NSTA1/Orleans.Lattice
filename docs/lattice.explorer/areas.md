@@ -184,7 +184,13 @@ It reads `ILatticeReplicationStatus` for peer status and
 The estate and trees pages share `?health=`, `?region=` and `?app=` filters.
 `?health=` accepts the known health labels and ignores unknown values rather
 than emptying the page. `?region=` filters peer regions. `?app=` matches trees
-whose logical id is `a/{slug}/...`.
+whose id is `a/{slug}/...`, or `t/{tenant}/a/{slug}/...` for a tenant's app tree.
+
+Both replication reports name a tree by its effective id: a default-tenant tree
+by its bare name, and a tenant's own tree by its qualified `t/{tenant}/{name}`
+id. Under a tenant, the estate and the enrolled-trees list both keep only the
+trees that tenant owns, by the same ownership rule, and the enrolled-trees page
+joins each enrolment to its links on that id.
 
 The estate page draws this region and its peer regions as an order diagram, then
 shows every link in a sortable table. Refreshing runs the `replication.refresh`

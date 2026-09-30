@@ -20,8 +20,9 @@ public sealed record ReplicationPeerStatusQuery
     public static ReplicationPeerStatusQuery All { get; } = new();
 
     /// <summary>
-    /// When set, only links of this tree are reported. Supplied in the same
-    /// logical, sanitised form the report uses (for example <c>a/{app}/{tree}</c>).
+    /// When set, only links of this tree are reported. A tenant-local name, scoped
+    /// to the caller's tenant before use; an id the report itself returned (for
+    /// example <c>t/{tenant}/a/{app}/{tree}</c>) selects the same tree.
     /// <see langword="null"/> or empty reports every tree the caller may see.
     /// </summary>
     [Id(0)] public string? TreeId { get; init; }

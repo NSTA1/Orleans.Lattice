@@ -6,21 +6,22 @@ namespace Orleans.Lattice.Api.Replication.Tests.PeerStatus;
 
 /// <summary>
 /// Unit tests for <see cref="ReplicationPeerStatusContinuation"/>: lossless round
-/// trips and fail-closed rejection of every malformed token shape.
+/// trips and fail-closed rejection of every malformed token shape, including a
+/// token of the retired version 1 format.
 /// </summary>
 [TestFixture]
 public sealed class ReplicationPeerStatusContinuationTests
 {
     private static string Token(string payload) =>
-        "1." + Base64Url.EncodeToString(Encoding.UTF8.GetBytes(payload));
+        "2." + Base64Url.EncodeToString(Encoding.UTF8.GetBytes(payload));
 
-    [TestCase("orders", false, "east", ReplicationContactDirection.Outbound)]
-    [TestCase("a/crm/contacts", true, "west", ReplicationContactDirection.Inbound)]
-    [TestCase("t/other/a:b:c", false, "peer:with:colons", ReplicationContactDirection.Inbound)]
-    [TestCase("\u00e9t\u00e9", false, "12", ReplicationContactDirection.Outbound)]
-    public void Encode_then_Decode_round_trips(string tree, bool stripped, string peer, ReplicationContactDirection direction)
+    [TestCase("orders", "east", ReplicationContactDirection.Outbound)]
+    [TestCase("t/acme/a/crm/contacts", "west", ReplicationContactDirection.Inbound)]
+    [TestCase("t/other/a:b:c", "peer:with:colons", ReplicationContactDirection.Inbound)]
+    [TestCase("\u00e9t\u00e9", "12", ReplicationContactDirection.Outbound)]
+    public void Encode_then_Decode_round_trips(string tree, string peer, ReplicationContactDirection direction)
     {
-        var cursor = new ReplicationPeerStatusCursor(tree, stripped, peer, direction);
+        var cursor = new ReplicationPeerStatusCursor(tree, peer, direction);
 
         var decoded = ReplicationPeerStatusContinuation.Decode(ReplicationPeerStatusContinuation.Encode(cursor));
 
@@ -31,11 +32,11 @@ public sealed class ReplicationPeerStatusContinuationTests
     public void Encode_produces_a_url_safe_opaque_token()
     {
         var token = ReplicationPeerStatusContinuation.Encode(
-            new ReplicationPeerStatusCursor("a/crm/contacts", true, "east", ReplicationContactDirection.Outbound));
+            new ReplicationPeerStatusCursor("t/acme/a/crm/contacts", "east", ReplicationContactDirection.Outbound));
 
         Assert.Multiple(() =>
         {
-            Assert.That(token, Does.StartWith("1."));
+            Assert.That(token, Does.StartWith("2."));
             Assert.That(token, Does.Not.Contain("/").And.Not.Contain("+").And.Not.Contain("="));
             Assert.That(token, Does.Not.Contain("contacts"));
         });
@@ -49,34 +50,50 @@ public sealed class ReplicationPeerStatusContinuationTests
     }
 
     [TestCase("garbage")]
-    [TestCase("2.AAAA")]
-    [TestCase("1.***")]
+    [TestCase("3.AAAA")]
+    [TestCase("2.***")]
     public void Decode_rejects_a_token_that_is_not_a_versioned_base64url_payload(string token)
     {
         Assert.That(() => ReplicationPeerStatusContinuation.Decode(token), Throws.ArgumentException);
     }
 
+    [Test]
+    public void Decode_rejects_a_version_1_token()
+    {
+        // Version 1 carried a trailing tenant-rendering flag; its tokens are refused, never misread.
+        var legacy = "1." + Base64Url.EncodeToString(Encoding.UTF8.GetBytes("6:orders4:east01"));
+
+        Assert.That(() => ReplicationPeerStatusContinuation.Decode(legacy), Throws.ArgumentException);
+    }
+
     [TestCase("")]
     [TestCase("6:orders")]
-    [TestCase("6:orders4:east0")]
-    [TestCase("6:orders4:east001")]
-    [TestCase("6:orders4:east20")]
-    [TestCase("6:orders4:east02")]
-    [TestCase("0:4:east00")]
-    [TestCase("6:orders0:00")]
-    [TestCase("99:orders4:east00")]
-    [TestCase("-1:x4:east00")]
-    [TestCase("x:orders4:east00")]
-    [TestCase(":orders4:east00")]
+    [TestCase("6:orders4:east")]
+    [TestCase("6:orders4:east00")]
+    [TestCase("6:orders4:east2")]
+    [TestCase("0:4:east0")]
+    [TestCase("6:orders0:0")]
+    [TestCase("99:orders4:east0")]
+    [TestCase("-1:x4:east0")]
+    [TestCase("x:orders4:east0")]
+    [TestCase(":orders4:east0")]
     public void Decode_rejects_a_malformed_payload(string payload)
     {
         Assert.That(() => ReplicationPeerStatusContinuation.Decode(Token(payload)), Throws.ArgumentException);
     }
 
     [Test]
+    public void Decode_accepts_a_well_formed_version_2_payload()
+    {
+        Assert.That(
+            ReplicationPeerStatusContinuation.Decode(Token("6:orders4:east1")),
+            Is.EqualTo(new ReplicationPeerStatusCursor("orders", "east", ReplicationContactDirection.Inbound)));
+    }
+
+    [Test]
     public void Decode_rejects_an_oversized_token_before_decoding_it()
     {
-        var token = "1." + new string('A', ReplicationPeerStatusContinuation.MaxTokenLength);
+        var token = "2." + new string('A', ReplicationPeerStatusContinuation.MaxTokenLength);
 
         Assert.That(() => ReplicationPeerStatusContinuation.Decode(token), Throws.ArgumentException);
     }

@@ -93,6 +93,8 @@ public sealed class ReplicationModelTests
     [TestCase("a/crm/orders", "crm")]
     [TestCase("a/crm/orders/archive", "crm")]
     [TestCase("a/task-board/items", "task-board")]
+    [TestCase("t/acme/a/task-board/tasks", "task-board")]
+    [TestCase("t/acme/a/crm/orders/archive", "crm")]
     public void An_a_slug_prefix_names_the_owning_app(string tree, string slug)
     {
         Assert.Multiple(() =>
@@ -112,6 +114,11 @@ public sealed class ReplicationModelTests
     [TestCase("a/CRM/orders")]
     [TestCase("ab/crm/orders")]
     [TestCase("t/acme/a")]
+    [TestCase("t/acme/orders")]
+    [TestCase("t/acme/a/crm")]
+    [TestCase("t//a/crm/orders")]
+    [TestCase("t/acme/")]
+    [TestCase("x/acme/a/crm/orders")]
     public void Anything_else_is_not_app_owned(string? tree)
     {
         Assert.That(ReplicationTreeOwnership.TryGetAppSlug(tree, out _), Is.False);

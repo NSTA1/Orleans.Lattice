@@ -3,7 +3,7 @@ namespace Orleans.Lattice.Replication.Tests.PeerStatus;
 /// <summary>
 /// Unit tests for <see cref="ReplicationPeerStats.ReadStatusPage"/>: field
 /// fidelity, the read order, filters, the exclusive cursor, the bounded limit,
-/// tenant rendering, and complete, duplicate-free paging.
+/// effective (tenant-qualified) tree ids, and complete, duplicate-free paging.
 /// </summary>
 [TestFixture]
 public sealed class ReplicationPeerStatsStatusReadTests
@@ -12,9 +12,8 @@ public sealed class ReplicationPeerStatsStatusReadTests
         int limit = ReplicationPeerStatusReadRequest.MaxLimit,
         string? tree = null,
         string? peer = null,
-        string? strip = null,
         ReplicationPeerStatusCursor? after = null) =>
-        new() { Limit = limit, TreeId = tree, Peer = peer, StripPrefix = strip, After = after };
+        new() { Limit = limit, TreeId = tree, Peer = peer, After = after };
 
     [Test]
     public void ReadStatusPage_carries_every_recorded_field()
@@ -122,7 +121,7 @@ public sealed class ReplicationPeerStatsStatusReadTests
         stats.RecordInboundSuccess("b", "p");
         stats.RecordSuccess("c", "p");
 
-        var after = new ReplicationPeerStatusCursor("b", Stripped: false, "p", ReplicationContactDirection.Outbound);
+        var after = new ReplicationPeerStatusCursor("b", "p", ReplicationContactDirection.Outbound);
         var keys = stats.ReadStatusPage(Read(after: after)).Select(r => (r.Tree, r.Direction)).ToArray();
 
         Assert.That(keys, Is.EqualTo(new[]
@@ -160,7 +159,7 @@ public sealed class ReplicationPeerStatsStatusReadTests
                 break;
             }
 
-            after = ReplicationPeerStatusOrder.CursorAfter(page[^1], stripPrefix: null);
+            after = ReplicationPeerStatusOrder.CursorAfter(page[^1]);
         }
 
         Assert.That(seen, Is.EquivalentTo(expected));
@@ -168,36 +167,35 @@ public sealed class ReplicationPeerStatsStatusReadTests
     }
 
     [Test]
-    public void ReadStatusPage_orders_on_the_display_id_the_caller_is_shown()
+    public void ReadStatusPage_orders_and_reports_tenant_trees_by_their_effective_id()
     {
         var stats = new ManualClockPeerStats();
         stats.RecordSuccess("t/acme/a/crm/contacts", "east");
         stats.RecordSuccess("b-global", "east");
         stats.RecordSuccess("t/other/zeta", "east");
 
-        var trees = stats.ReadStatusPage(Read(strip: "t/acme/")).Select(r => r.Tree).ToArray();
+        var trees = stats.ReadStatusPage(Read()).Select(r => r.Tree).ToArray();
 
-        // Effective ids come back unchanged; only their order follows the display
-        // id ("a/crm/contacts" < "b-global" < "t/other/zeta").
-        Assert.That(trees, Is.EqualTo(new[] { "t/acme/a/crm/contacts", "b-global", "t/other/zeta" }));
+        Assert.That(trees, Is.EqualTo(new[] { "b-global", "t/acme/a/crm/contacts", "t/other/zeta" }));
     }
 
     [Test]
-    public void ReadStatusPage_orders_a_tenants_own_tree_before_a_bare_tree_of_the_same_name()
+    public void ReadStatusPage_keeps_a_tenant_tree_distinct_from_a_bare_tree_of_the_same_name()
     {
         var stats = new ManualClockPeerStats();
         stats.RecordSuccess("orders", "east");
         stats.RecordSuccess("t/acme/orders", "east");
 
-        var trees = stats.ReadStatusPage(Read(strip: "t/acme/")).Select(r => r.Tree).ToArray();
-        var afterOwn = stats.ReadStatusPage(Read(
-            strip: "t/acme/",
-            after: new ReplicationPeerStatusCursor("orders", Stripped: true, "east", ReplicationContactDirection.Outbound)));
+        var trees = stats.ReadStatusPage(Read()).Select(r => r.Tree).ToArray();
+        var afterBare = stats.ReadStatusPage(Read(
+            after: new ReplicationPeerStatusCursor("orders", "east", ReplicationContactDirection.Outbound)));
+        var ownOnly = stats.ReadStatusPage(Read(tree: "t/acme/orders"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(trees, Is.EqualTo(new[] { "t/acme/orders", "orders" }));
-            Assert.That(afterOwn.Select(r => r.Tree), Is.EqualTo(new[] { "orders" }));
+            Assert.That(trees, Is.EqualTo(new[] { "orders", "t/acme/orders" }));
+            Assert.That(afterBare.Select(r => r.Tree), Is.EqualTo(new[] { "t/acme/orders" }));
+            Assert.That(ownOnly.Select(r => r.Tree), Is.EqualTo(new[] { "t/acme/orders" }));
         });
     }
 
