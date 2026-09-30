@@ -92,7 +92,7 @@
         "operations",
         "state"
       ],
-      "definition": "A grant is pending until the grantee approves and then authorizes the requested access.",
+      "definition": "A grant scope is a full t/{tenant}/... tree id or a /-boundary prefix of one; pending grants authorize nothing until the grantee approves.",
       "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
     },
     {

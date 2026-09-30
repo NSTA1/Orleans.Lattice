@@ -1787,7 +1787,8 @@
         ]
       },
       "response": {
-        "type": "IReadOnlyList<int>"
+        "type": "IReadOnlyList<int>",
+        "meaning": "One live-key count per physical shard in ascending physical shard-index order (ShardMap.GetPhysicalShardIndices); a list position equals a physical shard index only while those indices run contiguously from 0, which a shard consolidation can break, so address shards through GetRoutingAsync."
       },
       "errors": [
         {
@@ -1915,11 +1916,15 @@
         },
         {
           "error_id": "argument-exception",
-          "condition": "operationId is null, empty, whitespace, or contains '/'; a tree id is null, empty, or repeated; or a tree's slice repeats a key (a Set and a Delete of one key count as a repeat), or carries a null key or a null upsert value. A rejected batch stages no write and persists no saga state."
+          "condition": "operationId is null, empty, whitespace, or contains '/'; a tree id is null, empty, or repeated; a tree's slice repeats a key (a Set and a Delete of one key count as a repeat), or carries a null key or a null upsert value; or an entry exceeds its tree's MaxKeyLength or MaxValueSizeBytes. A rejected batch stages no write and persists no saga state."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A tree whose slice carries an upsert has reached its MaxLiveKeys or MaxEstimatedBytes cap; the refused batch stages no write and persists no saga state, and a delete-only slice is never refused."
         },
         {
           "error_id": "invalid-operation",
-          "condition": "A write fails after the saga compensates, including a key or value that exceeds MaxKeyLength or MaxValueSizeBytes when the saga writes it; or the operationId is re-submitted with a different tree-set or key-set."
+          "condition": "A write fails after the saga compensates, or the operationId is re-submitted with a different tree-set or key-set."
         },
         {
           "error_id": "state-write-failed",
@@ -3737,6 +3742,62 @@
       ]
     },
     {
+      "id": "is-resize-undo-pending",
+      "in_process": {
+        "interface": "ILattice",
+        "method": "IsResizeUndoPendingAsync",
+        "signature": "Task<bool> IsResizeUndoPendingAsync(CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "bool",
+        "meaning": "true while an undo accepted by UndoResizeAsync is still unwinding; false once it has finished or when no undo has been requested. A pending undo takes precedence over IsResizeCompleteAsync, which reports true after an undo of an already completed resize."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The caller is not authorized for whole-tree LatticeOperation.Read on the tree."
+        },
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before the read."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "The tree id starts with the internal system tree prefix."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Safe to retry: the call only reads the resize coordinator's undo progress and answers without waiting for an in-flight resize phase.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#IsResizeUndoPendingAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#IsResizeUndoPendingAsync"
+      },
+      "concurrency": {
+        "rule": "Answers without waiting for an in-flight resize phase; combine with IsResizeCompleteAsync to distinguish a running resize, an accepted undo that is unwinding, and no resize.",
+        "source": "src/lattice/BPlusTree/ILattice.cs#IsResizeUndoPendingAsync"
+      },
+      "sources": [
+        "src/lattice/BPlusTree/ILattice.cs#IsResizeUndoPendingAsync",
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#IsResizeUndoPendingAsync"
+      ]
+    },
+    {
       "id": "is-snapshot-complete",
       "in_process": {
         "interface": "ILattice",
@@ -4994,7 +5055,7 @@
         },
         {
           "error_id": "invalid-operation",
-          "condition": "The tree has not been deleted, or the purge has already completed."
+          "condition": "The tree has not been deleted."
         }
       ],
       "retry": {
@@ -5435,7 +5496,7 @@
         },
         {
           "error_id": "invalid-operation",
-          "condition": "The tree has not been deleted (including a live resized tree), a purge is in progress, or the purge has already completed."
+          "condition": "The tree has not been deleted (including a live resized tree), a purge is in progress, or the purge has already completed, except that a purged id registered again clears the stale purge record and returns."
         }
       ],
       "retry": {
@@ -5592,7 +5653,7 @@
         },
         {
           "error_id": "argument-out-of-range",
-          "condition": "newShardCount is outside 2..DefaultVirtualShardCount, or shrinks a populated tree below its current physical shard count."
+          "condition": "newShardCount is outside 2..min(DefaultVirtualShardCount, the tree's ShardMap virtual slot count), or shrinks a populated tree below its current physical shard count."
         },
         {
           "error_id": "invalid-operation",
@@ -6784,31 +6845,40 @@
       },
       "errors": [
         {
+          "error_id": "authorization-denied",
+          "condition": "The caller is not authorized for whole-tree LatticeOperation.TreeLifecycle on the tree."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "No resize exists to undo (the message names the most recent resize when it was already undone), the persisted resize state is incomplete, or the accepted unwind could not be applied, for example because the old tree has already been purged."
+        },
+        {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
         },
         {
-          "error_id": "invalid-operation",
-          "condition": "No resize exists to undo, or the old tree has already been purged."
+          "error_id": "reserved-tree-namespace",
+          "condition": "The tree id starts with the internal system tree prefix."
         }
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Retrying the same undo is safe while resize state remains InProgress or Complete; after a successful undo the InvalidOperationException that no resize exists is the benign terminal condition.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeAsync"
+        "policy": "Safe to retry: RequestUndoAsync records the undo intent once per resize operation id and acknowledges a repeat while that undo is pending; after the unwind is recorded a repeat throws InvalidOperationException whose message names the most recent resize as already undone, which is the benign terminal condition.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "UndoResizeAsync can be re-driven while the persisted resize state still names work to undo, but after ResetResizeState is written a repeat throws that no resize exists.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeAsync"
+        "basis": "The undo intent is keyed by the resize operation id, so a repeat while it is pending starts no second unwind; once the unwind is recorded a repeat is refused because no resize remains to undo.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
       },
       "concurrency": {
-        "rule": "TreeResizeGrain persists a resize state machine and reserves the tree alias with BeginAliasChangeAsync before undo, fencing alias mutations while undo runs.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeAsync"
+        "rule": "RequestUndoAsync is interleaved with the resize phase loop and writes only the separate undo-intent slot under a semaphore, so the undo is admitted even while a resize phase is in flight; the phase loop runs the unwind at its next phase or snapshot-slice boundary, and the call waits only a bounded time for it. Follow an unwind that outlasted the call with IsResizeUndoPendingAsync.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#UndoResizeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#UndoResizeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#UndoResizeAsync",
+        "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
       ]
     },
     {
@@ -6909,7 +6979,7 @@
       "type": "LatticeCursorRegistryPinExhaustedException",
       "grpc_status": null,
       "retryable": true,
-      "meaning": "Opening a point-in-time cursor would exceed the registry pin cap.",
+      "meaning": "Opening a point-in-time cursor would push a touched saga-decision registry shard over the pin cap; a multi-shard open can leave pins on shards that accepted their part.",
       "source": "src/lattice/LatticeCursorRegistryPinExhaustedException.cs#LatticeCursorRegistryPinExhaustedException"
     },
     {

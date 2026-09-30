@@ -40,6 +40,7 @@
       "endpoint": "MapLatticeMcp maps the MCP transport at LatticeApiMcpOptions.TransportPattern and applies RequireAuthorization by default.",
       "transport": "ModelContextProtocol streamable HTTP via AddMcpServer().WithHttpTransport().",
       "authorization_gate": "CredentialStampingTool enforces ILatticeApiMcpAuthorizer at invocation, stamps caller credentials and active tenant, resolves optional region, and translates faults. RequireAuthorization controls endpoint authentication only; it does not bypass the default-deny authorizer.",
+      "unknown_argument_rejection": "CredentialStampingTool rejects undeclared tool arguments as client errors and echoes only sanitized, length-capped argument names with a bounded count.",
       "tool_modules": [
         "AddAppMcpTools",
         "AddAuthTools",
@@ -6590,7 +6591,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "concurrency": {
-        "rule": "The last-resident-region guard runs before the write and again after the CRDT join to handle concurrent removals.",
+        "rule": "The last-resident-region guard runs before the write and again after the CRDT join; added regions start Provisioning until operator promotion, and dropped regions drain automatically through Offline to Removed.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "sources": [
@@ -7314,7 +7315,7 @@
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
       },
       "concurrency": {
-        "rule": "Target version must be strictly greater than the current target; eager migration aborts without data cutover on the first value that cannot be upcast.",
+        "rule": "Target version must be strictly greater than the current target; eager migration aborts without data cutover on the first value that cannot be upcast, and the committed target advance is not rolled back.",
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
       },
       "sources": [
@@ -9354,16 +9355,16 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Retry is safe until undo state is durably cleared; after success a repeated call fails with InvalidOperationException because no undoable resize remains.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeCoreAsync"
+        "policy": "Safe to retry: RequestUndoAsync records the undo intent once per resize operation id and acknowledges a repeat while that undo is pending; after the unwind is recorded a repeat throws InvalidOperationException whose message names the most recent resize as already undone, which is the benign terminal condition.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "UndoResizeCoreAsync preserves retryability until ResetResizeState is persisted, but after that persisted clear a repeat is rejected because no resize remains to undo.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeCoreAsync"
+        "basis": "The undo intent is keyed by the resize operation id, so a repeat while it is pending starts no second unwind; once the unwind is recorded a repeat is refused because no resize remains to undo.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
       },
       "concurrency": {
-        "rule": "Available during resize or before pre-resize purge.",
+        "rule": "RequestUndoAsync is interleaved with the resize phase loop and writes only the separate undo-intent slot under a semaphore, so the undo is admitted even while a resize phase is in flight; the phase loop runs the unwind at its next phase or snapshot-slice boundary, and the call waits only a bounded time for it. A returned status with UndoRequested true means the undo was accepted and is still unwinding; poll GetResizeStatusAsync instead of retrying.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
       },
       "sources": [
