@@ -63,6 +63,14 @@ internal sealed partial class ShardRootGrain
         if (movedSlots.Length == 0)
             throw new ArgumentException("At least one virtual slot must be moved.", nameof(movedSlots));
 
+        // A retired shard is a routing tombstone and can never be a migration
+        // source again. Refuse it as a refusal, not a stale-routing fault, so
+        // the split and consolidation coordinators unwind the intent they
+        // persisted instead of retrying a call that can never succeed.
+        if (state.State.IsRetired)
+            throw new InvalidOperationException(
+                $"Shard {MyShardIndex} has been retired by an online consolidation and cannot be a migration source.");
+
         await PrepareForOperationAsync();
 
         var existing = state.State.SplitInProgress;
@@ -156,6 +164,10 @@ internal sealed partial class ShardRootGrain
 
     /// <inheritdoc />
     public Task<bool> IsSplittingAsync() => Task.FromResult(state.State.SplitInProgress is not null);
+
+    /// <inheritdoc />
+    public Task<int?> GetMigrationTargetShardIndexAsync()
+        => Task.FromResult(state.State.SplitInProgress?.ShadowTargetShardIndex);
 
     /// <inheritdoc />
     public Task<bool> HasPendingBulkOperationAsync()

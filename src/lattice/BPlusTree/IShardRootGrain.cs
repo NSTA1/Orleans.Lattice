@@ -1289,6 +1289,12 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <paramref name="targetShardIndex"/> and <paramref name="movedSlots"/>, the call
     /// is a no-op.
     /// </para>
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> when the shard already
+    /// carries a different migration record, or when an online consolidation
+    /// has retired it: both are refusals the caller unwinds, never faults to
+    /// retry.
+    /// </para>
     /// </summary>
     Task BeginSplitAsync(int targetShardIndex, int[] movedSlots, int virtualShardCount);
 
@@ -1406,6 +1412,28 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<bool> IsSplittingAsync();
+
+    /// <summary>
+    /// Returns the physical shard index this shard's in-flight migration is
+    /// shadow-writing into - the target of an adaptive split, or the survivor of
+    /// an online consolidation it is donating to - or <see langword="null"/>
+    /// when no migration is in flight.
+    /// <para>
+    /// A migration's record lives only on its source, while its target is in
+    /// the routing map from the split's swap onwards and still receives the
+    /// final drain until the source's record clears. A consolidation reads this
+    /// across every shard so it never folds away a shard some other migration
+    /// still owes writes to.
+    /// </para>
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the
+    /// same reason as <see cref="IsSplittingAsync"/>: a pure synchronous read of
+    /// the single <c>state.State.SplitInProgress</c> reference with no awaits
+    /// and no mutation.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<int?> GetMigrationTargetShardIndexAsync();
 
     /// <summary>
     /// Returns <c>true</c> if this shard has a pending bulk-load or bulk-append

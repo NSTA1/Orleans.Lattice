@@ -281,6 +281,8 @@ internal sealed class TreeShardConsolidationGrain(
             throw new InvalidOperationException(
                 $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated into shard {survivorShardIndex} while an adaptive split is in progress on the survivor.");
 
+        await ThrowIfMigrationTargetAsync(physicalTreeId, currentMap, donorShardIndex, survivorShardIndex);
+
         var previous = Snapshot();
 
         var now = Clock.GetUtcNow().UtcTicks;
@@ -339,6 +341,43 @@ internal sealed class TreeShardConsolidationGrain(
         Logger.LogInformation(
             "Consolidation {OperationId} started on tree {TreeId}: folding {SlotCount} virtual slot(s) from shard {Donor} into shard {Survivor}.",
             state.State.OperationId, TreeId, plan.DonorSlots.Length, donorShardIndex, survivorShardIndex);
+    }
+
+    /// <summary>
+    /// Refuses the pair while either side is the target of another shard's
+    /// in-flight migration. A split keeps its migration record on its source,
+    /// so <see cref="IShardRootGrain.IsSplittingAsync"/> on the pair itself
+    /// cannot see it; yet from the split's swap onwards its target is in the
+    /// map, eligible to be planned, and still owed the split's final drain.
+    /// Folding that target away would retire it under the drain - the split
+    /// could then never finish, and the entries it forwards would reach a shard
+    /// the map no longer routes to. A split always aims at a freshly allocated
+    /// index, so no split that starts after this check can target the pair; a
+    /// second fold aimed at either side is excluded by the drivers themselves,
+    /// which never run two folds sharing a shard.
+    /// </summary>
+    private async Task ThrowIfMigrationTargetAsync(
+        string physicalTreeId, ShardMap map, int donorShardIndex, int survivorShardIndex)
+    {
+        var shards = map.GetPhysicalShardIndices();
+        var targets = new Task<int?>[shards.Count];
+        for (var i = 0; i < shards.Count; i++)
+        {
+            targets[i] = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shards[i]}")
+                .GetMigrationTargetShardIndexAsync();
+        }
+
+        await Task.WhenAll(targets);
+
+        for (var i = 0; i < shards.Count; i++)
+        {
+            var target = targets[i].Result;
+            if (target == donorShardIndex || target == survivorShardIndex)
+            {
+                throw new InvalidOperationException(
+                    $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated into shard {survivorShardIndex}: shard {target} is the target of an in-flight migration from shard {shards[i]}.");
+            }
+        }
     }
 
     /// <inheritdoc />
