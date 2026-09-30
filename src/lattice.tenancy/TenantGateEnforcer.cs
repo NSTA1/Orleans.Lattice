@@ -28,7 +28,9 @@ namespace Orleans.Lattice.Tenancy;
 /// The one exception is a cross-tenant crossing made while the compiled snapshot
 /// is not authoritative
 /// (<see cref="CompiledTenantPolicySnapshotMaintainer.IsSnapshotAuthoritative"/>
-/// is <c>false</c> while a registry-driven rebuild is outstanding or failing).
+/// is <c>false</c> while a registry-driven rebuild is outstanding or failing, and
+/// while this silo cannot confirm its snapshot reflects a registry write committed
+/// on another silo - see issue #4030).
 /// The snapshot then still holds the pre-write grant state, so
 /// <see cref="EnforceAsync"/> confirms the grant against the authoritative
 /// <see cref="ITenantRegistry"/> and the synchronous <see cref="Enforce"/> denies
@@ -112,9 +114,11 @@ internal sealed class TenantGateEnforcer(
     /// <inheritdoc />
     /// <remarks>
     /// Completes synchronously, with no allocation beyond <see cref="Enforce"/>'s,
-    /// on every path except one: a cross-tenant crossing that arrives while the
-    /// compiled snapshot is not authoritative (a tenant-registry write has
-    /// scheduled a rebuild that has not landed, or rebuilds are failing). That
+    /// on every path except two: the first call on a silo whose snapshot has never
+    /// been built, which builds it first; and a cross-tenant crossing that arrives
+    /// while the compiled snapshot is not authoritative (a tenant-registry write has
+    /// scheduled a rebuild that has not landed, rebuilds are failing, or this silo
+    /// cannot confirm it has seen every write committed on the other silos). That
     /// crossing is confirmed against the authoritative <see cref="ITenantRegistry"/>
     /// record of the owning tenant, exactly as
     /// <see cref="ReplicationTenantIsolationGate"/> falls back, so a revoked or
@@ -125,10 +129,47 @@ internal sealed class TenantGateEnforcer(
         in LatticeAccessRequest request,
         CancellationToken cancellationToken = default)
     {
+        // A silo that has never built its snapshot would report every tenant as
+        // unregistered; build it before the first decision (issue #4030). One field
+        // read on the steady state.
+        if (policy.CurrentEpoch == 0)
+        {
+            return WarmThenEnforceAsync(request, cancellationToken);
+        }
+
         var decision = Decide(in request);
         return NeedsConfirmation(in decision)
             ? ConfirmCrossingAsync(PendingCrossing.From(in request), cancellationToken)
             : new ValueTask<LatticeAccessDecision>(decision);
+    }
+
+    /// <summary>
+    /// Builds a cold snapshot, then decides as <see cref="EnforceAsync"/> does. A
+    /// warm-up failure other than the caller's own cancellation is logged and the
+    /// request is decided against the still-empty snapshot, which admits no
+    /// tenant-owned access (fail closed).
+    /// </summary>
+    private async ValueTask<LatticeAccessDecision> WarmThenEnforceAsync(
+        LatticeAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await policy.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not build the compiled tenant-policy snapshot before its first decision; deciding against the empty snapshot.");
+        }
+
+        var decision = Decide(in request);
+        return NeedsConfirmation(in decision)
+            ? await ConfirmCrossingAsync(PendingCrossing.From(in request), cancellationToken).ConfigureAwait(false)
+            : decision;
     }
 
     /// <summary>

@@ -105,8 +105,11 @@ internal sealed class ReplicationTenantIsolationGate(
         // a peer region's writes for a revoked tenant - a deny silently becoming an
         // allow, which is the one regression this optimisation must not introduce.
         // IsSnapshotAuthoritative is false exactly while a rebuild is outstanding
-        // or failing, so those windows fall back to the registry and the fast path
-        // is kept for the steady state it was added for.
+        // or failing, and while this silo cannot confirm its snapshot reflects a
+        // registry write committed on another silo (its lease from the tenant-policy
+        // epoch grain has lapsed, or it has been told of a newer epoch it has not
+        // compiled - issue #4030), so those windows fall back to the registry and
+        // the fast path is kept for the steady state it was added for.
         if (_policy.IsSnapshotAuthoritative
             && _policy.Current.TryGetTenant(tenant.Value ?? string.Empty, out var compiled)
             && compiled is not null)

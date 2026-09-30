@@ -187,6 +187,26 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   as soon as the revocation commits and an approved one admits the next request.
   A crossing whose grant cannot be confirmed is denied. Only crossings in that
   window pay the registry read; the steady state stays an in-memory decision.
+- **Every silo sees the change.** The change feed that drives the rebuild fires only
+  on the silo whose grain committed the registry write, so each silo's snapshot is
+  also kept current by a cluster-wide tenant-policy epoch. Before a registry write
+  returns, the committing silo advances the epoch and pushes it to every silo, which
+  marks its snapshot out of date and rebuilds; the write completes once every silo
+  has acknowledged, or has had its lease lapse. Each silo holds its snapshot
+  authoritative only while it holds a live lease from the epoch (renewed every third
+  of `PolicySnapshotLeaseDuration`) and has compiled the latest epoch it has seen.
+  A silo that cannot know it is current - its lease has lapsed, it has been told of a
+  change it has not compiled, or it could not publish a write of its own - confirms
+  crossings against the registry (or denies) exactly as above, and the inbound
+  replication isolation gate falls back to the registry for tenant existence and
+  status in the same windows. The steady state pays only a few field reads and a
+  timestamp read. A restarted epoch holds each write open for one lease, so no silo
+  leased by its previous incarnation stays authoritative. One window is bounded
+  rather than closed: a silo that crashes after committing a registry write but
+  before publishing it leaves the other silos unaware of that write until cluster
+  membership declares it dead, at which point every surviving silo rebuilds. Each
+  silo also builds its snapshot at start-up, and on its first decision if that has
+  not happened yet, so a new silo never reports a registered tenant as unregistered.
 - **Active-tenant assertion.** A subject carries a set of tenant memberships, but
   the active tenant is always a caller-supplied *assertion*, never inferred from
   that set - there is no implicit "sole membership" default. Every branch that
@@ -842,6 +862,7 @@ the service collection directly - for example
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view (`sys-tenant-registry-history`) over the `sys-tenant-registry` tree. |
 | `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
+| `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy snapshot as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, cross-tenant crossings and inbound-replication tenant checks are confirmed against the registry or denied. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
 
 ### `TenantUsageAccountingOptions`
 
