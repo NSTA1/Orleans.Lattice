@@ -197,6 +197,19 @@ host.
   authority or audience override values that the host configured explicitly.
 - If your provider accepts advertised parameters, validate them before opening a
   browser or sending a credential.
+- A sign-in is bound to the endpoint it was minted for.
+  `IExplorerAuthSession.GetAuthenticationFor(endpoint)` returns the credential only
+  for that endpoint, compared ignoring case and a trailing `/`, and `null` for any
+  other. The Explorer's own transport attaches a credential only through it, so a
+  credential never reaches a new endpoint while the console is being repointed,
+  before the old sign-in is dropped. A client that builds its own channel should
+  do the same rather than read `CurrentAuthentication`. It is a default interface
+  member whose default returns `null`, so an implementation that does not record
+  the endpoint fails closed and sends no credential.
+- A sign-in whose endpoint changes while its challenge runs is refused ("The
+  endpoint changed while signing in, so the sign-in was not applied. Sign in to
+  the new endpoint.") and is neither applied nor persisted; a stored credential
+  replayed across such a change leaves the session anonymous.
 
 ## See also
 

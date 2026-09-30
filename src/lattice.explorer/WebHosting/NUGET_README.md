@@ -61,8 +61,10 @@ cookie / data-protection plumbing.
 with the UI additional assembly), the static assets, the Lattice App frame's
 bootstrap route (`_apps/frame/v1/`), and the server-side `/auth/login` and
 `/auth/logout` endpoints under the configured base path. Every response carries
-static security headers; `X-Frame-Options: DENY` is omitted only on the frame
-bootstrap route, which sends its own sandboxing policy.
+static security headers, including a `script-src 'self'` Content-Security-Policy
+and `X-Frame-Options: DENY`. Only the frame bootstrap route's own endpoint lifts
+`X-Frame-Options`, for a file it serves, and it sends its own sandboxing policy
+instead; the exemption is never a path match.
 
 ## Interactivity and static assets
 

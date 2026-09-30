@@ -148,9 +148,12 @@ served by the Explorer head at:
 
 The route serves the AppKit static assets from
 `_content/Orleans.Lattice.Explorer.AppKit/appkit/v1`. The bootstrap document has
-its own sandboxed Content-Security-Policy with `frame-ancestors 'self'`; the web
-head exempts only this route from its global `X-Frame-Options: DENY` header. All
-other Explorer pages, assets and SignalR endpoints keep the anti-framing header.
+its own sandboxed Content-Security-Policy with `frame-ancestors 'self'`. The web
+head sends `X-Frame-Options: DENY` on every response, this route included, and
+only the route's own endpoint lifts it, for a file it actually serves. The
+exemption is not a path match, so a co-hosted route or fallback that answers
+under the same path keeps the anti-framing header, as do every Explorer page,
+asset and SignalR endpoint.
 
 ## Deployment: prefer an isolated head
 
@@ -200,8 +203,8 @@ under a subpath it is the first middleware inside the isolated branch.
 
 | Header | Value | Notes |
 |---|---|---|
-| `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` | Providers can add extra `form-action` sources through `ExplorerContentSecurityPolicyOptions`. |
-| `X-Frame-Options` | `DENY` | Emitted on every Explorer response except the app-frame bootstrap route. |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` | `script-src` is `'self'` alone: the console serves no inline script, so an injected inline script or `on*` handler does not run. `style-src` keeps `'unsafe-inline'` for the inline `style` attributes interactive components emit. Providers can add extra `form-action` sources through `ExplorerContentSecurityPolicyOptions`. |
+| `X-Frame-Options` | `DENY` | Emitted on every Explorer response. Only the app-frame route's endpoint removes it, and only for a file it serves; see [Lattice App frame route](#lattice-app-frame-route). |
 | `X-Content-Type-Options` | `nosniff` | Prevents MIME sniffing. |
 | `Referrer-Policy` | `no-referrer` | Avoids leaking tree, key, tenant or subject context in a referrer. |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), interest-cohort=()` | Disables browser features the console does not use. |
