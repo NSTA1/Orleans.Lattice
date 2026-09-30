@@ -307,6 +307,13 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
             .Append((int)node.StringMethod).Append(':')
             .Append(constant.Length).Append(':').Append(constant);
 
+        // Only a type test reads ValueKind, so only it contributes one: every tree
+        // built before TypeOf existed keeps the version it always had.
+        if (node.Kind == LatticePredicateNodeKind.TypeOf)
+        {
+            builder.Append(':').Append((int)node.ValueKind);
+        }
+
         if (node.Children is { } children)
         {
             builder.Append(":[");

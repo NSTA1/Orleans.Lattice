@@ -1,0 +1,613 @@
+@using Orleans.Lattice.Schema
+
+@*
+    The rule builder: the draft rule set as sentences, a composer that picks a
+    member from the inferred shape and a constraint from a gallery, a live check
+    against a sample of the tree's values, and an advanced view with the exact
+    policy and the raw editor. No drag, no hover-only affordance: every action is
+    a button or a native control, so it all works from the keyboard.
+*@
+
+<section class="lt-schema-rulebuilder" aria-labelledby="lt-schema-policy-editor-title">
+    <div class="lt-schema-heading">
+        <h2 id="lt-schema-policy-editor-title" class="lt-schema-section-title">@(Policy is null ? "Set a policy" : "Edit the policy")</h2>
+    </div>
+    <p class="lt-schema-note">A value must satisfy every rule. Saving replaces the whole policy; new writes are checked against it at once, and values already stored are not changed.</p>
+
+    <div class="lt-schema-rulebuilder__mode">
+        <LtSwitch Label="Advanced" Checked="@_advanced" CheckedChanged="value => _advanced = value"
+                  Hint="On: the exact policy and the raw rule editor. Off: the rules as sentences, built from cards." />
+    </div>
+
+    <div class="lt-schema-rulebuilder__layout">
+        <div class="lt-schema-rulebuilder__main">
+            @if (_advanced)
+            {
+                @RenderAdvanced()
+            }
+            else
+            {
+                @RenderRuleSet()
+            }
+
+            <LtSwitch Label="Strict ingest" Checked="@_strict" CheckedChanged="OnStrictChanged" Hint="@StrictHint" />
+        </div>
+
+        <aside class="lt-schema-rulebuilder__aside" aria-labelledby="lt-schema-preview-title">
+            @RenderPreview()
+        </aside>
+    </div>
+
+    @if ((_saveError ?? SaveError) is { } saveError)
+    {
+        <p class="lt-schema-error" role="alert">@saveError</p>
+    }
+
+    <div class="lt-toolbar lt-schema-actions">
+        <LtButton OnClick="SaveAsync" Disabled="@Busy">Save policy</LtButton>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync">Cancel</LtButton>
+    </div>
+
+    <LtDialog Open="@_confirmSave" OpenChanged="value => _confirmSave = value" Alert="true"
+              Title="Some sampled values would not comply">
+        <ChildContent>
+            @if (Preview() is { } result)
+            {
+                <p>@Share(result.Failed, result.Checked) sampled values fail the new rules.</p>
+            }
+            <p>Saving does not change stored values. New writes are checked at once; the values already stored stay as they are until you remediate them.</p>
+            @if (Workspace is { } workspace)
+            {
+                <p><a class="lt-schema-action" href="@workspace.Href(workspace.ForTab(SchemaTabs.Remediation))">Plan a remediation</a></p>
+            }
+        </ChildContent>
+        <Actions>
+            <LtButton OnClick="SaveAnywayAsync" Disabled="@Busy">Save anyway</LtButton>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _confirmSave = false">Keep editing</LtButton>
+        </Actions>
+    </LtDialog>
+</section>
+
+@code {
+    private RenderFragment RenderRuleSet() => __builder =>
+    {
+        var preview = Preview();
+        <h3 class="lt-schema-subtitle" tabindex="-1" @ref="_rulesHeading">Rules</h3>
+        @if (_cards.Count == 0)
+        {
+            <p class="lt-schema-muted">No rules yet. Add the first one: pick what it checks, then what it must be.</p>
+        }
+        else
+        {
+            <ol class="lt-schema-ruleset" aria-label="Rules in the new policy">
+                @for (var index = 0; index < _cards.Count; index++)
+                {
+                    var at = index;
+                    var card = _cards[at];
+                    var number = at + 1;
+                    <li class="lt-schema-ruleset__rule" @key="card.Id" tabindex="-1" @ref="_rows[card.Id]"
+                        aria-current="@(_editing == at || _alternativeOf == at ? "true" : null)">
+                        <div class="lt-schema-ruleset__sentence">
+                            <span class="lt-schema-ruleset__number">@number.</span>@(" ")
+                            @RenderSentence(SchemaCardText.Sentence(card))
+                            @if (card.Kind == SchemaCardKind.Custom)
+                            {
+                                @(" ")<LtStatusPill Text="kept as it is" />
+                            }
+                            @if (preview is { IsValid: true } result && result.Checked > 0 && at < result.FailuresByRule.Count)
+                            {
+                                var failing = result.FailuresByRule[at];
+                                @(" ")<LtStatusPill State="@(failing == 0 ? LtStateRole.Healthy : LtStateRole.Drift)"
+                                              Text="@(failing == 0 ? "all pass" : Share(failing, result.Checked) + " fail")" />
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(card.Description))
+                        {
+                            <p class="lt-schema-ruleset__message">Reported as: @card.Description</p>
+                        }
+                        @if (card.Kind == SchemaCardKind.AnyOf)
+                        {
+                            <ul class="lt-schema-ruleset__alternatives" aria-label="@($"Alternatives of rule {number}")">
+                                @for (var option = 0; option < card.Alternatives.Count; option++)
+                                {
+                                    var alternative = option;
+                                    <li class="lt-schema-ruleset__alternative">
+                                        @if (alternative > 0)
+                                        {
+                                            <span class="lt-schema-ruleset__or">or</span>
+                                        }
+                                        @RenderSentence(SchemaCardText.Sentence(card.Alternatives[alternative]))@(" ")
+                                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveAlternative(at, alternative)"
+                                                  aria-label="@($"Remove alternative {alternative + 1} of rule {number}")">Remove</LtButton>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        <div class="lt-schema-ruleset__actions">
+                            @if (card.Kind is not (SchemaCardKind.Custom or SchemaCardKind.AnyOf))
+                            {
+                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => EditRule(at)" aria-label="@($"Edit rule {number}")">Edit</LtButton>
+                            }
+                            @if (SchemaCardCompiler.IsPredicate(card.Kind))
+                            {
+                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AddAlternative(at)" aria-label="@($"Add an alternative to rule {number}")">Or...</LtButton>
+                            }
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => MoveRule(at, -1)" Disabled="@(at == 0)" aria-label="@($"Move rule {number} up")">Up</LtButton>
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => MoveRule(at, 1)" Disabled="@(at == _cards.Count - 1)" aria-label="@($"Move rule {number} down")">Down</LtButton>
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveRule(at)" aria-label="@($"Remove rule {number}")">Remove</LtButton>
+                        </div>
+                    </li>
+                }
+            </ol>
+        }
+
+        @if (_composer is null)
+        {
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="OpenComposer">Add a rule</LtButton>
+            </div>
+        }
+        else
+        {
+            @RenderComposer(_composer)
+        }
+    };
+
+    private RenderFragment RenderSentence(SchemaCardSentence sentence) => __builder =>
+    {
+        // Words are separated by real spaces, not only by layout, so the sentence
+        // reads correctly aloud and when copied.
+        var parts = 0;
+        <span class="lt-schema-sentence">
+            @if (sentence.Lead.Length > 0)
+            {
+                <span>@sentence.Lead</span>
+                parts++;
+            }
+            @if (sentence.Subject is { } subject)
+            {
+                @(parts++ > 0 ? " " : string.Empty)<code class="lt-schema-sentence__member">@subject</code>
+            }
+            @if (sentence.Text.Length > 0)
+            {
+                @(parts++ > 0 ? " " : string.Empty)<span>@sentence.Text</span>
+            }
+            @if (sentence.Inner.Count > 0)
+            {
+                @(parts++ > 0 ? " " : string.Empty)<span class="lt-schema-sentence__inner">
+                    @for (var index = 0; index < sentence.Inner.Count; index++)
+                    {
+                        @if (index > 0)
+                        {
+                            @(" ")<span class="lt-schema-ruleset__or">or</span>@(" ")
+                        }
+                        @RenderSentence(sentence.Inner[index])
+                    }
+                </span>
+            }
+        </span>
+    };
+    private RenderFragment RenderComposer(SchemaRuleCard card) => __builder =>
+    {
+        var alternative = _alternativeOf is not null;
+        <section class="lt-schema-composer" aria-labelledby="lt-schema-composer-title">
+            <h3 id="lt-schema-composer-title" class="lt-schema-subtitle" tabindex="-1" @ref="_composerHeading">@ComposerTitle</h3>
+            <div class="lt-schema-composer__steps">
+                <fieldset class="lt-schema-step">
+                    <legend class="lt-schema-step__legend"><span class="lt-schema-step__number">1</span> What it checks</legend>
+                    <LtComboBox Label="Member path" Value="@card.Path" ValueChanged="OnPathChanged" Source="@_rootMembers"
+                                Mode="LtComboBoxMode.Suggest" Noun="member" Placeholder="order.total"
+                                Hint="Pick a member below or type its path. Leave it empty to check the whole value." />
+                    @RenderShape()
+                </fieldset>
+
+                <fieldset class="lt-schema-step">
+                    <legend class="lt-schema-step__legend"><span class="lt-schema-step__number">2</span> What it must be</legend>
+                    @RenderGallery(card, _shape.Root, null, predicateOnly: alternative, group: "root")
+                </fieldset>
+
+                <div class="lt-schema-step" role="group" aria-labelledby="lt-schema-step-details">
+                    <p id="lt-schema-step-details" class="lt-schema-step__legend"><span class="lt-schema-step__number">3</span> Details</p>
+                    @RenderDetails(card, _shape.Root, null, topLevel: !alternative)
+                    <p class="lt-schema-composer__reads" aria-live="polite">
+                        <span class="lt-schema-muted">Reads:</span> @RenderSentence(SchemaCardText.Sentence(card))
+                    </p>
+                    @if (!alternative && PreviewOf(card) is { IsValid: true, Checked: > 0 } example)
+                    {
+                        <p class="lt-schema-composer__example" aria-live="polite">
+                            Against the sample: @Share(example.Passed, example.Checked) values pass.
+                            @if (example.Failures is [var first, ..])
+                            {
+                                <span> For example <code class="lt-schema-sentence__member">@first.Key</code> fails.</span>
+                            }
+                        </p>
+                    }
+                </div>
+            </div>
+
+            @if (_composerError is not null)
+            {
+                <p class="lt-schema-error" role="alert">@_composerError</p>
+            }
+
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="CommitComposer">@CommitText</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelComposer">Cancel</LtButton>
+            </div>
+        </section>
+    };
+
+    private RenderFragment RenderShape() => __builder =>
+    {
+        <div class="lt-schema-shape" role="group" aria-label="Members seen in the tree's values">
+            <p class="lt-schema-shape__caption">
+                @if (_sampling)
+                {
+                    <span role="status">Reading a sample of the values...</span>
+                }
+                else if (_shape.IsEmpty)
+                {
+                    <span>No members are known yet. Type a path above.</span>
+                }
+                else
+                {
+                    <span>From @Count(_shape.Documents, "sampled value") and the current policy.</span>
+                }
+            </p>
+            <ul class="lt-schema-shape__list">
+                <li class="lt-schema-shape__item">
+                    <button type="button" class="lt-schema-shape__member" aria-pressed="@(_composer?.Path.Length == 0 && _composer.Kind != SchemaCardKind.EveryItem ? "true" : "false")"
+                            @onclick="ChooseWholeValue">
+                        <span class="lt-schema-shape__name">The whole value</span>
+                        @if (_shape.Root.Dominant is { } rootType)
+                        {
+                            <span class="lt-schema-shape__type">@SchemaCardText.TypePhrase(rootType)</span>
+                        }
+                    </button>
+                </li>
+                @foreach (var child in _shape.Root.Children.Values)
+                {
+                    @RenderShapeNode(child)
+                }
+            </ul>
+            @if (_shape.Truncated)
+            {
+                <p class="lt-schema-muted">Only part of the shape is shown: the values are larger than the builder looks.</p>
+            }
+        </div>
+    };
+
+    private RenderFragment RenderShapeNode(SchemaShapeNode node) => __builder =>
+    {
+        var hasChildren = node.Children.Count > 0 || node.Items is not null;
+        var open = !_collapsed.Contains(node.DomId);
+        var selected = _composer is { } current && IsSelected(current, node);
+        <li class="lt-schema-shape__item" @key="node.DomId">
+            <div class="lt-schema-shape__row">
+                @if (hasChildren)
+                {
+                    <button type="button" class="lt-schema-shape__toggle" aria-expanded="@(open ? "true" : "false")"
+                            aria-controls="@node.DomId" aria-label="@($"{(open ? "Collapse" : "Expand")} {Label(node)}")"
+                            @onclick="() => ToggleCollapsed(node)">@(open ? "-" : "+")</button>
+                }
+                <button type="button" class="lt-schema-shape__member" aria-pressed="@(selected ? "true" : "false")"
+                        @onclick="() => ChooseNode(node)">
+                    <span class="lt-schema-shape__name">@Label(node)</span>
+                    @if (node.Dominant is { } type)
+                    {
+                        <span class="lt-schema-shape__type">@SchemaCardText.TypePhrase(type)@(node.Nulls > 0 ? ", sometimes null" : string.Empty)</span>
+                    }
+                    else if (node.NamedByPolicy)
+                    {
+                        <span class="lt-schema-shape__type">named by the policy</span>
+                    }
+                    @if (Example(node) is { } example)
+                    {
+                        <span class="lt-schema-shape__example">@example</span>
+                    }
+                </button>
+            </div>
+            @if (hasChildren && open)
+            {
+                <ul class="lt-schema-shape__list" id="@node.DomId">
+                    @if (node.Items is { } items)
+                    {
+                        @RenderShapeNode(items)
+                    }
+                    @foreach (var child in node.Children.Values)
+                    {
+                        @RenderShapeNode(child)
+                    }
+                </ul>
+            }
+        </li>
+    };
+
+    private RenderFragment RenderGallery(SchemaRuleCard card, SchemaShapeNode? scope, SchemaRuleCard? parent, bool predicateOnly, string group) => __builder =>
+    {
+        var node = scope is null ? null : SchemaShape.Find(scope, card.Path);
+        var whole = card.Path.Length == 0;
+        <div class="lt-schema-gallery" role="radiogroup" aria-label="@(parent is null ? "Constraint" : "Constraint on each item")">
+            @foreach (var kind in SchemaCardExamples.Gallery)
+            {
+                var option = kind;
+                var nested = parent is not null || predicateOnly;
+                var available = SchemaCardExamples.IsAvailable(option, whole, nested, out var reason);
+                var id = KindInputId(group, option);
+                <label class="lt-schema-gallery__option" for="@id">
+                    <input id="@id" class="lt-schema-gallery__radio" type="radio" name="@($"schema-kind-{group}")"
+                           value="@option" checked="@(card.Kind == option)" disabled="@(!available)"
+                           @onchange="() => ChooseKind(card, option, scope, parent)" />
+                    <span class="lt-schema-gallery__title">@SchemaCardExamples.Title(option)</span>
+                    <span class="lt-schema-gallery__meaning">@SchemaCardExamples.Meaning(option)</span>
+                    <span class="lt-schema-gallery__example">@(available ? SchemaCardExamples.Example(option, node) : reason)</span>
+                </label>
+            }
+        </div>
+    };
+
+    private RenderFragment RenderDetails(SchemaRuleCard card, SchemaShapeNode? scope, SchemaRuleCard? parent, bool topLevel, int depth = 0) => __builder =>
+    {
+        var node = scope is null ? null : SchemaShape.Find(scope, card.Path);
+        <div class="lt-schema-details">
+            @switch (card.Kind)
+            {
+                case SchemaCardKind.Required:
+                    <LtSwitch Label="It holds an object or a list" Checked="@card.Structural"
+                                CheckedChanged="value => card.Structural = value"
+                                Hint="A presence check on text, a number or true or false also works on older clusters; an object or a list needs this." />
+                    break;
+
+                case SchemaCardKind.Type:
+                    <LtSelect Label="Type" Options="@TypeOptions" Value="@card.ValueType.ToString()"
+                              ValueChanged="value => card.ValueType = Enum.Parse<SchemaValueType>(value)" />
+                    break;
+
+                case SchemaCardKind.OneOf:
+                    <LtMultiComboBox Label="Allowed values" Values="@card.Values" ValuesChanged="values => card.Values = [.. values]"
+                                     Source="@ValuesOf(card, scope)" Mode="LtComboBoxMode.Suggest" Noun="value"
+                                     Hint="Type a value and press Enter, or pick one seen in the sample." />
+                    <LtSwitch Label="Compare as numbers" Checked="@card.ValuesAreNumbers" CheckedChanged="value => card.ValuesAreNumbers = value"
+                                Hint="On: 5 and 5.0 are the same value. Off: values are compared as exact text." />
+                    break;
+
+                case SchemaCardKind.NumberRange:
+                    <div class="lt-schema-details__pair">
+                        <LtTextInput Label="Smallest" Value="@card.Minimum" ValueChanged="value => card.Minimum = value" inputmode="decimal" Placeholder="no minimum" />
+                        <LtTextInput Label="Largest" Value="@card.Maximum" ValueChanged="value => card.Maximum = value" inputmode="decimal" Placeholder="no maximum" />
+                    </div>
+                    <LtSwitch Label="Whole numbers only" Checked="@card.IntegerOnly" CheckedChanged="value => card.IntegerOnly = value" />
+                    break;
+
+                case SchemaCardKind.TextLength:
+                case SchemaCardKind.ListLength:
+                    var unit = card.Kind == SchemaCardKind.TextLength ? "characters" : "items";
+                    <div class="lt-schema-details__pair">
+                        <LtTextInput Label="@($"Fewest {unit}")" Value="@card.Minimum" ValueChanged="value => card.Minimum = value" inputmode="numeric" Placeholder="no minimum" />
+                        <LtTextInput Label="@($"Most {unit}")" Value="@card.Maximum" ValueChanged="value => card.Maximum = value" inputmode="numeric" Placeholder="no maximum" />
+                    </div>
+                    break;
+
+                case SchemaCardKind.Format:
+                    <LtSelect Label="Format" Options="@FormatOptions" Value="@card.Format.ToString()"
+                              ValueChanged="value => card.Format = Enum.Parse<SchemaTextFormat>(value)" />
+                    <p class="lt-schema-details__example">
+                        Accepts <code class="lt-schema-sentence__member">@SchemaFormatPatterns.PassingExampleOf(card.Format)</code>;
+                        refuses <code class="lt-schema-sentence__member">@SchemaFormatPatterns.FailingExampleOf(card.Format)</code>.
+                    </p>
+                    @RenderRegexReadout(card, SchemaFormatPatterns.PatternOf(card.Format), topLevel)
+                    break;
+
+                case SchemaCardKind.TextMatch:
+                    <div class="lt-schema-details__pair">
+                        <LtSelect Label="Where" Options="@MatchOptions" Value="@card.Match.ToString()"
+                                  ValueChanged="value => card.Match = Enum.Parse<SchemaTextMatch>(value)" />
+                        <LtTextInput Label="Text" Mono="true" Value="@card.MatchText" ValueChanged="value => card.MatchText = value" />
+                    </div>
+                    @if (card.MatchText.Length > 0)
+                    {
+                        @RenderRegexReadout(card, SchemaPatterns.ForMatch(card.Match, card.MatchText), topLevel)
+                    }
+                    break;
+
+                case SchemaCardKind.EveryItem:
+                    var items = node?.Items;
+                    <div class="lt-schema-details__nested" role="group" aria-label="What every item must be">
+                        <LtComboBox Label="Member of each item" Value="@(card.Item?.Path ?? string.Empty)"
+                                    ValueChanged="value => { if (card.Item is { } item) { item.Path = (value ?? string.Empty).Trim(); } }"
+                                    Source="@(parent is null ? _itemMembers : null)" Mode="LtComboBoxMode.Suggest" Noun="member"
+                                    Hint="Leave it empty to check each item itself." />
+                        @if (card.Item is { } item)
+                        {
+                            @RenderGallery(item, items, card, predicateOnly: true, group: $"item-{depth + 1}")
+                            @RenderDetails(item, items, card, topLevel: false, depth: depth + 1)
+                        }
+                    </div>
+                    break;
+
+                case SchemaCardKind.Pattern:
+                    <LtTextInput Label="Pattern (a regular expression)" Mono="true" Value="@card.Pattern" ValueChanged="value => card.Pattern = value"
+                                 Error="@(card.Pattern.Length > 0 && !SchemaPatterns.TryCompile(card.Pattern, out _, out var patternError) ? patternError : null)" />
+                    <LtTextInput Label="Try a value" Mono="true" Value="@_patternTest" ValueChanged="value => _patternTest = value"
+                                 Hint="Type any text to see whether the pattern accepts it." />
+                    @if (card.Pattern.Length > 0 && SchemaPatterns.TryCompile(card.Pattern, out var regex, out _) && regex is not null)
+                    {
+                        <p class="lt-schema-details__example" aria-live="polite">
+                            @if (_patternTest.Length > 0)
+                            {
+                                <span>@(regex.IsMatch(_patternTest.Length > SchemaPatterns.MaximumTestLength ? _patternTest[..SchemaPatterns.MaximumTestLength] : _patternTest) ? "Matches." : "Does not match.")</span>
+                            }
+                            @if (node is { Texts.Count: > 0 } member)
+                            {
+                                <span> Matches @Share(member.Texts.Count(text => regex.IsMatch(text)), member.Texts.Count) distinct text values seen.</span>
+                            }
+                        </p>
+                    }
+                    break;
+
+                case SchemaCardKind.Encoding:
+                    <LtSelect Label="The value must be" Options="@EncodingOptions" Value="@card.Encoding.ToString()"
+                              ValueChanged="value => card.Encoding = Enum.Parse<LatticeSchemaEncodingKind>(value)" />
+                    break;
+
+                case SchemaCardKind.MaxSize:
+                    <LtTextInput Label="Largest size, in bytes" Value="@card.MaxBytes" ValueChanged="value => card.MaxBytes = value" inputmode="numeric" />
+                    break;
+            }
+
+            @if (SchemaCardCompiler.CanBeOptional(card.Kind))
+            {
+                <LtSwitch Label="Also accept a missing value" Checked="@card.Optional" CheckedChanged="value => card.Optional = value"
+                            Hint="On: a value without this member, or with it set to null, passes." />
+            }
+
+            @if (topLevel)
+            {
+                <LtTextInput Label="Message when a value fails (optional)" Value="@card.Description" ValueChanged="value => card.Description = value"
+                             Hint="Shown to a writer whose value this rule refuses, and in compliance reports." />
+            }
+        </div>
+    };
+
+    private RenderFragment RenderRegexReadout(SchemaRuleCard card, string pattern, bool topLevel) => __builder =>
+    {
+        <div class="lt-schema-regex">
+            <p class="lt-schema-regex__label">The same check as a pattern</p>
+            <code class="lt-schema-regex__pattern">@pattern</code>
+            @if (topLevel)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => TakeOverAsRegex(card)">Edit as regex</LtButton>
+            }
+        </div>
+    };
+
+    private RenderFragment RenderPreview() => __builder =>
+    {
+        var preview = Preview();
+        var sample = CurrentSample;
+        <h3 id="lt-schema-preview-title" class="lt-schema-subtitle">Check against a sample</h3>
+        @if (_sampling)
+        {
+            <LtSkeleton Lines="3" Label="Reading a sample of the values" />
+        }
+        else if (_sampleError is not null)
+        {
+            <p class="lt-schema-note">@_sampleError</p>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="ReadSampleAsync">Try again</LtButton>
+        }
+        else if (sample is null || sample.Values.Count == 0)
+        {
+            <p class="lt-schema-note">The tree has no values to check yet.</p>
+        }
+        else if (_draftError is not null)
+        {
+            <p class="lt-schema-error">@_draftError</p>
+        }
+        else if (preview is { IsValid: false } refused)
+        {
+            <p class="lt-schema-error">@refused.Error</p>
+        }
+        else if (preview is { } result)
+        {
+            <div class="lt-schema-heading">
+                @if (_cards.Count == 0)
+                {
+                    <LtStatusPill Text="No rules" />
+                }
+                else if (result.Failed == 0)
+                {
+                    <LtStatusPill State="LtStateRole.Healthy" Text="All pass" />
+                }
+                else
+                {
+                    <LtStatusPill State="LtStateRole.Drift" Text="@($"{result.Failed:N0} would fail")" />
+                }
+            </div>
+            <LtDefinitionList>
+                <LtDefinition Term="Checked">@Count(result.Checked, "value")</LtDefinition>
+                <LtDefinition Term="Pass">@Count(result.Passed, "value")</LtDefinition>
+                <LtDefinition Term="Fail">@Count(result.Failed, "value")</LtDefinition>
+            </LtDefinitionList>
+            <p class="lt-schema-muted">
+                The first @Count(sample.Values.Count, "value") of @TreeId in key order@(sample.More ? ", of more" : string.Empty).
+                @if (sample.Unread > 0)
+                {
+                    <span> @Count(sample.Unread, "value") could not be read in full and were skipped.</span>
+                }
+                A read-only check; the full scan is on the Compliance tab.
+            </p>
+            @if (result.Failures.Count > 0)
+            {
+                <h4 class="lt-schema-subtitle">First failing values</h4>
+                <ol class="lt-schema-failures">
+                    @foreach (var failure in result.Failures)
+                    {
+                        <li class="lt-schema-failures__item" @key="failure.Key">
+                            <code class="lt-schema-sentence__member">@failure.Key</code>
+                            <span class="lt-schema-failures__reason">Rule @(failure.RuleIndex + 1): @failure.Reason</span>
+                            <pre class="lt-schema-value">@failure.Preview</pre>
+                        </li>
+                    }
+                </ol>
+            }
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="ReadSampleAsync">Read the sample again</LtButton>
+        }
+    };
+
+    private RenderFragment RenderAdvanced() => __builder =>
+    {
+        <h3 class="lt-schema-subtitle" tabindex="-1" @ref="_rulesHeading">Rules, as the policy stores them</h3>
+        @if (_cards.Count == 0)
+        {
+            <p class="lt-schema-muted">No rules yet. Add the first one below.</p>
+        }
+        else
+        {
+            <ol class="lt-schema-rules" aria-label="Rules in the new policy">
+                @for (var index = 0; index < _cards.Count; index++)
+                {
+                    var at = index;
+                    var card = _cards[at];
+                    <li class="lt-schema-rules__item" @key="card.Id">
+                        @if (SchemaCardCompiler.TryCompile(card, out var rule, out var error))
+                        {
+                            <span class="lt-schema-rules__text"><strong>@SchemaFormat.RuleKind(rule)</strong> - @SchemaFormat.RuleDetail(rule)</span>
+                        }
+                        else
+                        {
+                            <span class="lt-schema-rules__text lt-schema-error">@error</span>
+                        }
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveRule(at)" aria-label="@($"Remove rule {at + 1}")">Remove</LtButton>
+                    </li>
+                }
+            </ol>
+        }
+
+        <fieldset class="lt-schema-builder">
+            <legend class="lt-schema-builder__legend">Add a rule</legend>
+            <LtSelect Label="Rule" Options="@RawKinds" Value="@_raw.Kind.ToString()" ValueChanged="OnRawKindChanged" />
+            @switch (_raw.Kind)
+            {
+                case SchemaRuleDraftKind.MaxLength:
+                    <LtTextInput Label="Largest size, in bytes" Value="@_raw.MaxLength" ValueChanged="value => _raw.MaxLength = value" inputmode="numeric" />
+                    break;
+                case SchemaRuleDraftKind.Pattern:
+                    <LtTextInput Label="Pattern (a regular expression)" Mono="true" Value="@_raw.Pattern" ValueChanged="value => _raw.Pattern = value" />
+                    <LtComboBox Label="Member (leave empty for the whole value)" Value="@_raw.MemberPath" ValueChanged="value => _raw.MemberPath = value" Source="@_rootMembers" Mode="LtComboBoxMode.Suggest" Noun="member" />
+                    break;
+            }
+            <LtTextInput Label="Description (optional)" Value="@_raw.Description" ValueChanged="value => _raw.Description = value" Error="@_rawError" />
+            <LtButton OnClick="AddRawRule">Add rule</LtButton>
+        </fieldset>
+
+        <h3 class="lt-schema-subtitle">The exact policy</h3>
+        @if (ExactPolicy() is { } exact)
+        {
+            <pre class="lt-schema-value lt-schema-json" aria-label="The exact policy, as JSON">@SchemaPolicyJson.Write(exact)</pre>
+        }
+        else
+        {
+            <p class="lt-schema-muted">A rule is not complete yet, so the policy cannot be written out.</p>
+        }
+    };
+}

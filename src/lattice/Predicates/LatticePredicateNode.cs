@@ -27,6 +27,10 @@ public readonly record struct LatticePredicateNode
     /// For <see cref="LatticePredicateNodeKind.Member"/>: the dotted member
     /// path (e.g. <c>Age</c> or <c>Address.City</c>), resolved by name against
     /// the document. Property-name matching is ordinal and case-insensitive.
+    /// <see cref="LatticePredicateNodeKind.TypeOf"/>,
+    /// <see cref="LatticePredicateNodeKind.Length"/> and
+    /// <see cref="LatticePredicateNodeKind.Every"/> resolve it the same way, and
+    /// read a <see langword="null"/> or empty path as the current document.
     /// </summary>
     [Id(1)] public string? MemberPath { get; init; }
 
@@ -45,11 +49,18 @@ public readonly record struct LatticePredicateNode
     /// <summary>
     /// The operand sub-nodes. Comparison and string-method nodes carry exactly
     /// two children (left/right, or target/argument). Boolean <c>And</c>/<c>Or</c>
-    /// carry one or more; <c>Not</c> carries exactly one. Leaf nodes
+    /// carry one or more; <c>Not</c> carries exactly one, as does
+    /// <see cref="LatticePredicateNodeKind.Every"/>. Leaf nodes
     /// (<see cref="LatticePredicateNodeKind.Member"/> /
     /// <see cref="LatticePredicateNodeKind.Constant"/>) carry <c>null</c>.
     /// </summary>
     [Id(6)] public LatticePredicateNode[]? Children { get; init; }
+
+    /// <summary>
+    /// For <see cref="LatticePredicateNodeKind.TypeOf"/>: the kind of value the
+    /// member must hold. Ignored by every other kind.
+    /// </summary>
+    [Id(7)] public LatticeValueKind ValueKind { get; init; }
 
     /// <summary>
     /// Compares two nodes by structure: every scalar field plus an ordered,
@@ -67,6 +78,7 @@ public readonly record struct LatticePredicateNode
         && ComparisonOperator == other.ComparisonOperator
         && BooleanOperator == other.BooleanOperator
         && StringMethod == other.StringMethod
+        && ValueKind == other.ValueKind
         && ChildrenEqual(Children, other.Children);
 
     /// <inheritdoc />
@@ -79,6 +91,7 @@ public readonly record struct LatticePredicateNode
         hash.Add(ComparisonOperator);
         hash.Add(BooleanOperator);
         hash.Add(StringMethod);
+        hash.Add(ValueKind);
         if (Children is { } children)
         {
             hash.Add(children.Length);
@@ -133,4 +146,38 @@ public readonly record struct LatticePredicateNode
     /// <summary>Creates a string-method node (<paramref name="target"/> dot method, applied to <paramref name="argument"/>).</summary>
     public static LatticePredicateNode StringCall(LatticeStringMethod method, LatticePredicateNode target, LatticePredicateNode argument) =>
         new() { Kind = LatticePredicateNodeKind.StringMethod, StringMethod = method, Children = [target, argument] };
+
+    /// <summary>
+    /// Creates a type test: the value at <paramref name="memberPath"/> (the current
+    /// document when <see langword="null"/> or empty) is of <paramref name="kind"/>.
+    /// </summary>
+    /// <param name="memberPath">The dotted member path, or <see langword="null"/> for the current document.</param>
+    /// <param name="kind">The kind of value required.</param>
+    /// <returns>A <see cref="LatticePredicateNodeKind.TypeOf"/> node.</returns>
+    public static LatticePredicateNode TypeOf(string? memberPath, LatticeValueKind kind) =>
+        new() { Kind = LatticePredicateNodeKind.TypeOf, MemberPath = memberPath, ValueKind = kind };
+
+    /// <summary>
+    /// Creates a length operand: the length of the string, array or object at
+    /// <paramref name="memberPath"/> (the current document when <see langword="null"/> or empty).
+    /// </summary>
+    /// <param name="memberPath">The dotted member path, or <see langword="null"/> for the current document.</param>
+    /// <returns>A <see cref="LatticePredicateNodeKind.Length"/> node.</returns>
+    public static LatticePredicateNode LengthOf(string? memberPath) =>
+        new() { Kind = LatticePredicateNodeKind.Length, MemberPath = memberPath };
+
+    /// <summary>
+    /// Creates a quantifier: the array at <paramref name="memberPath"/> (the current
+    /// document when <see langword="null"/> or empty) has every item satisfying
+    /// <paramref name="item"/>, evaluated with the item as the current document.
+    /// </summary>
+    /// <param name="memberPath">The dotted member path of the array, or <see langword="null"/> for the current document.</param>
+    /// <param name="item">The predicate every item must satisfy.</param>
+    /// <returns>A <see cref="LatticePredicateNodeKind.Every"/> node.</returns>
+    public static LatticePredicateNode Every(string? memberPath, LatticePredicateNode item) =>
+        new() { Kind = LatticePredicateNodeKind.Every, MemberPath = memberPath, Children = [item] };
+
+    /// <summary>Creates an operand naming the current document: the whole value, or the item an enclosing quantifier visits.</summary>
+    /// <returns>A <see cref="LatticePredicateNodeKind.Self"/> node.</returns>
+    public static LatticePredicateNode Self() => new() { Kind = LatticePredicateNodeKind.Self };
 }

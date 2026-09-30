@@ -63,6 +63,12 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     /// <summary>How many entries <see cref="DemoTree"/> holds.</summary>
     public const int DemoEntryCount = 12;
 
+    /// <summary>
+    /// A tree of JSON orders for the schema rule builder's journey (issue #3963),
+    /// one of which has a negative total, so a range rule has a failing sample.
+    /// </summary>
+    public const string OrdersTree = "schema-orders";
+
     private readonly GrpcChannel _adminChannel;
 
     private ExplorerWorld(ExplorerHead head, string grpcEndpoint)
@@ -325,6 +331,15 @@ internal sealed class ExplorerWorld : IAsyncDisposable
             for (var i = 0; i < DemoEntryCount; i++)
             {
                 await tree.SetAsync($"machine-{i:D3}", Encoding.UTF8.GetBytes($"status-{i:D3}"));
+            }
+
+            var orders = grains.GetGrain<ILattice>(OrdersTree);
+            string[] totals = ["129.9", "18", "-5", "250", "9.99"];
+            for (var i = 0; i < totals.Length; i++)
+            {
+                await orders.SetAsync(
+                    $"order/{i + 1:D4}",
+                    Encoding.UTF8.GetBytes($"{{\"total\":{totals[i]},\"status\":\"{(i % 2 == 0 ? "open" : "shipped")}\",\"email\":\"buyer{i}@example.com\"}}"));
             }
 
             var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
