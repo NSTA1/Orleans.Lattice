@@ -6,7 +6,7 @@ using static Orleans.Lattice.Tenancy.Tests.RateLimiterTestData;
 namespace Orleans.Lattice.Tenancy.Tests;
 
 /// <summary>Unit tests for <see cref="TenantRateBudgetCoordinatorHostedService"/>.</summary>
-public sealed class TenantRateBudgetCoordinatorHostedServiceTests
+public sealed partial class TenantRateBudgetCoordinatorHostedServiceTests
 {
     private static IOptionsMonitor<LatticeTenantRateLimiterOptions> Options(LatticeTenantRateLimiterOptions options)
     {
