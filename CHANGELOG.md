@@ -84,6 +84,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - Leaving a page mid-read no longer ends the session.** A read still under way when its page is left is cancelled without ending the console's circuit, and in Development the web head keeps Blazor's circuit-fault log, with its stack trace, visible. ([#4011](https://github.com/NSTA1/Orleans.Lattice/issues/4011)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
+
 - **Explorer - Trees shared through a grant are listed.** A tenant's Data directory, tree pickers and completions now list the trees and prefixes other tenants share with it through an approved grant, marked with their owner and access, and the offer form sends the full tree id the grant needs. ([#3964](https://github.com/NSTA1/Orleans.Lattice/issues/3964)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Leaving a page no longer marks the next one not found.** A page now accepts only an address its own routes answer, so the page being left can no longer misread the next page's address as not found. The default tenant's Tenancy root is now the tenant directory. ([#3948](https://github.com/NSTA1/Orleans.Lattice/issues/3948)) (`Orleans.Lattice.Explorer.UI`)
