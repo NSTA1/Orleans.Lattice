@@ -47,11 +47,14 @@ public sealed class VectorKeyDictionary
     private long _loadHighest = -1L;
 
     // Key-map records assigned but not yet durable, awaiting one batched write.
-    // Cleared ONLY by a flush that succeeded: a failed flush leaves them here so
+    // Drained ONLY by a flush that succeeded: a failed flush leaves them here so
     // the next flush retries them. That is load-bearing, because the in-memory
     // maps above have already adopted these identifiers, so GetOrAddBufferedAsync
     // will not re-buffer them - dropping the buffer on failure would lose the
-    // record permanently while the mapping claimed it existed.
+    // record permanently while the mapping claimed it existed. The only other
+    // way a record leaves is together with the mapping it describes: a fresh
+    // LoadAsync, RemoveAsync, or ClearAsync discards it, since flushing it after
+    // that would write the dropped mapping back (issue #4074).
     private readonly List<KeyValuePair<string, byte[]>> _pendingWrites = [];
 
     /// <summary>
@@ -351,7 +354,9 @@ public sealed class VectorKeyDictionary
     public bool TryGetId(long key, out string id) => _reverse.TryGetValue(key, out id!);
 
     /// <summary>
-    /// Drops an identifier's mapping and its persisted record. The key it held is
+    /// Drops an identifier's mapping and its persisted record, including a record
+    /// still buffered by <see cref="GetOrAddBufferedAsync"/>, so a later
+    /// <see cref="FlushPendingAsync"/> cannot write it back. The key it held is
     /// retired with it and is never reassigned.
     /// </summary>
     /// <param name="id">The source identifier.</param>
@@ -367,13 +372,20 @@ public sealed class VectorKeyDictionary
         }
 
         _reverse.Remove(key);
+
+        // A record still buffered for this identifier must go with it. Otherwise
+        // the next FlushPendingAsync writes it back after the delete below, and
+        // the next load resurrects the mapping this call dropped (issue #4074).
+        DropPendingWrite(VectorIndexStorageKeys.KeyMap(_prefix, id));
+
         await _store.DeleteAsync(
             [VectorIndexStorageKeys.KeyMap(_prefix, id)], cancellationToken).ConfigureAwait(false);
         return key;
     }
 
     /// <summary>
-    /// Forgets every mapping, in memory and on the store. Used only when the
+    /// Forgets every mapping, in memory and on the store, and discards any record
+    /// still buffered by <see cref="GetOrAddBufferedAsync"/>. Used only when the
     /// whole index is being rebuilt from source, where the keys it assigned have
     /// no surviving meaning.
     /// </summary>
@@ -386,6 +398,10 @@ public sealed class VectorKeyDictionary
         _forward.Clear();
         _reverse.Clear();
 
+        // Buffered records describe the mapping just deleted. Flushing them later
+        // would write that mapping back over the cleared prefix (issue #4074).
+        _pendingWrites.Clear();
+
         // The counter deliberately does not rewind. A rebuild discards the
         // mapping, not the history of which keys have been in circulation, and a
         // durable record elsewhere may still name one of them.
@@ -397,6 +413,14 @@ public sealed class VectorKeyDictionary
         var target = _next + _reservationBlock;
         await PersistWatermarkAsync(target, cancellationToken).ConfigureAwait(false);
         _reservedTo = target;
+    }
+
+    private void DropPendingWrite(string storageKey)
+    {
+        // An identifier is buffered at most once - GetOrAddBufferedAsync returns
+        // early for a mapped id - but removal is rare and the buffer holds at
+        // most one slice, so a full sweep costs nothing and assumes nothing.
+        _pendingWrites.RemoveAll(pending => string.Equals(pending.Key, storageKey, StringComparison.Ordinal));
     }
 
     private Task PersistWatermarkAsync(long value, CancellationToken cancellationToken)

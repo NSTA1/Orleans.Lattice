@@ -140,6 +140,25 @@ public sealed class LatticeTreeAdminSnapshotTests
         });
     }
 
+    [TestCase(2)]
+    [TestCase(-1)]
+    [TestCase(int.MaxValue)]
+    public void SnapshotTreeAsync_undefined_mode_is_rejected_before_any_dial(int rawMode)
+    {
+        // Issue #4075: any value other than Online mapped to Offline, so an unknown
+        // mode - one a transport hands through verbatim - quiesced the source tree
+        // for the whole copy instead of being refused.
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Wire(factory);
+        var facade = Create(factory);
+
+        Assert.That(async () => await facade.SnapshotTreeAsync(Tree, Dest, (TreeSnapshotMode)rawMode),
+            Throws.TypeOf<ArgumentOutOfRangeException>().With.Property("ParamName").EqualTo("mode"));
+        lattice.DidNotReceive().SnapshotAsync(
+            Arg.Any<string>(), Arg.Any<SnapshotMode>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+        factory.DidNotReceive().GetGrain<ILattice>(Arg.Any<string>(), Arg.Any<string?>());
+    }
+
     [Test]
     public void SnapshotTreeAsync_propagates_the_core_precondition_rejection()
     {

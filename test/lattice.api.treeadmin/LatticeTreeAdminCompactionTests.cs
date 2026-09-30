@@ -205,6 +205,38 @@ public sealed class LatticeTreeAdminCompactionTests
         tree.DidNotReceive().SetHistoryRetentionAsync(Arg.Any<HistoryRetentionMode?>(), Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>());
     }
 
+    [TestCase(3)]
+    [TestCase(-1)]
+    [TestCase(int.MaxValue)]
+    public void SetHistoryRetentionAsync_undefined_mode_is_rejected_rather_than_clearing_the_override(int rawMode)
+    {
+        // Issue #4075: an undefined non-null mode mapped to null, which clears the
+        // override - a result the contract reserves for an explicit null.
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory);
+        var facade = Create(factory);
+
+        Assert.That(async () => await facade.SetHistoryRetentionAsync(TreeId, (TreeHistoryRetentionMode)rawMode, null),
+            Throws.TypeOf<ArgumentOutOfRangeException>().With.Property("ParamName").EqualTo("mode"));
+        tree.DidNotReceive().SetHistoryRetentionAsync(Arg.Any<HistoryRetentionMode?>(), Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>());
+    }
+
+    [TestCase(TreeHistoryRetentionMode.MetadataOnly, HistoryRetentionMode.MetadataOnly)]
+    [TestCase(TreeHistoryRetentionMode.FullValue, HistoryRetentionMode.FullValue)]
+    [TestCase(TreeHistoryRetentionMode.Hybrid, HistoryRetentionMode.Hybrid)]
+    public async Task SetHistoryRetentionAsync_maps_every_defined_mode(TreeHistoryRetentionMode mode, HistoryRetentionMode expected)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory);
+        tree.GetHistoryRetentionAsync(Arg.Any<CancellationToken>())
+            .Returns(new HistoryRetentionSettings { Mode = expected, Window = TimeSpan.Zero });
+        var facade = Create(factory);
+
+        await facade.SetHistoryRetentionAsync(TreeId, mode, null);
+
+        await tree.Received(1).SetHistoryRetentionAsync(expected, null, Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public void SetHistoryRetentionAsync_non_positive_window_throws_argument_exception()
     {
