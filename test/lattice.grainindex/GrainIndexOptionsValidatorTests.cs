@@ -106,6 +106,48 @@ public sealed class GrainIndexOptionsValidatorTests
         });
     }
 
+    /// <summary>
+    /// The regression. The interval arms the backfill grain's pass timer, and a
+    /// grain timer rejects a period above <c>0xFFFFFFFE</c> ms, so a longer
+    /// interval passed validation and then threw on every arming: the crawl was
+    /// marked running and never advanced. It must fail the host at startup instead.
+    /// </summary>
+    [TestCase(49.72)]
+    [TestCase(60.0)]
+    public void A_backfill_interval_above_the_pass_timer_ceiling_fails_and_names_the_index(double days)
+    {
+        var options = Valid();
+        options.BackfillInterval = TimeSpan.FromDays(days);
+
+        var result = Validate("users", options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain("users"));
+            Assert.That(result.FailureMessage, Does.Contain(nameof(GrainIndexOptions.BackfillInterval)));
+        });
+    }
+
+    [Test]
+    public void TimeSpan_MaxValue_as_a_backfill_interval_fails() =>
+        Assert.That(Validate("users", WithInterval(TimeSpan.MaxValue)).Failed, Is.True);
+
+    [Test]
+    public void The_longest_period_the_pass_timer_arms_passes() =>
+        Assert.That(Validate("users", WithInterval(GrainIndexOptions.MaxBackfillInterval)).Succeeded, Is.True);
+
+    [Test]
+    public void GrainIndexOptions_MaxBackfillInterval_is_the_grain_timer_ceiling() =>
+        Assert.That(GrainIndexOptions.MaxBackfillInterval, Is.EqualTo(TimeSpan.FromMilliseconds(uint.MaxValue - 1)));
+
+    private static GrainIndexOptions WithInterval(TimeSpan interval)
+    {
+        var options = Valid();
+        options.BackfillInterval = interval;
+        return options;
+    }
+
     [Test]
     public void Every_offender_is_reported_in_one_pass()
     {

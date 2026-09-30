@@ -703,6 +703,9 @@ public class LatticeOptions
     /// <summary>
     /// How often the autonomic monitor polls shard hotness counters.
     /// Shorter intervals detect hot shards faster at a small CPU cost.
+    /// The interval is the monitor's grain-timer period, so it must be at most
+    /// about 49.7 days (<c>0xFFFFFFFE</c> milliseconds); the validator rejects a
+    /// longer value, which a grain timer would refuse to arm.
     /// </summary>
     public TimeSpan HotShardSampleInterval { get; set; } = DefaultHotShardSampleInterval;
 
@@ -4528,8 +4531,10 @@ public class LatticeOptions
     /// when the box has measured headroom for parallel folds.
     /// </para>
     /// <para>
-    /// Must be strictly positive; use <see cref="ShardHealingEnabled"/> to
-    /// switch healing off.
+    /// Must be strictly positive and at most about 49.7 days
+    /// (<c>0xFFFFFFFE</c> milliseconds), the longest period the orchestrator's
+    /// grain timer accepts; use <see cref="ShardHealingEnabled"/> to switch
+    /// healing off.
     /// </para>
     /// </summary>
     public TimeSpan ShardHealingInterval { get; set; } = DefaultShardHealingInterval;

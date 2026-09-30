@@ -133,7 +133,9 @@ public sealed class LatticeViewOptions
     /// Idle poll cadence: how long the maintainer waits before re-checking the
     /// source WAL for new entries once it has drained to the head. Also bounds how
     /// long repeated writes to the same view key are batched together for
-    /// last-writer-wins coalescing. Must be greater than zero.
+    /// last-writer-wins coalescing. Must be greater than zero and at most about
+    /// 49.7 days (<c>0xFFFFFFFE</c> milliseconds), the longest period the
+    /// maintainer's grain timer accepts.
     /// </summary>
     public TimeSpan CoalesceWindow { get; set; } = DefaultCoalesceWindow;
 
