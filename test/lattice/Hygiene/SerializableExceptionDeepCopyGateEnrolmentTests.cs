@@ -493,6 +493,13 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
     }
 
     /// <summary>
+    /// How long a single <c>git grep</c> may take before the wait is abandoned.
+    /// Wide enough that no healthy checkout approaches it, so tripping it is
+    /// always a hang rather than a slow machine.
+    /// </summary>
+    private static readonly TimeSpan GitGrepTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// The absolute paths of the tracked files under <paramref name="directory"/>
     /// whose working-tree content contains <paramref name="token"/>, via
     /// <c>git grep</c>, so the scan reads a few hundred files rather than every file
@@ -519,7 +526,27 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
         var standardErrorTask = process.StandardError.ReadToEndAsync();
         var standardOutput = process.StandardOutput.ReadToEnd();
         var standardError = standardErrorTask.GetAwaiter().GetResult();
-        process.WaitForExit();
+
+        // Bounded. Both pipes have already been drained to EOF above, so the only
+        // remaining way to block here is a child that has written everything and
+        // still not exited. An unbounded wait makes that a CI abort naming no
+        // fixture; the bound makes it a failure that says what overran.
+        if (!process.WaitForExit((int)GitGrepTimeout.TotalMilliseconds))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) { /* already exited */ }
+            catch (NotSupportedException) { /* unsupported here */ }
+            catch (System.ComponentModel.Win32Exception) { /* the OS refused; the diagnosis below is the useful part */ }
+
+            throw new InvalidOperationException(
+                $"'git grep' over '{directory}' did not exit within {GitGrepTimeout.TotalSeconds:0}s. "
+                + "Both pipes had been read to EOF, so the child is stuck rather than blocked on output - "
+                + "commonly an index.lock left by a crashed git. Anything it did write: "
+                + standardError.Trim());
+        }
 
         // git grep exits 1 when nothing matches. That is reported as an empty set,
         // which the vacuity guards turn into a loud failure rather than a pass.

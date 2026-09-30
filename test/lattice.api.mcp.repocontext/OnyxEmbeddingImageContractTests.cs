@@ -136,8 +136,44 @@ public sealed class OnyxEmbeddingImageContractTests
         // happens inside the read, so WaitForExit is never reached and bounds nothing.
         var standardOutputTask = process.StandardOutput.ReadToEndAsync();
         var standardErrorTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
+
+        // The wait is bounded too. With both pipes draining, what is left to hang is
+        // docker itself - a daemon that is starting, unreachable, or pulling a layer
+        // over a stalled connection. Unbounded, that is a CI abort naming no fixture;
+        // bounded, it is a failure that says docker overran.
+        if (!process.WaitForExit((int)DockerTimeout.TotalMilliseconds))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) { /* already exited */ }
+            catch (NotSupportedException) { /* unsupported here */ }
+            catch (System.ComponentModel.Win32Exception) { /* the OS refused; the diagnosis below is the useful part */ }
+
+            output = $"docker {string.Join(' ', arguments)} did not exit within "
+                + $"{DockerTimeout.TotalSeconds:0}s and was terminated. Both output pipes were being "
+                + "drained, so the docker CLI or daemon is stuck rather than blocked on output.";
+            return TimedOutExitCode;
+        }
+
         output = standardOutputTask.GetAwaiter().GetResult() + standardErrorTask.GetAwaiter().GetResult();
         return process.ExitCode;
     }
+
+    /// <summary>
+    /// How long any single <c>docker</c> invocation may take. The image build is
+    /// the slow case and takes over a quarter of an hour on a warm machine, so
+    /// the budget is deliberately several times that: the bound exists to catch a
+    /// wedged daemon, and a bound a healthy cold run could trip would be worse
+    /// than no bound at all.
+    /// </summary>
+    private static readonly TimeSpan DockerTimeout = TimeSpan.FromMinutes(45);
+
+    /// <summary>
+    /// The exit code reported for a terminated invocation. Non-zero so that
+    /// <see cref="Docker"/> fails rather than reading the timeout as success, and
+    /// distinct from any code docker returns itself.
+    /// </summary>
+    private const int TimedOutExitCode = -1;
 }

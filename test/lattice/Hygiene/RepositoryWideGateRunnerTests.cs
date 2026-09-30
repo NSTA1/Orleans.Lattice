@@ -235,17 +235,76 @@ public sealed class RepositoryWideGateRunnerTests
     /// gate prints its own diagnostics to stderr while the run list streams to
     /// stdout - which is exactly the case that reaches it.
     /// </para>
+    /// <para>
+    /// The wait is <em>also</em> bounded, which is a separate concern from the
+    /// drain above. With both pipes draining, the remaining way to hang is the
+    /// child itself: this runner shells out to <c>dotnet test</c>, which can block
+    /// on a NuGet restore, a locked build output, or a wedged test host. An
+    /// unbounded wait turns that into a <c>--blame-hang</c> abort naming no
+    /// assertion; the bound turns it into a failure that says what overran.
+    /// </para>
     /// </summary>
     private static (int ExitCode, string StandardOutput, string StandardError) RunRunner(ProcessStartInfo psi)
     {
         using var process = Process.Start(psi)!;
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
+
+        if (!process.WaitForExit((int)RunnerTimeout.TotalMilliseconds))
+        {
+            KillTree(process);
+            Assert.Fail(
+                $"{RunnerRelativePath} did not exit within {RunnerTimeout.TotalSeconds:0}s. Both output "
+                + "pipes were being drained, so the runner itself is stuck. Partial output follows, "
+                + $"truncated at whatever it had written:{Environment.NewLine}"
+                + $"stdout:{Environment.NewLine}{Harvest(stdoutTask)}{Environment.NewLine}"
+                + $"stderr:{Environment.NewLine}{Harvest(stderrTask)}");
+        }
+
         return (
             process.ExitCode,
             stdoutTask.GetAwaiter().GetResult(),
             stderrTask.GetAwaiter().GetResult());
+    }
+
+    /// <summary>
+    /// How long the runner may take before the wait is abandoned. It drives real
+    /// test projects, so the budget is wide; tripping it means a hang, not a slow
+    /// machine.
+    /// </summary>
+    private static readonly TimeSpan RunnerTimeout = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Whatever a read task has produced, without waiting on it. The child was
+    /// killed, so both pipes close and the task completes; a short bound keeps a
+    /// diagnostic path from becoming a second hang.
+    /// </summary>
+    private static string Harvest(Task<string> read)
+        => read.Wait(TimeSpan.FromSeconds(5)) ? read.Result : "<unavailable: the pipe did not close>";
+
+    /// <summary>
+    /// Terminates an overrunning child and everything it spawned. The runner
+    /// starts a shell that starts <c>dotnet</c>, so killing only the shell would
+    /// leave the real work running.
+    /// </summary>
+    private static void KillTree(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited.
+        }
+        catch (NotSupportedException)
+        {
+            // Unsupported on this platform.
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The OS refused the kill; the timeout message is the useful diagnosis.
+        }
     }
 
     private static string? FindShell()
