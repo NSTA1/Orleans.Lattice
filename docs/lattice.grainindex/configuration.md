@@ -130,7 +130,7 @@ Resolved per index through `IOptionsMonitor<GrainIndexOptions>.Get(indexName)`.
 | `TreeName` | `__grainindex/<name>` | The lattice tree backing the index. Validated to stay inside the reserved prefix. |
 | `AllowReplication` | `false` | Whether the index's tree may replicate across clusters. |
 | `BackfillBatchSize` | `256` (`DefaultBackfillBatchSize`) | Grains visited per backfill pass. Must be at least 1. |
-| `BackfillInterval` | 1 second (`DefaultBackfillInterval`) | Pause between backfill passes. Must be greater than zero. |
+| `BackfillInterval` | 1 second (`DefaultBackfillInterval`) | Pause between backfill passes. Must be greater than zero and at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest period the backfill's pass timer accepts; both the per-index validator and `WithBackfillInterval` reject a longer value. |
 | `BackfillEnabled` | `true` | Whether *this host* schedules the crawl. Switching it off leaves the checkpoint durable and the control primitives working; it only stops this host driving passes. |
 | `DriftPolicy` | `Reject` | What silo start does when the declaration has drifted on a breaking field. |
 | `ProjectionMode` | `Synchronous` | When entries are published relative to the grain's own state write. |

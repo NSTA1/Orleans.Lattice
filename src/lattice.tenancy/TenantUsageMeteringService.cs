@@ -150,13 +150,52 @@ internal sealed class TenantUsageMeteringService : IHostedService
         }
     }
 
+    /// <summary>
+    /// The longest wait <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>
+    /// accepts: <c>0xFFFFFFFE</c> milliseconds, about 49.7 days. A longer
+    /// <see cref="TenantUsageAccountingOptions.MeterInterval"/> is clamped to it
+    /// rather than handed to the delay, which would throw
+    /// <see cref="ArgumentOutOfRangeException"/> out of the loop and end metering
+    /// for the life of the silo.
+    /// </summary>
+    internal static readonly TimeSpan MaxMeterDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    /// <summary>
+    /// Resolves the wait before the next metering cycle from the live
+    /// <see cref="TenantUsageAccountingOptions.MeterInterval"/>, re-read every cycle
+    /// so an options reload takes effect. Returns <c>null</c> when the interval is
+    /// zero or negative, which disables metering exactly as it does at
+    /// <see cref="StartAsync"/>; otherwise the interval clamped to
+    /// <see cref="MaxMeterDelay"/>.
+    /// </summary>
+    /// <returns>The wait before the next cycle, or <c>null</c> when metering is disabled.</returns>
+    internal TimeSpan? ResolveMeterDelay()
+    {
+        var interval = _options.CurrentValue.MeterInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        return interval > MaxMeterDelay ? MaxMeterDelay : interval;
+    }
+
     private async Task RunLoopAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            // A reload to a non-positive interval stops the loop rather than
+            // delaying by it: TimeSpan.Zero would re-meter every tenant back to
+            // back with no pause, and any other negative value throws out of the
+            // delay.
+            if (ResolveMeterDelay() is not { } delay)
+            {
+                return;
+            }
+
             try
             {
-                await Task.Delay(_options.CurrentValue.MeterInterval, _timeProvider, cancellationToken)
+                await Task.Delay(delay, _timeProvider, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)

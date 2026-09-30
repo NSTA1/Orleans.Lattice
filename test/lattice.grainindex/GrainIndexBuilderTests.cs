@@ -181,6 +181,18 @@ public sealed class GrainIndexBuilderTests
             Throws.TypeOf<ArgumentOutOfRangeException>());
 
     [Test]
+    public void With_backfill_interval_rejects_a_value_the_pass_timer_cannot_arm() =>
+        Assert.That(
+            () => Builder().WithBackfillInterval(GrainIndexOptions.MaxBackfillInterval + TimeSpan.FromMilliseconds(1)),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+
+    [Test]
+    public void With_backfill_interval_accepts_the_longest_period_the_pass_timer_arms() =>
+        Assert.That(
+            Builder().WithBackfillInterval(GrainIndexOptions.MaxBackfillInterval).BackfillIntervalOverride,
+            Is.EqualTo(GrainIndexOptions.MaxBackfillInterval));
+
+    [Test]
     public void Build_uses_the_built_in_codec_matching_the_grain_key_shape() =>
         Assert.That(
             Builder().Include(x => x.Age).Build().KeyCodec,

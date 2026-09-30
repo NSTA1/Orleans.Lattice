@@ -18,6 +18,13 @@ namespace Orleans.Lattice.Tests;
 /// checked against the primitive itself, so these tests cannot pass by rejecting a
 /// value the runtime would accept.
 /// </para>
+/// <para>
+/// <see cref="LatticeOptions.HotShardSampleInterval"/> and
+/// <see cref="LatticeOptions.ShardHealingInterval"/> are grain-timer periods rather
+/// than waits, and a grain timer refuses the same range: an over-long value threw
+/// each time the hot-shard monitor or the healing orchestrator armed its timer, so
+/// the tree was silently never sampled for auto-split and never healed.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class LatticeOptionsValidatorTimerCeilingTests
@@ -41,6 +48,8 @@ public sealed class LatticeOptionsValidatorTimerCeilingTests
         (nameof(LatticeOptions.WalAdmissionSaturationCallBudget), (o, v) => o.WalAdmissionSaturationCallBudget = v),
         (nameof(LatticeOptions.WalThrottledAdmissionPace), (o, v) => o.WalThrottledAdmissionPace = v),
         (nameof(LatticeOptions.MaxScanPageStallDuration), (o, v) => o.MaxScanPageStallDuration = v),
+        (nameof(LatticeOptions.HotShardSampleInterval), (o, v) => o.HotShardSampleInterval = v),
+        (nameof(LatticeOptions.ShardHealingInterval), (o, v) => o.ShardHealingInterval = v),
     ];
 
     private static ValidateOptionsResult Validate(Action<LatticeOptions> configure)
