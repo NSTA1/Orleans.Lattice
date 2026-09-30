@@ -959,26 +959,30 @@ public interface ILattice : IGrainWithStringKey
     Task<bool> IsResizeUndoPendingAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Online reshard - grows the tree to <paramref name="newShardCount"/>
-    /// distinct physical shards by iteratively splitting the largest-slot-owning
-    /// existing shards. The tree continues to serve reads and writes throughout;
-    /// every underlying split drains moved virtual slots online and then
-    /// atomically swaps the <see cref="ShardMap"/>, so key routing shifts
+    /// Online reshard - grows or shrinks the tree to <paramref name="newShardCount"/>
+    /// distinct physical shards. A larger count iteratively splits the
+    /// largest-slot-owning existing shards; a smaller count iteratively folds
+    /// the cheapest adjacent pairs of shards together through online shard
+    /// consolidation. The tree continues to serve reads and writes throughout;
+    /// every underlying split or fold drains the moving virtual slots online and
+    /// then atomically swaps the <see cref="ShardMap"/>, so key routing shifts
     /// transparently. Returns once orchestration has been accepted by the
     /// coordinator grain; the migration then runs anchored by reminders so
     /// it survives silo restarts. Poll completion with
     /// <see cref="IsReshardCompleteAsync"/>.
     /// <para>
-    /// <b>Grow-only on a populated tree.</b> <paramref name="newShardCount"/>
+    /// <b>Grow or shrink.</b> <paramref name="newShardCount"/>
     /// must be at least <c>2</c> and at most the smaller of
     /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
     /// (4096) and the number of virtual slots in the tree's
     /// <see cref="ShardMap"/> (fewer on a tree an installed app created with a
     /// declared virtual shard count); a value outside that range throws
     /// <see cref="ArgumentOutOfRangeException"/>. A request for the count the
-    /// tree already has is a no-op, and a smaller count than the current
-    /// number of distinct physical shards throws
-    /// <see cref="ArgumentOutOfRangeException"/> (shrinking is not supported).
+    /// tree already has is a no-op. A shrink completes only once every fold it
+    /// started has finished, including releasing the retired shards' storage:
+    /// their leaves, internal nodes and write-ahead-log retention pins are
+    /// cleared, and each retired shard keeps only a routing tombstone that
+    /// redirects callers still holding an older shard map.
     /// An observably empty tree is instead re-pinned directly to any count in
     /// range, smaller or larger, without running a migration; its shard map is
     /// rebuilt over the same virtual slot count. Throws

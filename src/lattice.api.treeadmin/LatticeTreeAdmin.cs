@@ -1112,7 +1112,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public ILattice verb so the tree's own guards (system-tree) and
-        // grow-only argument validation are inherited rather than duplicated, and the
+        // argument validation are inherited rather than duplicated, and the
         // core re-enforces TreeLifecycle. Orchestration is accepted synchronously; the
         // migration then runs online anchored by reminders.
         await _grainFactory.GetGrain<ILattice>(effectiveTreeId)

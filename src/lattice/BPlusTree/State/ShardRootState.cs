@@ -318,6 +318,31 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(21)] public List<GrainId> PendingLeafClears { get; set; } = new();
+
+    /// <summary>
+    /// Whether an online shard consolidation has retired this shard: its
+    /// virtual slots were folded onto a survivor, the routing map no longer
+    /// references it, and <c>IShardRootGrain.RetireAsync</c> has released (or is
+    /// releasing) its storage.
+    /// <para>
+    /// A retired shard keeps only its routing tombstone -
+    /// <see cref="MovedAwaySlots"/> and <see cref="MovedAwayVirtualShardCount"/> -
+    /// so a caller still holding a pre-fold <see cref="ShardMap"/> is redirected
+    /// rather than served. Every leaf and internal node is cleared, which also
+    /// retires the leaves' WAL materialiser pins, and the shard never creates a
+    /// new root: a routed operation is refused with
+    /// <see cref="StaleShardRoutingException"/> and a range-read page returns
+    /// empty, so the caller's map-version reconciliation re-reads the data from
+    /// its current owner.
+    /// </para>
+    /// <para>
+    /// Set and persisted <em>before</em> the storage walk starts, so a crash part
+    /// way through leaves the shard refusing traffic and the walk resumable by
+    /// re-issuing <c>RetireAsync</c>. Adding this slot is backward-compatible:
+    /// state persisted before the field existed deserializes to <c>false</c>.
+    /// </para>
+    /// </summary>
+    [Id(22)] public bool IsRetired { get; set; }
 }
 
 /// <summary>

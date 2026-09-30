@@ -131,9 +131,167 @@ internal sealed partial class ShardRootGrain
         // tree-deletion retry comes back to them.
         await ClearPendingLeavesForPurgeAsync();
 
+        await ClearTopologyAsync();
+
+        await state.ClearStateAsync();
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsRetiredAsync() => Task.FromResult(state.State.IsRetired);
+
+    /// <inheritdoc />
+    public async Task RetireAsync()
+    {
+        EnsureInternalOrigin(LatticeOperation.Admin);
+
+        if (!state.State.IsRetired)
+        {
+            // Fail closed: each of these means this shard may still be the
+            // authoritative owner of live data, so its storage is not ours to
+            // release. The consolidation coordinator only calls this after its
+            // fold committed, where none of them can hold.
+            if (state.State.SplitInProgress is { } sip)
+                throw new InvalidOperationException(
+                    $"Shard {MyShardIndex} of tree '{TreeId}' cannot be retired while a migration to shard {sip.ShadowTargetShardIndex} is in progress (phase {sip.Phase}).");
+            if (state.State.ShadowForward is not null || state.State.RetainedRedirect is not null)
+                throw new InvalidOperationException(
+                    $"Shard {MyShardIndex} of tree '{TreeId}' cannot be retired while an online resize is forwarding or redirecting it.");
+            if (state.State.MovedAwaySlots.Count == 0 || state.State.MovedAwayVirtualShardCount is null)
+                throw new InvalidOperationException(
+                    $"Shard {MyShardIndex} of tree '{TreeId}' cannot be retired: it records no moved-away slots, so a caller holding an older shard map would be served from it instead of redirected.");
+
+            // Persisted BEFORE the storage walk. From here the shard refuses
+            // routed traffic and returns empty range-read pages, so nothing can
+            // observe - or re-grow - the half-cleared topology below, and a crash
+            // part way through is finished by re-issuing this call.
+            state.State.IsRetired = true;
+            try
+            {
+                await WriteShardStateAsync();
+            }
+            catch
+            {
+                state.State.IsRetired = false;
+                throw;
+            }
+        }
+
+        await ReleaseRetiredStorageAsync();
+
+        logger.LogInformation(
+            "Retired shard {ShardIndex} of tree {TreeId}: its leaves, internal nodes and WAL materialiser pins were released; its moved-away fence of {SlotCount} slot(s) is kept.",
+            MyShardIndex,
+            TreeId,
+            state.State.MovedAwaySlots.Count);
+
+        // Drop the activation's in-memory routing and leaf caches with it.
+        RequestDeactivationFencingPointWrites();
+    }
+
+    /// <inheritdoc />
+    public async Task ReviveAsync(int[] ownedSlots, int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(ownedSlots);
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+        EnsureInternalOrigin(LatticeOperation.Admin);
+
+        if (!state.State.IsRetired)
+        {
+            return;
+        }
+
+        // Finish an interrupted retirement first, so a revived shard never
+        // resumes serving a half-cleared topology.
+        await ReleaseRetiredStorageAsync();
+
+        // Lift the fence only where the new map sends traffic here. A slot this
+        // shard gave away and does not get back keeps redirecting a caller whose
+        // map predates the one being published. A fence recorded under a
+        // different slot count cannot be read against this map, so it goes.
+        var previousSlots = state.State.MovedAwaySlots;
+        var previousVsc = state.State.MovedAwayVirtualShardCount;
+        var kept = new Dictionary<int, int>(previousSlots);
+        if (previousVsc == virtualShardCount)
+        {
+            foreach (var slot in ownedSlots) kept.Remove(slot);
+        }
+        else
+        {
+            kept.Clear();
+        }
+
+        state.State.IsRetired = false;
+        state.State.MovedAwaySlots = kept;
+        state.State.MovedAwayVirtualShardCount = kept.Count == 0 ? null : previousVsc;
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            state.State.IsRetired = true;
+            state.State.MovedAwaySlots = previousSlots;
+            state.State.MovedAwayVirtualShardCount = previousVsc;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Clears every leaf and internal node of a retired shard and rewrites its
+    /// record as an empty routing tombstone. Idempotent: a shard already reduced
+    /// to its tombstone clears nothing and writes once.
+    /// </summary>
+    private async Task ReleaseRetiredStorageAsync()
+    {
+        // A routing mutation for the whole walk: an interleaved optimistic read
+        // that overlaps it fails its epoch check and retries serially, queueing
+        // behind this call and then meeting the retired gate.
+        BeginRoutingMutation();
+        try
+        {
+            await ClearPendingLeavesForPurgeAsync();
+            await ClearTopologyAsync();
+
+            // Keep the moved-away fence, the delete flag and the registration;
+            // drop everything that described the cleared topology.
+            state.State.RootNodeId = null;
+            state.State.RootIsLeaf = false;
+            state.State.PendingPromotion = null;
+            state.State.PendingPromotionRootWasLeaf = false;
+            state.State.PendingBulkGraft = null;
+            state.State.DirtyLeavesSinceLastCompaction.Clear();
+            state.State.LeafAccessModel = null;
+            state.State.StrandedScanLeafId = null;
+            state.State.StrandedScanRecoveries = 0;
+            state.State.PendingChildLinks.Clear();
+            state.State.PendingLeafClears.Clear();
+            await WriteShardStateAsync();
+        }
+        finally
+        {
+            EndRoutingMutation();
+        }
+
+        logger.LogInformation(
+            "Retired shard {ShardIndex} of tree {TreeId}: its leaves, internal nodes and WAL materialiser pins were released; its moved-away fence of {SlotCount} slot(s) is kept.",
+            MyShardIndex,
+            TreeId,
+            state.State.MovedAwaySlots.Count);
+
+        // Drop the activation's in-memory routing and leaf caches with it.
+        RequestDeactivationFencingPointWrites();
+    }
+
+    /// <summary>
+    /// Clears every leaf and internal node this shard routes to. Shared by
+    /// <see cref="PurgeAsync"/> and <see cref="RetireAsync"/>; leaves the shard
+    /// root's own record untouched, which each caller then clears or rewrites.
+    /// </summary>
+    private async Task ClearTopologyAsync()
+    {
         if (state.State.RootNodeId is null)
         {
-            await state.ClearStateAsync();
             return;
         }
 
@@ -200,8 +358,6 @@ internal sealed partial class ShardRootGrain
         }
 
         await ClearInternalNodesAsync(internalNodeIds);
-
-        await state.ClearStateAsync();
     }
 
     /// <summary>

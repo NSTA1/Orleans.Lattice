@@ -337,10 +337,9 @@ if ($ResetStorage) {
 Write-Host "[cohort] walTable=$WalTable grainStateTable=$GrainStateTable resetStorage=$ResetStorage" -ForegroundColor DarkGray
 
 # Per-cell silo configuration. BENCH_SHARD_COUNT stays 0 on every silo: in a
-# multi-replica cluster all N would race the grow-only reshard, the first
-# would win, and the rest would take the ArgumentOutOfRangeException as fatal
-# and exit - turning a configuration detail into a replica crashloop. The
-# producer performs the single reshard instead.
+# multi-replica cluster all N would race the same reshard and each would hold
+# its listener until the migration finished. The producer performs the single
+# reshard instead.
 $siloEnv = @(
 	"BENCH_TREE_ID=$TreeId",
 	"BENCH_WAL_TABLE=$WalTable",

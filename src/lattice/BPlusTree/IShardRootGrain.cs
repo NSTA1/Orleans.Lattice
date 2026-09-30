@@ -768,6 +768,64 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task PurgeAsync();
 
     /// <summary>
+    /// Releases the storage of a shard that an online shard consolidation has
+    /// retired from the routing map, leaving only a routing tombstone behind.
+    /// <para>
+    /// Called by the consolidation coordinator once its fold has committed: the
+    /// survivor has durably absorbed every entry (each merge is appended to the
+    /// survivor's write-ahead log before it returns), the routing map no longer
+    /// references this shard, and every slot it owned is recorded in its
+    /// moved-away set. Without this, a retired donor kept every leaf and
+    /// internal node it ever had, and each of those leaves kept its WAL
+    /// materialiser pin at a frontier that could never advance again - a
+    /// permanent floor under the tree's WAL trim horizon.
+    /// </para>
+    /// <para>
+    /// Clears every leaf (which retires its WAL materialiser pins), every
+    /// internal node and every leaf still owed a clear, then resets the shard
+    /// root to an empty tombstone that keeps its moved-away slot fence. A
+    /// retired shard never creates a new root: a routed operation is refused with
+    /// <see cref="StaleShardRoutingException"/> so the caller refreshes its map,
+    /// and a range-read page returns empty so the caller's map-version
+    /// reconciliation reads the folded slots from their current owner.
+    /// </para>
+    /// <para>
+    /// Fails closed. Refuses with <see cref="InvalidOperationException"/> - and
+    /// changes nothing - when the shard still carries a migration record, a
+    /// resize shadow-forward or redirect, or no moved-away fence, because any of
+    /// those means the shard may still be the authoritative owner of live data.
+    /// Idempotent and resumable: the retired flag is persisted before the storage
+    /// walk, so a call interrupted part way is completed by re-issuing it.
+    /// </para>
+    /// </summary>
+    Task RetireAsync();
+
+    /// <summary>
+    /// Returns a shard retired by <see cref="RetireAsync"/> to service as an
+    /// empty shard: finishes any interrupted release of its storage, clears its
+    /// retired flag, and lifts its moved-away fence for exactly the slots in
+    /// <paramref name="ownedSlots"/>. Fence entries for every other slot are
+    /// kept, so a caller holding a map older than the one being published is
+    /// still redirected rather than served. A no-op on a shard that is not
+    /// retired.
+    /// <para>
+    /// Only valid when the routing map is being rebuilt over an observably empty
+    /// tree - the online reshard's empty-tree path, which rebuilds the identity
+    /// map over shard indices <c>0..n-1</c> and may therefore route to an index a
+    /// shrink retired. Everywhere else a retired index is never reused: a slot
+    /// reassignment raises the tree's split allocation high-water past it.
+    /// </para>
+    /// </summary>
+    /// <param name="ownedSlots">The virtual slots the map being published routes to this shard.</param>
+    /// <param name="virtualShardCount">The virtual slot count of that map.</param>
+    Task ReviveAsync(int[] ownedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Returns <c>true</c> once <see cref="RetireAsync"/> has retired this shard.
+    /// </summary>
+    Task<bool> IsRetiredAsync();
+
+    /// <summary>
     /// Re-asserts the owning-tree binding on every node this shard still
     /// routes to, repairing a topology left half-torn-down by an interrupted
     /// <see cref="PurgeAsync"/>. Called by <see cref="ITreeDeletionGrain"/> on

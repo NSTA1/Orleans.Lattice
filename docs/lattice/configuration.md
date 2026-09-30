@@ -258,7 +258,7 @@ The timeout, budget and cadence options the runtime arms as timers - `Activation
 `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` used to live on `LatticeOptions` but are now pinned per-tree on the `TreeRegistryEntry`. They are seeded from `LatticeConstants` on first tree use (defaults 128 / 128 / 64) and can be changed through:
 
 - `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` - see [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). Runs online; empty-tree fast-path if no data exists.
-- `ILattice.ReshardAsync(newShardCount)` - see [Online Reshard](online-reshard.md). Grow-only unless the tree is empty (fast-path).
+- `ILattice.ReshardAsync(newShardCount)` - see [Online Reshard](online-reshard.md). Grows or shrinks the physical shard count online; an empty tree is re-pinned directly (fast-path).
 - Pre-pinning the sizing explicitly before the tree's first use with `ILatticeTreeAdmin.CreateTreeAsync(treeId, shardCount, maxLeafKeys, maxInternalChildren)` from [Orleans.Lattice.Api.TreeAdmin](../lattice.api.treeadmin/README.md). Creation is idempotent, and the supplied sizing is honoured only when the call registers the tree for the first time.
 - Declaring it in an installed app's manifest ([Orleans.Lattice.Apps](../lattice.apps/README.md)), whose per-tree `shardCount`, `maxLeafKeys`, `maxInternalChildren`, `walPartitions` and `virtualShardCount` pins are applied when the install first registers each tree the app creates; a tree that already exists keeps its pinned structure.
 
@@ -795,7 +795,7 @@ This option can be changed freely at any time.
 
 ### `MaxConcurrentMigrations`
 
-Maximum number of shard splits an online reshard (`ILattice.ReshardAsync`) may drive concurrently (default: 4). Each split drains one physical shard's upper-half virtual slots into a newly allocated target shard; running several in parallel shortens the reshard at the cost of proportionally more background drain I/O. Values below 1 are treated as 1. Splits driven by a reshard are independent of autonomic splits, so this cap and [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) compose additively.
+Maximum number of shard splits (grow) or shard consolidations (shrink) an online reshard (`ILattice.ReshardAsync`) may drive concurrently (default: 4). Each split drains one physical shard's upper-half virtual slots into a newly allocated target shard, and each fold drains one shard into an adjacent survivor; running several in parallel shortens the reshard at the cost of proportionally more background drain I/O. Values below 1 are treated as 1. Splits driven by a reshard are independent of autonomic splits, so this cap and [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) compose additively. A shrink's folds are bounded by this option, not by [`MaxConcurrentShardConsolidations`](#maxconcurrentshardconsolidations), which governs automatic healing only.
 
 This option can be changed freely at any time.
 

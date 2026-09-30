@@ -150,6 +150,8 @@ public partial class TreeShardConsolidationGrainTests
             .Returns(_ => { log.Record("donor.EnterReject"); return Task.CompletedTask; });
         donor.CompleteSplitAsync()
             .Returns(_ => { log.Record("donor.CompleteSplit"); return Task.CompletedTask; });
+        donor.RetireAsync()
+            .Returns(_ => { log.Record("donor.Retire"); return Task.CompletedTask; });
         donor.AbortSplitAsync()
             .Returns(_ => { log.Record("donor.AbortSplit"); return Task.CompletedTask; });
         survivor.ReclaimSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
@@ -165,6 +167,14 @@ public partial class TreeShardConsolidationGrainTests
         });
 
         WireLeafChain(grainFactory, donor, leafEntries, log);
+
+        // Finalise stands off a resize, snapshot or merge on the tree; by
+        // default none is running.
+        var lattice = Substitute.For<ILattice>();
+        lattice.IsResizeCompleteAsync().Returns(true);
+        lattice.IsSnapshotCompleteAsync().Returns(true);
+        lattice.IsMergeCompleteAsync().Returns(true);
+        grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
         var clock = new FakeTimeProvider();
         var state = existingState ?? new FakePersistentState<TreeShardConsolidationState>();

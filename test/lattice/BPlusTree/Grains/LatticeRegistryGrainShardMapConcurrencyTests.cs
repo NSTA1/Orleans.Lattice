@@ -100,6 +100,31 @@ public class LatticeRegistryGrainShardMapConcurrencyTests
     /// The same composition in the other direction, so neither coordinator is
     /// privileged by the ordering. Enumerated rather than assumed symmetric.
     /// </summary>
+    /// <summary>
+    /// A fold that retires the highest-indexed shard must not let the split
+    /// allocator hand that index out again. A retired shard keeps a routing
+    /// tombstone that refuses every routed operation, so a split that targeted
+    /// it could never drain and would pin its source's migration record forever.
+    /// The allocator derives the next index from the highest one the map still
+    /// references, so the reassignment itself has to raise the high-water.
+    /// </summary>
+    [Test]
+    public async Task ReassignSlots_retiring_the_highest_index_keeps_it_out_of_split_allocation()
+    {
+        var grain = CreateGrainOverBackingStore();
+        var identity = ShardMap.CreateDefault(8, 4);
+        await grain.SetShardMapAsync(TreeId, identity);
+
+        // Fold shard 3 onto shard 2: shard 3 leaves the map.
+        var donorSlots = Enumerable.Range(0, 8).Where(s => identity.Slots[s] == 3).ToArray();
+        var afterFold = await grain.ReassignSlotsAsync(TreeId, donorSlots, 2, identity);
+        Assert.That(afterFold.GetPhysicalShardIndices(), Does.Not.Contain(3), "precondition: the donor left the map");
+
+        var next = await grain.AllocateNextShardIndexAsync(TreeId, afterFold.GetPhysicalShardIndices().Max());
+
+        Assert.That(next, Is.EqualTo(4), "the retired index 3 must never be allocated again");
+    }
+
     [Test]
     public async Task Fold_then_split_each_holding_a_stale_view_both_survive()
     {

@@ -351,7 +351,7 @@ Use these documents for day-to-day use and operations:
 - [Durable Cursors](docs/lattice/durable-cursors.md) - server-checkpointed iterators for long-running key scans and resumable range deletes that survive silo failovers and client restarts.
 - [Snapshot Cursors](docs/lattice/snapshot-cursors.md) - strict snapshot-isolation cursors, whose every page reflects the tree as it was when the cursor opened.
 - [Snapshots](docs/lattice/snapshots.md) - point-in-time copies of a tree into a new destination tree, offline or online.
-- [Online Reshard](docs/lattice/online-reshard.md) - `ReshardAsync`: growing a tree's physical shard count while it keeps serving reads and writes.
+- [Online Reshard](docs/lattice/online-reshard.md) - `ReshardAsync`: growing or shrinking a tree's physical shard count while it keeps serving reads and writes.
 - [Tree Sizing](docs/lattice/tree-sizing.md) - `ResizeAsync`: changing a live tree's `MaxLeafKeys` and `MaxInternalChildren`, its phase machine, and its undo window.
 - [Tree Deletion](docs/lattice/tree-deletion.md) - soft delete with a configurable retention window, recovery, and manual purge.
 - [Tree Registry](docs/lattice/tree-registry.md) - the built-in registry of every user tree and its per-tree configuration overrides, aliases, shard maps, and the optional `ITreeOwnershipGuard` seam that bounds alias changes.

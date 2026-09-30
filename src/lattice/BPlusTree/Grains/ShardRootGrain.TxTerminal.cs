@@ -108,6 +108,16 @@ internal sealed partial class ShardRootGrain
         // prepared entries become orphans in _pendingTx - which surface as
         // pre-saga reads once the saga's decision is forgotten by
         // ITxRegistryGrain.
+        //
+        // A shard an online consolidation retired holds no leaves, so it has no
+        // prepared state to resolve, and the survivor that absorbed its slots is
+        // already in the terminal's shard closure through the moved-away
+        // targets. Answer before PrepareForOperationAsync, whose retired gate
+        // would otherwise refuse the terminal on every retry and fail the whole
+        // broadcast - including the survivor's terminal it was batched with.
+        if (state.State.IsRetired)
+            return null;
+
         await PrepareForOperationAsync();
 
         if (transactionId == Guid.Empty)

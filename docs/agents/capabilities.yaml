@@ -1798,11 +1798,13 @@ capabilities:
       - reshard
       - shard-map
     guarantees:
-      - statement: "ReshardAsync grows a tree's physical shard count online while reads and writes continue."
+      - statement: "ReshardAsync grows or shrinks a tree's physical shard count online while reads and writes continue."
         source: "docs/lattice/online-reshard.md"
       - statement: "Resharding changes key-space partitioning and write-path fan-out, not the maximum amount of data a shard can hold."
         source: "docs/lattice/online-reshard.md"
-      - statement: "On a tree that holds data, resharding is grow-only and the target must exceed the current distinct-shard count."
+      - statement: "A target below the current distinct-shard count shrinks the tree by online shard consolidation, and the shrink completes only once every fold it started has released its retired shard's storage."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "A retired shard keeps a routing tombstone, so a router holding a pre-shrink shard map is redirected rather than served."
         source: "docs/lattice/online-reshard.md"
       - statement: "An observably empty tree can be re-pinned in place to any in-range shard count without a coordinator."
         source: "docs/lattice/online-reshard.md"
@@ -1813,7 +1815,7 @@ capabilities:
       - statement: "The reshard target range is 2 through the smaller of 4096 and the tree's own virtual slot count (the number of slots in its shard map), and a target above it is refused with ArgumentOutOfRangeException."
         source: "docs/lattice/online-reshard.md"
     non_guarantees:
-      - statement: "ReshardAsync cannot shrink a tree that holds data."
+      - statement: "A started reshard cannot be reverted; reshard again to return to the previous count."
         source: "docs/lattice/online-reshard.md"
       - statement: "ReshardAsync is shard-count only and does not change MaxLeafKeys or MaxInternalChildren."
         source: "docs/lattice/online-reshard.md"
@@ -1838,7 +1840,7 @@ capabilities:
         hazard: "Healing never undoes a reshard below the pinned shard count."
         source: "docs/lattice/online-reshard.md"
     concurrency_rules:
-      - statement: "The reshard coordinator dispatches up to MaxConcurrentMigrations concurrent online shard splits per tick."
+      - statement: "The reshard coordinator keeps up to MaxConcurrentMigrations concurrent online shard splits (grow) or shard consolidations (shrink) running."
         source: "docs/lattice/online-reshard.md"
       - statement: "The autonomic split monitor suppresses its own passes while a reshard is running."
         source: "docs/lattice/online-reshard.md"

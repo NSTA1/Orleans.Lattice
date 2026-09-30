@@ -12,6 +12,7 @@ internal sealed partial class ShardRootGrain
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
+        ThrowIfRetired();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
         if (state.State.RootNodeId is not null)
@@ -63,6 +64,7 @@ internal sealed partial class ShardRootGrain
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
+        ThrowIfRetired();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
         if (state.State.RootNodeId is not null)
@@ -303,6 +305,7 @@ internal sealed partial class ShardRootGrain
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
+        ThrowIfRetired();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
         RecordWrite(sortedEntries.Count);
 

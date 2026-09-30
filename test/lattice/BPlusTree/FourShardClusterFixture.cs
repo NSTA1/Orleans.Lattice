@@ -43,8 +43,8 @@ public sealed class FourShardClusterFixture
     /// keys per leaf) and returns a grain reference to it. Tests that need a fresh per-test
     /// tree ID must call this instead of <c>GetGrain&lt;ILattice&gt;(...)</c> directly, otherwise
     /// the tree lazy-seeds from <see cref="LatticeConstants"/> defaults (64 shards / 128 keys
-    /// per leaf) and subsequent <c>ReshardAsync</c> / <c>ResizeAsync</c> calls that target
-    /// smaller values are rejected as shrinks.
+    /// per leaf) and a subsequent <c>ReshardAsync</c> to a smaller value starts a slow shrink
+    /// across 64 shards instead of the grow the test meant.
     /// </summary>
     public async Task<ILattice> CreateTreeAsync(string treeId)
     {

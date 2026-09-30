@@ -2,13 +2,15 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Coordinator grain that drives an online reshard end-to-end: iteratively
-/// dispatches per-shard <see cref="Orleans.Lattice.BPlusTree.ITreeShardSplitGrain"/> operations
+/// Coordinator grain that drives an online reshard end-to-end: a grow
+/// iteratively dispatches per-shard <see cref="Orleans.Lattice.BPlusTree.ITreeShardSplitGrain"/> operations
 /// against the largest-slot-owning physical shards until the tree's
 /// <see cref="ShardMap"/> contains at least the target number of distinct
-/// physical shards. All work happens online - the tree continues to serve
-/// reads and writes throughout, and virtual-slot routing is swapped
-/// atomically by each underlying split.
+/// physical shards, and a shrink iteratively starts
+/// <see cref="ITreeShardConsolidationGrain"/> folds against the cheapest
+/// adjacent shard pairs until it contains at most the target. All work happens
+/// online - the tree continues to serve reads and writes throughout, and
+/// virtual-slot routing is swapped atomically by each underlying split or fold.
 /// <para>
 /// Key format: <c>{treeId}</c>.
 /// </para>
@@ -17,15 +19,18 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ITreeReshardGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Initiates an online reshard that grows the tree to
+    /// Initiates an online reshard that grows or shrinks the tree to
     /// <paramref name="newShardCount"/> distinct physical shards. Returns
     /// once the intent has been persisted; the actual migration runs
     /// asynchronously, anchored by a reminder so it survives silo restarts.
     /// <para>
-    /// Grow-only: <paramref name="newShardCount"/> must be strictly greater
-    /// than the current physical shard count, and no greater than the smaller
-    /// of <see cref="LatticeConstants.DefaultVirtualShardCount"/> (4096) and the
-    /// number of virtual slots in the tree's <see cref="ShardMap"/>.
+    /// <paramref name="newShardCount"/> must be at least 2 and no greater than
+    /// the smaller of <see cref="LatticeConstants.DefaultVirtualShardCount"/>
+    /// (4096) and the number of virtual slots in the tree's
+    /// <see cref="ShardMap"/>. A count equal to the current physical shard count
+    /// is a no-op; a smaller count on a populated tree starts a shrink, which
+    /// completes only once every fold it started - including the release of
+    /// each retired shard's storage - has finished.
     /// Idempotent: if a reshard to the same target is already in progress,
     /// this call is a no-op. Throws <see cref="InvalidOperationException"/>
     /// if a reshard with a different target is in progress.
