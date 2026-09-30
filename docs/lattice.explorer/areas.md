@@ -24,7 +24,7 @@ Data is the Explorer's state browser. It has two routed pages:
 
 | Address | What it shows |
 | --- | --- |
-| `/data`, `/t/{tenant}/data` | Every tree and view the caller can reach, followed, with tenancy on, by the trees other tenants share with the tenant through an approved grant. Rows show the logical name, kind, owning app, shard count, lifecycle and source view tree, plus a **Shared by** column with tenancy on. The table is virtualised and can be filtered by text and by kind: All, Trees, Views, and with tenancy on **Shared with this tenant**. |
+| `/data`, `/t/{tenant}/data` | Every tree and view the caller can reach, followed, with tenancy on, by the trees other tenants share with the tenant through an approved grant. Rows show the logical name, kind, owning app, shard count, lifecycle and source view tree. A filter or column that cannot apply is left out: the **Shared by** column and the **Shared with this tenant** filter appear only where sharing applies (tenancy on, at a tenant other than the reserved `default` one), the **App** column only when some tree belongs to an app, and the **Source** column only when there is a view. The columns follow the whole listing, not the filtered rows, so typing a filter never makes them come and go. The table is virtualised and can be filtered by text and by kind: All, Trees, Views, and, where sharing applies, **Shared with this tenant**. |
 | `/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`, plus the tenant-rooted equivalent | One tree workspace. The route accepts up to six logical tree-id path segments. The page shows the logical id, kind, owning app link, view source, shard count and live-key count when metrics are available. |
 
 The directory uses `?filter=` for the text filter. A tree workspace keeps state
@@ -40,7 +40,9 @@ feed. If a scan cursor expires, the page offers a restart from the first page.
 If a live feed is not offered, it disables live updates; if the feed moves past
 the cursor, it reports that live updates stopped and offers a restart. The key
 table clips long keys in cells but keeps the full key in details, and selecting
-one writes `?key=` and opens the entry panel below the table.
+one writes `?key=` and opens the entry panel. At the expanded width the entry
+stands beside the key table as a split view, kept in view while the list
+scrolls; at narrower widths it opens below the table.
 
 The entry panel reads the selected key through the state reader and renders the
 value automatically, with alternate renderers when CRDT members are present. It
@@ -54,9 +56,12 @@ for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's k
 starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
 at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
-boundary notes and a live tail. `?at=` marks the revision that was in effect at
-the chosen UTC instant, and disables the live tail while the point-in-time view
-is active.
+boundary notes and a live tail. A revision that kept only the value's size and
+hash is marked "metadata only", and the timeline explains what that means once,
+rather than under each such revision. The **As of (UTC)** field starts empty,
+with a hint giving its form (`yyyy-MM-ddTHH:mm:ssZ`, empty for the latest).
+`?at=` marks the revision that was in effect at the chosen UTC instant, and
+disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
 tombstones, depth, shards splitting, views and view lag where the cluster
@@ -140,7 +145,9 @@ operation model.
 ## Tenancy
 
 Tenancy has two roots: `/tenancy` for an operator's tenant directory and
-`/t/{tenant}/tenancy` for the active tenant administration view. It requires the
+`/t/{tenant}/tenancy` for the active tenant administration view. Either way one
+tenant is shown under the same tabs: Overview, Members, Quota, Regions and
+Sharing. It requires the
 tenant self-service facade and tenancy to be active, then proves whether the
 caller is an operator or administers the scoped tenant. Operators get the
 `tenancy.create-tenant` command; non-default tenant admins get
@@ -183,6 +190,10 @@ enrolment follows the app install. Disabling is a destructive confirmation: it
 stops new changes from replicating, leaves peer data in place, and keeps the
 merge mode for a later enable. Static-only enrolments cannot be toggled here.
 
+The estate and enrolled-trees pages share a section row, **Estate** and
+**Enrolled trees**. One tree's page is below both, so in place of the row it
+shows a **Back to enrolled trees** link.
+
 The tree detail page reads one tree's links afresh, then starts a visibility
 aware refresh loop after the first browser render. While the page is visible it
 refreshes every 5 seconds; when the tab is hidden it stops; when it becomes
@@ -215,7 +226,9 @@ catalogue maintenance through `ILatticeBackupControl`. It appears when the
 capability probe says the caller can list backups; a denied or grantless caller
 sees an Unavailable grant sentence, while an unserved or faulted backup control
 surface is Hidden. Its palette command is `backups.capture`, labelled "Capture
-backup...". See [Managing backups](managing-backups.md) for backup scopes,
+backup...". The Catalogue, Schedules, Health and Maintenance pages share a page
+row; a page below them (capturing a backup, one backup, one operation) shows a
+**Back to the catalogue** link instead. See [Managing backups](managing-backups.md) for backup scopes,
 capture, restore and maintenance.
 
 ## Telemetry

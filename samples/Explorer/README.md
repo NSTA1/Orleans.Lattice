@@ -141,12 +141,14 @@ adds `"state": "unknown"`), so the Versions page has a registry to target.
 ### Tenancy
 
 As the operator, `/tenancy` is the tenant directory: `acme` and `globex`, their
-state, quota use and apps. Open a tenant for its overview and lifecycle, its
-**Grants**, **Admin subjects** and **Regions**:
+state, quota use and apps. Open a tenant for its **Overview** and lifecycle, and
+its **Members**, **Quota**, **Regions** and **Sharing** tabs, the same tabs a
+tenant admin sees:
 
 - **Quota**: `acme` is capped at 500 keys and `globex` at 200, each at ten trees
-  with a 20% burst allowance.
-- **Grants**: `acme` has offered `globex` Read on `t/acme/orders`, by its full
+  with a 20% burst allowance. The operator sets the limits here; a tenant admin's
+  Quota tab reads them.
+- **Sharing**: `acme` has offered `globex` Read on `t/acme/orders`, by its full
   tree id, which is what the cluster's tenant gate matches. The grant is *Pending*
   until `globex` approves it.
 - **Regions**: both tenants may use `east` and `west`. Residency is left

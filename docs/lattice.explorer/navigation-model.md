@@ -174,7 +174,7 @@ own width and uses three bands:
 |---|---|---|---|---|
 | Expanded | 1200px and up | A full spine with badges and reasons. | Connection, appearance, tenant switcher and identity controls in a row. | The full chain. |
 | Medium | 768px to 1199px | A rail: every label, but no badges or reasons. | As expanded. | The full chain. |
-| Compact | Below 768px | A slide-in sheet opened from the **Directory** button, which returns focus when it closes; for an operator it starts with the tenant switcher. | The mark and name, with a **Menu** button holding the connection, identity and appearance controls. | The last two nodes after a `...` node that opens the full chain as a list. The command palette opens as a full-screen sheet. |
+| Compact | Below 768px | A slide-in sheet opened from the **Directory** button, which returns focus when it closes; for an operator it starts with the tenant switcher. | The mark and the name, shortened to "Lattice Explorer" so it is never cut off, with a **Menu** button holding the connection, identity and appearance controls. | The current node alone, on one line, after a `...` elision (not a node) that opens the full chain as a list. The command palette opens as a full-screen sheet. |
 
 Until the width has been measured, the expanded layout renders, so nothing
 depends on script to be usable.
@@ -208,6 +208,14 @@ The Explorer keeps every address canonical for your tenancy:
   to the active tenant's equivalent address and shows a warning, so a URL can
   never scope you beyond what you may reach.
 
+A successful switch is not drawn as a toast, because the address and the header
+already show the new tenant: "Scoped to tenant {tenant}." is read out in the
+notification region's polite live announcement, and nothing covers the page or
+waits to be dismissed. The first address a circuit opens (a reload, a bookmark or
+a pasted link) only establishes the tenant, so it announces nothing. A refused
+switch is still a warning toast, which stays until it is dismissed, because it
+left you somewhere you did not ask to be.
+
 To re-root the current address, type `t/` in the address line. It completes the
 tenants you may reach, marking the active one. Choosing one keeps the rest of the
 address and replaces its tenant root; a cluster-wide address is unchanged.
@@ -240,8 +248,8 @@ Choosing a tenant makes the same fail-closed switch as typing `t/{tenant}`. At a
 tenant-scoped address you go to the same address re-rooted at the chosen tenant,
 and a refusal redirects back with the usual warning. At a cluster-wide address,
 such as an Access page, you stay where you are while the tenant changes, and the
-Explorer says "Scoped to tenant {tenant}." or, on a refusal, that it can't scope
-to that tenant.
+Explorer announces "Scoped to tenant {tenant}." or, on a refusal, shows a warning
+toast saying it can't scope to that tenant.
 
 ## Pickers
 
