@@ -3,9 +3,9 @@ namespace Orleans.Lattice.Tenancy;
 /// <summary>
 /// The resource quotas and burst allowance for a tenant. Each dimension is a
 /// nullable ceiling where <c>null</c> means <em>unbounded</em> (no limit on that
-/// dimension); <see cref="BurstPercent"/> is the transient headroom, as a
-/// percentage of the bounded ceilings, a tenant may momentarily exceed before
-/// admission control engages (<c>0</c> means no burst).
+/// dimension); a bounded ceiling must be non-negative. <see cref="BurstPercent"/> is
+/// the transient headroom, as a percentage of the bounded ceilings, a tenant may
+/// momentarily exceed before admission control engages (<c>0</c> means no burst).
 /// </summary>
 /// <remarks>
 /// This is the tenant's declared allocation, authored by an operator and stored

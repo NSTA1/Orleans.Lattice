@@ -87,12 +87,12 @@ public sealed class TenantRecord
     /// </summary>
     /// <param name="id">The tenant identity. Must be an initialised (parsed) tenant id.</param>
     /// <param name="status">The initial status.</param>
-    /// <param name="quotas">The initial quotas.</param>
+    /// <param name="quotas">The initial quotas. Its <see cref="TenantQuotas.BurstPercent"/> and every bounded ceiling must be non-negative.</param>
     /// <param name="placement">The initial placement binding.</param>
     /// <param name="clock">The clock to stamp the initial fields with.</param>
     /// <param name="writerId">The writer id to stamp the initial fields with (may be <c>null</c>).</param>
     /// <returns>The constructed record.</returns>
-    /// <exception cref="ArgumentException"><paramref name="id"/> is the uninitialised <c>default(TenantId)</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is the uninitialised <c>default(TenantId)</c>, or <paramref name="quotas"/> carries a negative <see cref="TenantQuotas.BurstPercent"/> or a negative ceiling.</exception>
     public static TenantRecord Create(
         TenantId id,
         TenantStatus status,
@@ -143,9 +143,10 @@ public sealed class TenantRecord
         StatusRegister = StatusRegister.Set(status, clock, writerId);
 
     /// <summary>Sets the tenant's quotas if the stamp supersedes the current one.</summary>
-    /// <param name="quotas">The new quotas.</param>
+    /// <param name="quotas">The new quotas. Its <see cref="TenantQuotas.BurstPercent"/> and every bounded ceiling must be non-negative.</param>
     /// <param name="clock">The write clock.</param>
     /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentException"><paramref name="quotas"/> carries a negative <see cref="TenantQuotas.BurstPercent"/> or a negative ceiling.</exception>
     public void SetQuotas(TenantQuotas quotas, HybridLogicalClock clock, string? writerId)
     {
         ValidateQuotas(quotas, nameof(quotas));
@@ -790,6 +791,25 @@ public sealed class TenantRecord
         {
             throw new ArgumentException(
                 $"TenantQuotas.BurstPercent must be non-negative, but was {quotas.BurstPercent}.",
+                paramName);
+        }
+
+        // A negative ceiling has no meaning, and the enforcement paths read one in
+        // opposite ways: the storage evaluator refuses every write against it, while
+        // the rate provider treats a non-positive rate as unbounded.
+        ValidateCeiling(quotas.MaxBytes, nameof(TenantQuotas.MaxBytes), paramName);
+        ValidateCeiling(quotas.MaxKeys, nameof(TenantQuotas.MaxKeys), paramName);
+        ValidateCeiling(quotas.MaxMemoryBytes, nameof(TenantQuotas.MaxMemoryBytes), paramName);
+        ValidateCeiling(quotas.MaxTreeCount, nameof(TenantQuotas.MaxTreeCount), paramName);
+        ValidateCeiling(quotas.MaxOpsPerSecond, nameof(TenantQuotas.MaxOpsPerSecond), paramName);
+    }
+
+    private static void ValidateCeiling(long? ceiling, string dimension, string paramName)
+    {
+        if (ceiling is < 0)
+        {
+            throw new ArgumentException(
+                $"TenantQuotas.{dimension} must be null (unbounded) or non-negative, but was {ceiling}.",
                 paramName);
         }
     }

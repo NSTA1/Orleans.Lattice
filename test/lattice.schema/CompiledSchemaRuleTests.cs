@@ -146,6 +146,39 @@ public class CompiledSchemaRuleTests
         Assert.That(() => CompiledSchemaRule.Compile(rule), Throws.ArgumentException);
     }
 
+    [TestCase(-1)]
+    [TestCase(int.MinValue)]
+    public void Compile_max_byte_length_rule_with_negative_limit_throws(int limit)
+    {
+        // Regression for #4097: an initializer-built (or wire-decoded) rule skipped
+        // the MaxLength factory's guard and compiled into a rule no value satisfies.
+        var rule = new LatticeSchemaRule
+        {
+            Kind = LatticeSchemaRuleKind.Encoding,
+            EncodingKind = LatticeSchemaEncodingKind.MaxByteLength,
+            MaxByteLength = limit,
+        };
+
+        Assert.That(
+            () => CompiledSchemaRule.Compile(rule),
+            Throws.ArgumentException.With.Message.Contains("non-negative"));
+    }
+
+    [Test]
+    public void Compile_ignores_a_negative_max_byte_length_on_another_encoding_kind()
+    {
+        var rule = new LatticeSchemaRule
+        {
+            Kind = LatticeSchemaRuleKind.Encoding,
+            EncodingKind = LatticeSchemaEncodingKind.Utf8,
+            MaxByteLength = -1,
+        };
+
+        var compiled = CompiledSchemaRule.Compile(rule);
+
+        Assert.That(compiled.Validate(Utf8("text")), Is.Null);
+    }
+
     [Test]
     public void Compile_unknown_rule_kind_throws()
     {

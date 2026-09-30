@@ -69,6 +69,26 @@ public sealed class LatticeSchemaPolicyStoreTests
     }
 
     [Test]
+    public async Task SetPolicyAsync_negative_max_byte_length_is_rejected_and_not_stored()
+    {
+        // Regression for #4097: the policy was accepted and then rejected every
+        // value written to the governed tree.
+        var store = CreateStore();
+        var policy = new LatticeSchemaPolicy(new[]
+        {
+            new LatticeSchemaRule
+            {
+                Kind = LatticeSchemaRuleKind.Encoding,
+                EncodingKind = LatticeSchemaEncodingKind.MaxByteLength,
+                MaxByteLength = -1,
+            },
+        });
+
+        Assert.That(() => store.SetPolicyAsync("orders", policy), Throws.ArgumentException);
+        Assert.That(await store.GetPolicyAsync("orders"), Is.Null);
+    }
+
+    [Test]
     public void GetPolicyAsync_empty_tree_throws()
     {
         var store = CreateStore();

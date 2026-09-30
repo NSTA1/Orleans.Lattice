@@ -128,8 +128,9 @@ lifecycle, quota, and region-residency verbs (see the
   burst allowance in one platform-operator action. Each ceiling (`MaxBytes`,
   `MaxKeys`, `MaxMemoryBytes`, `MaxTreeCount`, `MaxOpsPerSecond`) is `null` for
   unbounded on that dimension; passing `TenantQuotasDescriptor.Unbounded` lifts every
-  cap again. `BurstPercent` is the transient headroom above the bounded ceilings and
-  must be non-negative (a negative value fails closed with an `ArgumentException`). The
+  cap again. A bounded ceiling must be non-negative, and so must `BurstPercent`, the
+  transient headroom above the bounded ceilings: a negative value on any of them fails
+  closed with an `ArgumentException` and writes nothing. The
   reserved `default` tenant can never be given quotas. The quotas now in effect come
   back on `TenantQuotasUpdateResult.Quotas`, and stay readable on
   `ILatticeTenantSelfService.GetTenantAsync` (`TenantStatusReport.Quotas`) for any

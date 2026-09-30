@@ -671,7 +671,7 @@ composed for its own install's tenant.
 |---|---|---|
 | `ReconcileOnStartup` | `true` | Reconcile every enabled app once, in the background, when the silo starts. |
 | `StartupRetryDelay` | 250 ms | Initial delay before retrying the startup registry read while the silo cannot yet serve it; doubles on each retry. Must be positive. |
-| `StartupRetryMaxDelay` | 30 s | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. |
+| `StartupRetryMaxDelay` | 30 s | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. Every retry delay is held to the timer ceiling (about 49.7 days), so `TimeSpan.MaxValue` leaves the doubling uncapped up to it. |
 
 ### `InImageAppSourceOptions`
 
