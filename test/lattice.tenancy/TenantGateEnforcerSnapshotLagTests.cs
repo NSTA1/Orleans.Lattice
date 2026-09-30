@@ -119,6 +119,7 @@ public sealed class TenantGateEnforcerSnapshotLagTests
     public async Task EnforceAsync_unregistered_owner_while_the_snapshot_is_not_authoritative_denies()
     {
         var registry = new FakeTenantRegistry();
+        registry.Records.Add(Record("beta", admins: [Subject]));
         var enforcer = CrossingEnforcer(registry);
         LatticeActiveTenantContext.Current = Beta;
 
@@ -127,7 +128,7 @@ public sealed class TenantGateEnforcerSnapshotLagTests
         var decision = await enforcer.EnforceAsync(in request);
 
         Assert.That(decision.Allowed, Is.False);
-        Assert.That(decision.Reason, Does.Contain("not registered"));
+        Assert.That(decision.Reason, Does.Contain("Target tenant 'acme' is not registered"));
     }
 
     [Test]
@@ -197,7 +198,7 @@ public sealed class TenantGateEnforcerSnapshotLagTests
     }
 
     [Test]
-    public async Task EnforceAsync_owned_tree_while_the_snapshot_is_not_authoritative_does_not_read_the_registry()
+    public async Task EnforceAsync_owned_tree_while_the_snapshot_is_not_authoritative_confirms_membership_with_one_registry_read()
     {
         await using var world = await World.CreateAsync(TenantGrantState.Active);
         world.TransitionGrant(TenantGrantState.Revoked);
@@ -206,11 +207,13 @@ public sealed class TenantGateEnforcerSnapshotLagTests
         LatticeActiveTenantContext.Current = Beta;
         var request = new LatticeAccessRequest("t/beta/own", LatticeOperation.Read, new LatticeSubject(Subject), "k");
 
-        var pending = world.Enforcer.EnforceAsync(in request);
+        var decision = await world.Enforcer.EnforceAsync(in request);
 
-        Assert.That(pending.IsCompletedSuccessfully, Is.True, "only a cross-tenant crossing is confirmed");
-        Assert.That(pending.Result.Allowed, Is.True);
-        Assert.That(world.Registry.PointReads, Is.EqualTo(reads));
+        world.AssertAdmitted(decision, "the active tenant's own record still lists the subject");
+        Assert.That(
+            world.Registry.PointReads - reads,
+            Is.EqualTo(1),
+            "an owned-tree request confirms the active tenant's membership (issue #4053) from its one record");
     }
 
     // ---- helpers --------------------------------------------------------
@@ -228,9 +231,10 @@ public sealed class TenantGateEnforcerSnapshotLagTests
     }
 
     /// <summary>
-    /// An enforcer over a cold (non-authoritative) maintainer and an engine that
-    /// validates <c>bob</c> acting as <c>beta</c>, so a read of <c>acme</c>'s tree
-    /// reaches the registry confirmation.
+    /// An enforcer over a warm but non-authoritative maintainer. The substituted
+    /// engine would validate <c>bob</c> acting as <c>beta</c>, but in the
+    /// non-authoritative window it is not consulted (issue #4053): the enforcer
+    /// confirms both the membership and the grant against <paramref name="registry"/>.
     /// </summary>
     private static TenantGateEnforcer CrossingEnforcer(ITenantRegistry registry)
     {
