@@ -157,6 +157,27 @@ public sealed partial class LtComboBoxTests
     }
 
     [Test]
+    public void The_field_keeps_its_keys_from_its_ancestors_whatever_state_its_list_is_in()
+    {
+        // The Escape race's mechanism: a stop-propagation flag that followed the list's
+        // state was applied by the render diff, so a quick second key saw the stale flag.
+        // A constant flag has nothing to go stale; the field decides Escape on the server.
+        var cut = RenderBox(new FakeSuggestionSource(Trees));
+        var closed = cut.Find("input").HasAttribute("blazor:onkeydown:stoppropagation");
+
+        cut.Find("input").Input("crm/");
+        var open = cut.Find("input").HasAttribute("blazor:onkeydown:stoppropagation");
+        Key(cut, "Escape");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(closed, Is.True, "with the list closed");
+            Assert.That(open, Is.True, "with the list open");
+            Assert.That(cut.Find("input").HasAttribute("blazor:onkeydown:stoppropagation"), Is.True, "after Escape closed the list");
+        });
+    }
+
+    [Test]
     public void Inside_a_dialog_Escape_on_a_closed_list_closes_the_dialog_exactly_once()
     {
         // The field keeps its keys from its ancestors, so the dialog is closed by the
