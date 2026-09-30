@@ -275,10 +275,67 @@ public sealed class AggregationApplierTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(counting.GetManyCalls, Is.EqualTo(2),
-                "one batched materialise gather, one batched cleanup probe");
+            Assert.That(counting.GetManyCalls, Is.EqualTo(1),
+                "the cleanup probe stays batched; the materialise gather is a point read at fanout 1");
             Assert.That(inner.Count, Is.EqualTo(0),
                 "the emptied slot, membership row, and materialised group are all removed");
+        });
+    }
+
+    [Test]
+    public async Task Materialise_reads_its_single_slot_directly_at_the_default_fanout()
+    {
+        // An unsharded group has exactly one slot, so gathering it through a
+        // batched read is a batch of one: a list to hold one key and a map to
+        // hold one row, both discarded immediately. The pass reads that slot
+        // directly instead. The batched read is kept above fanout 1, so the
+        // same contribution must cost strictly fewer batched reads unsharded
+        // than sharded. Counting the difference rather than asserting zero is
+        // deliberate: the flip's cleanup probe is batched at every fanout and
+        // is not the gather, so an absolute count would pin unrelated work.
+        var single = new CountingAggregationViewStore(new InMemoryAggregationViewStore());
+        var sharded = new CountingAggregationViewStore(new InMemoryAggregationViewStore());
+        var singleApplier = new AggregationApplier(single, AggregationKind.Count, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1");
+        var shardedApplier = new AggregationApplier(sharded, AggregationKind.Count, fanout: 4, maxGroupEntries: 0, operationEpoch: "e1");
+
+        var contribution = AggregationContribution.OfNumeric("g", "s1", 1.0, Hlc());
+        await singleApplier.ApplyAsync(contribution);
+        await shardedApplier.ApplyAsync(contribution);
+
+        Assert.That(single.GetManyCalls, Is.LessThan(sharded.GetManyCalls),
+            "a single-slot group must not issue a batched read to fetch its one row");
+    }
+
+    [Test]
+    public async Task Materialise_agrees_across_fanouts_for_the_same_contributions()
+    {
+        // The direct read and the batched read must be observationally identical:
+        // a batched read omits an absent key exactly as a point read returns null
+        // for one, and every call site already treats null and the empty sentinel
+        // alike. Same contributions, different gather shape, same materialised
+        // value.
+        var single = new InMemoryAggregationViewStore();
+        var sharded = new InMemoryAggregationViewStore();
+        var singleApplier = new AggregationApplier(single, AggregationKind.Sum, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1");
+        var shardedApplier = new AggregationApplier(sharded, AggregationKind.Sum, fanout: 8, maxGroupEntries: 0, operationEpoch: "e1");
+
+        for (var i = 0; i < 24; i++)
+        {
+            var contribution = AggregationContribution.OfNumeric("g", $"s{i}", i * 0.25, Hlc());
+            await singleApplier.ApplyAsync(contribution);
+            await shardedApplier.ApplyAsync(contribution);
+        }
+
+        var singleValue = await single.GetAsync("g");
+        var shardedValue = await sharded.GetAsync("g");
+        Assert.Multiple(() =>
+        {
+            Assert.That(singleValue, Is.Not.Null);
+            Assert.That(shardedValue, Is.Not.Null);
+            Assert.That(
+                LatticeAggregationValue.DecodeDouble(singleValue!),
+                Is.EqualTo(LatticeAggregationValue.DecodeDouble(shardedValue!)).Within(1e-9),
+                "the gather shape must not change the materialised total");
         });
     }
 }

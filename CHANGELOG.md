@@ -40,6 +40,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Aggregation inverse row splice.** The splice's second pass re-walked and re-parsed every entry purely to re-derive byte spans its first pass had already measured, then copied each entry one by one. It now block-copies the runs either side of the match: 42% faster on a 64-entry row. ([#4062](https://github.com/NSTA1/Orleans.Lattice/pull/4062)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation fold row splice.** The fold splice re-walked the same way, and each entry it stepped over also carried an opaque value payload whose length prefix the walk read only to skip. The same block copy makes it 44% faster on a 64-entry row. ([#4062](https://github.com/NSTA1/Orleans.Lattice/pull/4062)) (`Orleans.Lattice`)
+
+- **Performance - Unsharded aggregation slot gather.** Materialising a group gathered its slots through a batched read, a batch of one at the default fanout: a list to hold one key and a map to hold one row, both dropped at once. It reads that slot directly instead: 55% faster, 57% less allocated. ([#4062](https://github.com/NSTA1/Orleans.Lattice/pull/4062)) (`Orleans.Lattice`)
+
 - **Performance - Aggregation same-group re-contribution.** A min, max or set-union contribution that keeps its group sent its retraction and its addition to the same shard row, so the applier read, spliced and wrote that row twice. One fused splice now does it: 44% faster, 48% less allocated. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation fold re-contribution.** The custom-fold contribution path fuses the same way, and saves more: each redundant row walk also copied every member's opaque value payload. The fused splice is 46% faster and allocates 48% less. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
