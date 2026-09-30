@@ -2167,6 +2167,7 @@ internal sealed partial class ShardRootGrain(
     public Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new ShardCountPage { Count = 0 });
         var scan = BeginScanPage(nameof(CountBoundedAsync));
         return GuardScanPageAsync(scan, CountBoundedCoreAsync(startInclusive, endExclusive, scan));
     }
@@ -2337,6 +2338,7 @@ internal sealed partial class ShardRootGrain(
     public Task<ShardAnyPage> AnyBoundedAsync(string? resumeFromInclusive)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new ShardAnyPage { Found = false });
         var scan = BeginScanPage(nameof(AnyBoundedAsync));
         return GuardScanPageAsync(scan, AnyBoundedCoreAsync(resumeFromInclusive, scan));
     }
@@ -2434,6 +2436,7 @@ internal sealed partial class ShardRootGrain(
     public Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedAsync(string? resumeFromInclusive)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new ShardCountWithMovedAwayPage { Count = 0 });
         var scan = BeginScanPage(nameof(CountWithMovedAwayBoundedAsync));
         return GuardScanPageAsync(scan, CountWithMovedAwayBoundedCoreAsync(resumeFromInclusive, scan));
     }
@@ -2550,6 +2553,7 @@ internal sealed partial class ShardRootGrain(
         int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new ShardCountPage { Count = 0 });
         var scan = BeginScanPage(nameof(CountForSlotsBoundedAsync));
         return GuardScanPageAsync(
             scan,
@@ -2870,6 +2874,30 @@ internal sealed partial class ShardRootGrain(
             throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
     }
 
+    /// <summary>
+    /// Refuses a routed operation on a shard an online consolidation has
+    /// retired. The routing map no longer references this shard, so the only
+    /// caller that can reach it holds an older map; the stale-routing signal
+    /// makes that caller refresh its map and retry against the survivor, and it
+    /// is raised before <see cref="EnsureRootAsync"/> so a retired shard never
+    /// grows a new root.
+    /// </summary>
+    private void ThrowIfRetired()
+    {
+        if (state.State.IsRetired)
+            throw new StaleShardRoutingException(MyShardIndex, -1, -1);
+    }
+
+    /// <summary>
+    /// Whether this shard has been retired, for the range-read entry points
+    /// that answer a retired shard with an empty page rather than a stale-routing
+    /// fault. Those pages are consumed by scans that already reconcile against
+    /// the current map's version, so an empty page from a shard the map no
+    /// longer references is corrected by that reconciliation, whereas a fault
+    /// would fail the whole scan.
+    /// </summary>
+    private bool IsRetiredForRangeRead => state.State.IsRetired && !state.State.IsDeleted;
+
     private Task PrepareForOperationAsync()
     {
         // Order matters: a shard that participated as the *source* of an
@@ -2886,6 +2914,7 @@ internal sealed partial class ShardRootGrain(
         ThrowIfTreeRejecting();
         ThrowIfRetainedRedirect();
         ThrowIfDeleted();
+        ThrowIfRetired();
 
         // Steady-state sync fast path: on the read hot path each `await`
         // below resolves synchronously - `EnsureRootAsync` short-circuits
@@ -3289,6 +3318,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new KeysPage { Keys = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedKeysBatchAsync));
         return GuardScanPageAsync(
             scan,
@@ -3459,6 +3489,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new KeysPage { Keys = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedKeysBatchReverseAsync));
         return GuardScanPageAsync(
             scan,
@@ -3614,6 +3645,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new EntriesPage { Entries = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchAsync));
         return GuardScanPageAsync(
             scan,
@@ -3770,6 +3802,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new EntriesPage { Entries = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchReverseAsync));
         return GuardScanPageAsync(
             scan,
@@ -3922,6 +3955,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new KeysPage { Keys = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedKeysBatchForSlotsAsync));
         return GuardScanPageAsync(
             scan,
@@ -4059,6 +4093,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        if (IsRetiredForRangeRead) return Task.FromResult(new EntriesPage { Entries = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchForSlotsAsync));
         return GuardScanPageAsync(
             scan,
@@ -4188,8 +4223,10 @@ internal sealed partial class ShardRootGrain(
         // internal root (issue 899) would otherwise return the internal root id
         // to a caller that casts it to IBPlusLeafGrain (the replication snapshot
         // producer, compaction / merge / split leaf-chain walkers). The guarded
-        // traversal returns a real leaf id or null for an empty shard.
-        return state.State.RootNodeId is null
+        // traversal returns a real leaf id or null for an empty shard. A retired
+        // shard has no leaves left to walk, and its half-cleared chain must not
+        // be handed to a walker while RetireAsync is completing.
+        return state.State.RootNodeId is null || state.State.IsRetired
             ? null
             : await TraverseToLeftmostLeafAsync();
     }
@@ -4202,7 +4239,7 @@ internal sealed partial class ShardRootGrain(
         // Same node-TYPE guard as GetLeftmostLeafIdAsync: ResolveWalkStartLeafAsync
         // re-descends when a baked-inconsistent RootIsLeaf flag resolves an
         // internal node (issue 899), so the caller always receives a real leaf id.
-        return state.State.RootNodeId is null
+        return state.State.RootNodeId is null || state.State.IsRetired
             ? null
             : await ResolveWalkStartLeafAsync(resumeFromInclusive);
     }

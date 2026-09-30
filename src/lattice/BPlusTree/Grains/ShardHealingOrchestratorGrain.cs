@@ -236,6 +236,10 @@ internal sealed class ShardHealingOrchestratorGrain(
     });
 
     /// <inheritdoc />
+    public Task<int[]> GetInFlightDonorShardIndicesAsync()
+        => Task.FromResult(state.State.InFlightDonorShardIndices.ToArray());
+
+    /// <inheritdoc />
     public async Task RunHealingPassAsync()
     {
         var options = Options;

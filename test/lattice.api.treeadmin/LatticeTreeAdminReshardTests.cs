@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 /// <summary>
 /// Unit tests for the online-reshard trigger and status-read operations on
 /// <see cref="LatticeTreeAdmin"/>. The trigger wraps the public
-/// <see cref="ILattice.ReshardAsync"/> verb (inheriting its grow-only guards,
+/// <see cref="ILattice.ReshardAsync"/> verb (inheriting its argument guards,
 /// system-tree guard, and internal-origin marker, and letting the core re-enforce
 /// <c>TreeLifecycle</c>) after authorizing the whole-tree <c>TreeLifecycle</c>
 /// capability fail-closed; the status read authorizes whole-tree <c>Read</c> and

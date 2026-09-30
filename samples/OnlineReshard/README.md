@@ -56,7 +56,8 @@ demo finishes sooner at the cost of proportionally more background drain I/O.
 
 ## When not to use
 
-- Shrinking shard count. This is a grow-only online migration.
+- Shrinking below what the write rate needs. `ReshardAsync` also accepts a smaller
+  count, but fewer shards means fewer independent write paths.
 - Expecting instant completion. Resharding is a background migration; poll
   `IsReshardCompleteAsync` rather than assuming the new count is live immediately.
 

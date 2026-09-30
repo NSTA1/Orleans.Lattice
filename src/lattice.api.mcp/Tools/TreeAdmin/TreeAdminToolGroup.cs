@@ -468,12 +468,13 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "engine is registered. Restore-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ReshardTreeAsync, "lattice_treeadmin_tree_reshard",
                 "Trigger an online reshard of a tree",
-                "Triggers an online reshard that grows a tree to a target number of distinct physical shards. The "
-                + "tree keeps serving reads and writes throughout: the migration iteratively splits the "
-                + "largest-slot-owning shards and atomically swaps virtual-slot routing per split, anchored by "
-                + "reminders so it survives silo restarts. Returns once the coordinator accepts the intent; poll "
-                + "tree_reshard_status for completion. Grow-only: a target below the current physical shard count is "
-                + "rejected and a target equal to it is a no-op (an empty tree may be re-pinned to any count); the "
+                "Triggers an online reshard that grows or shrinks a tree to a target number of distinct physical "
+                + "shards. The tree keeps serving reads and writes throughout: a grow iteratively splits the "
+                + "largest-slot-owning shards and a shrink iteratively folds adjacent shards together, each step "
+                + "atomically swapping virtual-slot routing, anchored by reminders so it survives silo restarts. A "
+                + "shrink completes only once the retired shards' storage has been released. Returns once the "
+                + "coordinator accepts the intent; poll tree_reshard_status for completion. A target equal to the "
+                + "current physical shard count is a no-op (an empty tree is re-pinned directly to any count); the "
                 + "target must be at least 2 and at most 4096. Idempotent for a matching in-flight target. Rejected "
                 + "for a reserved system tree id, when a reshard with a different target is already in flight, or "
                 + "when a resize is in flight. Tree-lifecycle-gated and destructive."));

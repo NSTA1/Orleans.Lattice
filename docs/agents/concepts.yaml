@@ -1367,12 +1367,12 @@ concepts:
   - id: reshard
     name: "Reshard"
     category: operation
-    definition: "Reshard grows the physical shard count by migrating virtual slots to new physical shards online."
+    definition: "Reshard changes the physical shard count online, splitting shards to grow it or folding adjacent shards together to shrink it."
     packages:
       - "Orleans.Lattice"
     capability_boundary:
       in_scope:
-        - statement: "Online reshard is grow-only."
+        - statement: "Online reshard grows or shrinks the physical shard count."
           source: "FEATURES.md"
       out_of_scope:
         - statement: "Target shard count cannot exceed the virtual shard space."

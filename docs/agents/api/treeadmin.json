@@ -3756,7 +3756,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "A request for the current physical shard count, or a matching in-flight target, is a no-op; a target below the current count is rejected except for the documented empty-tree re-pin case.",
+        "basis": "A request for the current physical shard count, or a matching in-flight target, is a no-op; a different in-flight target is rejected.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {

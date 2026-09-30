@@ -8,10 +8,10 @@ using Orleans.Lattice;
 // ---------------------------------------------------------------------------
 // OnlineReshard
 // ---------------------------------------------------------------------------
-// ILattice.ReshardAsync grows a tree's physical shard count ONLINE: the tree
+// ILattice.ReshardAsync changes a tree's physical shard count ONLINE: the tree
 // keeps serving reads and writes throughout, with no global cutover lock and no
 // maintenance window. Resharding spreads the key space across more independent
-// write paths - it is grow-only.
+// write paths; a smaller count folds them back together.
 //
 // This sample:
 //   1. writes a set of keys and records the starting shard count,

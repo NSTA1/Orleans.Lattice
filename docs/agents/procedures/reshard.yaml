@@ -1,6 +1,6 @@
 schema: lattice.agents/procedure/v1
 id: reshard
-name: "Grow a tree with online reshard"
+name: "Grow or shrink a tree with online reshard"
 surfaces:
   in_process:
     api: "ILatticeTreeAdmin.ReshardTreeAsync"
@@ -12,8 +12,8 @@ surfaces:
     api: "lattice_treeadmin_tree_reshard"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
-  - id: grow-only-target
-    check: "Target shard count is at least 2, at most the smaller of 4096 and the tree's virtual slot count, and not below the current physical shard count."
+  - id: target-in-range
+    check: "Target shard count is at least 2 and at most the smaller of 4096 and the tree's virtual slot count."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
   - id: no-resize
     check: "No resize is already in flight."
@@ -28,7 +28,7 @@ steps:
     expects: "Returns in-flight flag, physical shard fan-out, virtual-slot space, and map version."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync"
   - n: 2
-    action: "Trigger the grow-only reshard."
+    action: "Trigger the reshard to the target count."
     api: "ILatticeTreeAdmin.ReshardTreeAsync / ReshardTree"
     expects: "Returns accepted intent and observed fan-out."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
@@ -40,8 +40,10 @@ steps:
 postconditions:
   - check: "The tree keeps serving reads and writes throughout the migration."
     source: "docs/lattice.api.treeadmin/README.md"
-  - check: "Virtual-slot routing is atomically swapped per split and map version advances."
+  - check: "Virtual-slot routing is atomically swapped per split or fold and map version advances."
     source: "docs/lattice.api.treeadmin/README.md"
+  - check: "After a shrink, every retired shard's storage has been released and its shard root is a routing tombstone."
+    source: "docs/lattice/online-reshard.md"
 failure_modes:
   - id: different-inflight
     signal: "InvalidOperationException for a different in-flight reshard target."
@@ -51,13 +53,13 @@ failure_modes:
     signal: "InvalidOperationException when resize is in flight."
     effect: "No reshard is started."
     response: "Wait for resize completion or undo."
-  - id: shrink-request
-    signal: "ArgumentOutOfRangeException for a target below current fan-out."
+  - id: out-of-range-target
+    signal: "ArgumentOutOfRangeException for a target below 2 or above the virtual slot space."
     effect: "No reshard is started."
-    response: "Pick a grow-only target."
+    response: "Pick a target in range."
 rollback:
   supported: false
-  mechanism: "Reshard is grow-only; no shrink or revert operation is documented."
+  mechanism: "A started reshard runs to its target; there is no revert operation. Reshard again to the previous count to undo its effect."
   steps: []
   source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
 concurrency:

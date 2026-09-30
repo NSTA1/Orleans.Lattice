@@ -218,7 +218,7 @@ It does **not** control the leaf state row size and does **not** control the WAL
 | Large values (>2 KB) | Table Storage, DynamoDB | 32 to 128 | Snapshot blob cap dominates |
 | Large values | Blob Storage | 256 to 1,024 | Snapshot blob stays under 10 MB |
 
-> **Applying a new `MaxLeafKeys` / `MaxInternalChildren`:** call [`ResizeAsync`](api.md#resize-and-reshard) on the live tree (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize-and-reshard)), or pre-seed the pin on a new tree via [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) (the sizing is honoured only on first creation). See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree). To grow the physical shard count, call [`ReshardAsync`](api.md#resize-and-reshard) (online, grow-only).
+> **Applying a new `MaxLeafKeys` / `MaxInternalChildren`:** call [`ResizeAsync`](api.md#resize-and-reshard) on the live tree (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize-and-reshard)), or pre-seed the pin on a new tree via [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) (the sizing is honoured only on first creation). See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree). To grow or shrink the physical shard count, call [`ReshardAsync`](api.md#resize-and-reshard) (online).
 
 ## Internal node sizing
 
@@ -288,7 +288,7 @@ MaxLeafKeys = floor((921,600 - 200) / (45 + 100 + 1,024)) = floor(921,400 / 1,16
 SafeMaxLeafKeys = floor(788 * 0.75) = 591
 ```
 
-> **Applying the result:** to change `MaxLeafKeys` / `MaxInternalChildren` on a live tree, call [`ResizeAsync`](api.md#resize-and-reshard) (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize-and-reshard)). To grow the physical shard count, call [`ReshardAsync`](api.md#resize-and-reshard) (online, grow-only). For a brand-new tree, either call these on the empty tree (fast path - no coordinator) or pre-register the pin via [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) (the sizing is honoured only on first creation). See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree) and [Online Reshard](online-reshard.md).
+> **Applying the result:** to change `MaxLeafKeys` / `MaxInternalChildren` on a live tree, call [`ResizeAsync`](api.md#resize-and-reshard) (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize-and-reshard)). To grow or shrink the physical shard count, call [`ReshardAsync`](api.md#resize-and-reshard) (online). For a brand-new tree, either call these on the empty tree (fast path - no coordinator) or pre-register the pin via [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) (the sizing is honoured only on first creation). See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree) and [Online Reshard](online-reshard.md).
 
 ## Measuring retained storage at runtime
 

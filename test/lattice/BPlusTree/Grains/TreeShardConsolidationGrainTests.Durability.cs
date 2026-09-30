@@ -10,20 +10,22 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// highest-severity invariant of the whole operation.
 /// <para>
 /// The WAL GC trims a prefix only up to the minimum durable checkpoint pin
-/// across live materialiser consumers. A fold that released the donor's pins,
-/// deleted its leaf state, or retired its shard record would therefore let the
-/// GC trim a prefix the survivor may not yet have absorbed - and a leaf that
-/// later needs to replay over a trimmed prefix is real data loss, not a slow
-/// start.
+/// across live materialiser consumers. A fold that released the donor's pins or
+/// deleted its leaf state before the survivor had durably absorbed its data
+/// would let the GC trim a prefix nothing else covers - and a leaf that later
+/// needs to replay over a trimmed prefix is real data loss, not a slow start.
 /// </para>
 /// <para>
-/// Consolidation's answer is structural rather than best-effort: it retires the
-/// donor from the <em>routing map</em> and nothing else. Its leaves, their
-/// projection checkpoints and their pins all survive, so the trim horizon can
-/// only stay where it is or move backwards-safe, and no prefix becomes
-/// trimmable that was not trimmable before. These tests pin that structurally,
-/// by asserting the fold never invokes any of the operations that could
-/// release durability, across a complete end-to-end run.
+/// A fold that <em>never</em> released them is the opposite failure: a retired
+/// donor's leaves keep one pin each at a frontier that can never advance, so the
+/// tree's trim horizon is held back for good. The contract is therefore an
+/// ordering, not an abstention. The donor's storage is released only through
+/// <see cref="IShardRootGrain.RetireAsync"/>, only after every sweep - including
+/// the authoritative ones over the frozen donor - has merged into the survivor
+/// (whose merge path appends to its own write-ahead log before returning), only
+/// after the donor's moved-away fence is permanent, and only when the live map
+/// no longer routes any slot to the donor. The donor is never purged, deleted,
+/// or force-deactivated through any other path.
 /// </para>
 /// </summary>
 public partial class TreeShardConsolidationGrainTests
@@ -69,17 +71,19 @@ public partial class TreeShardConsolidationGrainTests
     }
 
     [Test]
-    public async Task A_fold_retires_the_donor_by_routing_only()
+    public async Task A_fold_releases_the_donor_storage_only_through_RetireAsync()
     {
         // The complete set of donor-side mutations a fold performs: open the
-        // shadow window, seal the leaves, freeze, and record the permanent
-        // retirement. Nothing here touches storage lifetime or durability.
+        // shadow window, seal the leaves, freeze, record the permanent
+        // retirement, and release the retired donor's storage through the one
+        // verb that keeps its routing fence.
         var h = await RunCompleteFoldAsync();
 
         await h.Donor.Received().BeginSplitAsync(0, Arg.Any<int[]>(), VirtualShardCount);
         await h.Donor.Received().MarkLeavesMovedAwayAsync(Arg.Any<int[]>(), VirtualShardCount);
         await h.Donor.Received().EnterRejectPhaseAsync();
         await h.Donor.Received().CompleteSplitAsync();
+        await h.Donor.Received(1).RetireAsync();
 
         await h.Donor.DidNotReceive().PurgeAsync();
         await h.Donor.DidNotReceive().MarkDeletedAsync();
@@ -122,6 +126,103 @@ public partial class TreeShardConsolidationGrainTests
         await h.Survivor.DidNotReceive().PurgeAsync();
         Assert.That(h.PersistedMap!.GetPhysicalShardIndices(), Has.Count.EqualTo(2),
             "An abandoned fold must leave the tree's physical topology exactly as it was.");
+    }
+
+    [Test]
+    public async Task The_donor_storage_is_released_only_after_every_merge_and_the_permanent_fence()
+    {
+        // The release is the last donor-side step: after the final sweep has
+        // merged into the survivor, and after the moved-away fence that
+        // redirects callers holding an older map has been made permanent.
+        var h = await RunCompleteFoldAsync();
+
+        var lastMerge = h.Log.Entries.LastIndexOf("survivor.MergeMany");
+        var fence = h.Log.IndexOf("donor.CompleteSplit");
+        var release = h.Log.IndexOf("donor.Retire");
+
+        Assert.That(lastMerge, Is.GreaterThanOrEqualTo(0));
+        Assert.That(fence, Is.GreaterThan(lastMerge));
+        Assert.That(release, Is.GreaterThan(fence),
+            "A donor's storage must never be released ahead of its data being absorbed and its fence being permanent.");
+    }
+
+    [TestCase("snapshot")]
+    [TestCase("merge")]
+    public async Task Finalise_waits_out_a_snapshot_or_merge_before_releasing_the_donor(string running)
+    {
+        // A snapshot or merge may still read the donor's leaves through the
+        // shard list it recorded when it started.
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
+        h.PersistedMap = new ShardMap { Slots = new int[VirtualShardCount] };
+        var lattice = h.Factory.GetGrain<ILattice>(TreeId);
+        if (running == "snapshot") lattice.IsSnapshotCompleteAsync().Returns(false);
+        else lattice.IsMergeCompleteAsync().Returns(false);
+
+        var finished = await h.Grain.FinaliseAsync();
+
+        Assert.That(finished, Is.False);
+        Assert.That(h.State.State.InProgress, Is.True);
+        Assert.That(h.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Complete));
+        await h.Donor.DidNotReceive().RetireAsync();
+
+        lattice.IsSnapshotCompleteAsync().Returns(true);
+        lattice.IsMergeCompleteAsync().Returns(true);
+
+        Assert.That(await h.Grain.FinaliseAsync(), Is.True, "the fold completes once the maintenance has finished");
+        await h.Donor.Received(1).RetireAsync();
+    }
+
+    [Test]
+    public async Task Finalise_does_not_wait_out_a_resize()
+    {
+        // Waiting would strand the fold: once the resize completes the old
+        // copy's shards reject stale-tree routing forever. The donor itself
+        // refuses retirement while a resize forwards it, keeping its storage.
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
+        h.PersistedMap = new ShardMap { Slots = new int[VirtualShardCount] };
+        h.Factory.GetGrain<ILattice>(TreeId).IsResizeCompleteAsync().Returns(false);
+
+        Assert.That(await h.Grain.FinaliseAsync(), Is.True);
+        Assert.That(h.State.State.Complete, Is.True);
+    }
+
+    [Test]
+    public async Task A_donor_the_live_map_still_routes_to_keeps_its_storage()
+    {
+        // Fail closed: the default two-shard map still routes the donor's odd
+        // slots to it, so it may be the authoritative owner of live data.
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
+
+        await h.Grain.FinaliseAsync();
+
+        await h.Donor.DidNotReceive().RetireAsync();
+        Assert.That(h.State.State.Complete, Is.True,
+            "Keeping the storage must not hold the fold open; it completes as a routing-only retirement.");
+    }
+
+    [Test]
+    public async Task A_donor_that_refuses_retirement_keeps_its_storage_and_the_fold_still_completes()
+    {
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
+        h.PersistedMap = new ShardMap { Slots = new int[VirtualShardCount] };
+        h.Donor.RetireAsync().Returns(Task.FromException(new InvalidOperationException("resize forward")));
+
+        await h.Grain.FinaliseAsync();
+
+        Assert.That(h.State.State.Complete, Is.True);
+        Assert.That(h.State.State.InProgress, Is.False);
+    }
+
+    [Test]
+    public void A_transient_retirement_failure_leaves_the_fold_in_Complete_for_the_next_pass()
+    {
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
+        h.PersistedMap = new ShardMap { Slots = new int[VirtualShardCount] };
+        h.Donor.RetireAsync().Returns(Task.FromException(new TimeoutException()));
+
+        Assert.ThrowsAsync<TimeoutException>(() => h.Grain.FinaliseAsync());
+        Assert.That(h.State.State.InProgress, Is.True);
+        Assert.That(h.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Complete));
     }
 
     [Test]

@@ -120,15 +120,27 @@ public partial class PublicApiContractTests
     }
 
     [Test]
-    public async Task ReshardAsync_to_smaller_count_throws()
+    public async Task ReshardAsync_shrinks_shard_count_and_preserves_data()
     {
         var treeId = "pac-reshard-shrink-" + Guid.NewGuid().ToString("N")[..8];
         var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 4);
-        await tree.SetAsync("k", Bytes("v"));
 
-        Assert.That(
-            async () => await tree.ReshardAsync(newShardCount: 2),
-            Throws.InstanceOf<ArgumentOutOfRangeException>());
+        for (var i = 0; i < 16; i++)
+        {
+            await tree.SetAsync($"k{i:D2}", Bytes($"v{i}"));
+        }
+
+        await tree.ReshardAsync(newShardCount: 2);
+        await PollUntilAsync(async () => await tree.IsReshardCompleteAsync(), TimeSpan.FromSeconds(60));
+
+        for (var i = 0; i < 16; i++)
+        {
+            Assert.That(Str(await tree.GetAsync($"k{i:D2}")), Is.EqualTo($"v{i}"));
+        }
+
+        Assert.That(await tree.CountAsync(), Is.EqualTo(16));
+        var perShard = await tree.CountPerShardAsync();
+        Assert.That(perShard.Count, Is.EqualTo(2));
     }
 
     [Test]

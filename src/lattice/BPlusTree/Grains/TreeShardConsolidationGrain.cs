@@ -57,17 +57,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </description></item>
 /// <item><description>
 /// <see cref="ShardConsolidationPhase.Complete"/> - a last drain pass, then the
-/// donor records the folded slots permanently and the coordinator retires.
+/// donor records the folded slots permanently, its storage is released, and the
+/// coordinator retires.
 /// </description></item>
 /// </list>
 /// <para>
-/// <b>Durability.</b> Consolidation never deletes donor leaf state and never
-/// releases a WAL materialiser pin. The donor is retired from the routing map
-/// only, so the WAL GC's trim horizon - a minimum over live pins - cannot move
-/// forward as a result of a fold, and no prefix becomes trimmable that was not
-/// trimmable before. Reclaiming the retired donor's <em>storage</em> is a
-/// separate concern that would need a durable-absorption proof, and is
-/// deliberately not attempted here.
+/// <b>Durability.</b> The donor's storage is released only once the survivor has
+/// durably absorbed everything it held, and only after the routing map has
+/// stopped referencing it. Every drained batch reaches the survivor through
+/// <see cref="IShardRootGrain.MergeManyAsync"/>, whose leaf apply appends each
+/// entry to the survivor's write-ahead log before it returns, so the survivor's
+/// own materialiser pins cover the absorbed data. The authoritative sweeps run
+/// over a frozen donor, after which <see cref="IShardRootGrain.RetireAsync"/>
+/// clears the donor's leaves and internal nodes - retiring the leaves' WAL
+/// materialiser pins, which would otherwise sit at a frontier that can never
+/// advance and hold the tree's WAL trim horizon back for good - and leaves the
+/// donor's shard root as a routing tombstone that keeps its moved-away fence.
+/// A donor the live map still routes a slot to, or one that refuses retirement,
+/// keeps its storage.
 /// </para>
 /// <para>
 /// Key format: <c>{treeId}/{donorShardIndex}</c>.
@@ -224,8 +231,22 @@ internal sealed class TreeShardConsolidationGrain(
         var registry = grainFactory.GetLatticeRegistry();
         var resolved = await optionsResolver.ResolveAsync(TreeId);
 
-        var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+        var currentMap = await registry.GetShardMapAsync(TreeId);
+        if (currentMap is null)
+        {
+            // A tree that has never changed topology has no persisted map, and
+            // its readers take a version-0 fast path that counts every entry on
+            // every shard without asking which slots each owns - sound only
+            // while no shard holds another's entries. A fold breaks that from
+            // the moment the survivor absorbs its first drained copy, while the
+            // map would still read version 0. Materialise the map first, so any
+            // reader that overlaps the fold sees a version change and falls back
+            // to slot-owned counting. An empty reassignment persists the live map
+            // (or this default) inside one registry call, so it cannot erase a
+            // concurrent split's reassignment the way a get-then-set could.
+            var defaultMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            currentMap = await registry.ReassignSlotsAsync(TreeId, [], survivorShardIndex, defaultMap);
+        }
 
         if (!ShardConsolidationPlanner.TryPlan(
                 currentMap, donorShardIndex, survivorShardIndex, out var plan, out var reason))
@@ -438,8 +459,7 @@ internal sealed class TreeShardConsolidationGrain(
                 return true;
 
             case ShardConsolidationPhase.Complete:
-                await FinaliseAsync();
-                return true;
+                return await FinaliseAsync();
 
             default:
                 return false;
@@ -567,17 +587,46 @@ internal sealed class TreeShardConsolidationGrain(
     /// Final drain pass to capture anything written during the freeze window,
     /// then retires the donor: the folded slots move into its permanent
     /// moved-away map so every later stale route self-heals onto the survivor,
-    /// and the coordinator clears its own in-progress state. Exposed as
+    /// the donor's storage is released (see <see cref="RetireDonorAsync"/>), and
+    /// the coordinator clears its own in-progress state. Exposed as
     /// <c>internal</c> for unit testing.
     /// </summary>
-    internal async Task FinaliseAsync()
+    internal async Task<bool> FinaliseAsync()
     {
+        // The retirement below releases the donor's storage, and a snapshot or
+        // merge that began before the fold may still read the shards it
+        // recorded then - the donor among them - straight from their leaves.
+        // Hold the whole finalise until they finish; the donor is frozen and
+        // rejecting meanwhile, so waiting costs no correctness. A resize is
+        // deliberately not waited for: once it completes, the old copy's shards
+        // reject stale-tree routing and this fold's cached physical tree id
+        // could never finalise, and RetireAsync already refuses - keeping the
+        // storage - while a resize forwards or redirects the donor.
+        if (await IsTreeMaintenanceInFlightAsync())
+        {
+            Logger.LogDebug(
+                "Consolidation {OperationId} on tree {TreeId} defers finalising shard {Donor}: a snapshot or merge is in flight.",
+                state.State.OperationId, TreeId, state.State.DonorShardIndex);
+            return false;
+        }
+
         state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
         await DrainToEndAtomicallyAsync("ConsolidationFinaliseFinalDrain");
 
         var donor = await GetDonorAsync();
         await donor.CompleteSplitAsync();
+
+        // Release the retired donor's storage. Every entry it held has now been
+        // absorbed: each merge into the survivor is appended to the survivor's
+        // write-ahead log before it returns, and the final sweep above ran over a
+        // donor that could no longer accept a folded-slot write. What the donor
+        // still holds is therefore unreachable data, plus one WAL materialiser
+        // pin per leaf at a frontier that can never advance again - a permanent
+        // floor under the tree's WAL trim horizon. Retiring clears them and
+        // keeps the donor as a routing tombstone. Before the terminal write, so
+        // a failure leaves the fold in Complete and the next pass retries it.
+        await RetireDonorAsync(donor);
 
         var previous = Snapshot();
         state.State.InProgress = false;
@@ -611,6 +660,61 @@ internal sealed class TreeShardConsolidationGrain(
             LatticeTenantLabel.ForTree(TreeId));
 
         await CompleteCoordinatorAsync();
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a snapshot of, or a merge into, this fold's tree is running. Read
+    /// through the tree's own status verbs under a system-origin scope, exactly
+    /// as the healing orchestrator's stand-off reads them, because this
+    /// timer-driven step carries no caller identity for the access gate.
+    /// </summary>
+    private async Task<bool> IsTreeMaintenanceInFlightAsync()
+    {
+        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return !await lattice.IsSnapshotCompleteAsync()
+                || !await lattice.IsMergeCompleteAsync();
+        }
+    }
+
+    /// <summary>
+    /// Retires the donor's storage once the fold has committed, but only when the
+    /// live routing map confirms the donor owns no virtual slot.
+    /// <para>
+    /// Fails closed in both directions. A donor the map still routes a slot to
+    /// may be the authoritative owner of live data, so it is left intact and the
+    /// fold completes as a routing-only retirement, exactly as it did before
+    /// storage was reclaimed. A donor that refuses retirement because it carries
+    /// another migration or a resize forward is likewise left intact, rather than
+    /// holding the fold in <see cref="ShardConsolidationPhase.Complete"/> forever.
+    /// Any other failure propagates so the next pass retries it.
+    /// </para>
+    /// </summary>
+    private async Task RetireDonorAsync(IShardRootGrain donor)
+    {
+        var map = await grainFactory.GetLatticeRegistry().GetShardMapAsync(TreeId);
+        var donorIndex = state.State.DonorShardIndex;
+        if (map is null || ShardConsolidationPlanner.CountOwnedSlots(map, donorIndex) > 0)
+        {
+            Logger.LogWarning(
+                "Consolidation {OperationId} on tree {TreeId} left shard {Donor}'s storage in place: the routing map {Reason}.",
+                state.State.OperationId, TreeId, donorIndex,
+                map is null ? "could not be read" : "still routes a virtual slot to it");
+            return;
+        }
+
+        try
+        {
+            await donor.RetireAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Logger.LogWarning(ex,
+                "Consolidation {OperationId} on tree {TreeId} left shard {Donor}'s storage in place: the shard refused retirement.",
+                state.State.OperationId, TreeId, donorIndex);
+        }
     }
 
     /// <summary>

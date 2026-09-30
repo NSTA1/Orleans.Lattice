@@ -71,6 +71,8 @@ public partial class TreeReshardGrainTests
         var defaultLattice = Substitute.For<ILattice>();
         defaultLattice.CountAsync().Returns(Task.FromResult(1));
         defaultLattice.IsResizeCompleteAsync().Returns(true);
+        defaultLattice.IsSnapshotCompleteAsync().Returns(true);
+        defaultLattice.IsMergeCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(defaultLattice);
 
         var defaultResize = Substitute.For<ITreeResizeGrain>();
@@ -121,10 +123,31 @@ public partial class TreeReshardGrainTests
     }
 
     [Test]
-    public void ReshardAsync_throws_when_target_below_current_shard_count()
+    public async Task ReshardAsync_below_current_shard_count_starts_a_shrink()
     {
-        var (grain, _, _, _) = CreateGrain(physicalShardCount: 4);
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(2));
+        var (grain, state, _, _) = CreateGrain(physicalShardCount: 4);
+
+        await grain.ReshardAsync(2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.InProgress, Is.True);
+            Assert.That(state.State.Shrinking, Is.True);
+            Assert.That(state.State.TargetShardCount, Is.EqualTo(2));
+            Assert.That(state.State.Phase, Is.EqualTo(ReshardPhase.Migrating));
+            Assert.That(state.State.ConsolidationDonorShardIndices, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ReshardAsync_above_current_shard_count_starts_a_grow()
+    {
+        var (grain, state, _, _) = CreateGrain(physicalShardCount: 2);
+
+        await grain.ReshardAsync(4);
+
+        Assert.That(state.State.InProgress, Is.True);
+        Assert.That(state.State.Shrinking, Is.False);
     }
 
     [Test]
