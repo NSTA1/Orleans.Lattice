@@ -88,6 +88,24 @@ public sealed class ShellDesignConsistencyTests
     }
 
     [Test]
+    public void A_tab_row_scrolls_in_its_own_frame_rather_than_wrapping()
+    {
+        var list = Body(ShellStylesheets.Primitives, ".lt-tabs__list");
+        var tab = Body(ShellStylesheets.Primitives, ".lt-tabs__tab");
+        var marker = Body(ShellStylesheets.Primitives, ".lt-tabs__tab[aria-selected=\"true\"]::after");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(list, Does.Contain("flex-wrap: nowrap;"));
+            Assert.That(list, Does.Contain("overflow-x: auto;"));
+            Assert.That(tab, Does.Contain("flex-shrink: 0;").And.Contain("white-space: nowrap;"), "a tab keeps its title on one line");
+            Assert.That(marker, Does.Contain("bottom: 0;"), "the marker sits inside the scrolling frame, which would clip it below");
+            Assert.That(Body(ShellStylesheets.Primitives, ".lt-tabs__tab:focus-visible"), Does.Contain("outline-offset: calc(-1 * var(--lt-op-focus-ring-width));"),
+                "the focus ring is drawn inside the tab, so the scrolling frame never clips it");
+        });
+    }
+
+    [Test]
     public void The_tenant_switchers_list_opens_in_flow_inside_its_panel()
     {
         Assert.That(Body(Chrome, ".lt-shell-tenant .lt-combobox__list"), Does.Contain("position: static;"),

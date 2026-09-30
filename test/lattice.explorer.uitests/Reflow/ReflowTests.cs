@@ -82,6 +82,52 @@ public sealed class ReflowTests : UiTestBase
     }
 
     [Test]
+    public async Task On_a_phone_a_tab_row_stays_on_one_line_scrolls_in_its_own_frame_and_keeps_the_active_tab_in_view()
+    {
+        // Issue #3986: the Data tree's six tabs wrapped onto two lines at phone width.
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, $"/data/{ExplorerWorld.DemoTree}?tab=views", WorldIdentities.Admin, Shell.SmallWidth);
+        var list = page.GetByRole(AriaRole.Tablist).First;
+        await Expect(list.GetByRole(AriaRole.Tab, new() { Name = "Views", Exact = true })).ToHaveAttributeAsync("aria-selected", "true");
+        await Shell.WaitForMotionToSettleAsync(page);
+
+        var row = await RowAsync(list);
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Lines, Is.EqualTo(1), "The tab row wraps onto more than one line.");
+            Assert.That(row.Scrolls, Is.True, "The premise failed: six tabs fit a phone's width, so nothing here scrolls.");
+            Assert.That(row.ActiveInView, Is.True, "The active tab is outside the row's visible frame.");
+        });
+        await Shell.AssertNoHorizontalPageScrollAsync(page, "A tab row at phone width");
+
+        foreach (var path in new[] { $"/cluster/trees/{ExplorerWorld.DemoTree}", $"/schema/{ExplorerWorld.DemoTree}" })
+        {
+            await Shell.GotoAsync(page, world.Head, path);
+            var other = page.GetByRole(AriaRole.Tablist).First;
+            await Expect(other).ToBeVisibleAsync();
+            await Shell.WaitForMotionToSettleAsync(page);
+            Assert.That((await RowAsync(other)).Lines, Is.EqualTo(1), $"The tab row on {path} wraps at phone width.");
+            await Shell.AssertNoHorizontalPageScrollAsync(page, $"{path} at phone width");
+        }
+    }
+
+    private static async Task<(int Lines, bool Scrolls, bool ActiveInView)> RowAsync(ILocator list)
+    {
+        var measured = await list.EvaluateAsync<double[]>(
+            """
+            l => {
+              const tabs = [...l.querySelectorAll('[role="tab"]')];
+              const tops = new Set(tabs.map(t => Math.round(t.getBoundingClientRect().top)));
+              const frame = l.getBoundingClientRect();
+              const active = l.querySelector('[aria-selected="true"]').getBoundingClientRect();
+              const inView = active.left >= frame.left - 0.5 && active.right <= frame.right + 0.5;
+              return [tops.size, l.scrollWidth > l.clientWidth + 1 ? 1 : 0, inView ? 1 : 0];
+            }
+            """);
+        return ((int)measured[0], measured[1] > 0, measured[2] > 0);
+    }
+
+    [Test]
     public async Task An_open_picker_reflows_on_a_phone_and_its_suggestions_are_touch_targets()
     {
         var world = await UiHosts.WorldAsync();
