@@ -76,6 +76,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
             registry,
             Options.Create(new ClusterOptions { ClusterId = regionId }),
             listeners,
+            TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);
 
     [Test]
@@ -85,6 +86,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
                 null!,
                 Options.Create(new ClusterOptions()),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
+                TimeProvider.System,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
 
@@ -95,6 +97,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
                 Substitute.For<ITenantRegistry>(),
                 null!,
                 Array.Empty<ITenantRegionStatusChangeListener>(),
+                TimeProvider.System,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
 
@@ -104,6 +107,18 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
                 Options.Create(new ClusterOptions()),
+                null!,
+                TimeProvider.System,
+                NullLogger<TenantResidencySnapshotMaintainer>.Instance),
+            Throws.ArgumentNullException);
+
+    [Test]
+    public void Ctor_null_time_provider_throws() =>
+        Assert.That(
+            () => new TenantResidencySnapshotMaintainer(
+                Substitute.For<ITenantRegistry>(),
+                Options.Create(new ClusterOptions()),
+                Array.Empty<ITenantRegionStatusChangeListener>(),
                 null!,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
@@ -115,6 +130,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
                 Substitute.For<ITenantRegistry>(),
                 Options.Create(new ClusterOptions()),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
+                TimeProvider.System,
                 null!),
             Throws.ArgumentNullException);
 

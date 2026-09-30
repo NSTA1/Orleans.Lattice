@@ -47,29 +47,18 @@ namespace Orleans.Lattice.Tenancy;
 /// window is therefore bounded by membership failure detection.
 /// </para>
 /// </remarks>
-internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver, IDisposable
+internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver, ITenantEpochSubscriber, IDisposable
 {
-    /// <summary>
-    /// How much earlier than its true deadline a lease measured on the coarse
-    /// system tick count lapses: two tick periods (the Windows tick is about
-    /// 15.6ms), covering the tick lag on both the reading that sets the deadline
-    /// and the reading that checks it, so the coarse clock can only expire a lease
-    /// early, never late.
-    /// </summary>
-    internal const long CoarseClockAllowanceMilliseconds = 32;
-
     private static readonly TimeSpan InitialAdvanceRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MaxAdvanceRetryDelay = TimeSpan.FromSeconds(5);
 
     private readonly ITenantRegistry _registry;
     private readonly ITenantPolicyEpochPublisher _publisher;
     private readonly TimeProvider _time;
-    private readonly bool _systemClock;
+    private readonly TenantSnapshotCurrency _currency;
     private readonly ILogger<CompiledTenantPolicySnapshotMaintainer> _logger;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
-    private readonly Lock _epochGate = new();
     private readonly CancellationTokenSource _disposed = new();
-    private readonly TaskCompletionSource _leaseEstablished = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private CompiledTenantPolicy _current = CompiledTenantPolicy.Empty;
     private long _epoch;
@@ -83,16 +72,9 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     private int _rebuildState;
     private Task _backgroundRebuild = Task.CompletedTask;
 
-    // The latest cluster epoch this silo has observed (guarded by _epochGate), a
-    // generation counter bumped whenever the silo learns its snapshot may be out of
-    // date, and the generation the current snapshot was built for.
-    private TenantPolicyEpoch _knownEpoch;
-    private long _clusterGeneration;
+    // The cluster generation (see TenantSnapshotCurrency) the current snapshot was
+    // built for.
     private long _builtForGeneration;
-
-    // The instant until which the silo's lease makes its snapshot authoritative,
-    // on the lease clock (see LeaseClockNow); zero until the first lease.
-    private long _leaseDeadline;
 
     // Advances this silo's hook is publishing inline, and a sequence pair that
     // records whether an advance failed and has not yet been re-published.
@@ -121,7 +103,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
         _registry = registry;
         _publisher = publisher;
         _time = timeProvider;
-        _systemClock = ReferenceEquals(timeProvider, TimeProvider.System);
+        _currency = new TenantSnapshotCurrency(timeProvider);
         _logger = logger;
     }
 
@@ -153,10 +135,8 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// the silo's lease from the epoch grain has lapsed, because then a write on
     /// another silo may have advanced the epoch without reaching this one. In each
     /// case a consumer falls back to the registry or denies. The check is a handful
-    /// of field reads and one clock read, and allocates nothing. On the system clock
-    /// the lease is measured on <see cref="Environment.TickCount64"/>, which is far
-    /// cheaper to read than a high-resolution timestamp; its coarseness is absorbed
-    /// by expiring the lease <see cref="CoarseClockAllowanceMilliseconds"/> early.
+    /// of field reads and one clock read, and allocates nothing (see
+    /// <see cref="TenantSnapshotCurrency"/> for how the lease is measured).
     /// </para>
     /// </remarks>
     public bool IsSnapshotAuthoritative =>
@@ -165,8 +145,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
         && Volatile.Read(ref _consecutiveRebuildFailures) == 0
         && Volatile.Read(ref _advancesInFlight) == 0
         && Interlocked.Read(ref _failedAdvanceSequence) == Interlocked.Read(ref _repairedAdvanceSequence)
-        && Interlocked.Read(ref _builtForGeneration) == Interlocked.Read(ref _clusterGeneration)
-        && LeaseClockNow() < Interlocked.Read(ref _leaseDeadline);
+        && _currency.IsCurrent(Volatile.Read(ref _builtForGeneration));
 
     /// <summary>
     /// The most recently scheduled background rebuild loop, or a completed task
@@ -185,7 +164,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// Completes when the silo's first lease from the epoch grain has been applied.
     /// Exposed so a test can await authority deterministically.
     /// </summary>
-    internal Task LeaseEstablished => _leaseEstablished.Task;
+    internal Task LeaseEstablished => _currency.LeaseEstablished;
 
     /// <summary>
     /// <c>true</c> when <paramref name="mutation"/> targets the reserved tenant
@@ -240,20 +219,12 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// does not supersede it (a late, out-of-order answer) is ignored.
     /// </summary>
     /// <param name="epoch">The observed cluster epoch.</param>
-    internal void ObserveEpoch(TenantPolicyEpoch epoch)
+    public void ObserveEpoch(TenantPolicyEpoch epoch)
     {
-        lock (_epochGate)
+        if (_currency.Observe(epoch))
         {
-            if (!epoch.Supersedes(_knownEpoch))
-            {
-                return;
-            }
-
-            _knownEpoch = epoch;
-            Interlocked.Increment(ref _clusterGeneration);
+            ScheduleRebuild();
         }
-
-        ScheduleRebuild();
     }
 
     /// <summary>
@@ -265,40 +236,12 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// </summary>
     /// <param name="lease">The granted lease.</param>
     /// <param name="requestedAt">The <see cref="TimeProvider"/> timestamp taken before the lease was requested.</param>
-    internal void ApplyLease(TenantPolicyEpochLease lease, long requestedAt)
+    public void ApplyLease(TenantPolicyEpochLease lease, long requestedAt)
     {
-        ObserveEpoch(lease.Epoch);
-
-        long deadline;
-        if (_systemClock)
+        if (_currency.ApplyLease(lease, requestedAt))
         {
-            // Re-express "requestedAt + duration" on the tick-count clock: subtract
-            // the (rounded-up) time since the request from the current tick, add the
-            // duration, and take off the coarse-clock allowance so the lease can
-            // only lapse early.
-            var sinceRequest = (long)Math.Ceiling(_time.GetElapsedTime(requestedAt).TotalMilliseconds);
-            deadline = Environment.TickCount64 - sinceRequest
-                + (long)lease.Duration.TotalMilliseconds
-                - CoarseClockAllowanceMilliseconds;
+            ScheduleRebuild();
         }
-        else
-        {
-            deadline = TenantPolicyTimestamps.Add(_time, requestedAt, lease.Duration);
-        }
-
-        var current = Interlocked.Read(ref _leaseDeadline);
-        while (deadline > current)
-        {
-            var observed = Interlocked.CompareExchange(ref _leaseDeadline, deadline, current);
-            if (observed == current)
-            {
-                break;
-            }
-
-            current = observed;
-        }
-
-        _leaseEstablished.TrySetResult();
     }
 
     /// <summary>
@@ -306,9 +249,9 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// rebuild. Used when cluster membership declares a silo dead, since that silo
     /// may have committed a registry write it never got to publish.
     /// </summary>
-    internal void InvalidateClusterView()
+    public void InvalidateClusterView()
     {
-        Interlocked.Increment(ref _clusterGeneration);
+        _currency.Invalidate();
         ScheduleRebuild();
     }
 
@@ -329,7 +272,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var generation = Interlocked.Read(ref _clusterGeneration);
+            var generation = _currency.Generation;
             List<TenantRecord> records;
             var attempt = 1;
             while (true)
@@ -354,13 +297,6 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
 
         return CurrentEpoch;
     }
-
-    /// <summary>
-    /// The current instant on the lease clock: <see cref="Environment.TickCount64"/>
-    /// (milliseconds) for the system clock, otherwise the injected provider's
-    /// timestamp, so tests on a fake clock stay deterministic.
-    /// </summary>
-    private long LeaseClockNow() => _systemClock ? Environment.TickCount64 : _time.GetTimestamp();
 
     /// <inheritdoc />
     /// <remarks>Stops any background re-publish of a failed epoch advance. Idempotent.</remarks>
@@ -516,7 +452,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
             // Captured before the scan: an epoch observed while the scan runs bumps
             // the generation past it, so the result is not authoritative and the
             // rebuild that observation queued captures the change.
-            var generation = Interlocked.Read(ref _clusterGeneration);
+            var generation = _currency.Generation;
             PublishSnapshot(await ScanRecordsAsync(cancellationToken).ConfigureAwait(false), generation);
         }
         finally
@@ -552,7 +488,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     {
         var compiled = CompiledTenantPolicy.Compile(records);
         Volatile.Write(ref _current, compiled);
-        Interlocked.Exchange(ref _builtForGeneration, generation);
+        Volatile.Write(ref _builtForGeneration, generation);
         Volatile.Write(ref _consecutiveRebuildFailures, 0);
         Interlocked.Increment(ref _epoch);
     }

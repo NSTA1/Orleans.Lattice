@@ -30,6 +30,7 @@ public sealed class TenantPolicyEpochSubscriptionTests
     private ITenantPolicyEpochGrain _grain = null!;
     private ITenantPolicyEpochObserver _reference = null!;
     private SteppedMembership _membership = null!;
+    private ILocalSiloDetails _localSilo = null!;
     private HoldableTenantRegistry _registry = null!;
     private CompiledTenantPolicySnapshotMaintainer _maintainer = null!;
     private TenantPolicyEpochSubscription? _subscription;
@@ -43,8 +44,10 @@ public sealed class TenantPolicyEpochSubscriptionTests
         _grainFactory = Substitute.For<IGrainFactory>();
         _grainFactory.CreateObjectReference<ITenantPolicyEpochObserver>(Arg.Any<IGrainObserver>()).Returns(_reference);
         _grainFactory.GetGrain<ITenantPolicyEpochGrain>(ITenantPolicyEpochGrain.Key, Arg.Any<string?>()).Returns(_grain);
-        _grain.LeaseAsync(_reference).Returns(new TenantPolicyEpochLease(new TenantPolicyEpoch(Incarnation, 0), Lease));
+        _grain.LeaseAsync(_reference, Arg.Any<SiloAddress>()).Returns(new TenantPolicyEpochLease(new TenantPolicyEpoch(Incarnation, 0), Lease));
         _membership = new SteppedMembership();
+        _localSilo = Substitute.For<ILocalSiloDetails>();
+        _localSilo.SiloAddress.Returns(SiloAddress.New(new IPEndPoint(IPAddress.Loopback, 11111), 7));
 
         _registry = new HoldableTenantRegistry();
         _registry.Records.Add(Record("acme", admins: ["alice"]));
@@ -67,8 +70,9 @@ public sealed class TenantPolicyEpochSubscriptionTests
     private TenantPolicyEpochSubscription Create() =>
         _subscription = new TenantPolicyEpochSubscription(
             _grainFactory,
-            _maintainer,
+            [_maintainer],
             _membership.Service,
+            _localSilo,
             _time,
             Options.Create(new LatticeTenancyOptions { PolicySnapshotLeaseDuration = Lease }),
             NullLogger<TenantPolicyEpochSubscription>.Instance);
@@ -78,14 +82,16 @@ public sealed class TenantPolicyEpochSubscriptionTests
     {
         var options = Options.Create(new LatticeTenancyOptions());
         var logger = NullLogger<TenantPolicyEpochSubscription>.Instance;
+        ITenantEpochSubscriber[] subscribers = [_maintainer];
         Assert.Multiple(() =>
         {
-            Assert.That(() => new TenantPolicyEpochSubscription(null!, _maintainer, _membership.Service, _time, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, null!, _membership.Service, _time, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, _maintainer, null!, _time, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, _maintainer, _membership.Service, null!, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, _maintainer, _membership.Service, _time, null!, logger), Throws.ArgumentNullException);
-            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, _maintainer, _membership.Service, _time, options, null!), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(null!, subscribers, _membership.Service, _localSilo, _time, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, null!, _membership.Service, _localSilo, _time, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, subscribers, null!, _localSilo, _time, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, subscribers, _membership.Service, null!, _time, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, subscribers, _membership.Service, _localSilo, null!, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, subscribers, _membership.Service, _localSilo, _time, null!, logger), Throws.ArgumentNullException);
+            Assert.That(() => new TenantPolicyEpochSubscription(_grainFactory, subscribers, _membership.Service, _localSilo, _time, options, null!), Throws.ArgumentNullException);
         });
     }
 
@@ -100,7 +106,7 @@ public sealed class TenantPolicyEpochSubscriptionTests
         await _maintainer.BackgroundRebuild;
 
         _grainFactory.Received(1).CreateObjectReference<ITenantPolicyEpochObserver>(subscription);
-        await _grain.Received(1).LeaseAsync(_reference);
+        await _grain.Received(1).LeaseAsync(_reference, _localSilo.SiloAddress);
         Assert.That(_maintainer.IsSnapshotAuthoritative, Is.True);
     }
 
@@ -115,13 +121,13 @@ public sealed class TenantPolicyEpochSubscriptionTests
         _time.Advance(Lease / 3);
         await NextLeaseTimerAsync();
 
-        await _grain.Received(2).LeaseAsync(_reference);
+        await _grain.Received(2).LeaseAsync(_reference, _localSilo.SiloAddress);
     }
 
     [Test]
     public async Task Failed_lease_is_retried_after_a_tenth_of_the_lease_capped_at_one_second()
     {
-        _grain.LeaseAsync(_reference).Returns(
+        _grain.LeaseAsync(_reference, Arg.Any<SiloAddress>()).Returns(
             _ => Task.FromException<TenantPolicyEpochLease>(new TimeoutException("grain unreachable")),
             _ => Task.FromResult(new TenantPolicyEpochLease(new TenantPolicyEpoch(Incarnation, 0), Lease)));
         var subscription = Create();
@@ -132,7 +138,7 @@ public sealed class TenantPolicyEpochSubscriptionTests
         _time.Advance(TimeSpan.FromSeconds(0.9));
         await _maintainer.LeaseEstablished;
 
-        await _grain.Received(2).LeaseAsync(_reference);
+        await _grain.Received(2).LeaseAsync(_reference, _localSilo.SiloAddress);
     }
 
     [Test]
@@ -183,7 +189,7 @@ public sealed class TenantPolicyEpochSubscriptionTests
     {
         // No lease (grain unreachable), so the only builds are the start-up warm-up
         // and whatever the failed membership watch forces.
-        _grain.LeaseAsync(_reference).ThrowsAsync(new TimeoutException("grain unreachable"));
+        _grain.LeaseAsync(_reference, Arg.Any<SiloAddress>()).ThrowsAsync(new TimeoutException("grain unreachable"));
         _membership.Service.MembershipUpdates.Returns(Failing());
         var subscription = Create();
 
@@ -197,7 +203,7 @@ public sealed class TenantPolicyEpochSubscriptionTests
     [Test]
     public async Task Warmup_builds_the_snapshot_even_when_the_epoch_grain_is_unreachable()
     {
-        _grain.LeaseAsync(_reference).ThrowsAsync(new TimeoutException("grain unreachable"));
+        _grain.LeaseAsync(_reference, Arg.Any<SiloAddress>()).ThrowsAsync(new TimeoutException("grain unreachable"));
         var subscription = Create();
 
         await subscription.StartAsync(CancellationToken.None);
@@ -208,6 +214,33 @@ public sealed class TenantPolicyEpochSubscriptionTests
             Assert.That(_maintainer.CurrentEpoch, Is.GreaterThan(0), "a cold silo does not report tenants unregistered");
             Assert.That(_maintainer.IsSnapshotAuthoritative, Is.False, "but without a lease it is not authoritative");
         });
+    }
+
+    [Test]
+    public async Task Every_registered_snapshot_is_warmed_leased_pushed_and_invalidated()
+    {
+        var other = Substitute.For<ITenantEpochSubscriber>();
+        var subscription = _subscription = new TenantPolicyEpochSubscription(
+            _grainFactory,
+            [_maintainer, other],
+            _membership.Service,
+            _localSilo,
+            _time,
+            Options.Create(new LatticeTenancyOptions { PolicySnapshotLeaseDuration = Lease }),
+            NullLogger<TenantPolicyEpochSubscription>.Instance);
+
+        await subscription.StartAsync(CancellationToken.None);
+        await _maintainer.LeaseEstablished;
+        await subscription.Warmup;
+        var pushed = new TenantPolicyEpoch(Incarnation, 7);
+        await subscription.OnEpochAdvancedAsync(pushed);
+        await _membership.PublishAsync(Member(1, SiloStatus.Active));
+        await _membership.PublishAsync(Member(1, SiloStatus.Dead));
+
+        await other.Received(1).EnsureWarmAsync(Arg.Any<CancellationToken>());
+        other.Received(1).ApplyLease(Arg.Is<TenantPolicyEpochLease>(l => l.Duration == Lease), Arg.Any<long>());
+        other.Received(1).ObserveEpoch(pushed);
+        other.Received(1).InvalidateClusterView();
     }
 
     [Test]

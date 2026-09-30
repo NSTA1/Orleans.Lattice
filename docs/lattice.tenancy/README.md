@@ -208,13 +208,18 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   active-tenant requests and crossings against the registry (or denies) exactly as above, and the inbound
   replication isolation gate falls back to the registry for tenant existence and
   status in the same windows. The steady state pays only a few field reads and a
-  timestamp read. A restarted epoch holds each write open for one lease, so no silo
+  timestamp read. A restarted epoch holds each write open for one lease, or until
+  every silo cluster membership does not report dead has leased from it, so no silo
   leased by its previous incarnation stays authoritative. One window is bounded
   rather than closed: a silo that crashes after committing a registry write but
   before publishing it leaves the other silos unaware of that write until cluster
   membership declares it dead, at which point every surviving silo rebuilds. Each
   silo also builds its snapshot at start-up, and on its first decision if that has
   not happened yet, so a new silo never reports a registered tenant as unregistered.
+  The same epoch and lease keep each silo's residency and placement views of the
+  registry current, with the same fail-closed fallbacks: see
+  [Every silo applies a residency change](#every-silo-applies-a-residency-change) and
+  [Placement follows the registry on every silo](#placement-follows-the-registry-on-every-silo).
 - **Active-tenant assertion.** A subject carries a set of tenant memberships, but
   the active tenant is always a caller-supplied *assertion*, never inferred from
   that set - there is no implicit "sole membership" default. Every branch that
@@ -305,6 +310,21 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   data-plane role can enumerate one tenant's metadata from another. Only a
   bootstrap administrator, a system-origin caller, or an explicit rule an operator
   deliberately scopes at a registry tree may read them.
+
+### Placement follows the registry on every silo
+
+A tenant tree's WAL placement is resolved once, when the tree is first registered,
+from an in-memory placement view of the registry, and the resulting pin is
+immutable. The view is kept current by the same epoch and lease, so a placement
+change made through one silo reaches every silo before the write returns. Placement
+cannot be confirmed against the registry instead - it is resolved inside the tree
+registry's own turn, which a registry read could re-enter - so while a silo's view
+is not authoritative a tenant tree's registration waits up to a fifth of
+`PolicySnapshotLeaseDuration` (2 seconds by default) for the view to catch up, and
+is otherwise refused with a retryable `TimeoutException` rather than pinned to a
+placement that may be stale. Creating a tenant and then its trees works without a
+retry: the wait covers the rebuild the tenant write triggers. Non-tenant trees are
+never affected.
 
 ## Resource governance
 
@@ -565,6 +585,21 @@ shown today.
   is no primary or leader. Enforcement ties in at the gate (a tenant not `Online` in
   the serving region is refused) and the replication apply path (a tenant's
   replicated writes land only in a region where it is `Online`).
+
+### Every silo applies a residency change
+
+Each silo answers "is this tenant online here?" from an in-memory residency view of
+the registry, and the change feed that refreshes it fires only on the silo that
+committed the write. So the view is kept current by the same cluster-wide epoch and
+lease as the tenant-policy snapshot (see [Isolation model](#isolation-model), "Every
+silo sees the change"): a residency change made through one silo reaches every silo
+before the write returns. While a silo's view is not authoritative - it has been
+told of a change it has not yet compiled, or its lease has lapsed - the tenant gate
+and the replication isolation gate confirm the tenant's residency against its
+registry record instead, so a tenant drained or taken offline through any silo is
+refused on every silo at once, and one brought online is admitted at once. A
+residency check that cannot be confirmed is refused. The steady state stays an
+in-memory lookup.
 
 ### Lifecycle states
 
@@ -870,7 +905,7 @@ the service collection directly - for example
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view (`sys-tenant-registry-history`) over the `sys-tenant-registry` tree. |
 | `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
-| `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy snapshot as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, cross-tenant crossings and inbound-replication tenant checks are confirmed against the registry or denied. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
+| `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy, residency and placement snapshots as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, cross-tenant crossings, residency checks and inbound-replication tenant checks are confirmed against the registry or denied, and a tenant tree's registration waits a fifth of this for the lease to return before it is refused. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
 
 ### `TenantUsageAccountingOptions`
 
