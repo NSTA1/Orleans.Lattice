@@ -22,7 +22,7 @@ internal sealed class RepoContextAppTestHost
     public const string Principal = "alice";
 
     private static readonly LatticeApiMcpAccessSet Access =
-        LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.RepoContext);
+        RepoContextTestAccessSets.Granting(LatticeApiMcpGroup.RepoContext);
 
     private readonly RepoContextMcpStubCredentialBridge _bridge =
         new(new LatticeCredential("token", principalId: Principal));

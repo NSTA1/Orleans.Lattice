@@ -16,7 +16,7 @@ public sealed class LatticeCapabilitiesUnchangedTests
     private static readonly AppSlug Notes = AppSlug.Parse("notes");
 
     private static readonly LatticeApiMcpAccessSet Access =
-        LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data).With(LatticeApiMcpGroup.State);
+        AppTestAccessSets.Granting(LatticeApiMcpGroup.Data, LatticeApiMcpGroup.State);
 
     private static async Task<(string Capabilities, string Tools, string Instructions)> SnapshotAsync(AppMcpTestHost host)
     {
