@@ -42,6 +42,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Aggregation same-group re-contribution.** A min, max or set-union contribution that keeps its group sent its retraction and its addition to the same shard row, so the applier read, spliced and wrote that row twice. One fused splice now does it: 44% faster, 48% less allocated. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
+
+- **Performance - Aggregation fold re-contribution.** The custom-fold contribution path fuses the same way, and saves more: each redundant row walk also copied every member's opaque value payload. The fused splice is 46% faster and allocates 48% less. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
+
+- **Performance - History view drain reshape.** The history drain re-serialised every row it shaped, including the rows retention left untouched, reproducing bytes it already held. It now keeps the original bytes when shaping is a no-op: 47% faster and 49% less allocated on a CRDT delta row. ([#4010](https://github.com/NSTA1/Orleans.Lattice/pull/4010)) (`Orleans.Lattice`)
+
 - **Performance - Aggregation contribution row splice.** Changing one entry of a group shard decoded the whole row into a map and re-encoded it, and every membership read decoded a member no caller uses. Rows are spliced in place instead: up to 69% faster and 79% less allocated. ([#3981](https://github.com/NSTA1/Orleans.Lattice/pull/3981)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation group re-materialise.** Re-folding a group decoded every shard into a keyed map, materialising a source-key string per entry that the fold never looks up. It now walks the row directly: the min/max gather allocates nothing at all, and the set-union gather 59% less. ([#3950](https://github.com/NSTA1/Orleans.Lattice/pull/3950)) (`Orleans.Lattice`)
