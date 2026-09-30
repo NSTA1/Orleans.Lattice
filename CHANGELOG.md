@@ -42,6 +42,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Identity digest allocations.** Three SHA-256 identity paths staged input or digest bytes through throwaway arrays. They hash from stack or pooled buffers now: 72-88% less allocated on the credential metadata digest, 69-91% on the Explorer cookie digest, 16-27% on backup artifacts. ([#4094](https://github.com/NSTA1/Orleans.Lattice/pull/4094)) (`Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Backup`)
+
 - **Performance - Leaf snapshot vector clock decode.** Decoding a row's version vector read its exact entry count, then grew a default-sized dictionary into it one rehash at a time. It presizes from that count instead: 29% faster and 28% less allocated at four replicas, 40% and 38% at sixteen. ([#4079](https://github.com/NSTA1/Orleans.Lattice/pull/4079)) (`Orleans.Lattice`)
 
 - **Performance - Aggregation splice key handling.** Splicing an entry into a group row transcoded its source key three times: once into a scratch buffer, once to size it and once to write it. It now reuses the first transcode, and sizes that buffer to the key: 44% to 57% faster on that work. ([#4079](https://github.com/NSTA1/Orleans.Lattice/pull/4079)) (`Orleans.Lattice`)

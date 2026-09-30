@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -60,6 +61,13 @@ public sealed class CookieCredentialStore : ICredentialStore
     /// the browser holding one has long since been re-challenged.
     /// </summary>
     private const int MaxRevocations = 1024;
+
+    /// <summary>
+    /// Cookie-payload budget staged on the stack when computing a revocation
+    /// digest. A constant width keeps the fixed-size zeroing the JIT unrolls; a
+    /// larger payload rents from the shared pool instead.
+    /// </summary>
+    private const int StackCookieBytes = 512;
 
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IDataProtector _protector;
@@ -300,8 +308,40 @@ public sealed class CookieCredentialStore : ICredentialStore
         }
     }
 
-    private static string Digest(string cookieValue) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cookieValue)));
+    /// <summary>
+    /// The revocation-set identity of <paramref name="cookieValue"/>: the
+    /// uppercase hexadecimal SHA-256 of its UTF-8 bytes.
+    /// </summary>
+    /// <remarks>
+    /// Staged through a stack or pooled buffer rather than
+    /// <c>Encoding.UTF8.GetBytes(string)</c> plus an allocating
+    /// <c>SHA256.HashData</c>: this runs on every cookie-authenticated read to
+    /// test the revocation set, which is a steady-state security path and so
+    /// holds to the allocation bar. The rented buffer is cleared on return
+    /// because it holds the encrypted credential payload.
+    /// </remarks>
+    private static string Digest(string cookieValue)
+    {
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(cookieValue.Length);
+        byte[]? rented = null;
+        var buffer = maxBytes <= StackCookieBytes
+            ? stackalloc byte[StackCookieBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(cookieValue, buffer);
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(buffer[..written], digest);
+            return Convert.ToHexString(digest);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            }
+        }
+    }
 
     /// <summary>
     /// Reports whether <paramref name="cookieValue"/> is a payload this store

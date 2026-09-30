@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -35,6 +36,23 @@ namespace Orleans.Lattice.Membership;
 /// </remarks>
 internal readonly record struct MembershipCacheKey
 {
+    /// <summary>The U+001F field separator, ASCII and so one UTF-8 byte.</summary>
+    private const byte UnitSeparator = 0x1f;
+
+    /// <summary>
+    /// Upper bound on the bytes the two length prefixes and their separators add
+    /// to one pair: an <see cref="int"/> is at most 11 decimal digits, and each of
+    /// the two prefixes contributes those digits plus one separator byte.
+    /// </summary>
+    private const int MaxLengthPrefixBytes = (11 + 1) * 2;
+
+    /// <summary>
+    /// Canonical-form budget staged on the stack. A constant width keeps the
+    /// fixed-size zeroing the JIT unrolls; a metadata bag that does not fit rents
+    /// from the shared pool instead.
+    /// </summary>
+    private const int StackCanonicalBytes = 256;
+
     private MembershipCacheKey(string? token, string? scheme, string? principalId, string? metadataDigest)
     {
         Token = token;
@@ -105,13 +123,62 @@ internal readonly record struct MembershipCacheKey
             return byKey != 0 ? byKey : string.CompareOrdinal(left.Value, right.Value);
         });
 
-        var canonical = new StringBuilder();
+        // The canonical form is written straight to UTF-8 and hashed from that
+        // buffer. Staging it as a StringBuilder, materialising it with ToString,
+        // and re-encoding it with GetBytes allocated three intermediates that
+        // nothing outlives the call, on a path that runs for every credential
+        // cache probe - which the security invariant on steady-state auth paths
+        // (allocate nothing avoidable) rules out. The byte stream is unchanged:
+        // UTF-8 of a concatenation equals the concatenation of the parts' UTF-8
+        // here, because a length digit or the U+001F separator always falls
+        // between two caller-supplied strings, so no surrogate pair can straddle
+        // a part boundary.
+        var maxBytes = 0;
         foreach (var pair in pairs)
         {
-            canonical.Append(pair.Key.Length).Append('\u001f').Append(pair.Key)
-                .Append(pair.Value.Length).Append('\u001f').Append(pair.Value);
+            maxBytes += Encoding.UTF8.GetMaxByteCount(pair.Key.Length + pair.Value.Length)
+                + MaxLengthPrefixBytes;
         }
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+        byte[]? rented = null;
+        var canonical = maxBytes <= StackCanonicalBytes
+            ? stackalloc byte[StackCanonicalBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        try
+        {
+            var written = 0;
+            foreach (var pair in pairs)
+            {
+                written += WriteLengthPrefix(canonical[written..], pair.Key.Length);
+                written += Encoding.UTF8.GetBytes(pair.Key, canonical[written..]);
+                written += WriteLengthPrefix(canonical[written..], pair.Value.Length);
+                written += Encoding.UTF8.GetBytes(pair.Value, canonical[written..]);
+            }
+
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(canonical[..written], digest);
+            return Convert.ToHexString(digest);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                // Caller-supplied metadata values may be sensitive, so the buffer
+                // is cleared rather than handed back to the pool still populated.
+                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the decimal <paramref name="length"/> followed by the U+001F field
+    /// separator into <paramref name="destination"/>, returning the bytes written.
+    /// Both are ASCII, so the UTF-8 encoding is the literal characters.
+    /// </summary>
+    private static int WriteLengthPrefix(Span<byte> destination, int length)
+    {
+        length.TryFormat(destination, out var written);
+        destination[written] = UnitSeparator;
+        return written + 1;
     }
 }
