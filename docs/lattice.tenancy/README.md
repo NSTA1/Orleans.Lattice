@@ -168,6 +168,14 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   `ILatticeAccessGate` is made tenant-aware: a request is denied unless the
   subject's active tenant owns the target tree (prefix match), or an explicit
   cross-tenant grant or platform-operator scope authorizes it.
+- **Grant changes take effect at once.** The gate answers from a compiled snapshot
+  of the tenant registry, and a registry write (approving, rejecting, or revoking a
+  grant) only schedules a background rebuild of it. While that rebuild is
+  outstanding, or while rebuilds are failing, the gate confirms a cross-tenant
+  crossing against the registry itself, so a revoked grant stops admitting access
+  as soon as the revocation commits and an approved one admits the next request.
+  A crossing whose grant cannot be confirmed is denied. Only crossings in that
+  window pay the registry read; the steady state stays an in-memory decision.
 - **Active-tenant assertion.** A subject carries a set of tenant memberships, but
   the active tenant is always a caller-supplied *assertion*, never inferred from
   that set - there is no implicit "sole membership" default. Every branch that
