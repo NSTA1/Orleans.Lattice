@@ -194,7 +194,10 @@ A caller that fails the gate learns nothing. The catalogue refuses the call befo
 it reads any source or the registry. The workspace answers as if the app did not
 exist. The workspace description excludes the ceiling, the approved exception
 scopes, consent history, role-to-group bindings and every physical tree id: those
-remain behind `AppInstall` on the control facade.
+remain behind `AppInstall` on the control facade. Its `Ui.Bridge` is not the
+manifest's bare request: it carries only the grants the operator consented to that
+the installed manifest still requests, which is exactly what the bridge admits, so
+a client launching the UI is never offered an unconsented grant.
 
 When the same slug is offered by more than one source, the catalogue lists one row
 per source. An install names its source with `AppInstallRequest.SourceKey`. Without

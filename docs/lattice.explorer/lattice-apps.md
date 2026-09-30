@@ -103,8 +103,10 @@ An app's UI never runs in the Explorer's own page.
 - **Bootstrap.** Every frame loads the same static bootstrap document from the AppKit
   package, at `{base}/_apps/frame/v1/frame.html`. That document is served with
   `sandbox allow-scripts; default-src 'none'; connect-src 'none'` and related CSP
-  directives, so the frame has **no network egress**. It is the only Explorer route
-  exempt from `X-Frame-Options: DENY`.
+  directives, so the frame has no network egress of its own (but see the known
+  limitation below). It is the one Explorer response that may be framed: the web
+  head sends `X-Frame-Options: DENY` everywhere, and only this route's endpoint
+  lifts it, for a file it serves.
 - **Bundle delivery.** The bundle is never served to the frame over HTTP. The
   Explorer fetches it on the signed-in user's credential through
   `ILatticeAppWorkspace` and verifies every SHA-256 and the bundle digest. It then
@@ -114,7 +116,12 @@ An app's UI never runs in the Explorer's own page.
   [`ILatticeAppBridge`](../lattice.api.apps/README.md#the-bridge). The bridge allows
   only what the app's own roles grant this user, inside the consented bridge
   operations and the app's own trees. The Explorer broker only validates, rate-limits
-  and relays.
+  and relays. It answers the operations that never reach the cluster
+  (`context.read`, `context.user`, `nav.sync` and `ui.notify`) itself, and grants
+  them from the launch's bridge set: the grants the operator consented to that the
+  installed manifest still requests, which the cluster computes for
+  `WorkspaceAppDescriptor.Ui.Bridge`. A grant the manifest requests but the operator
+  never consented to is not offered to the frame.
 - **Credentials.** No credential ever enters the frame. If the frame loads a new
   page, the Explorer closes it. An upgrade, disable or uninstall revokes the session,
   and the Explorer replaces the frame with a message asking you to open the app again.
@@ -124,6 +131,15 @@ blocked where the browser does not support the `webrtc` directive. Data handed t
 frame can therefore, in principle, leave it. This is why a frame only ever receives
 data within its app's consented scope, and why the user's display name is a
 separately consented operation (`context.user`).
+
+**Known limitation: self-navigation in some WebKit builds.** The sandbox does not
+stop a frame navigating itself. Chromium and Firefox always check such a
+navigation against the Explorer's own `frame-src 'self'` and refuse a
+cross-origin one before any request is sent. WebKit varies by build: some refuse
+it the same way, while others let the request out, so a frame there can navigate
+itself to another origin, sending whatever it put in the URL. What could leave
+that way is bounded by the app's consented bridge scope, and the target's own
+framing policy still stops the response rendering in the frame.
 
 ## Writing an app UI
 
