@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Replication;
 public sealed record ReplicationPeerStatusEntry
 {
     /// <summary>Initializes a new <see cref="ReplicationPeerStatusEntry"/>.</summary>
-    /// <param name="treeId">The logical, sanitised tree id. Must not be <c>null</c>.</param>
+    /// <param name="treeId">The effective tree id (see <see cref="TreeId"/>). Must not be <c>null</c>.</param>
     /// <param name="peerRegionId">The peer region (cluster) id. Must not be <c>null</c>.</param>
     /// <param name="direction">Which way the link carries entries.</param>
     /// <param name="entriesBehind">WAL entries not yet shipped to the peer (outbound only).</param>
@@ -48,9 +48,11 @@ public sealed record ReplicationPeerStatusEntry
     }
 
     /// <summary>
-    /// The logical, sanitised tree id: <c>a/{app}/{tree}</c> for an app tree and
-    /// the tenant-local name for any other tree of the caller's tenant - never the
-    /// composed id the cluster stores the tree under.
+    /// The effective tree id: the bare name for a default-tenant tree, and the
+    /// tenant-qualified <c>t/{tenant}/{name}</c> id for a tree of an asserted,
+    /// non-default tenant. It is the id
+    /// <see cref="ReplicationTreeConfigEntry.TreeId"/> carries for the same tree,
+    /// so a link joins to its enrolment on it.
     /// </summary>
     [Id(0)] public string TreeId { get; init; }
 

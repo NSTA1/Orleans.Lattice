@@ -271,30 +271,33 @@ public sealed class ReplicationDataSourceTests
     }
 
     [Test]
-    public async Task Under_a_tenant_the_estate_drops_other_tenants_and_system_trees_but_never_a_bare_name()
+    public async Task Under_a_tenant_the_estate_and_the_enrolment_list_its_own_trees_under_one_id()
     {
-        _status.Links.AddRange([Link("a/task-board/tasks", "west"), Link("t/acme/orders", "west"), Link("t/globex/orders", "west"), Link("sys-replication-config", "west")]);
+        // Both facades name a tenant's own trees by their qualified t/{tenant}/{name} id (#4000).
+        _status.Links.AddRange([
+            Link("t/acme/a/task-board/tasks", "west"),
+            Link("t/acme/orders", "west"),
+            Link("t/globex/orders", "west"),
+            Link("orders", "west"),
+            Link("sys-replication-config", "west")]);
+        _control.Trees.AddRange([
+            Tree("t/acme/a/task-board/tasks"),
+            Tree("t/acme/orders"),
+            Tree("t/globex/orders"),
+            Tree("orders"),
+            Tree("sys-replication-config")]);
         using var data = Create(tenancy: true, tenant: "acme");
 
         var estate = await data.GetEstateAsync(refresh: false, CancellationToken.None);
+        var config = await data.GetConfigAsync(refresh: false, CancellationToken.None);
+        var rows = ReplicationTreeRow.Build(config.Value!, estate.Value!.Links);
 
-        Assert.That(estate.Value!.Links.Select(link => link.TreeId), Is.EqualTo(new[] { "a/task-board/tasks", "t/acme/orders" }), "the cluster names the tenant's own trees by their bare names");
-    }
-
-    [Test]
-    public void A_link_is_listed_by_its_tree_ownership()
-    {
         Assert.Multiple(() =>
         {
-            Assert.That(ReplicationDataSource.ListsLink(null, "t/acme/orders"), Is.True, "tenancy off");
-            Assert.That(ReplicationDataSource.ListsLink("default", "factory-floor"), Is.True);
-            Assert.That(ReplicationDataSource.ListsLink("default", "t/acme/orders"), Is.False);
-            Assert.That(ReplicationDataSource.ListsLink("default", "sys-replication-config"), Is.False);
-            Assert.That(ReplicationDataSource.ListsLink("acme", "a/task-board/tasks"), Is.True);
-            Assert.That(ReplicationDataSource.ListsLink("acme", "t/acme/orders"), Is.True);
-            Assert.That(ReplicationDataSource.ListsLink("acme", "t/globex/orders"), Is.False);
-            Assert.That(ReplicationDataSource.ListsLink("acme", "_lattice_internal"), Is.False);
-            Assert.That(() => ReplicationDataSource.ListsLink("acme", null!), Throws.ArgumentNullException);
+            Assert.That(estate.Value!.Links.Select(link => link.TreeId), Is.EqualTo(new[] { "t/acme/a/task-board/tasks", "t/acme/orders" }));
+            Assert.That(config.Value!.Trees.Select(tree => tree.TreeId), Is.EqualTo(new[] { "t/acme/a/task-board/tasks", "t/acme/orders" }));
+            Assert.That(rows.Select(row => (row.TreeId, row.Links)), Is.EqualTo(new[] { ("t/acme/a/task-board/tasks", 1), ("t/acme/orders", 1) }), "every enrolled tree joins to its links");
+            Assert.That(rows[0].AppSlug, Is.EqualTo("task-board"), "a tenant's app tree is still recognised as app-owned");
         });
     }
     [Test]

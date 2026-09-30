@@ -34,7 +34,6 @@ public partial class ReplicationPeerStats
         ArgumentNullException.ThrowIfNull(request);
 
         var limit = request.EffectiveLimit;
-        var strip = request.StripPrefix;
         var after = request.After;
         var now = GetTimestamp();
         var selected = new List<ReplicationPeerStatusRow>(Math.Min(limit, state.Count));
@@ -52,14 +51,13 @@ public partial class ReplicationPeerStats
                 continue;
             }
 
-            var display = ReplicationPeerStatusOrder.DisplayTree(key.Tree, strip, out var stripped);
             if (after is { } cursor
-                && ReplicationPeerStatusOrder.Compare(display, stripped, key.Peer, key.Direction, cursor) <= 0)
+                && ReplicationPeerStatusOrder.Compare(key.Tree, key.Peer, key.Direction, cursor) <= 0)
             {
                 continue;
             }
 
-            if (selected.Count == limit && CompareToRow(display, stripped, key, selected[^1], strip) >= 0)
+            if (selected.Count == limit && CompareToRow(key, selected[^1]) >= 0)
             {
                 continue;
             }
@@ -82,7 +80,7 @@ public partial class ReplicationPeerStats
 
             var row = new ReplicationPeerStatusRow(
                 key.Tree, key.Peer, key.Direction, entries, bytes, errors, elapsed, inFlight);
-            selected.Insert(FindInsertIndex(selected, display, stripped, key, strip), row);
+            selected.Insert(FindInsertIndex(selected, key), row);
             if (selected.Count > limit)
             {
                 selected.RemoveAt(selected.Count - 1);
@@ -92,31 +90,17 @@ public partial class ReplicationPeerStats
         return selected.ToArray();
     }
 
-    private static int CompareToRow(
-        ReadOnlySpan<char> display,
-        bool stripped,
-        PeerKey key,
-        in ReplicationPeerStatusRow row,
-        string? strip)
-    {
-        var rowDisplay = ReplicationPeerStatusOrder.DisplayTree(row.Tree, strip, out var rowStripped);
-        return ReplicationPeerStatusOrder.Compare(
-            display, stripped, key.Peer, key.Direction, rowDisplay, rowStripped, row.Peer, row.Direction);
-    }
+    private static int CompareToRow(PeerKey key, in ReplicationPeerStatusRow row) =>
+        ReplicationPeerStatusOrder.Compare(key.Tree, key.Peer, key.Direction, row.Tree, row.Peer, row.Direction);
 
-    private static int FindInsertIndex(
-        List<ReplicationPeerStatusRow> selected,
-        ReadOnlySpan<char> display,
-        bool stripped,
-        PeerKey key,
-        string? strip)
+    private static int FindInsertIndex(List<ReplicationPeerStatusRow> selected, PeerKey key)
     {
         var low = 0;
         var high = selected.Count;
         while (low < high)
         {
             var mid = low + ((high - low) / 2);
-            if (CompareToRow(display, stripped, key, selected[mid], strip) > 0)
+            if (CompareToRow(key, selected[mid]) > 0)
             {
                 low = mid + 1;
             }

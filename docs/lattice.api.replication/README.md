@@ -62,9 +62,14 @@ count, and a derived `ReplicationLinkHealth`: `Healthy`, `Lagging`, `Stalled` or
   active silo through an internal grain service. When the same link appears on more
   than one silo, it keeps the most recent contact whole. None of this runs on the
   shipping or apply path.
-- **Logical ids.** Tree ids are reported in their logical form (`a/{app}/{tree}` for
-  an app's tree), with the caller's tenant prefix removed. A continuation token only
-  encodes rows the caller was shown.
+- **Effective ids, the same as the config report.** Each link names its tree by the
+  effective id, which is the id `GetReplicationConfigAsync` uses for the same tree, so
+  the two reports join on tree id. A default-tenant tree keeps its bare name, and an
+  app's tree reads `a/{app}/{tree}`. Under an asserted non-default tenant, the
+  caller's own trees are tenant-qualified: `t/{tenant}/{name}`, or
+  `t/{tenant}/a/{app}/{tree}` for an app's tree. A tree filter accepts the
+  tenant-local name or the qualified id. A continuation token only encodes rows the
+  caller was shown.
 - **Permission-scoped.** Each tree is checked against the same `Replication`
   capability that `GetReplicationConfigAsync` requires. Trees the caller may not
   manage are left out. A tree filter the caller may not manage returns an empty page

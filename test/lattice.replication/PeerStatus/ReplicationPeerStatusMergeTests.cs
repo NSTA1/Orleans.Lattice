@@ -22,7 +22,7 @@ public sealed class ReplicationPeerStatusMergeTests
         var live = Row("orders", lastContactSeconds: 2, errors: 0, entries: 5);
         var stale = Row("orders", lastContactSeconds: 400, errors: 9, entries: 900);
 
-        var merged = ReplicationPeerStatusMerge.Merge(new[] { new[] { stale }, new[] { live } }, 10, null);
+        var merged = ReplicationPeerStatusMerge.Merge(new[] { new[] { stale }, new[] { live } }, 10);
 
         Assert.That(merged, Is.EqualTo(new[] { live }));
     }
@@ -62,7 +62,7 @@ public sealed class ReplicationPeerStatusMergeTests
         var otherPeer = Row("orders", 1, peer: "west");
 
         var merged = ReplicationPeerStatusMerge.Merge(
-            new[] { new[] { outbound, inbound }, new[] { otherPeer, inbound } }, 10, null);
+            new[] { new[] { outbound, inbound }, new[] { otherPeer, inbound } }, 10);
 
         Assert.That(merged, Is.EqualTo(new[] { outbound, inbound, otherPeer }));
     }
@@ -76,21 +76,19 @@ public sealed class ReplicationPeerStatusMergeTests
                 new[] { Row("a", 1), Row("c", 1), Row("e", 1) },
                 new[] { Row("b", 1), Row("d", 1) },
             },
-            limit: 3,
-            stripPrefix: null);
+            limit: 3);
 
         Assert.That(merged.Select(r => r.Tree), Is.EqualTo(new[] { "a", "b", "c" }));
     }
 
     [Test]
-    public void Merge_orders_on_the_display_id()
+    public void Merge_orders_on_the_effective_tree_id()
     {
         var merged = ReplicationPeerStatusMerge.Merge(
-            new[] { new[] { Row("b", 1) }, new[] { Row("t/acme/a", 1) } },
-            limit: 10,
-            stripPrefix: "t/acme/");
+            new[] { new[] { Row("t/acme/a", 1) }, new[] { Row("b", 1) } },
+            limit: 10);
 
-        Assert.That(merged.Select(r => r.Tree), Is.EqualTo(new[] { "t/acme/a", "b" }));
+        Assert.That(merged.Select(r => r.Tree), Is.EqualTo(new[] { "b", "t/acme/a" }));
     }
 
     [Test]
@@ -98,8 +96,7 @@ public sealed class ReplicationPeerStatusMergeTests
     {
         var merged = ReplicationPeerStatusMerge.Merge(
             new IReadOnlyList<ReplicationPeerStatusRow>[] { null!, new[] { Row("a", 1), Row("b", 1) } },
-            limit: 0,
-            stripPrefix: null);
+            limit: 0);
 
         Assert.That(merged.Select(r => r.Tree), Is.EqualTo(new[] { "a" }));
     }
@@ -107,6 +104,6 @@ public sealed class ReplicationPeerStatusMergeTests
     [Test]
     public void Merge_null_answers_throws()
     {
-        Assert.That(() => ReplicationPeerStatusMerge.Merge(null!, 10, null), Throws.ArgumentNullException);
+        Assert.That(() => ReplicationPeerStatusMerge.Merge(null!, 10), Throws.ArgumentNullException);
     }
 }

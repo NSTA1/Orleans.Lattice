@@ -86,7 +86,11 @@ public interface ILatticeReplicationControl
     /// includes only the trees the caller is authorized to manage (fail-closed
     /// discovery), so a caller without a grant for a tree is not told the tree
     /// exists. Never throws on a per-tree permission denial; a denied tree is
-    /// silently omitted.
+    /// silently omitted. Each tree is named by its effective id - the bare name for
+    /// a default-tenant tree, the tenant-qualified <c>t/{tenant}/{name}</c> id for a
+    /// tree of an asserted, non-default tenant - which is the id
+    /// <see cref="ILatticeReplicationStatus.GetPeerStatusAsync"/> reports the same
+    /// tree's links by, so the two reports join on tree id.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The permission-scoped per-tree replication config report.</returns>

@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Api.Replication;
 /// cluster-wide per-peer telemetry through the internal
 /// <see cref="IReplicationPeerStatusReader"/> (which never touches the ship or
 /// apply path), authorizes every reported tree through the shared
-/// <see cref="ReplicationAccessAuthorizer"/> fail-closed, renders each tree id in
-/// its logical, sanitised form, and derives each link's health.
+/// <see cref="ReplicationAccessAuthorizer"/> fail-closed, reports each tree by
+/// its effective id, and derives each link's health.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -21,8 +21,16 @@ namespace Orleans.Lattice.Api.Replication;
 /// empty page without any telemetry being read.
 /// </para>
 /// <para>
+/// <b>Tree ids.</b> Every link names its tree by the effective id the telemetry
+/// state records: a bare name for a default-tenant tree, and the tenant-qualified
+/// <c>t/{tenant}/{name}</c> id for a tenant's own tree. That is the id
+/// <see cref="ILatticeReplicationControl.GetReplicationConfigAsync"/> names the
+/// same tree by, so the two reports join on tree id (issue #4000). A tenant still
+/// sees only the trees the access gate admits to it; the report never widens that.
+/// </para>
+/// <para>
 /// <b>Paging.</b> The read path returns rows in a single total order keyed on the
-/// display tree id, so the continuation token carries only a key the caller was
+/// effective tree id, so the continuation token carries only a key the caller was
 /// shown. Rows for trees the caller may not see are skipped by reading further
 /// rather than by ending the page early, so a continuation is only ever issued
 /// for an authorized row. The total work is bounded by the number of recorded
@@ -40,7 +48,7 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
     /// <summary>Initializes a new <see cref="LatticeReplicationStatus"/>.</summary>
     /// <param name="reader">The cluster-wide peer-status read path. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed replication authorization seam. Must not be <c>null</c>.</param>
-    /// <param name="tenantResolver">The active-tenant resolver used to scope and render tree ids. Must not be <c>null</c>.</param>
+    /// <param name="tenantResolver">The active-tenant resolver used to fail closed on an unresolvable caller and to scope a tree filter. Must not be <c>null</c>.</param>
     /// <param name="replicationOptions">The replication options, read for the local region id. Must not be <c>null</c>.</param>
     /// <param name="statusOptions">The health thresholds. Must not be <c>null</c>.</param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
@@ -73,8 +81,7 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
         var after = ReplicationPeerStatusContinuation.Decode(query.ContinuationToken);
         var localRegionId = _replicationOptions.CurrentValue.ClusterId ?? string.Empty;
 
-        var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
-        var strip = tenant.IsDefault ? null : LatticeTenantTrees.ComposePrefix(tenant);
+        await EnsureTenantResolvesAsync(cancellationToken).ConfigureAwait(false);
 
         string? treeFilter = null;
         if (!string.IsNullOrEmpty(query.TreeId))
@@ -109,15 +116,11 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
             {
                 TreeId = treeFilter,
                 Peer = peerFilter,
-                StripPrefix = strip,
                 After = after,
                 Limit = readLimit,
             };
             var rows = await _reader.ReadAsync(request, cancellationToken).ConfigureAwait(false);
 
-            // Cursors are built once per read (to resume the scan) and once per page
-            // (for the token), never per scanned row: rendering a tenant-qualified
-            // id allocates, and most scanned rows need no cursor at all.
             ReplicationPeerStatusRow? lastScanned = null;
             foreach (var row in rows)
             {
@@ -133,13 +136,13 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
                     break;
                 }
 
-                entries.Add(ToEntry(row, strip, options));
+                entries.Add(ToEntry(row, options));
                 lastReturned = row;
             }
 
             if (lastScanned is { } scanned)
             {
-                after = ReplicationPeerStatusOrder.CursorAfter(scanned, strip);
+                after = ReplicationPeerStatusOrder.CursorAfter(scanned);
             }
 
             // A short read is the end of the report. A read that did not move the
@@ -151,12 +154,12 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
         }
 
         var token = more && lastReturned is { } last
-            ? ReplicationPeerStatusContinuation.Encode(ReplicationPeerStatusOrder.CursorAfter(last, strip))
+            ? ReplicationPeerStatusContinuation.Encode(ReplicationPeerStatusOrder.CursorAfter(last))
             : null;
         return new ReplicationPeerStatusPage(localRegionId, entries, token);
     }
 
-    private async ValueTask<TenantId> ResolveTenantAsync(CancellationToken cancellationToken)
+    private async ValueTask EnsureTenantResolvesAsync(CancellationToken cancellationToken)
     {
         var tenant = _tenantResolver.TryResolveCurrent(out var resolved)
             ? resolved
@@ -167,8 +170,6 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
         {
             throw new LatticeTenantAccessDeniedException();
         }
-
-        return tenant;
     }
 
     private async ValueTask<bool> IsVisibleAsync(
@@ -187,10 +188,9 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
 
     private static ReplicationPeerStatusEntry ToEntry(
         in ReplicationPeerStatusRow row,
-        string? strip,
         LatticeReplicationStatusOptions options) =>
         new(
-            ReplicationPeerStatusOrder.DisplayTreeString(row.Tree, strip, out _),
+            row.Tree,
             row.Peer,
             row.Direction == ReplicationContactDirection.Inbound
                 ? ReplicationLinkDirection.Inbound

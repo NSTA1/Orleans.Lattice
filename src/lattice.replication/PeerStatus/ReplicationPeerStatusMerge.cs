@@ -34,13 +34,11 @@ internal static class ReplicationPeerStatusMerge
     /// </summary>
     /// <param name="perSilo">Each silo's sorted, limit-bounded answer. Must not be <see langword="null"/>.</param>
     /// <param name="limit">The maximum number of rows to return; clamped to at least one.</param>
-    /// <param name="stripPrefix">The caller's tenant qualification, or <see langword="null"/> for none.</param>
     /// <returns>The merged, ordered rows.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="perSilo"/> is <see langword="null"/>.</exception>
     public static IReadOnlyList<ReplicationPeerStatusRow> Merge(
         IReadOnlyList<IReadOnlyList<ReplicationPeerStatusRow>> perSilo,
-        int limit,
-        string? stripPrefix)
+        int limit)
     {
         ArgumentNullException.ThrowIfNull(perSilo);
         limit = Math.Max(1, limit);
@@ -61,7 +59,7 @@ internal static class ReplicationPeerStatusMerge
         }
 
         var merged = new List<ReplicationPeerStatusRow>(byKey.Values);
-        merged.Sort((a, b) => ReplicationPeerStatusOrder.Compare(a, b, stripPrefix));
+        merged.Sort(static (a, b) => ReplicationPeerStatusOrder.Compare(a, b));
         if (merged.Count > limit)
         {
             merged.RemoveRange(limit, merged.Count - limit);

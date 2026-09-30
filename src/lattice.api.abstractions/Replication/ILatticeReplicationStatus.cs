@@ -23,11 +23,18 @@ namespace Orleans.Lattice.Api.Replication;
 /// as a tree with no replication links does.
 /// </para>
 /// <para>
-/// <b>Tree ids.</b> Each row carries the <b>logical, sanitised</b> tree id: the
-/// caller's own tenant qualification is removed, so an app tree is reported as
-/// <c>a/{app}/{tree}</c> and a tenant-local tree by its tenant-local name, never
-/// as the composed id the cluster stores it under. A tree filter is supplied in
-/// the same form.
+/// <b>Tree ids.</b> Each row carries the tree's <b>effective</b> id - the id the
+/// cluster stores it under, and the id
+/// <see cref="ILatticeReplicationControl.GetReplicationConfigAsync"/> reports the
+/// same tree by, so the two reports join on tree id. A default-tenant tree is
+/// reported by its bare name (an app tree as <c>a/{app}/{tree}</c>); under an
+/// asserted, non-default tenant the caller's own trees are reported
+/// tenant-qualified, as <c>t/{tenant}/{name}</c> (an app tree as
+/// <c>t/{tenant}/a/{app}/{tree}</c>). Reporting the qualified id discloses nothing
+/// new: it names only a tree the caller is already authorized to manage. A tree
+/// filter is a tenant-local name, scoped to the caller's tenant exactly as the
+/// enrolment verbs scope theirs, so either the tenant-local name or the qualified
+/// id a report returned selects the same tree.
 /// </para>
 /// <para>
 /// <b>Scope and freshness.</b> The report reflects the whole local cluster
