@@ -38,7 +38,7 @@ public sealed class ReplicationTreePageTests : ReplicationTestContext
             Assert.That(rows.Select(row => (row.Children[0].TextContent.Trim(), row.Children[1].TextContent.Trim(), row.Children[2].TextContent.Trim())),
                 Is.EqualTo(new[] { ("ap-south", "Outbound", "Stalled"), ("ap-south", "Inbound", "Lagging") }));
             Assert.That(cut.FindAll("thead th").Select(header => header.TextContent.Trim()), Does.Not.Contain("Tree"));
-            Assert.That(cut.FindAll(".lt-replication-sections__link")[1].GetAttribute("aria-current"), Is.EqualTo("location"));
+            Assert.That(cut.Find(".lt-replication-back__link").TextContent, Is.EqualTo(ReplicationSections.BackText));
             Assert.That(Status.Queries.Last().TreeId, Is.EqualTo("a/crm/contacts"));
         });
     }

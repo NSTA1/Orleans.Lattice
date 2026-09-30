@@ -18,6 +18,16 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 public sealed class SchemaAreaTests : SchemaTestContext
 {
     [Test]
+    public void A_tree_path_is_one_chain_node_whatever_its_slashes()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/t/acme/schema/t/acme/a/task-board/tasks?tab=policy")), Is.EqualTo(new[] { 5 }));
+            Assert.That(Area.GetChainSpans(ExplorerAddress.Parse("/schema?show=all")), Is.Null);
+            Assert.That(() => Area.GetChainSpans(null!), Throws.ArgumentNullException);
+        });
+    }
+    [Test]
     public async Task It_is_visible_when_the_capability_probe_grants_anything()
     {
         var area = Area;
@@ -131,6 +141,25 @@ public sealed class SchemaAreaTests : SchemaTestContext
     public async Task The_home_status_says_so_when_no_tree_is_under_schema()
     {
         UseTrees("scratch");
+
+        Assert.That(await Area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("No tree is under a schema policy yet."));
+    }
+
+    [Test]
+    public async Task A_default_version_config_is_neither_under_schema_nor_versioned()
+    {
+        // The cluster reads an absent config as family 0 at version 0 (#3985).
+        UseEstate();
+        Schema.UnversionedReadsAsDefault = true;
+
+        Assert.That(await Area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("3 trees under schema, 2 versioned."));
+    }
+
+    [Test]
+    public async Task Only_default_version_configs_leave_no_tree_under_schema()
+    {
+        UseTrees("scratch", "factory-floor");
+        Schema.UnversionedReadsAsDefault = true;
 
         Assert.That(await Area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("No tree is under a schema policy yet."));
     }

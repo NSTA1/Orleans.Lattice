@@ -64,6 +64,17 @@ public partial class DataHistoryPanel : IDisposable
         _ => null,
     };
 
+    /// <summary>The As-of field's hint: the form it takes, rather than a sample time that reads as a value.</summary>
+    internal const string AtHint = "As yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
+
+    /// <summary>What a metadata-only revision holds, said once for the timeline.</summary>
+    internal const string MetadataOnlyText = "Revisions marked \"metadata only\" kept only the value's size and hash, so there is no value to show for them.";
+
+    private string? MetadataOnlyNote =>
+        _timeline is { } timeline && timeline.Rows.Any(row => row.RenderMode == HistoryRowRenderMode.MetadataOnly)
+            ? MetadataOnlyText
+            : null;
+
     /// <inheritdoc />
     protected override void OnInitialized()
     {

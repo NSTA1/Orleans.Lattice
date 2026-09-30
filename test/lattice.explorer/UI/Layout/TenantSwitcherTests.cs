@@ -117,6 +117,7 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
         {
             Assert.That(Switcher!.ReceivedCalls().Any(call => call.GetMethodInfo().Name == nameof(IExplorerTenantSwitcher.SwitchTenantAsync)), Is.True);
             Assert.That(cut.Find(".lt-toasts").TextContent, Does.Contain(ExplorerNavigator.SwitchedNotice("globex")));
+            Assert.That(cut.FindAll(".lt-toast"), Is.Empty, "a switch the address and header already show is read out, not drawn over the page (#3987)");
             Assert.That(Toggle(cut).TextContent, Does.Contain("globex"));
             Assert.That(cut.FindAll(".lt-shell-tenant__panel"), Is.Empty, "the panel closes on a choice");
         });
@@ -141,7 +142,41 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
         {
             Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "t/acme/data/orders"));
             Assert.That(cut.Find(".lt-toasts").TextContent, Does.Contain(ExplorerNavigator.RefusedNotice("globex", "acme")));
+            Assert.That(cut.FindAll(".lt-toast"), Has.Count.EqualTo(1), "a refusal stays on screen until it is read");
         });
+    }
+
+    [Test]
+    public void Landing_on_another_tenants_address_scopes_to_it_without_announcing_a_switch()
+    {
+        // #3987: a reload, a bookmark or a pasted link only establishes the tenant.
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/globex/data/orders");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Toggle(cut).TextContent, Does.Contain("globex"));
+            Assert.That(cut.FindAll("#page-body"), Has.Count.EqualTo(1));
+        });
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-toasts").TextContent, Does.Not.Contain(ExplorerNavigator.SwitchedNotice("globex")));
+            Assert.That(cut.FindAll(".lt-toast"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Moving_within_the_active_tenant_announces_nothing()
+    {
+        Operator(allowSwitch: true, Reachable);
+        var cut = RenderSignedIn("t/acme/data/orders");
+        cut.WaitUntil(() => Assert.That(Toggles(cut), Has.Count.EqualTo(1)));
+
+        cut.InvokeAsync(() => Navigation.NavigateTo("t/acme/data/customers"));
+        RenderAgain(cut);
+
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "t/acme/data/customers")));
+        Assert.That(cut.Find(".lt-toasts").TextContent.Trim(), Is.Empty);
     }
 
     [Test]
@@ -162,6 +197,7 @@ public sealed class TenantSwitcherTests : ShellLayoutTestContext
         {
             Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "cluster"));
             Assert.That(cut.Find(".lt-toasts").TextContent, Does.Contain(ExplorerNavigator.SwitchedNotice("globex")));
+            Assert.That(cut.FindAll(".lt-toast"), Is.Empty, "read out, not drawn over the page (#3987)");
             Assert.That(Toggle(cut).TextContent, Does.Contain("globex"));
         });
     }

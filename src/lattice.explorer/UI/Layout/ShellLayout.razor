@@ -41,7 +41,8 @@
         }
         <a class="lt-shell-brand" href="@HomeHref">
             <LtMark Size="22" />
-            <span class="lt-shell-brand__name"><span class="lt-shell-brand__prefix">Orleans.</span>Lattice Explorer</span>
+            @* Compact, the name drops its namespace so it fits between the header's two controls whole, never cut off. *@
+            <span class="lt-shell-brand__name">@if (!IsCompact) { <span class="lt-shell-brand__prefix">Orleans.</span> }Lattice Explorer</span>
         </a>
         <div class="lt-shell-header__end">
             @if (IsCompact)

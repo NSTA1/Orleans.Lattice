@@ -545,6 +545,11 @@
   text-align: left;
 }
 
+/*
+ * A member is a choice, drawn as a radio: its hollow marker takes the control
+ * boundary colour (3:1 against the surface) rather than the diagram's quieter
+ * node ring, so the list reads as something to pick before any pointer is near it.
+ */
 .lt-schema-shape__member::before {
   content: "";
   position: absolute;
@@ -552,13 +557,24 @@
   left: var(--lt-space-2);
   width: var(--lt-diagram-node-size);
   height: var(--lt-diagram-node-size);
-  border: var(--lt-diagram-ring-width) solid var(--lt-diagram-node-ring);
+  border: var(--lt-diagram-ring-width) solid var(--lt-op-control-border);
   border-radius: 50%;
   background: var(--lt-diagram-node-hollow);
 }
 
 .lt-schema-shape__member:hover {
   background: var(--lt-op-row-hover);
+}
+
+.lt-schema-shape__member:hover::before,
+.lt-schema-shape__member:focus-visible::before {
+  border-color: var(--lt-ink);
+}
+
+.lt-schema-shape__member:hover .lt-schema-shape__name,
+.lt-schema-shape__member:focus-visible .lt-schema-shape__name {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 .lt-schema-shape__member[aria-pressed="true"] {

@@ -172,6 +172,11 @@ public partial class SchemaRuleBuilder : IDisposable
             {
                 _sample = sample;
                 Reshape();
+                if (_composer is { } composer)
+                {
+                    FitToSubject(composer);
+                }
+
                 Touch();
             }
         }
@@ -265,7 +270,9 @@ public partial class SchemaRuleBuilder : IDisposable
     private void OpenComposer()
     {
         var kind = SchemaCardKind.Required;
-        _composer = SchemaCardExamples.Seed(kind, null);
+
+        // The composer starts on the whole value, so it is seeded from what the sample showed there.
+        _composer = SchemaCardExamples.Seed(kind, _shape.Root);
         _editing = null;
         _alternativeOf = null;
         _composerError = null;
@@ -295,7 +302,7 @@ public partial class SchemaRuleBuilder : IDisposable
             return;
         }
 
-        _composer = SchemaCardExamples.Seed(SchemaCardKind.Required, null);
+        _composer = SchemaCardExamples.Seed(SchemaCardKind.Required, _shape.Root);
         _editing = null;
         _alternativeOf = index;
         _composerError = null;
@@ -446,16 +453,30 @@ public partial class SchemaRuleBuilder : IDisposable
         }
 
         card.Path = (value ?? string.Empty).Trim();
+        FitToSubject(card);
         _composerError = null;
         Touch();
     }
 
+    /// <summary>
+    /// Fits a presence card to what the sample showed at its subject: an object or
+    /// a list needs the structural form, which the older form reads as missing, so
+    /// the card's claim, its sentence and the check against the sample agree.
+    /// A subject the sample never showed leaves the card as it is.
+    /// </summary>
+    private void FitToSubject(SchemaRuleCard card)
+    {
+        if (card.Kind == SchemaCardKind.Required && _shape.Find(card.Path) is { Unseen: false } node)
+        {
+            card.Structural = SchemaCardExamples.HoldsStructure(node);
+        }
+    }
+
     private void ChooseWholeValue()
     {
-        if (_composer is { } card)
+        if (_composer is not null)
         {
-            card.Path = string.Empty;
-            _composerError = null;
+            ChooseNode(_shape.Root);
         }
     }
 
@@ -466,8 +487,9 @@ public partial class SchemaRuleBuilder : IDisposable
             return;
         }
 
+        var whole = node.Parent is null && !node.IsItem;
         var leafKind = card.Kind is SchemaCardKind.EveryItem or SchemaCardKind.AnyOf ? SchemaCardKind.Required : card.Kind;
-        if (SchemaCardCompiler.IsWholeValueOnly(leafKind) || (node.ItemScopes().Count > 0 && !SchemaCardCompiler.IsPredicate(leafKind)))
+        if ((SchemaCardCompiler.IsWholeValueOnly(leafKind) && !whole) || (node.ItemScopes().Count > 0 && !SchemaCardCompiler.IsPredicate(leafKind)))
         {
             leafKind = SchemaCardKind.Required;
         }
@@ -642,6 +664,17 @@ public partial class SchemaRuleBuilder : IDisposable
     }
 
     private Task CancelAsync() => OnCancel.InvokeAsync();
+
+    /// <summary>
+    /// Whether there is anything to save: a rule, or one being written. A policy
+    /// with no rules is refused, so saving is offered only once there is a rule;
+    /// accepting every value is what clearing the policy does.
+    /// </summary>
+    private bool HasRules => _cards.Count > 0 || _composer is not null || (_advanced && _raw.IsDirty);
+
+    private string NoRulesNote => Policy is null
+        ? "Add a rule to save the policy."
+        : "Add a rule to save the policy. To accept every value, clear the policy instead.";
 
     // ----- Focus -----
 

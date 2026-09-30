@@ -86,6 +86,12 @@
   font-size: var(--lt-text-sm);
 }
 
+/* The catalogue's note under its toolbar stands clear of the listing below it,
+   which on a phone opens with the "Sort by" label. */
+.lt-apps-search-note {
+  margin-block-end: var(--lt-space-4);
+}
+
 .lt-apps-app {
   display: flex;
   align-items: flex-start;

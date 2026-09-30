@@ -46,6 +46,12 @@ internal static class ClusterAddresses
     /// <summary>The query key naming a WAL move's target provider key.</summary>
     public const string TargetQuery = "target";
 
+    /// <summary>The query key naming the open tab of a tree's page; absent means <see cref="SummaryTab"/>.</summary>
+    public const string TabQuery = "tab";
+
+    /// <summary>The tree page's default tab.</summary>
+    public const string SummaryTab = "summary";
+
     /// <summary>
     /// The deepest path the area's routes match below <c>/cluster</c>. A tree whose
     /// logical id has more parts than fit is listed but has no address.
@@ -193,6 +199,25 @@ internal static class ClusterAddresses
             default:
                 return null;
         }
+    }
+
+    /// <summary>
+    /// How the address line groups <paramref name="address"/>'s path: for a tree's
+    /// page, the trees node, the whole logical tree id as one node, then the view
+    /// word when there is one. <see langword="null"/> for every other page.
+    /// </summary>
+    /// <param name="address">A Cluster address.</param>
+    /// <returns>The spans, or <see langword="null"/> for one node per segment.</returns>
+    public static IReadOnlyList<int>? ChainSpans(ExplorerAddress address)
+    {
+        if (Parse(address) is not { Kind: ClusterPageKind.Tree, TreeId: { Length: > 0 } treeId })
+        {
+            return null;
+        }
+
+        var treeParts = treeId.Split('/').Length;
+        var rest = address.Path.Count - 1 - treeParts;
+        return rest > 0 ? [1, treeParts, rest] : [1, treeParts];
     }
 
     private static string WordOf(ClusterTreeView view) => view switch

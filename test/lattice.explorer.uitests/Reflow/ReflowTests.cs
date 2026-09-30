@@ -81,6 +81,93 @@ public sealed class ReflowTests : UiTestBase
         Assert.That(measured, Is.GreaterThan(ExplorerAreas.Shown.Count()), "The touch-target scan measured almost nothing.");
     }
 
+    /// <summary>Every page the test world shows, at its primary and its deeper address.</summary>
+    public static IEnumerable<TestCaseData> ShownPages() =>
+        from area in ExplorerAreas.Shown
+        from path in new[] { area.PrimaryPath, area.DeepPath }
+        select new TestCaseData(path).SetArgDisplayNames(path);
+
+    [TestCaseSource(nameof(ShownPages))]
+    public async Task On_a_phone_the_chrome_keeps_one_line_and_a_stacked_toolbar_is_as_tall_as_its_controls(string path)
+    {
+        // #3987: at 390px the Data toolbar held a 250px blank under its filter (a
+        // flex basis read as a height once the row stacked), the brand was cut to
+        // "Orleans.Lattice Ex...", and the address chain wrapped with its prompt cut off.
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, path, WorldIdentities.Admin, Shell.SmallWidth);
+        await Expect(Shell.Heading(page)).ToBeVisibleAsync();
+        await Shell.WaitForMotionToSettleAsync(page);
+
+        var faults = await page.EvaluateAsync<string[]>(
+            """
+            () => {
+              const faults = [];
+              const clipped = (element) => element && element.scrollWidth > element.clientWidth + 1;
+              if (clipped(document.querySelector('.lt-shell-brand__name'))) {
+                faults.push('the brand is cut off: ' + document.querySelector('.lt-shell-brand__name').innerText);
+              }
+              const line = document.querySelector('.lt-shell-address-line');
+              const edit = document.querySelector('.lt-shell-address-line__edit');
+              if (line && edit) {
+                const lineBox = line.getBoundingClientRect();
+                const editBox = edit.getBoundingClientRect();
+                if (lineBox.height > editBox.height + 4) { faults.push('the address line wraps: ' + Math.round(lineBox.height) + 'px tall'); }
+                if (clipped(document.querySelector('.lt-shell-address-line__hint'))) { faults.push('the address prompt is cut off'); }
+              }
+              for (const toolbar of document.querySelectorAll('main .lt-toolbar')) {
+                const items = [...toolbar.children].filter(item => {
+                  const box = item.getBoundingClientRect();
+                  return box.width > 0 && box.height > 0;
+                });
+                const label = (item) => (item.innerText || item.className).trim().slice(0, 30);
+                for (let i = 0; i < items.length; i++) {
+                  // An item taller than what it holds is blank space: the stacked
+                  // row read a width basis as a height.
+                  const box = items[i].getBoundingClientRect();
+                  const parts = [...items[i].querySelectorAll('*')].map(part => part.getBoundingClientRect()).filter(part => part.height > 0);
+                  if (parts.length > 0) {
+                    const held = Math.max(...parts.map(part => part.bottom)) - Math.min(...parts.map(part => part.top));
+                    if (box.height - held > 24) {
+                      faults.push('"' + label(items[i]) + '" in a toolbar is ' + Math.round(box.height - held) + 'px taller than what it holds');
+                    }
+                  }
+                  if (i > 0) {
+                    const gap = box.top - items[i - 1].getBoundingClientRect().bottom;
+                    if (gap > 24) {
+                      faults.push('a ' + Math.round(gap) + 'px gap in a toolbar after "' + label(items[i - 1]) + '"');
+                    }
+                  }
+                }
+              }
+              return faults;
+            }
+            """);
+
+        Assert.That(faults, Is.Empty, $"{path} at {Shell.SmallWidth}px: " + string.Join("; ", faults));
+    }
+
+    [Test]
+    public async Task On_a_phone_the_apps_catalogue_note_stands_clear_of_the_listing_below_it()
+    {
+        // #3987: "No configured source supports search." touched the "Sort by" label.
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, "/apps/catalogue", WorldIdentities.Admin, Shell.SmallWidth);
+        var note = page.Locator(".lt-apps-search-note");
+        await Expect(note).ToBeVisibleAsync();
+        await Shell.WaitForMotionToSettleAsync(page);
+
+        var gap = await note.EvaluateAsync<double>(
+            """
+            note => {
+              let next = note.nextElementSibling;
+              while (next && next.getBoundingClientRect().height === 0) { next = next.nextElementSibling; }
+              return next ? next.getBoundingClientRect().top - note.getBoundingClientRect().bottom : 999;
+            }
+            """);
+
+        Assert.That(gap, Is.GreaterThanOrEqualTo(12), "the note keeps a clear space above what follows it");
+    }
+
     [Test]
     public async Task An_open_picker_reflows_on_a_phone_and_its_suggestions_are_touch_targets()
     {

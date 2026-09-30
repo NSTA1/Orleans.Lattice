@@ -24,10 +24,10 @@ public sealed class AddressCompletionJourneyTests : UiTestBase
         var tree = Shell.Suggestions(page).Filter(new() { HasText = ExplorerWorld.DemoTree });
         await Expect(tree).ToHaveCountAsync(1);
 
-        // Arrow to the tree and go.
+        // Arrow to the tree and go: the list opens on its first suggestion.
         var options = await Shell.Suggestions(page).AllInnerTextsAsync();
         var index = options.ToList().FindIndex(option => option.Contains(ExplorerWorld.DemoTree, StringComparison.Ordinal));
-        for (var i = 0; i <= index; i++)
+        for (var i = 0; i < index; i++)
         {
             await page.Keyboard.PressAsync("ArrowDown");
         }

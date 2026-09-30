@@ -39,6 +39,50 @@ public sealed class DataDirectoryPageTests : DataTestContext
     }
 
     [Test]
+    public void At_the_default_tenant_nothing_can_be_shared_so_no_sharing_filter_or_column_is_offered()
+    {
+        // #3987: the reserved default tenant takes no part in grants.
+        UseDataTenancy("default");
+        Client.WithTree("orders");
+
+        var cut = RenderAt("t/default/data");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr.lt-table__row"), Has.Count.EqualTo(1)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-data-segmented button").Select(button => button.TextContent), Is.EqualTo(new[] { "All", "Trees", "Views" }));
+            Assert.That(Headers(cut), Has.None.EqualTo("Shared by"));
+        });
+    }
+
+    [Test]
+    public void Columns_that_are_empty_for_every_row_are_left_out()
+    {
+        // #3987: no tree belongs to an app and there is no view.
+        Client.WithTree("orders").WithTree("customers");
+
+        var cut = RenderAt("data");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr.lt-table__row"), Has.Count.EqualTo(2)));
+        Assert.That(Headers(cut), Is.EqualTo(new[] { "Name", "Kind", "Shards", "Status" }));
+    }
+
+    [Test]
+    public void An_app_tree_brings_the_app_column_and_a_view_the_source_column_whatever_the_filter()
+    {
+        Client.WithTree("a/crm/orders").WithTree("customers");
+        Client.Views.Add(new ViewStateSummary { ViewName = "crm-summary", SourceTreeId = "a/crm/orders" });
+
+        var cut = RenderAt("data?filter=customers");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr.lt-table__row"), Has.Count.EqualTo(1)));
+        Assert.That(Headers(cut), Is.EqualTo(new[] { "Name", "Kind", "App", "Shards", "Status", "Source" }), "the columns follow the listing, not the filtered rows");
+    }
+
+    private static string[] Headers(IRenderedComponent<DataPageHost> cut) =>
+        [.. cut.FindAll("thead th").Select(header => header.TextContent.Trim())];
+
+    [Test]
     public void Physical_system_and_restore_shadow_trees_never_appear()
     {
         Client.WithTree("orders");

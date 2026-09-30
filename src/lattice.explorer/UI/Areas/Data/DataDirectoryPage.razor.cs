@@ -44,6 +44,8 @@ public partial class DataDirectoryPage : IDisposable
     private string _kind = AllKinds;
     private string? _error;
     private bool _subscribed;
+    private bool _anyApp;
+    private bool _anySource;
 
     [Inject]
     internal DataDirectory Directory { get; set; } = default!;
@@ -54,11 +56,15 @@ public partial class DataDirectoryPage : IDisposable
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
 
-    // Only a tenant can have trees shared with it, so the filter offers "shared" only with tenancy on.
-    private IReadOnlyList<LtSelectOption> KindOptions => Tenancy.IsActive ? TenantKindOptions : OwnedKindOptions;
+    // Only a tenant other than the reserved default one can have trees shared with
+    // it, so the filter offers "shared" only where sharing applies.
+    private IReadOnlyList<LtSelectOption> KindOptions => Directory.SharingApplies ? TenantKindOptions : OwnedKindOptions;
 
     // The responsive contract: a segmented control of more than three options becomes a select at the compact band.
     private bool UseKindSelect => Breakpoint == LtBreakpoint.Compact && KindOptions.Count > 3;
+
+    // Which optional columns the table draws; the table is keyed on it.
+    private (bool Shared, bool App, bool Source) ColumnSet => (Directory.SharingApplies, _anyApp, _anySource);
 
     private string Lede => Tenancy.IsActive && Tenancy.ActiveTenant is { } tenant
         ? $"Every tree and view you can reach in tenant {tenant}."
@@ -219,7 +225,24 @@ public partial class DataDirectoryPage : IDisposable
         if (_entries is not { } entries)
         {
             _visible = [];
+            _anyApp = false;
+            _anySource = false;
             return;
+        }
+
+        // The columns follow the whole listing, not the filtered rows, so typing a
+        // filter never makes them come and go.
+        _anyApp = false;
+        _anySource = false;
+        foreach (var entry in entries)
+        {
+            _anyApp |= entry.AppSlug is not null;
+            _anySource |= entry.SourceLogicalId is not null;
+        }
+
+        if (_kind == SharedKinds && !Directory.SharingApplies)
+        {
+            _kind = AllKinds;
         }
 
         var filter = _filter?.Trim();

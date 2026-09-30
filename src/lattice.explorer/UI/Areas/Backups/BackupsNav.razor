@@ -2,16 +2,28 @@
     The Backups area's own pages, as a row of links under the page title. Every
     destination belongs to the one Backups stop on the directory spine; this row
     only moves within it. Health appears only where health monitoring applies.
+    A page below them (capturing a backup, one backup, one operation) is none of
+    the row's pages, so it shows the way back to the catalogue instead of a row
+    with nothing selected.
 *@
-<nav class="lt-backups-nav" aria-label="Backups pages">
-    <ul class="lt-backups-nav__list">
-        @foreach (var link in Pages)
-        {
-            <li @key="link.Key">
-                <a class="lt-backups-nav__link"
-                   href="@Navigator.Canonicalize(link.Address).ToHref()"
-                   aria-current="@(string.Equals(link.Key, Current, StringComparison.Ordinal) ? "page" : null)">@link.Text</a>
-            </li>
-        }
-    </ul>
-</nav>
+@if (Current is null)
+{
+    <nav class="lt-backups-back" aria-label="Backups pages">
+        <a class="lt-backups-link lt-backups-back__link" href="@Navigator.Canonicalize(BackupsAddresses.Root).ToHref()">@BackText</a>
+    </nav>
+}
+else
+{
+    <nav class="lt-backups-nav" aria-label="Backups pages">
+        <ul class="lt-backups-nav__list">
+            @foreach (var link in Pages)
+            {
+                <li @key="link.Key">
+                    <a class="lt-backups-nav__link"
+                       href="@Navigator.Canonicalize(link.Address).ToHref()"
+                       aria-current="@(string.Equals(link.Key, Current, StringComparison.Ordinal) ? "page" : null)">@link.Text</a>
+                </li>
+            }
+        </ul>
+    </nav>
+}

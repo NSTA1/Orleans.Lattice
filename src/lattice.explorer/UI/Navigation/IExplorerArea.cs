@@ -54,6 +54,20 @@ internal interface IExplorerArea
     bool IsTenantScopedAt(Address.ExplorerAddress address) => IsTenantScoped;
 
     /// <summary>
+    /// How the address line groups the path of <paramref name="address"/>, an
+    /// address in this area, into chain nodes: the number of consecutive path
+    /// segments each node spans, outermost first. <see langword="null"/>, the
+    /// default, is one node per segment. An area whose path holds a logical tree
+    /// id answers so the whole id - <c>t/acme/a/crm/orders</c> - is one node.
+    /// </summary>
+    /// <remarks>
+    /// The spans must be positive and sum to the path's length; an answer that
+    /// does not is ignored and the path falls back to one node per segment.
+    /// </remarks>
+    /// <param name="address">An address whose area is this one.</param>
+    IReadOnlyList<int>? GetChainSpans(Address.ExplorerAddress address) => null;
+
+    /// <summary>
     /// The area's completion source for the address line, or <see langword="null"/>
     /// for none. Only a <see cref="AreaAvailabilityKind.Visible"/> area is asked.
     /// </summary>

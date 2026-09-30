@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
@@ -144,6 +145,7 @@ internal sealed class ReplicationDataSource : IDisposable
         }
 
         ReplicationRead<ReplicationConfigReport> read;
+        var tenant = _tenant.ListingTenant;
         if (Control is not { } control)
         {
             read = ReplicationRead<ReplicationConfigReport>.Failure(ReplicationFault.NotServed(ConfigSubject));
@@ -152,8 +154,8 @@ internal sealed class ReplicationDataSource : IDisposable
         {
             try
             {
-                var report = await control.GetReplicationConfigAsync(cancellationToken).ConfigureAwait(false);
-                read = ReplicationRead<ReplicationConfigReport>.Success(report ?? ReplicationConfigReport.Empty);
+                var report = await control.GetReplicationConfigAsync(cancellationToken).ConfigureAwait(false) ?? ReplicationConfigReport.Empty;
+                read = ReplicationRead<ReplicationConfigReport>.Success(ScopeToTenant(report, tenant));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -265,6 +267,49 @@ internal sealed class ReplicationDataSource : IDisposable
 
     private bool Fresh(DateTimeOffset? at) => at is { } read && _time.GetUtcNow() - read < _options.CacheLifetime;
 
+    /// <summary>
+    /// The enrolment report narrowed to the trees a listing under
+    /// <paramref name="tenant"/> shows. The area is tenant-scoped, and the cluster
+    /// hands the reserved default tenant every tenant's trees and its system trees.
+    /// </summary>
+    /// <param name="report">The report as the facade returned it.</param>
+    /// <param name="tenant">The tenant it was read under, or <see langword="null"/>.</param>
+    /// <returns>The narrowed report; the same instance when nothing is dropped.</returns>
+    internal static ReplicationConfigReport ScopeToTenant(ReplicationConfigReport report, string? tenant)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        if (report.Trees.All(tree => ShellAssertedTenant.Lists(tenant, tree.TreeId)))
+        {
+            return report;
+        }
+
+        return report with { Trees = [.. report.Trees.Where(tree => ShellAssertedTenant.Lists(tenant, tree.TreeId))] };
+    }
+
+    /// <summary>
+    /// Whether the estate for <paramref name="tenant"/> shows a link of
+    /// <paramref name="treeId"/>. At the default tenant a link's tree id is in the
+    /// cluster's ownership grammar, so only the default tenant's own trees are kept.
+    /// Under another tenant the status report names that tenant's own trees by
+    /// their bare names, which cannot be told from the default tenant's, so a bare
+    /// name is kept and only a system tree or another tenant's qualified tree is
+    /// dropped: a tenant's own link is never hidden.
+    /// </summary>
+    /// <param name="tenant">The listing tenant, or <see langword="null"/> with tenancy off.</param>
+    /// <param name="treeId">The link's tree id.</param>
+    /// <returns><see langword="true"/> when the estate shows the link.</returns>
+    internal static bool ListsLink(string? tenant, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (string.IsNullOrEmpty(tenant) || string.Equals(tenant, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal))
+        {
+            return ShellAssertedTenant.Lists(tenant, treeId);
+        }
+
+        return ExplorerTenantTrees.TryGetOwner(treeId, out var owner)
+            && (owner == ExplorerTenantId.Default || owner.Value == tenant);
+    }
+
     private async Task<ReplicationRead<ReplicationEstate>> ReadLinksAsync(string? treeId, CancellationToken cancellationToken)
     {
         if (Status is not { } status)
@@ -274,6 +319,9 @@ internal sealed class ReplicationDataSource : IDisposable
 
         try
         {
+            // The estate is this tenant's links; one tree's links, asked for by its
+            // address, are read as addressed.
+            var tenant = _tenant.ListingTenant;
             var links = new List<ReplicationPeerStatusEntry>();
             var seen = new HashSet<(string, string, ReplicationLinkDirection)>();
             var tokens = new HashSet<string>(StringComparer.Ordinal);
@@ -290,7 +338,8 @@ internal sealed class ReplicationDataSource : IDisposable
                 localRegion = result.LocalRegionId;
 
                 // One row per (tree, peer, direction): a page served twice adds nothing.
-                links.AddRange(result.Peers.Where(link => seen.Add((link.TreeId, link.PeerRegionId, link.Direction))));
+                links.AddRange(result.Peers.Where(link => seen.Add((link.TreeId, link.PeerRegionId, link.Direction))
+                    && (treeId is not null || ListsLink(tenant, link.TreeId))));
                 token = result.ContinuationToken;
                 if (token is null)
                 {

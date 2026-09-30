@@ -68,7 +68,7 @@
 </div>
 @if (!TextEnabled)
 {
-    <p id="@SearchHintId" class="lt-apps-hint">@(_view.SourceKey is null ? "No configured source supports search." : "This source does not support search.")</p>
+    <p id="@SearchHintId" class="lt-apps-hint lt-apps-search-note">@(_view.SourceKey is null ? "No configured source supports search." : "This source does not support search.")</p>
 }
 
 @if (_error is not null)

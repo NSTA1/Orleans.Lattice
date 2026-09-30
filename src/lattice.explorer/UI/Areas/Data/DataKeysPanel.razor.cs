@@ -5,6 +5,7 @@ using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
@@ -55,6 +56,16 @@ public partial class DataKeysPanel : IDisposable
 
     [CascadingParameter]
     internal DataWorkspace? Workspace { get; set; }
+
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
+    internal LtBreakpoint? Breakpoint { get; set; }
+
+    /// <summary>
+    /// Whether the open entry is shown beside the table rather than below it: at
+    /// the expanded width (or outside the layout, which reads as expanded) with a
+    /// key open. Narrower, the two stack so neither is squeezed.
+    /// </summary>
+    internal bool IsSplit => Workspace?.Key is not null && (Breakpoint ?? LtBreakpoint.Expanded) == LtBreakpoint.Expanded;
 
     [Inject]
     internal IServiceProvider Services { get; set; } = default!;

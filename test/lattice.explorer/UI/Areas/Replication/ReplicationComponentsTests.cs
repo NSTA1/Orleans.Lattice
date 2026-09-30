@@ -114,16 +114,29 @@ public sealed class ReplicationComponentsTests : ReplicationTestContext
     }
 
     [Test]
-    public void The_sections_mark_a_tree_page_as_a_location_under_the_trees()
+    public void A_tree_page_shows_the_way_back_to_the_enrolled_trees_instead_of_the_section_row()
     {
+        // #3987: one tree is below both sections, so no tab may read as this page.
         var cut = Render<ReplicationSections>(parameters => parameters
-            .AddCascadingValue(new ExplorerLocation(ExplorerAddress.Parse("/replication/trees/orders"), [], true, false)));
+            .AddCascadingValue(new ExplorerLocation(ExplorerAddress.Parse("/replication/trees/orders?health=lagging"), [], true, false)));
 
         Assert.Multiple(() =>
         {
             Assert.That(cut.Instance.Section, Is.EqualTo(ReplicationSections.SectionKind.Tree));
-            Assert.That(cut.FindAll(".lt-replication-sections__link").Select(link => link.GetAttribute("aria-current")), Is.EqualTo(new[] { null, "location" }));
+            Assert.That(cut.FindAll(".lt-replication-sections__link"), Is.Empty, "no tab strip with a tab marked as if it were this page");
+            Assert.That(cut.FindAll("[aria-current]"), Is.Empty);
+            Assert.That(cut.Find(".lt-replication-back__link").TextContent, Is.EqualTo(ReplicationSections.BackText));
+            Assert.That(cut.Find(".lt-replication-back__link").GetAttribute("href"), Is.EqualTo("replication/trees?health=lagging"), "the filters travel back");
             Assert.That(cut.Find("nav").GetAttribute("aria-label"), Is.EqualTo("Replication sections"));
         });
+    }
+
+    [Test]
+    public void The_enrolled_trees_page_marks_its_own_tab_only()
+    {
+        var cut = Render<ReplicationSections>(parameters => parameters
+            .AddCascadingValue(new ExplorerLocation(ExplorerAddress.Parse("/replication/trees"), [], true, false)));
+
+        Assert.That(cut.FindAll(".lt-replication-sections__link").Select(link => link.GetAttribute("aria-current")), Is.EqualTo(new[] { null, "page" }));
     }
 }

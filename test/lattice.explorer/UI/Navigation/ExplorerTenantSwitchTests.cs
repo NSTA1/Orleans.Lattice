@@ -209,7 +209,8 @@ public sealed class ExplorerTenantSwitchTests
             Assert.That(outcome, Is.EqualTo(TenantSwitchOutcome.Switched));
             Assert.That(_view.ActiveTenant, Is.EqualTo(new ExplorerTenantId("globex")));
             Assert.That(_navigation.Navigations.Single(), Is.EqualTo(("cluster/shards", true)), "the layout is asked to synchronise without moving");
-            Assert.That(_toasts.Toasts.Single().Message, Is.EqualTo(ExplorerNavigator.SwitchedNotice("globex")));
+            Assert.That(_toasts.Announcement?.Message, Is.EqualTo(ExplorerNavigator.SwitchedNotice("globex")), "the switch is read out");
+            Assert.That(_toasts.Toasts, Is.Empty, "the switch the header already shows is not drawn over the page (#3987)");
         });
     }
 

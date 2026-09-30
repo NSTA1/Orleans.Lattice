@@ -33,7 +33,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
     [Test]
     public void Required_compiles_to_a_presence_check()
     {
-        var rule = Build(cut => Path(cut, "id"), "id must be present");
+        var rule = Build(cut => Path(cut, "id"), "id must be present as text, a number or true or false");
 
         Assert.That(rule, Is.EqualTo(LatticeSchemaRule.Structured(
             LatticePredicateNode.Compare(LatticeComparisonOperator.NotEqual, Member("id"), LatticePredicateNode.Const(LatticeConstant.Null())))));
@@ -371,7 +371,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         {
             Path(cut, "id");
             Type(cut, "Message when a value fails (optional)", "every order has an id");
-        }, "id must be present");
+        }, "id must be present as text, a number or true or false");
 
         Assert.That(rule.Description, Is.EqualTo("every order has an id"));
     }

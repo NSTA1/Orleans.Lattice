@@ -54,7 +54,7 @@
     {
         <h2 class="lt-data-section-title">History of <span class="lt-shell-mono">@DataKeysPanel.Clip(Workspace.Key)</span></h2>
         <form class="lt-toolbar" @onsubmit="ApplyAt" @onsubmit:preventDefault>
-            <LtTextInput Label="As of (UTC)" Mono="true" Placeholder="2026-09-28T14:00:00Z" Value="@_atInput" ValueChanged="value => _atInput = value" Error="@_atError" />
+            <LtTextInput Label="As of (UTC)" Mono="true" Hint="@AtHint" Value="@_atInput" ValueChanged="value => _atInput = value" Error="@_atError" />
             <LtButton Type="LtButtonType.Submit">Show as of</LtButton>
             @if (_at is not null)
             {
@@ -90,6 +90,12 @@
             @if (BoundNote is { } bound)
             {
                 <p class="lt-data-note">@bound</p>
+            }
+
+            @if (MetadataOnlyNote is { } metadataOnly)
+            {
+                @* Said once for the timeline, not under every revision it applies to. *@
+                <p class="lt-data-note">@metadataOnly</p>
             }
 
             @if (!_timeline.HasRows)
@@ -160,7 +166,7 @@
                 <pre class="lt-data-value" tabindex="0" aria-label="Value">@value.Content</pre>
                 break;
             case HistoryRowRenderMode.MetadataOnly:
-                <p class="lt-data-note">Only the value's size and hash were retained.</p>
+                // Its kind already reads "(metadata only)"; the timeline's note says what that means.
                 break;
             case HistoryRowRenderMode.CrdtMembers:
                 <ul class="lt-data-members">

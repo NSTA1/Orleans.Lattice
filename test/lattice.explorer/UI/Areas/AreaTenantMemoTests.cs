@@ -4,6 +4,7 @@ using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.Telemetry;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Backup;
@@ -203,6 +204,14 @@ public sealed class AreaTenantMemoTests
             .Returns(_ => Task.FromResult(new ClusterStorageUsageSummary { TreeCount = _provider.AssertedTenant == "acme" ? 3 : 7 }));
         var session = Substitute.For<IExplorerSession>();
         session.IsConfigured.Returns(true);
+
+        // The badge counts the tree list, which the cluster answers per tenant too.
+        session.Connection.ListTreesAsync(Arg.Any<CatalogRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new TreeCatalogPage
+            {
+                Entries = [.. Enumerable.Range(0, _provider.AssertedTenant == "acme" ? 3 : 7)
+                    .Select(index => new TreeCatalogEntry { TreeId = $"t/{_provider.AssertedTenant}/tree-{index}", Config = new TreeConfigSummary() })],
+            }));
         using var services = new ServiceCollection()
             .AddKeyedSingleton(ShellFacades.Key, admin)
             .AddSingleton(session)

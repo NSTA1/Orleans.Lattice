@@ -94,18 +94,42 @@ internal static class SchemaCardExamples
         return true;
     }
 
+    /// <summary>
+    /// Whether the sample showed an object or a list at <paramref name="node"/>, so
+    /// a presence check there must be the structural form: the older form reads an
+    /// object or a list as missing.
+    /// </summary>
+    /// <param name="node">What the sample showed, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when an object or a list was seen.</returns>
+    public static bool HoldsStructure(SchemaShapeNode? node) =>
+        node is not null && (node.Types.GetValueOrDefault(SchemaValueType.Object) > 0 || node.Types.GetValueOrDefault(SchemaValueType.List) > 0);
+
     /// <summary>The live example for a card kind on a member.</summary>
     /// <param name="kind">The kind.</param>
     /// <param name="node">What the sample showed for the member, or <see langword="null"/> when nothing is known.</param>
+    /// <param name="current">
+    /// The card being written, or <see langword="null"/>. When it is of
+    /// <paramref name="kind"/> the example describes that card as it stands, so its
+    /// claim agrees with the check against the sample; otherwise it describes the
+    /// card that choosing <paramref name="kind"/> would seed.
+    /// </param>
     /// <returns>The example, one line.</returns>
-    public static string Example(SchemaCardKind kind, SchemaShapeNode? node)
+    public static string Example(SchemaCardKind kind, SchemaShapeNode? node, SchemaRuleCard? current = null)
     {
         var seen = node is { Unseen: false } ? node : null;
         switch (kind)
         {
             case SchemaCardKind.Required when seen is not null:
+                var structural = current is { Kind: SchemaCardKind.Required } chosen ? chosen.Structural : HoldsStructure(seen);
                 var present = seen.Seen - seen.Nulls;
-                return $"Set in {present:N0} of {Documents(seen):N0} sampled values.";
+                if (structural || !HoldsStructure(seen))
+                {
+                    return $"Set in {present:N0} of {Documents(seen):N0} sampled values.";
+                }
+
+                // The older presence check reads an object or a list as missing.
+                var scalars = present - seen.Types.GetValueOrDefault(SchemaValueType.Object) - seen.Types.GetValueOrDefault(SchemaValueType.List);
+                return $"Set as text, a number or true or false in {scalars:N0} of {Documents(seen):N0} sampled values.";
 
             case SchemaCardKind.Type when seen?.Dominant is { } dominant:
                 return "Seen as " + string.Join(", ", seen.Types.OrderByDescending(pair => pair.Value).Select(pair => $"{SchemaCardText.TypePhrase(pair.Key)} ({pair.Value:N0})")) + ".";
@@ -166,7 +190,7 @@ internal static class SchemaCardExamples
         switch (kind)
         {
             case SchemaCardKind.Required:
-                card.Structural = seen?.Dominant is SchemaValueType.Object or SchemaValueType.List;
+                card.Structural = HoldsStructure(seen);
                 break;
 
             case SchemaCardKind.Type:
