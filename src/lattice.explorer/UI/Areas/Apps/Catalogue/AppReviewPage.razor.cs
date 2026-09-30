@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
@@ -12,7 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// </summary>
 public partial class AppReviewPage : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private AppInstallFlow? _flow;
     private ExplorerAddress? _resolvedFor;
     private string? _slug;
@@ -67,8 +68,7 @@ public partial class AppReviewPage : IDisposable
     {
         Detach();
         Intents.Posted -= OnIntentPosted;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />
@@ -106,6 +106,12 @@ public partial class AppReviewPage : IDisposable
             return;
         }
 
+        if (_lifetime.IsLeft)
+        {
+            // Left while the probe answered: a page that is gone decides nothing.
+            return;
+        }
+
         if (!snapshot.CanReview || Facades.Catalog is not { } catalog)
         {
             NotFound();
@@ -121,6 +127,12 @@ public partial class AppReviewPage : IDisposable
         catch (Exception error) when (error is not OperationCanceledException)
         {
             // The description itself still answers; without the summary the flow assumes a static source.
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            // Left while the sources were listed: no flow is started for a page that is gone.
+            return;
         }
 
         Attach(Flows.GetOrCreate(new AppInstallFlowKey(Address.Tenant, path[1], slug, version), source));

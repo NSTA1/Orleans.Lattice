@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
@@ -15,7 +16,7 @@ public partial class AppsPage : IDisposable
     private readonly Dictionary<string, string?> _icons = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> _installedIcons = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Source, string Slug), AppPresentationDescriptor?> _presentations = [];
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private AppsAccessSnapshot? _snapshot;
     private IReadOnlyList<AppSummary> _failed = [];
     private ImmutableArray<AppSummary> _installed = [];
@@ -42,8 +43,7 @@ public partial class AppsPage : IDisposable
     public void Dispose()
     {
         Access.Changed -= OnAccessChanged;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

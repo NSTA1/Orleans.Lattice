@@ -29,7 +29,7 @@ public partial class DataKeysPanel : IDisposable
     private static readonly IReadOnlyList<LtSelectOption> PageSizeOptions =
         [.. DataPaging.PageSizes.Select(size => new LtSelectOption(size.ToString(CultureInfo.InvariantCulture), size.ToString(CultureInfo.InvariantCulture)))];
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private IDataReader? _reader;
     private ILatticeStateClient? _client;
     private DataPager? _pager;
@@ -51,7 +51,7 @@ public partial class DataKeysPanel : IDisposable
     private bool _live = true;
     private string? _liveNote;
     private bool _liveRestartable;
-    private CancellationTokenSource? _follow;
+    private readonly ComponentLifetime _follows = new();
     private int _entryVersion;
 
     [CascadingParameter]
@@ -148,6 +148,12 @@ public partial class DataKeysPanel : IDisposable
             await LoadTagsAsync(workspace.Tree.StateId);
         }
 
+        if (_lifetime.IsLeft)
+        {
+            // Left while the filters were read: nothing is paged or followed for a page that is gone.
+            return;
+        }
+
         await ResetAsync();
         RestartFollow();
     }
@@ -155,14 +161,13 @@ public partial class DataKeysPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        StopFollow();
+        _follows.Leave();
         if (_pager is { } pager)
         {
             _ = CloseQuietlyAsync(pager);
         }
 
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -260,7 +265,7 @@ public partial class DataKeysPanel : IDisposable
         {
             await _pager.ResetAsync(workspace.Tree.StateId, _pageSize, ActiveTagFilter, ActiveTagFilter is null ? workspace.Prefix : null, _mode, _lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -286,7 +291,7 @@ public partial class DataKeysPanel : IDisposable
         {
             await _pager.NextAsync(_lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception) when (DataErrors.IsCursorExpired(exception, resuming: true))
@@ -370,24 +375,17 @@ public partial class DataKeysPanel : IDisposable
 
     private void StopFollow()
     {
-        if (_follow is { } follow)
-        {
-            _follow = null;
-            follow.Cancel();
-            follow.Dispose();
-        }
+        _follows.Renew();
     }
 
     private void RestartFollow()
     {
         StopFollow();
-        if (!_followAvailable || !_live || _mode != EntryScanMode.Live || _client is null || Workspace is not { } workspace)
+        if (_lifetime.IsLeft || !_followAvailable || !_live || _mode != EntryScanMode.Live || _client is null || Workspace is not { } workspace)
         {
             return;
         }
 
-        var follow = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _follow = follow;
         var prefix = ActiveTagFilter is null ? workspace.Prefix : null;
         var request = new StateObserveRequest
         {
@@ -396,7 +394,7 @@ public partial class DataKeysPanel : IDisposable
             EndExclusive = string.IsNullOrEmpty(prefix) ? null : DataTreeNames.PrefixUpperBound(prefix),
             IncludeMaintenance = false,
         };
-        _ = FollowAsync(_client, request, follow.Token);
+        _ = FollowAsync(_client, request, _follows.Token);
     }
 
     private async Task FollowAsync(ILatticeStateClient client, StateObserveRequest request, CancellationToken cancellationToken)
@@ -471,7 +469,7 @@ public partial class DataKeysPanel : IDisposable
                 await ResetAsync();
                 StateHasChanged();
             }
-            while (_pendingRefresh && !_lifetime.IsCancellationRequested);
+            while (_pendingRefresh && !_lifetime.IsLeft);
         }
         finally
         {

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -12,7 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// </summary>
 public partial class DataTreePage : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private DataTreeEntry? _tree;
     private DataTreeEntry? _source;
     private DataWorkspace? _workspace;
@@ -43,8 +44,7 @@ public partial class DataTreePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -60,7 +60,7 @@ public partial class DataTreePage : IDisposable
         {
             _tree = await Directory.ResolveAsync(target, _lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             return;
         }

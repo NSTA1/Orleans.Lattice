@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -21,7 +22,7 @@ public partial class BackupHealthPage : IDisposable
 
     private readonly Dictionary<string, BackupHealthReport?> _reports = new(StringComparer.Ordinal);
     private readonly HashSet<string> _read = new(StringComparer.Ordinal);
-    private CancellationTokenSource _load = new();
+    private readonly ComponentLifetime _load = new();
     private ExplorerAddress? _loadedFor;
     private bool _ready;
     private BackupCatalogPage? _page;
@@ -55,8 +56,7 @@ public partial class BackupHealthPage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _load.Cancel();
-        _load.Dispose();
+        _load.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -70,10 +70,7 @@ public partial class BackupHealthPage : IDisposable
         }
 
         _loadedFor = address;
-        _load.Cancel();
-        _load.Dispose();
-        _load = new CancellationTokenSource();
-        var cancellationToken = _load.Token;
+        var cancellationToken = _load.Renew();
 
         _ready = false;
         bool available;
@@ -83,6 +80,12 @@ public partial class BackupHealthPage : IDisposable
         }
         catch (OperationCanceledException)
         {
+            return;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // Left, or replaced by a newer load: another page may be on screen.
             return;
         }
 
@@ -182,6 +185,7 @@ public partial class BackupHealthPage : IDisposable
         try
         {
             var description = await Control.DescribeBackupAsync(backupId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (description is null)
             {
                 Navigation.NotFound();

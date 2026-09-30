@@ -13,7 +13,7 @@ public partial class SchemaPolicyPanel : IDisposable
 
     private const string StrictOff = "Off: replicated and restored values are trusted and not checked";
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private IReadOnlyList<RuleRow> _rules = [];
     private LatticeSchemaPolicy? _policy;
     private string? _loadedTree;
@@ -39,8 +39,7 @@ public partial class SchemaPolicyPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -72,7 +71,7 @@ public partial class SchemaPolicyPanel : IDisposable
                 : _policy.Rules.Select((rule, index) => new RuleRow(index + 1, SchemaFormat.RuleKind(rule), SchemaFormat.RuleDetail(rule))).ToArray();
             _loaded = true;
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -113,7 +112,7 @@ public partial class SchemaPolicyPanel : IDisposable
             await ReloadAsync();
             await workspace.RefreshAsync();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -144,7 +143,7 @@ public partial class SchemaPolicyPanel : IDisposable
             await ReloadAsync();
             await workspace.RefreshAsync();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

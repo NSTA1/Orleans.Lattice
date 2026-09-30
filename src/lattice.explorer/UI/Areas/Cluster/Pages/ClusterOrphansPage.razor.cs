@@ -20,10 +20,11 @@ public partial class ClusterOrphansPage : IDisposable
     /// <summary>The most batches one pass runs before it stops and says so.</summary>
     internal const int MaximumBatches = 1000;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<LatticeTreeAdminCapabilities> _accessLoad = ClusterLoad<LatticeTreeAdminCapabilities>.Loading;
     private LatticeTreeAdminCapabilities _access = default!;
-    private CancellationTokenSource? _run;
+    private readonly ComponentLifetime _runs = new();
+    private CancellationToken? _run;
     private ClusterOrphanPass? _pass;
     private string? _tree;
     private string? _treeError;
@@ -53,8 +54,8 @@ public partial class ClusterOrphansPage : IDisposable
     public void Dispose()
     {
         Stop();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _runs.Leave();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />
@@ -81,7 +82,7 @@ public partial class ClusterOrphansPage : IDisposable
         }
 
         _treeError = null;
-        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true) || _lifetime.IsLeft)
         {
             return;
         }
@@ -91,13 +92,8 @@ public partial class ClusterOrphansPage : IDisposable
 
     private void Stop()
     {
-        var run = _run;
         _run = null;
-        if (run is not null)
-        {
-            run.Cancel();
-            run.Dispose();
-        }
+        _runs.Renew();
     }
 
     private Task AuditAsync()
@@ -118,17 +114,18 @@ public partial class ClusterOrphansPage : IDisposable
         {
             var count = repaired.Findings.Count(finding => finding.Disposition == TreeOrphanedLeafDisposition.Repaired);
             Toasts.Show($"Repair finished: {ClusterFormat.Plural(count, "leaf", "leaves")} unspliced. Auditing again.", LtToastTone.Success);
-            await AuditAsync();
+            if (!_lifetime.IsLeft)
+            {
+                await AuditAsync();
+            }
         }
     }
 
     private async Task<ClusterOrphanPass?> DriveAsync(string kind, Func<string?, CancellationToken, Task<TreeOrphanedLeafReport>> batch)
     {
-        Stop();
         _error = null;
-        var run = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _run = run;
-        var token = run.Token;
+        var token = _runs.Renew();
+        _run = token;
         var pass = new ClusterOrphanPass(kind);
         _pass = pass;
 
@@ -150,7 +147,7 @@ public partial class ClusterOrphansPage : IDisposable
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            if (_lifetime.IsCancellationRequested)
+            if (_lifetime.IsLeft)
             {
                 throw;
             }
@@ -167,10 +164,9 @@ public partial class ClusterOrphansPage : IDisposable
         }
         finally
         {
-            if (ReferenceEquals(_run, run))
+            if (_run == token)
             {
                 _run = null;
-                run.Dispose();
             }
         }
     }

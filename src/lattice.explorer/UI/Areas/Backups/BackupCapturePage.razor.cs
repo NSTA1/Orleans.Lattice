@@ -36,7 +36,7 @@ public partial class BackupCapturePage : IDisposable
         new(KeyScope, "One key"),
     ];
 
-    private readonly CancellationTokenSource _disposed = new();
+    private readonly ComponentLifetime _disposed = new();
     private readonly List<string> _setTrees = [];
     private string _kind = FullKind;
     private string? _name;
@@ -73,8 +73,7 @@ public partial class BackupCapturePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _disposed.Cancel();
-        _disposed.Dispose();
+        _disposed.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -194,6 +193,11 @@ public partial class BackupCapturePage : IDisposable
             }
 
             if (scope is not null && _treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+            {
+                return;
+            }
+
+            if (_disposed.IsLeft)
             {
                 return;
             }

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 
@@ -9,7 +10,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 /// </summary>
 public partial class ReplicationTreePage
 {
-    private readonly CancellationTokenSource _cancellation = new();
+    private readonly ComponentLifetime _cancellation = new();
     private ReplicationRefreshLoop? _loop;
     private string? _loadedTree;
     private IReadOnlyList<ReplicationPeerStatusEntry>? _links;
@@ -48,8 +49,7 @@ public partial class ReplicationTreePage
     public void Dispose()
     {
         _loop?.Dispose();
-        _cancellation.Cancel();
-        _cancellation.Dispose();
+        _cancellation.Leave();
     }
 
     /// <inheritdoc />
@@ -74,6 +74,11 @@ public partial class ReplicationTreePage
         var config = await Data.GetConfigAsync(refresh: false, _cancellation.Token);
         _entry = config.Value?.Trees.FirstOrDefault(entry => string.Equals(entry.TreeId, tree, StringComparison.Ordinal));
         await ReadAsync();
+        if (_cancellation.IsLeft)
+        {
+            // Another page may be on screen: it is not declared not found.
+            return;
+        }
 
         if (_entry is null && _links is { Count: 0 })
         {

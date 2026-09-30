@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
@@ -37,7 +38,7 @@ public partial class AppPage : IDisposable
     /// <summary>How long a page waits between those re-reads.</summary>
     internal static readonly TimeSpan SettlingRetryDelay = TimeSpan.FromSeconds(1);
 
-    private CancellationTokenSource? _loading;
+    private readonly ComponentLifetime _loads = new();
     private AppPageLoad? _load;
     private (string? Tenant, string Slug, string Tab)? _loadedFor;
     private bool _settling;
@@ -69,9 +70,7 @@ public partial class AppPage : IDisposable
     public void Dispose()
     {
         Access.Changed -= OnAppsChanged;
-        _loading?.Cancel();
-        _loading?.Dispose();
-        _loading = null;
+        _loads.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -213,9 +212,9 @@ public partial class AppPage : IDisposable
 
     private async Task LoadAsync((string? Tenant, string Slug, string Tab) key, bool keepShowing)
     {
-        _loading?.Cancel();
-        _loading?.Dispose();
-        var loading = _loading = new CancellationTokenSource();
+        // Cancels the load this one replaces; a token that is cancelled afterwards means
+        // this load was replaced in turn, or the page was left.
+        var loading = _loads.Renew();
 
         if (!keepShowing)
         {
@@ -228,7 +227,7 @@ public partial class AppPage : IDisposable
         AppPageLoad load;
         try
         {
-            load = await Loader.LoadAsync(key.Slug, loading.Token);
+            load = await Loader.LoadAsync(key.Slug, loading);
 
             // Right after an install or an enable the cluster's reads can briefly miss
             // the change. Read again a few times, saying so, before settling on the answer.
@@ -236,8 +235,8 @@ public partial class AppPage : IDisposable
             {
                 _settling = true;
                 StateHasChanged();
-                await Task.Delay(SettlingRetryDelay, Time, loading.Token);
-                load = await Loader.LoadAsync(key.Slug, loading.Token);
+                await Task.Delay(SettlingRetryDelay, Time, loading);
+                load = await Loader.LoadAsync(key.Slug, loading);
             }
         }
         catch (OperationCanceledException) when (loading.IsCancellationRequested)
@@ -246,13 +245,13 @@ public partial class AppPage : IDisposable
         }
         finally
         {
-            if (ReferenceEquals(loading, _loading))
+            if (!loading.IsCancellationRequested)
             {
                 _settling = false;
             }
         }
 
-        if (!ReferenceEquals(loading, _loading))
+        if (loading.IsCancellationRequested)
         {
             return;
         }

@@ -26,6 +26,12 @@ internal sealed class FakeAppPagesWorkspace : ILatticeAppWorkspace
     /// <summary>When set, <see cref="DescribeMyAppAsync"/> waits for it, so a test can hold the page in its loading state.</summary>
     public TaskCompletionSource? Gate { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="Gate"/> is awaited without the caller's token, as a reply already
+    /// on its way when the caller gave up is.
+    /// </summary>
+    public bool GateIgnoresCancellation { get; set; }
+
     /// <summary>The slugs <see cref="DescribeMyAppAsync"/> was asked for, in order.</summary>
     public List<string> Described { get; } = [];
 
@@ -65,7 +71,7 @@ internal sealed class FakeAppPagesWorkspace : ILatticeAppWorkspace
         Described.Add(appSlug);
         if (Gate is { } gate)
         {
-            await gate.Task.WaitAsync(cancellationToken);
+            await (GateIgnoresCancellation ? gate.Task : gate.Task.WaitAsync(cancellationToken));
         }
 
         ThrowIfScripted();

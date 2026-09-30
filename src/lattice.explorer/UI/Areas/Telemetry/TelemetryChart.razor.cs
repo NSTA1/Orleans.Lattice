@@ -27,7 +27,7 @@ public partial class TelemetryChart : IDisposable
 
     private TelemetryQueryRequest? _asked;
     private int _askedGeneration = -1;
-    private CancellationTokenSource? _load;
+    private readonly ComponentLifetime _loads = new();
     private TelemetryChartGeometry? _geometry;
     private IReadOnlyList<TelemetryValuesRow> _rows = [];
     private string? _failure;
@@ -136,12 +136,7 @@ public partial class TelemetryChart : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose()
-    {
-        _load?.Cancel();
-        _load?.Dispose();
-        _load = null;
-    }
+    public void Dispose() => _loads.Leave();
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -178,9 +173,9 @@ public partial class TelemetryChart : IDisposable
 
     private async Task LoadAsync()
     {
-        _load?.Cancel();
-        _load?.Dispose();
-        _load = null;
+        // Cancels the load this one replaces; a token cancelled later means this load was
+        // replaced in turn, or the chart was left.
+        var load = _loads.Renew();
         _geometry = null;
         _rows = [];
         _failure = null;
@@ -192,13 +187,10 @@ public partial class TelemetryChart : IDisposable
             return;
         }
 
-        var load = new CancellationTokenSource();
-        _load = load;
-
         TelemetryQueryResponse response;
         try
         {
-            response = await Telemetry.QueryAsync(request, load.Token);
+            response = await Telemetry.QueryAsync(request, load);
         }
         catch (OperationCanceledException) when (load.IsCancellationRequested)
         {
@@ -206,7 +198,7 @@ public partial class TelemetryChart : IDisposable
         }
         catch (Exception exception) when (IsDenial(exception))
         {
-            if (ReferenceEquals(load, _load))
+            if (!load.IsCancellationRequested)
             {
                 await OnDenied.InvokeAsync(Descriptor.QueryId);
             }
@@ -215,7 +207,7 @@ public partial class TelemetryChart : IDisposable
         }
         catch (Exception exception)
         {
-            if (ReferenceEquals(load, _load))
+            if (!load.IsCancellationRequested)
             {
                 (_failure, _retryable) = Describe(exception);
             }
@@ -223,7 +215,7 @@ public partial class TelemetryChart : IDisposable
             return;
         }
 
-        if (!ReferenceEquals(load, _load))
+        if (load.IsCancellationRequested)
         {
             return;
         }

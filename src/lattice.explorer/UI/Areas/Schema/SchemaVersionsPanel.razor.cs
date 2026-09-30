@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 public partial class SchemaVersionsPanel : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private LatticeSchemaVersionConfig? _config;
     private string? _loadedTree;
     private string? _error;
@@ -82,8 +82,7 @@ public partial class SchemaVersionsPanel : IDisposable
     public void Dispose()
     {
         Operations.Changed -= OnOperationChanged;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -124,7 +123,7 @@ public partial class SchemaVersionsPanel : IDisposable
             _config = SchemaVersioning.Effective(await Facades.RequireSchema().GetVersionConfigAsync(workspace.TreeId, _lifetime.Token));
             _loaded = true;
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (InvalidOperationException)
@@ -296,7 +295,7 @@ public partial class SchemaVersionsPanel : IDisposable
             await ReloadAsync();
             await workspace.RefreshAsync();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -321,7 +320,7 @@ public partial class SchemaVersionsPanel : IDisposable
             await ReloadAsync();
             await workspace.RefreshAsync();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

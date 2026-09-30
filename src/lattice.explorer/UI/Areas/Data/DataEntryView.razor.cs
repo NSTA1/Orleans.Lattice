@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// </summary>
 public partial class DataEntryView : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly string _headingId = LtIds.Next("lt-data-entry");
     private DataEntry? _entry;
     private DataRenderedValue? _rendered;
@@ -74,8 +74,7 @@ public partial class DataEntryView : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -104,7 +103,7 @@ public partial class DataEntryView : IDisposable
 
             Render();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

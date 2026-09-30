@@ -52,6 +52,18 @@ public sealed class MinimalSmokeTests
     }
 
     [Test]
+    public void The_console_region_logs_a_circuit_fault_and_nothing_else()
+    {
+        var factory = _sample.ConsoleRegion.Services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreateLogger(SampleCircuitDiagnostics.CircuitCategory + ".CircuitHost").IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error), Is.True);
+            Assert.That(factory.CreateLogger("Orleans.Runtime.Silo").IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error), Is.False, "the terminal stays quiet otherwise");
+        });
+    }
+
+    [Test]
     public async Task One_region_runs_with_no_peer_no_shared_sink_and_no_writer()
     {
         Assert.That(_sample.Regions, Has.Count.EqualTo(1));

@@ -51,7 +51,7 @@ public partial class SchemaRuleBuilder : IDisposable
 
     private const string StrictHint = "On: replicated and restored values are checked as well, and one that fails goes to the dead letters instead of being applied. Off: only direct writes are checked.";
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly List<SchemaRuleCard> _cards = [];
     private readonly SchemaRuleDraft _raw = new();
     private readonly Dictionary<string, ElementReference> _rows = new(StringComparer.Ordinal);
@@ -117,8 +117,7 @@ public partial class SchemaRuleBuilder : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -180,7 +179,7 @@ public partial class SchemaRuleBuilder : IDisposable
                 Touch();
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

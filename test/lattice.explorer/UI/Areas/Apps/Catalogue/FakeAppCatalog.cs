@@ -52,9 +52,26 @@ internal sealed class FakeAppCatalog : ILatticeAppCatalog
     /// <summary>Every description request received.</summary>
     public List<(string Source, string Slug, string? Version)> Describes { get; } = [];
 
+    /// <summary>
+    /// When set, <see cref="ListSourcesAsync"/> waits for it before answering and ignores
+    /// its token, as a reply already on its way when the caller gave up does.
+    /// </summary>
+    public TaskCompletionSource? SourcesGate { get; set; }
+
+    /// <summary>How many times the sources were listed.</summary>
+    public int SourceListings { get; private set; }
+
     /// <inheritdoc />
-    public Task<ImmutableArray<AppSourceSummary>> ListSourcesAsync(CancellationToken cancellationToken = default) =>
-        ListFailure is { } failure ? Task.FromException<ImmutableArray<AppSourceSummary>>(failure) : Task.FromResult<ImmutableArray<AppSourceSummary>>([.. Sources]);
+    public async Task<ImmutableArray<AppSourceSummary>> ListSourcesAsync(CancellationToken cancellationToken = default)
+    {
+        SourceListings++;
+        if (SourcesGate is { } gate)
+        {
+            await gate.Task;
+        }
+
+        return ListFailure is { } failure ? throw failure : [.. Sources];
+    }
 
     /// <inheritdoc />
     public Task<AvailableAppPage> ListAvailableAsync(AvailableAppQuery query, CancellationToken cancellationToken = default)

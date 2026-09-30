@@ -21,7 +21,7 @@ public partial class ClusterSnapshotPage : IDisposable
         new(nameof(TreeSnapshotMode.Offline), "Offline"),
     ];
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeSnapshotStatus> _status = ClusterLoad<TreeSnapshotStatus>.Loading;
     private LatticeTreeAdminCapabilities _access = default!;
     private ClusterStatusPoller? _poller;
@@ -59,8 +59,7 @@ public partial class ClusterSnapshotPage : IDisposable
     public void Dispose()
     {
         _poller?.Dispose();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.UI.Design.Components;
+
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
 /// <summary>
@@ -20,7 +22,8 @@ internal sealed class ClusterStatusPoller(TimeProvider time) : IDisposable
     /// <summary>The longest the poller waits between reads while they keep failing.</summary>
     public static readonly TimeSpan MaximumInterval = TimeSpan.FromSeconds(30);
 
-    private CancellationTokenSource? _following;
+    private readonly ComponentLifetime _follows = new();
+    private CancellationToken? _following;
 
     /// <summary>Whether the poller is following an operation.</summary>
     public bool IsFollowing => _following is not null;
@@ -53,30 +56,27 @@ internal sealed class ClusterStatusPoller(TimeProvider time) : IDisposable
     {
         ArgumentNullException.ThrowIfNull(refresh);
 
-        Stop();
-        var following = new CancellationTokenSource();
-        _following = following;
+        var following = _follows.Renew();
+        _following = following.IsCancellationRequested ? null : following;
         _ = FollowAsync(refresh, following);
     }
 
     /// <summary>Stops following.</summary>
     public void Stop()
     {
-        var following = _following;
         _following = null;
-        if (following is not null)
-        {
-            following.Cancel();
-            following.Dispose();
-        }
+        _follows.Renew();
     }
 
     /// <inheritdoc />
-    public void Dispose() => Stop();
-
-    private async Task FollowAsync(Func<CancellationToken, Task<ClusterPollOutcome>> refresh, CancellationTokenSource following)
+    public void Dispose()
     {
-        var token = following.Token;
+        _following = null;
+        _follows.Leave();
+    }
+
+    private async Task FollowAsync(Func<CancellationToken, Task<ClusterPollOutcome>> refresh, CancellationToken token)
+    {
         var failures = 0;
         try
         {
@@ -97,10 +97,9 @@ internal sealed class ClusterStatusPoller(TimeProvider time) : IDisposable
             return;
         }
 
-        if (ReferenceEquals(_following, following))
+        if (_following == token)
         {
             _following = null;
-            following.Dispose();
         }
     }
 }

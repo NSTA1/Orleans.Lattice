@@ -1,5 +1,6 @@
 using System.Globalization;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -18,7 +19,7 @@ internal sealed class BackupOperations : IDisposable
 {
     private readonly TimeProvider _time;
     private readonly ShellAssertedTenant _tenant;
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly object _gate = new();
     private readonly List<(BackupOperation Operation, string? Tenant)> _operations = [];
     private int _next;
@@ -72,7 +73,7 @@ internal sealed class BackupOperations : IDisposable
         Func<BackupOperation, CancellationToken, Task> work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        ObjectDisposedException.ThrowIf(_lifetime.IsCancellationRequested, this);
+        ObjectDisposedException.ThrowIf(_lifetime.IsLeft, this);
 
         var tenant = _tenant.AssertedTenant;
         BackupOperation operation;
@@ -134,12 +135,7 @@ internal sealed class BackupOperations : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (!_lifetime.IsCancellationRequested)
-        {
-            _lifetime.Cancel();
-        }
-
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     private static async Task RunAsync(

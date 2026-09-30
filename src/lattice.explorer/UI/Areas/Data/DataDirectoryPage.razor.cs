@@ -37,7 +37,7 @@ public partial class DataDirectoryPage : IDisposable
         new(SharedKinds, "Shared with this tenant"),
     ];
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private IReadOnlyList<DataTreeEntry>? _entries;
     private IReadOnlyList<DataTreeEntry> _visible = [];
     private string? _filter;
@@ -95,8 +95,7 @@ public partial class DataDirectoryPage : IDisposable
             Directory.Changed -= OnDirectoryChanged;
         }
 
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -158,7 +157,7 @@ public partial class DataDirectoryPage : IDisposable
             _entries = await Directory.LoadAsync(_lifetime.Token);
             Apply();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -176,7 +175,7 @@ public partial class DataDirectoryPage : IDisposable
         {
             await Directory.RefreshAsync(_lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             return;
         }

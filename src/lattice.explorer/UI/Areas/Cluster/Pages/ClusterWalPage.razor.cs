@@ -21,7 +21,7 @@ public partial class ClusterWalPage : IDisposable
     private LtComboBox? _planTreeBox;
     private LtComboBox? _planTargetBox;
     private ClusterProviderKeySuggestionSource? _providerKeys;
-    private CancellationTokenSource _load = new();
+    private readonly ComponentLifetime _load = new();
     private (string? Tree, int? Partition, string? Target) _loaded;
     private ClusterLoad<TreeWalPlacementAudit> _audit = ClusterLoad<TreeWalPlacementAudit>.Loading;
     private ClusterLoad<TreeWalMovePlan> _plan = ClusterLoad<TreeWalMovePlan>.Loading;
@@ -94,8 +94,7 @@ public partial class ClusterWalPage : IDisposable
     public void Dispose()
     {
         Signals.Requested -= OnCommand;
-        _load.Cancel();
-        _load.Dispose();
+        _load.Leave();
     }
 
     /// <inheritdoc />
@@ -124,10 +123,7 @@ public partial class ClusterWalPage : IDisposable
         _tree = TreeId;
         _receipt = null;
         _reclaimKey = null;
-        await _load.CancelAsync();
-        _load.Dispose();
-        _load = new CancellationTokenSource();
-        var token = _load.Token;
+        var token = _load.Renew();
 
         if (TreeId is not { } tree)
         {
@@ -160,7 +156,7 @@ public partial class ClusterWalPage : IDisposable
         }
 
         _treeError = null;
-        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true) || _load.IsLeft)
         {
             return;
         }
@@ -199,7 +195,7 @@ public partial class ClusterWalPage : IDisposable
             : "Enter a partition index: a whole number from 0.";
         _planTargetError = string.IsNullOrEmpty(target) ? "Name the provider key to move to." : null;
 
-        if (_planTreeError is null && _planPartitionError is null && _planTargetError is null && await ConfirmPlanAsync().ConfigureAwait(true))
+        if (_planTreeError is null && _planPartitionError is null && _planTargetError is null && await ConfirmPlanAsync().ConfigureAwait(true) && !_load.IsLeft)
         {
             _planOpen = false;
             Navigator.NavigateTo(ClusterAddresses.Wal(tree, partition, target));

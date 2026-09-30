@@ -38,7 +38,7 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// </remarks>
 public partial class ShellLayout : IAsyncDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ExplorerLocation _location = ExplorerLocation.Initial;
     private LtBreakpoint _breakpoint = LtBreakpoint.Expanded;
     private int _version;
@@ -165,8 +165,9 @@ public partial class ShellLayout : IAsyncDisposable
             _watchedConnection.StatusChanged -= OnConnectionStatusChanged;
         }
 
-        await _lifetime.CancelAsync();
-        _lifetime.Dispose();
+        // A synchronisation still suspended sees a newer version and goes no further.
+        _version++;
+        _lifetime.Leave();
 
         await DisposeHandleAsync(_shortcuts);
         await DisposeHandleAsync(_viewport);
@@ -209,9 +210,17 @@ public partial class ShellLayout : IAsyncDisposable
                 _root,
                 _callbacks,
                 [LtBreakpoints.MediumMinimumWidth, LtBreakpoints.ExpandedMinimumWidth]);
+            if (_lifetime.IsLeft)
+            {
+                // Left while the module answered: DisposeAsync has already run, so the
+                // listeners registered since are released here.
+                await DisposeHandleAsync(_shortcuts);
+                await DisposeHandleAsync(_viewport);
+                return;
+            }
         }
 
-        if (!Appearance.IsLoaded)
+        if (!_lifetime.IsLeft && !Appearance.IsLoaded)
         {
             await Appearance.EnsureLoadedAsync(_lifetime.Token);
         }

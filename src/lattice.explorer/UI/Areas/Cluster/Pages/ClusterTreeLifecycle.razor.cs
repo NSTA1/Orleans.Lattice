@@ -20,7 +20,7 @@ public partial class ClusterTreeLifecycle : IDisposable
     internal const string PurgeRule =
         "Purge requires the TreeLifecycle grant and is not an app operation: no app role can purge a tree, even one its app owns.";
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeDeletionStatus> _status = ClusterLoad<TreeDeletionStatus>.Loading;
     private ClusterStatusPoller? _poller;
     private Verb _confirm;
@@ -66,8 +66,7 @@ public partial class ClusterTreeLifecycle : IDisposable
     public void Dispose()
     {
         _poller?.Dispose();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

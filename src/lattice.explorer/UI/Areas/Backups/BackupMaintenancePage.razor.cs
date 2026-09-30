@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -11,7 +12,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// </summary>
 public partial class BackupMaintenancePage : IDisposable
 {
-    private readonly CancellationTokenSource _disposed = new();
+    private readonly ComponentLifetime _disposed = new();
     private bool? _served;
     private bool _confirmRebuild;
     private bool _confirmPrune;
@@ -28,8 +29,7 @@ public partial class BackupMaintenancePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _disposed.Cancel();
-        _disposed.Dispose();
+        _disposed.Leave();
         GC.SuppressFinalize(this);
     }
 

@@ -31,6 +31,31 @@ public sealed partial class AppPageTests
     }
 
     [Test]
+    public async Task A_page_left_while_a_settling_read_is_on_its_way_ends_quietly()
+    {
+        // Issue #4011: the read resumes after the page is disposed, finds the app still
+        // settling, and must not arm a retry on a disposed cancellation source.
+        Services.GetRequiredService<AppsAccess>().Invalidate(Slug);
+        Workspace.Gate = new TaskCompletionSource();
+        Workspace.GateIgnoresCancellation = true;
+        var cut = RenderAt("apps/crm/overview");
+        cut.WaitForAssertion(() => Assert.That(Workspace.Described, Has.Count.EqualTo(1)));
+
+        await DisposeComponentsAsync();
+        await cut.InvokeAsync(Workspace.Gate.SetResult);
+
+        // The read resumes on the renderer's dispatcher after a hop through the loader;
+        // a fault it raised would complete the renderer's unhandled-exception task.
+        SpinWait.SpinUntil(() => Renderer.UnhandledException.IsCompleted, TimeSpan.FromSeconds(2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Renderer.UnhandledException.IsCompleted, Is.False, () => "the circuit would end: " + Renderer.UnhandledException.Result);
+            Assert.That(Time.ArmedTimers, Is.Zero, "no retry is armed for a page that is gone");
+        });
+    }
+
+    [Test]
     public void A_read_that_misses_a_change_made_a_moment_ago_is_retried_while_it_settles()
     {
         Services.GetRequiredService<AppsAccess>().Invalidate(Slug);
