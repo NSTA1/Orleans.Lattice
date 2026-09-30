@@ -279,9 +279,9 @@ toast saying it can't scope to that tenant.
 
 ## Pickers
 
-Every field that names something the cluster already knows (a tree, a region, a
-user or group, a tenant, a key, a rule id, a schema member, a WAL provider key) is
-a type-ahead picker. As you type, it lists the matching existing values in a mono
+Every field that chooses something the cluster already knows (a tree, a region, a
+user or group, a tenant, a key, a schema member, a WAL provider key) is a
+type-ahead picker. As you type, it lists the matching existing values in a mono
 face, with a short description beside each where there is one, such as a
 principal's display name. A polite status region announces how many values match,
 or that more match than are shown and you should keep typing.
@@ -294,9 +294,18 @@ A picker works in one of two ways:
   act on an existing tree, region, subject or tenant work this way.
 - **Suggest.** Any text is accepted, and existing values are offered as
   suggestions. A typed value that already exists is flagged, for example "This
-  tree exists: restoring replaces what it holds.", and where a new id must be
-  unused (a snapshot's destination tree, a new tenant, a new rule id) it is
-  refused.
+  tree exists: restoring replaces what it holds." (the Restore into tree field).
+
+A field that names a **new** thing is not a picker, because there is nothing to
+pick: a new group id, a new rule id, a new tenant id, a snapshot's destination
+tree and a schema remediation's rename target are plain text boxes with no list
+and no arrow. As you type, the name is checked against the existing ones (at most
+one check in flight, however fast you type), and a taken name is refused inline,
+for example "A group named operators already exists.", or, for the rename target,
+only flagged. A slower check, such as asking the identity directory about a new
+group id, runs when you leave the field and again when you submit. A check that
+cannot answer leaves a note rather than a refusal, because the cluster checks the
+name again when it is written.
 
 A field that takes several values, such as a tenant's allowed regions or a new
 tenant's admin subjects, shows the chosen values as removable chips. Choosing a

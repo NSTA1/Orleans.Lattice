@@ -357,9 +357,10 @@ App and tenant ownership are parsed from `t/{tenant}/a/{app}/...` and shown as
 text. The visible `cluster.reshard-tree` control opens a dialog whose tree field
 is a picker over the cluster's logical trees, and navigates to that tree's reshard
 page. Every Cluster field that names an existing tree (the WAL and orphaned-leaf
-audits, the alias target, the reshard dialog) accepts only a listed tree, while a
-snapshot's destination is suggested against the existing trees and refused if it
-already exists.
+audits, the alias target, the reshard dialog) accepts only a listed tree. A
+snapshot's destination names a new tree, so it is a plain name box rather than a
+picker: it offers no list, and refuses a name that already exists ("A tree with
+this name already exists; a snapshot needs a new one.").
 
 A tree page begins with a side-effect-free capability probe. If the caller has
 no tree-admin capability over the tree, it shows "Nothing you can administer".
