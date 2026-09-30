@@ -41,4 +41,29 @@ public sealed class LatticeTenancyOptions
     /// edits on restart.
     /// </summary>
     public bool SeedDefaultTenant { get; set; } = true;
+
+    /// <summary>
+    /// How long a silo may treat its compiled tenant-policy snapshot as
+    /// authoritative without renewing its lease from the cluster-wide tenant-policy
+    /// epoch grain. Defaults to 10 seconds; must be strictly positive and no longer
+    /// than a timer can wait (<c>0xFFFFFFFE</c> milliseconds, about 49.7 days).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A silo renews every third of this duration. While its lease is live the
+    /// silo answers cross-tenant grant decisions and inbound-replication tenant
+    /// checks from its in-memory snapshot; once it lapses (the epoch grain is
+    /// unreachable) those decisions are confirmed against the tenant registry, or
+    /// denied, until a renewal succeeds.
+    /// </para>
+    /// <para>
+    /// It is also the worst case a tenant-registry write can be delayed by: the
+    /// write completes only once every silo has acknowledged the change or its
+    /// lease has lapsed, so a silo that cannot be reached costs a registry write up
+    /// to about 1.1 times this duration. Keep it well below the Orleans response
+    /// timeout. Shorter values bound that delay more tightly at the cost of more
+    /// frequent renewals (one small grain call per silo per third of a lease).
+    /// </para>
+    /// </remarks>
+    public TimeSpan PolicySnapshotLeaseDuration { get; set; } = TimeSpan.FromSeconds(10);
 }

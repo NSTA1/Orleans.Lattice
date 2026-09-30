@@ -20,8 +20,30 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
     }
 
     /// <inheritdoc />
-    public TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant)
+    public TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant) =>
+        ValidateActiveTenant(maintainer.Current, subjectId, activeTenant);
+
+    /// <summary>
+    /// Validates that <paramref name="subjectId"/> may act as
+    /// <paramref name="activeTenant"/> against an explicit compiled
+    /// <paramref name="policy"/>: the tenant is registered, <see cref="TenantStatus.Active"/>,
+    /// and lists the subject as an admin. The single home of the active-tenant
+    /// rule: the engine applies it to the maintainer's current snapshot, and the
+    /// data-plane gate applies it to a policy compiled from the authoritative
+    /// registry record while that snapshot is not authoritative, so both answer by
+    /// the same rule (issue #4053).
+    /// </summary>
+    /// <param name="policy">The compiled policy to validate against. Must not be <c>null</c>.</param>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <param name="activeTenant">The asserted active tenant.</param>
+    /// <returns>An allow decision when the subject may act as the tenant, or a denial carrying the reason.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="policy"/> or <paramref name="subjectId"/> is <c>null</c>.</exception>
+    internal static TenantAccessDecision ValidateActiveTenant(
+        CompiledTenantPolicy policy,
+        string subjectId,
+        TenantId activeTenant)
     {
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(subjectId);
 
         if (activeTenant.Value is null)
@@ -29,7 +51,7 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
             return TenantAccessDecision.Deny("The uninitialised 'no tenant' value cannot be an active tenant.");
         }
 
-        if (!maintainer.Current.TryGetTenant(activeTenant.Value, out var tenant) || tenant is null)
+        if (!policy.TryGetTenant(activeTenant.Value, out var tenant) || tenant is null)
         {
             return TenantAccessDecision.Deny($"Tenant '{activeTenant}' is not registered.");
         }

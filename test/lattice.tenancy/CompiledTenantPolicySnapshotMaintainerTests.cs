@@ -17,11 +17,8 @@ namespace Orleans.Lattice.Tenancy.Tests;
 [TestFixture]
 public sealed class CompiledTenantPolicySnapshotMaintainerTests
 {
-    private static CompiledTenantPolicySnapshotMaintainer CreateMaintainer(FakeTenantRegistry registry) =>
-        new(registry, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
-
     private static CompiledTenantPolicySnapshotMaintainer CreateMaintainer(ITenantRegistry registry) =>
-        new(registry, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        TenantPolicyEpochTestCluster.Unleased(registry);
 
     private static async IAsyncEnumerable<TenantRecord> Stream(
         IEnumerable<TenantRecord> records,
@@ -53,7 +50,26 @@ public sealed class CompiledTenantPolicySnapshotMaintainerTests
     public void Constructor_null_registry_throws()
     {
         Assert.That(
-            () => new CompiledTenantPolicySnapshotMaintainer(null!, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance),
+            () => new CompiledTenantPolicySnapshotMaintainer(
+                null!, Substitute.For<ITenantPolicyEpochPublisher>(), TimeProvider.System, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_null_publisher_throws()
+    {
+        Assert.That(
+            () => new CompiledTenantPolicySnapshotMaintainer(
+                new FakeTenantRegistry(), null!, TimeProvider.System, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_null_time_provider_throws()
+    {
+        Assert.That(
+            () => new CompiledTenantPolicySnapshotMaintainer(
+                new FakeTenantRegistry(), Substitute.For<ITenantPolicyEpochPublisher>(), null!, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -61,7 +77,8 @@ public sealed class CompiledTenantPolicySnapshotMaintainerTests
     public void Constructor_null_logger_throws()
     {
         Assert.That(
-            () => new CompiledTenantPolicySnapshotMaintainer(new FakeTenantRegistry(), null!),
+            () => new CompiledTenantPolicySnapshotMaintainer(
+                new FakeTenantRegistry(), Substitute.For<ITenantPolicyEpochPublisher>(), TimeProvider.System, null!),
             Throws.ArgumentNullException);
     }
 
