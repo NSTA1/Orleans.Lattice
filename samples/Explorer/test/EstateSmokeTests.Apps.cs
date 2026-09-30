@@ -1,4 +1,6 @@
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Apps;
+using Orleans.Lattice.Apps.Sources;
 using Orleans.Lattice.Samples.Explorer.TaskBoard;
 
 namespace Orleans.Lattice.Samples.Explorer.Tests;
@@ -27,6 +29,38 @@ public sealed partial class EstateSmokeTests
                 Is.All.Null,
                 "a tree the install already owns is not a conflict");
         });
+    }
+
+    [Test]
+    public async Task The_seeded_task_board_is_recorded_under_the_provenance_the_in_image_source_vouches_for()
+    {
+        await using var circuit = await ConsoleCircuit.OpenAsync(_sample, SampleIdentities.Administrator, SampleIdentities.AcmeTenant);
+        var recorded = (await circuit.Apps.ListAsync()).Apps.Single(app => app.Slug == TaskBoardApp.Slug).Provenance;
+        var vouched = (await circuit.Catalog.DescribeFromSourceAsync(InImageAppSource.SourceKey, TaskBoardApp.Slug))!.Provenance;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded.Source, Is.EqualTo(InImageAppSource.SourceKey));
+            Assert.That(recorded.Publisher, Is.EqualTo(vouched.Publisher), "the seeder installs as the Apps area does, under the source's publisher");
+            Assert.That(recorded.Reference, Is.EqualTo(vouched.Reference));
+        });
+    }
+
+    [Test]
+    public async Task An_install_from_the_in_image_source_is_the_owner_of_the_seeded_task_boards_trees()
+    {
+        var slug = AppSlug.Parse(TaskBoardApp.Slug);
+        var resolved = await _sample.East.Services.GetRequiredService<AppSourceSet>().ResolveAsync(slug, sourceKey: InImageAppSource.SourceKey);
+
+        IReadOnlyList<AppTreeOwnershipConflict> conflicts;
+        using (LatticeSystemOrigin.Enter())
+        {
+            // The probe as an install or upgrade from the source would claim: the source's publisher, no override.
+            conflicts = await _sample.East.Services.GetRequiredService<IAppRegistry>()
+                .GetTreeOwnershipConflictsAsync(TenantId.Parse(SampleIdentities.AcmeTenant), resolved.Manifest!, resolved.Provenance!);
+        }
+
+        Assert.That(conflicts, Is.Empty, "the seeded install owns its trees as the in-image source's publisher, so an upgrade from it is not refused");
     }
 
     [Test]
