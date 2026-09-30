@@ -23,7 +23,7 @@ public partial class AccessRuleEditor
     private LatticeAuthorizationRule? _editing;
     private bool _initialised;
     private bool _saving;
-    private LtComboBox? _ruleIdBox;
+    private LtNameInput? _ruleIdBox;
     private LtComboBox? _treeBox;
     private AccessSubjectPicker? _subjectPicker;
     private AccessRuleIdSuggestionSource? _ruleIds;

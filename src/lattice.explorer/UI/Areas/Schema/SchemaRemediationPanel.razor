@@ -51,7 +51,7 @@
                     @switch (_draft.Kind)
                     {
                         case SchemaTransformStepKind.Rename:
-                            <LtComboBox Label="New name" Value="@_draft.ToPath" ValueChanged="value => _draft.ToPath = value" Source="@_members" Mode="LtComboBoxMode.Suggest" Noun="member" ExistingMessage="The policy already names a member with this name." />
+                            <LtNameInput Label="New name" Value="@_draft.ToPath" ValueChanged="value => _draft.ToPath = value" Existing="@_members" RejectExisting="false" Noun="member" ExistingMessage="The policy already names a member with this name." />
                             break;
                         case SchemaTransformStepKind.Set:
                             <LtSelect Label="Value kind" Options="@ValueKinds" Value="@_draft.ValueKind.ToString()" ValueChanged="OnValueKindChanged" />

@@ -168,6 +168,26 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
     }
 
     [Test]
+    public void A_renamed_members_new_name_is_a_text_box_that_flags_a_name_the_policy_already_uses()
+    {
+        UseEstate();
+        Schema.Policies["orders"] = new LatticeSchemaPolicy([LatticeSchemaRule.Regex("^[a-z]+$", "customer.name"), LatticeSchemaRule.Regex(".+", "customer.email")]);
+        var cut = Open();
+        cut.FindAll(".lt-schema-builder select")[0].Change(nameof(SchemaTransformStepKind.Rename));
+
+        var name = Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.NameBox(cut, "New name");
+        name.Input("customer");
+        Assert.That(cut.FindAll(".lt-schema-builder [role=option]"), Is.Empty, "members are not offered as the new name");
+
+        Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.NameBox(cut, "New name").Input("customer.email");
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.FlagOf(cut, "New name"), Is.EqualTo("The policy already names a member with this name."));
+            Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.ErrorOf(cut, "New name"), Is.Null, "renaming onto a named member is allowed, and flagged");
+        });
+    }
+
+    [Test]
     public void An_aborted_remediation_names_the_first_value_that_still_fails_as_text()
     {
         UseEstate();

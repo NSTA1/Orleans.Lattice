@@ -47,7 +47,7 @@ else
         else
         {
             <form class="lt-cluster-form" @onsubmit="Review" aria-label="Stage a snapshot">
-                <LtComboBox @ref="_destinationBox" Label="Destination tree" @bind-Value="_destination" Error="@_destinationError" Hint="A new tree's logical name. It must not exist yet." Source="@Suggestions.ClusterTrees" Mode="LtComboBoxMode.Suggest" RejectExisting="true" Noun="tree" ExistingMessage="A tree with this name already exists; a snapshot needs a new one." />
+                <LtNameInput @ref="_destinationBox" Label="Destination tree" @bind-Value="_destination" Error="@_destinationError" Hint="A new tree's logical name. It must not exist yet." Existing="@Suggestions.ClusterTrees" Noun="tree" ExistingMessage="A tree with this name already exists; a snapshot needs a new one." />
                 <LtSelect Label="Mode" Options="Modes" @bind-Value="_mode" Hint="Offline stops the source for the copy; online keeps it serving." />
                 <LtTextInput Label="Keys per leaf (optional)" Mono="true" @bind-Value="_leaf" Error="@_sizingError" Hint="Leave empty for the library default; the source's sizing is not inherited." inputmode="numeric" />
                 <LtTextInput Label="Children per internal node (optional)" Mono="true" @bind-Value="_internal" inputmode="numeric" />

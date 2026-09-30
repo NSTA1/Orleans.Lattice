@@ -198,6 +198,19 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Removes the group record <paramref name="groupId"/> if there is one, so a journey
+    /// that creates it starts from the same state however often the world has run it.
+    /// </summary>
+    /// <param name="groupId">The group id.</param>
+    public async Task RemoveGroupAsync(string groupId)
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Head.Services.GetRequiredService<ILatticeMembershipDirectory>().RemoveGroupAsync(groupId);
+        }
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
@@ -235,7 +248,8 @@ internal sealed class ExplorerWorld : IAsyncDisposable
                 .AddGroup(WorldIdentities.OperatorsGroup, "Floor Operators")
                 .AddGroup(WorldIdentities.EditorsGroup, "Task board editors")
                 .AddGroup(WorldIdentities.ViewersGroup, "Task board viewers")
-                .AddGroup(WorldIdentities.VisitorsGroup, "Visitors"));
+                .AddGroup(WorldIdentities.VisitorsGroup, "Visitors")
+                .AddGroup(WorldIdentities.AuditorsGroup, "Auditors"));
             silo.AddLatticeAuth(options =>
             {
                 options.DefaultEffect = LatticeEffect.Deny;
@@ -363,6 +377,13 @@ internal sealed class ExplorerWorld : IAsyncDisposable
             }
 
             var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
+
+            // A membership edge alone makes no group: each seeded group gets its record,
+            // so Access lists it and refuses its id as a new group's.
+            await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.OperatorsGroup, "Floor Operators"));
+            await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.EditorsGroup, "Task board editors"));
+            await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.ViewersGroup, "Task board viewers"));
+            await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.VisitorsGroup, "Visitors"));
             await membership.AddMemberAsync(WorldIdentities.OperatorsGroup, WorldIdentities.Alice);
             await membership.AddMemberAsync(WorldIdentities.EditorsGroup, WorldIdentities.Alice);
             await membership.AddMemberAsync(WorldIdentities.ViewersGroup, WorldIdentities.Bob);

@@ -32,6 +32,8 @@ public partial class AccessGroupsPage
     private string? _formError;
     private bool _loaded;
     private string? _loadedScope;
+    private LtNameInput? _idBox;
+    private AccessGroupNameSource? _existingGroups;
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
@@ -93,6 +95,23 @@ public partial class AccessGroupsPage
     private string? Scope => Address.Tenant;
 
     private string ClusterWideHref => Navigator.Canonicalize(AccessRoutes.Groups.WithTenant(null)).ToHref();
+
+    private string ClusterWideCreateHref => Navigator.Canonicalize(AccessRoutes.Groups.WithTenant(null).WithQuery(AccessRoutes.NewQuery, "true")).ToHref();
+
+    private bool CreateRequested => string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
+
+    private string IdHint => _model is { DirectoryAvailable: true } model
+        ? (string.IsNullOrWhiteSpace(model.DirectoryExplanation)
+            ? $"The id of a group in the identity directory ({AccessPrincipalValidation.DirectoryName(model)}) that is not defined here yet."
+            : model.DirectoryExplanation)
+        : "No identity directory is configured, so the id is used as typed. It must not name a group that already exists.";
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        _existingGroups = new AccessGroupNameSource(Catalog);
+    }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -170,13 +189,8 @@ public partial class AccessGroupsPage
         _createOpen = true;
     }
 
-    private void OnPrincipalSelected(DirectoryPrincipalDescriptor principal)
-    {
-        if (string.IsNullOrWhiteSpace(_newName))
-        {
-            _newName = principal.DisplayName;
-        }
-    }
+    private Task<string?> ValidateInDirectoryAsync(string id, CancellationToken cancellationToken) =>
+        AccessPrincipalValidation.ValidateAsync(Catalog.Admin, _model, id, DirectoryPrincipalKind.Group, cancellationToken);
 
     private async Task CreateAsync()
     {
@@ -197,15 +211,28 @@ public partial class AccessGroupsPage
         _saving = true;
         try
         {
-            _idError = await AccessPrincipalValidation.ValidateAsync(Catalog.Admin, _model, id, DirectoryPrincipalKind.Group).ConfigureAwait(true);
-            if (_idError is not null)
+            // The field's own checks - already a group, not in the directory - answer
+            // first, beside the id; the exact look-up below covers a group the field
+            // could not see, and the server validates again on write.
+            if (_idBox is { } box)
             {
-                return;
+                if (!await box.ConfirmAsync().ConfigureAwait(true))
+                {
+                    return;
+                }
+            }
+            else
+            {
+                _idError = await ValidateInDirectoryAsync(id, CancellationToken.None).ConfigureAwait(true);
+                if (_idError is not null)
+                {
+                    return;
+                }
             }
 
             if (await Catalog.Admin.GetGroupAsync(id).ConfigureAwait(true) is not null)
             {
-                _idError = $"A group with the id {id} already exists.";
+                _idError = DuplicateMessage(id);
                 return;
             }
 
@@ -214,13 +241,13 @@ public partial class AccessGroupsPage
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
-            if (failure.Kind == AccessFailureKind.DirectoryValidation)
+            if (failure.Kind is AccessFailureKind.DirectoryValidation or AccessFailureKind.Invalid)
             {
                 _idError = failure.Message;
             }
             else
             {
-                _formError = failure.Message;
+                _formError = CreateRefusal(failure);
             }
 
             return;
@@ -234,6 +261,19 @@ public partial class AccessGroupsPage
         Catalog.Invalidate();
         Toasts.Show($"Group {id} created.", LtToastTone.Success);
         Navigator.NavigateTo(Navigator.Canonicalize(AccessRoutes.Group(id)));
+    }
+
+    /// <summary>The sentence a duplicate group id is refused with.</summary>
+    /// <param name="id">The id.</param>
+    internal static string DuplicateMessage(string id) => $"A group named {id} already exists.";
+
+    /// <summary>The sentence a refused create is shown with in the dialog, which stays open with the id kept.</summary>
+    /// <param name="failure">The classified failure.</param>
+    internal static string CreateRefusal(AccessFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        var reason = failure.Message.Length == 0 ? "the cluster refused it." : char.ToLowerInvariant(failure.Message[0]) + failure.Message[1..];
+        return "The group was not created: " + reason;
     }
 
     private string GroupHref(string groupId) => Navigator.Canonicalize(AccessRoutes.Group(groupId)).ToHref();

@@ -5,9 +5,9 @@
     pairs them with one is refused before it is sent.
 *@
 <form class="lt-access-form" @onsubmit="SaveAsync" novalidate>
-    <LtComboBox @ref="_ruleIdBox" Label="Rule id" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
-                Source="@_ruleIds" Mode="LtComboBoxMode.Suggest" Noun="rule" RejectExisting="@(!_draft.IsExisting)"
-                ExistingMessage="A rule with this id already governs this tree."
+    <LtNameInput @ref="_ruleIdBox" Label="Rule id" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
+                 Existing="@(_draft.IsExisting ? null : _ruleIds)" Noun="rule"
+                 ExistingMessage="A rule with this id already governs this tree."
                  ReadOnly="_draft.IsExisting" Error="@_errors.RuleId"
                  Hint="@(_draft.IsExisting ? "A rule's id and governed tree are fixed once it exists." : "A stable id, unique within the governed tree.")" />
     <LtSelect Label="Effect" Options="EffectOptions" Value="@(_draft.Effect == LatticeEffect.Deny ? "deny" : "allow")"

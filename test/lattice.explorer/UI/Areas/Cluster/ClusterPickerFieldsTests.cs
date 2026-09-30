@@ -80,13 +80,13 @@ public sealed class ClusterPickerFieldsTests : ClusterTestContext
         var cut = RenderAt("/cluster/trees/a/crm/orders/snapshot");
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("No snapshot is running.")));
 
-        SuggestionFields.Box(cut, "Destination tree").Input("a/crm/orders-copy");
+        SuggestionFields.NameBox(cut, "Destination tree").Input("a/crm/orders-copy");
         cut.Find("form").Submit();
 
         cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Destination tree"), Is.EqualTo("A tree with this name already exists; a snapshot needs a new one.")));
         Assert.That(cut.FindAll(".lt-cluster-review"), Is.Empty);
 
-        SuggestionFields.Box(cut, "Destination tree").Input("a/crm/orders-new");
+        SuggestionFields.NameBox(cut, "Destination tree").Input("a/crm/orders-new");
         cut.Find("form").Submit();
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-cluster-review"), Has.Count.EqualTo(1)));
     }

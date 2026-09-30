@@ -276,8 +276,8 @@ internal sealed class SampleRegion : IAsyncDisposable
             return;
         }
 
-        // The static roster the Access area's picker searches and its create form
-        // validates against: an id that is not listed fails closed.
+        // The static roster the Access area's forms validate against: an id that is
+        // not listed fails closed. Every group but 'auditors' is created at startup.
         silo.AddStaticIdentityDirectory(roster => roster
             .AddUser(SampleIdentities.Administrator, "Explorer Administrator")
             .AddUser(SampleIdentities.AcmeAdmin, "Acme tenant administrator")
@@ -289,7 +289,8 @@ internal sealed class SampleRegion : IAsyncDisposable
             .AddGroup(SampleIdentities.TaskEditorsGroup, "Task board editors")
             .AddGroup(SampleIdentities.TaskViewersGroup, "Task board viewers")
             .AddGroup(SampleIdentities.VisitorsGroup, "Visitors")
-            .AddGroup(SampleIdentities.AcmeEditorsGroup, "Acme task board editors"));
+            .AddGroup(SampleIdentities.AcmeEditorsGroup, "Acme task board editors")
+            .AddGroup(SampleIdentities.AuditorsGroup, "Auditors"));
     }
 
     private static void ConfigureReplication(ISiloBuilder silo, SampleRegionPlan plan)

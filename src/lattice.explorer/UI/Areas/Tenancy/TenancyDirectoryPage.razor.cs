@@ -35,6 +35,7 @@ public partial class TenancyDirectoryPage
     private IReadOnlyList<string> _newAdmins = [];
     private IReadOnlyList<string> _newAllowed = [];
     private IReadOnlyList<string> _newResidency = [];
+    private LtNameInput? _idBox;
     private LtMultiComboBox? _adminsBox;
     private LtMultiComboBox? _allowedBox;
     private LtMultiComboBox? _residencyBox;
@@ -265,6 +266,11 @@ public partial class TenancyDirectoryPage
             : _rows?.Any(row => string.Equals(row.TenantId, id, StringComparison.Ordinal)) == true ? $"A tenant with the id {id} already exists."
             : null;
         if (_idError is not null)
+        {
+            return;
+        }
+
+        if (_idBox is not null && !await _idBox.ConfirmAsync().ConfigureAwait(true))
         {
             return;
         }
