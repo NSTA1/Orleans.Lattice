@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Pages;
 
@@ -12,7 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Pages;
 public partial class HomePage : IDisposable
 {
     private readonly Dictionary<string, string?> _statuses = new(StringComparer.Ordinal);
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private IReadOnlyList<ExplorerAreaEntry>? _asked;
 
     [Inject]
@@ -23,8 +24,7 @@ public partial class HomePage : IDisposable
     /// <summary>Stops asking for statuses.</summary>
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

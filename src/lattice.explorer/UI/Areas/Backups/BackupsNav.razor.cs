@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -25,7 +26,7 @@ public partial class BackupsNav : IDisposable
     /// <summary>The way back a page below the row's pages shows in place of the row.</summary>
     public const string BackText = "Back to the catalogue";
 
-    private readonly CancellationTokenSource _disposed = new();
+    private readonly ComponentLifetime _disposed = new();
     private bool _health;
 
     /// <summary>
@@ -61,8 +62,7 @@ public partial class BackupsNav : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _disposed.Cancel();
-        _disposed.Dispose();
+        _disposed.Leave();
         GC.SuppressFinalize(this);
     }
 

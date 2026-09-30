@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterTreeList : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<IReadOnlyList<ClusterTreeEntry>> _trees = ClusterLoad<IReadOnlyList<ClusterTreeEntry>>.Loading;
     private string? _filter;
     private bool _reshardOpen;
@@ -45,8 +45,7 @@ public partial class ClusterTreeList : IDisposable
     public void Dispose()
     {
         Signals.Requested -= OnCommand;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

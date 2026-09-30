@@ -42,7 +42,7 @@ public partial class AddressLine : IDisposable
     private readonly List<string> _notes = [];
 
     private List<OptionGroup> _groups = [];
-    private CancellationTokenSource? _completion;
+    private readonly ComponentLifetime _completions = new();
     private ElementReference _trigger;
     private ElementReference _input;
     private bool _editing;
@@ -109,12 +109,7 @@ public partial class AddressLine : IDisposable
     private IReadOnlyList<LtChainLink> Chain => BuildChain(CurrentLocation.Address, Directory.Find(CurrentLocation.Address.Area));
 
     /// <summary>Stops any completion still running.</summary>
-    public void Dispose()
-    {
-        _completion?.Cancel();
-        _completion?.Dispose();
-        _completion = null;
-    }
+    public void Dispose() => _completions.Leave();
 
     /// <summary>
     /// Turns the address line into its input, holding <paramref name="text"/> or,
@@ -329,7 +324,8 @@ public partial class AddressLine : IDisposable
 
     private void Close(bool restoreFocus)
     {
-        Dispose();
+        // Cancels the completion still running; the line itself stays usable.
+        _completions.Renew();
         _editing = false;
         _focusTrigger = restoreFocus;
         _pointerMoved = false;
@@ -372,7 +368,8 @@ public partial class AddressLine : IDisposable
 
     private async Task RefreshAsync()
     {
-        Dispose();
+        // Cancels the completion still running for earlier text.
+        var token = _completions.Renew();
         ClearOptions();
 
         var input = AddressInput.Read(_text);
@@ -411,9 +408,6 @@ public partial class AddressLine : IDisposable
         }
 
         var query = new AddressQuery(input.Text, input.Mode, location.Address);
-        var completion = new CancellationTokenSource();
-        _completion = completion;
-        var token = completion.Token;
         var answered = new Dictionary<string, AddressCompletionBatch>(StringComparer.Ordinal);
         _status = "Searching.";
 

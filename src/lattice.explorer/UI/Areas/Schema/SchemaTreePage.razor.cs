@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -10,7 +11,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 public partial class SchemaTreePage : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private string? _loadedTree;
     private SchemaGrants? _grants;
     private SchemaTreeRow? _row;
@@ -36,8 +37,7 @@ public partial class SchemaTreePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -70,7 +70,14 @@ public partial class SchemaTreePage : IDisposable
 
         try
         {
-            if (!await Directory.ExistsAsync(tree, _lifetime.Token))
+            var exists = await Directory.ExistsAsync(tree, _lifetime.Token);
+            if (_lifetime.IsLeft)
+            {
+                // Another page may be on screen: it is not declared not found.
+                return;
+            }
+
+            if (!exists)
             {
                 _missing = true;
                 Navigation.NotFound();
@@ -80,7 +87,7 @@ public partial class SchemaTreePage : IDisposable
             _grants = await Access.GetGrantsAsync(tree, refresh: false, _lifetime.Token);
             _row = await Directory.ReadTreeAsync(tree, _lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -113,7 +120,7 @@ public partial class SchemaTreePage : IDisposable
                 await InvokeAsync(StateHasChanged);
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception)

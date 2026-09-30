@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -13,7 +14,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 internal sealed class SchemaOperations : IDisposable
 {
     private readonly ConcurrentDictionary<string, SchemaOperation> _operations = new(StringComparer.Ordinal);
-    private readonly CancellationTokenSource _circuit = new();
+    private readonly ComponentLifetime _circuit = new();
     private readonly TimeProvider _time;
 
     /// <summary>Creates the tracker.</summary>
@@ -97,8 +98,7 @@ internal sealed class SchemaOperations : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _circuit.Cancel();
-        _circuit.Dispose();
+        _circuit.Leave();
     }
 
     private async Task RunAsync(SchemaOperation started, Func<CancellationToken, Task<LatticeSchemaRemediationReport>> run)
@@ -115,7 +115,7 @@ internal sealed class SchemaOperations : IDisposable
                 FinishedAt = _time.GetUtcNow(),
             };
         }
-        catch (OperationCanceledException) when (_circuit.IsCancellationRequested)
+        catch (OperationCanceledException) when (_circuit.IsLeft)
         {
             // The circuit ended; the cluster keeps the operation and its status page resumes it.
             return;

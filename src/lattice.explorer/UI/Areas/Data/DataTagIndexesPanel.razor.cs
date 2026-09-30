@@ -17,7 +17,7 @@ public partial class DataTagIndexesPanel : IDisposable
     /// <summary>How many members one page asks for.</summary>
     internal const int MemberPageSize = 50;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly string _headingId = LtIds.Next("lt-data-tag-index");
     private readonly Dictionary<string, TreeTagIndexStatus?> _statuses = new(StringComparer.Ordinal);
     private IReadOnlyList<DataTagMember> _members = [];
@@ -85,8 +85,7 @@ public partial class DataTagIndexesPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -127,7 +126,7 @@ public partial class DataTagIndexesPanel : IDisposable
         {
             _indexes = await reader.ListTagIndexesForTreeAsync(workspace.Tree.StateId, _lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             return;
         }
@@ -227,7 +226,7 @@ public partial class DataTagIndexesPanel : IDisposable
 
             _membersContinuation = page.HasMore ? page.ContinuationToken : null;
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -259,7 +258,7 @@ public partial class DataTagIndexesPanel : IDisposable
             _statuses[index.IndexName] = await StatusAsync(admin, index.IndexName);
             await ResetMembersAsync();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

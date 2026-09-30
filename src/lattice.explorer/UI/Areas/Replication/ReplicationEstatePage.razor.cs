@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 
@@ -16,7 +17,7 @@ public partial class ReplicationEstatePage
     private IReadOnlyList<string> _apps = [];
     private bool _refreshing;
     private bool _subscribed;
-    private CancellationTokenSource _cancellation = new();
+    private readonly ComponentLifetime _cancellation = new();
 
     [Inject]
     internal ReplicationDataSource Data { get; set; } = default!;
@@ -52,8 +53,7 @@ public partial class ReplicationEstatePage
     public void Dispose()
     {
         Data.Invalidated -= OnInvalidated;
-        _cancellation.Cancel();
-        _cancellation.Dispose();
+        _cancellation.Leave();
     }
 
     /// <inheritdoc />

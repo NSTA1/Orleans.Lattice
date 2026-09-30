@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -16,7 +17,7 @@ public partial class SchemaDeadLettersPanel : IDisposable
     /// <summary>The most characters of a key the table shows before clipping it.</summary>
     public const int KeyCharacters = 96;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private IReadOnlyList<LatticeSchemaDeadLetterEntry>? _entries;
     private string? _loadedTree;
     private string? _error;
@@ -42,8 +43,7 @@ public partial class SchemaDeadLettersPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -77,7 +77,7 @@ public partial class SchemaDeadLettersPanel : IDisposable
         {
             _count = await Facades.RequireSchema().CountDeadLettersAsync(workspace.TreeId, _lifetime.Token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -131,7 +131,7 @@ public partial class SchemaDeadLettersPanel : IDisposable
             _limit = limit;
             _more = more;
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -41,7 +42,7 @@ internal sealed class DataDirectory : IDisposable
 
     private readonly IServiceProvider _services;
     private readonly ExplorerTenancy _tenancy;
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly Lock _gate = new();
     private Task<IReadOnlyList<DataTreeEntry>>? _load;
     private Task<bool>? _probe;
@@ -238,8 +239,7 @@ internal sealed class DataDirectory : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <summary>
@@ -405,7 +405,7 @@ internal sealed class DataDirectory : IDisposable
         {
             report = await grants.ListGrantsAsync(tenant, _lifetime.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             throw;
         }

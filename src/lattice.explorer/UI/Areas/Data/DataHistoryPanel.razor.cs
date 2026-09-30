@@ -4,6 +4,7 @@ using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -20,7 +21,7 @@ public partial class DataHistoryPanel : IDisposable
     /// <summary>The most prefix changes kept on screen.</summary>
     internal const int PrefixChangeLimit = 200;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly List<HistoryRevisionRow> _durable = [];
     private readonly List<HistoryRevisionRow> _liveRows = [];
     private readonly List<StateChangeNotification> _prefixChanges = [];
@@ -45,7 +46,7 @@ public partial class DataHistoryPanel : IDisposable
     private bool _liveRestartable;
     private bool _loading;
     private string? _error;
-    private CancellationTokenSource? _follow;
+    private readonly ComponentLifetime _follows = new();
 
     [CascadingParameter]
     internal DataWorkspace? Workspace { get; set; }
@@ -138,9 +139,9 @@ public partial class DataHistoryPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        StopFollow();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _following = false;
+        _follows.Leave();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -248,7 +249,7 @@ public partial class DataHistoryPanel : IDisposable
             _tail = new HistoryLiveTail(key, _durable);
             Build();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -339,18 +340,13 @@ public partial class DataHistoryPanel : IDisposable
     private void StopFollow()
     {
         _following = false;
-        if (_follow is { } follow)
-        {
-            _follow = null;
-            follow.Cancel();
-            follow.Dispose();
-        }
+        _follows.Renew();
     }
 
     private void RestartFollow()
     {
         StopFollow();
-        if (_client is null || !_followOffered || !_live || _at is not null || Workspace is not { } workspace)
+        if (_lifetime.IsLeft || _client is null || !_followOffered || !_live || _at is not null || Workspace is not { } workspace)
         {
             return;
         }
@@ -374,10 +370,8 @@ public partial class DataHistoryPanel : IDisposable
             return;
         }
 
-        var follow = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _follow = follow;
         _following = true;
-        _ = FollowAsync(_client, request, workspace.Key, follow.Token);
+        _ = FollowAsync(_client, request, workspace.Key, _follows.Token);
     }
 
     private async Task FollowAsync(ILatticeStateClient client, StateObserveRequest request, string? key, CancellationToken cancellationToken)

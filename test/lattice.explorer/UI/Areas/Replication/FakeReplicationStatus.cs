@@ -20,6 +20,12 @@ internal sealed class FakeReplicationStatus : ILatticeReplicationStatus
 
     public TaskCompletionSource? Gate { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="Gate"/> is awaited without the caller's token, as a reply already
+    /// on its way when the caller gave up is.
+    /// </summary>
+    public bool GateIgnoresCancellation { get; set; }
+
     /// <summary>When set, every page carries this token, so a reader that follows it blindly never ends.</summary>
     public string? StuckToken { get; set; }
 
@@ -33,7 +39,7 @@ internal sealed class FakeReplicationStatus : ILatticeReplicationStatus
         Queries.Add(query);
         if (Gate is { } gate)
         {
-            await gate.Task.WaitAsync(cancellationToken);
+            await (GateIgnoresCancellation ? gate.Task : gate.Task.WaitAsync(cancellationToken));
         }
 
         if (Failure is not null)

@@ -16,7 +16,7 @@ public partial class ClusterReshardPage : IDisposable
     /// <summary>The largest shard count a reshard accepts.</summary>
     internal const int MaximumShards = 4096;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeReshardStatus> _status = ClusterLoad<TreeReshardStatus>.Loading;
     private LatticeTreeAdminCapabilities _access = default!;
     private ClusterStatusPoller? _poller;
@@ -45,8 +45,7 @@ public partial class ClusterReshardPage : IDisposable
     public void Dispose()
     {
         _poller?.Dispose();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

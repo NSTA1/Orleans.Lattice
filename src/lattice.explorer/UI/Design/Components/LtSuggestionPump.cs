@@ -15,7 +15,9 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// <para>
 /// It is driven from one component on the renderer's synchronization context,
 /// so its fields need no lock. A cancellation source is reused while it was not
-/// cancelled, so a query that completes normally allocates no new one.
+/// cancelled, so a query that completes normally allocates no new one. A source is
+/// never disposed: a query can resume after its field is gone, and a plain source
+/// holds nothing that needs releasing (see <see cref="ComponentLifetime"/>).
 /// </para>
 /// </remarks>
 /// <param name="deliver">Called with the text and the answer for it, on the renderer's context.</param>
@@ -77,11 +79,6 @@ internal sealed class LtSuggestionPump(Func<string, LtSuggestionSet, Task> deliv
     {
         _disposed = true;
         Cancel();
-        if (_running is not { IsCompleted: false })
-        {
-            _query?.Dispose();
-            _query = null;
-        }
     }
 
     private async Task RunAsync()
@@ -115,17 +112,10 @@ internal sealed class LtSuggestionPump(Func<string, LtSuggestionSet, Task> deliv
 
             await deliver(text, answer).ConfigureAwait(true);
         }
-
-        if (_disposed)
-        {
-            _query?.Dispose();
-            _query = null;
-        }
     }
 
     private CancellationTokenSource Replace()
     {
-        _query?.Dispose();
         _query = new CancellationTokenSource();
         return _query;
     }

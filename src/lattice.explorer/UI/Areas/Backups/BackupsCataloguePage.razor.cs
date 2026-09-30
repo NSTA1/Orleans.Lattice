@@ -28,7 +28,7 @@ public partial class BackupsCataloguePage : IDisposable
     private readonly List<string?> _pageTokens = [null];
     private readonly Dictionary<string, BackupHealthReport?> _health = new(StringComparer.Ordinal);
     private readonly HashSet<string> _healthRead = new(StringComparer.Ordinal);
-    private CancellationTokenSource _load = new();
+    private readonly ComponentLifetime _load = new();
     private ExplorerAddress? _loadedFor;
     private BackupCatalogPage? _page;
     private int _pageIndex;
@@ -79,8 +79,7 @@ public partial class BackupsCataloguePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _load.Cancel();
-        _load.Dispose();
+        _load.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -172,10 +171,7 @@ public partial class BackupsCataloguePage : IDisposable
 
     private async Task LoadAsync(bool loadExtras)
     {
-        _load.Cancel();
-        _load.Dispose();
-        _load = new CancellationTokenSource();
-        var cancellationToken = _load.Token;
+        var cancellationToken = _load.Renew();
 
         _page = null;
         _error = null;

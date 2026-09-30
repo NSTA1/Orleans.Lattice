@@ -51,6 +51,12 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// <summary>When set, the tree catalogue waits for it before answering.</summary>
     public TaskCompletionSource? CatalogGate { get; set; }
 
+    /// <summary>
+    /// When set, listing the tag indexes that cover one tree waits for it and ignores its
+    /// token, as a reply already on its way when the caller gave up does.
+    /// </summary>
+    public TaskCompletionSource? TreeTagIndexGate { get; set; }
+
     /// <summary>When set, a continuation scan throws this.</summary>
     public Exception? ContinuationFault { get; set; }
 
@@ -117,14 +123,19 @@ internal sealed class FakeStateClient : ILatticeStateClient
     }
 
     /// <inheritdoc />
-    public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+    public async Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(ListTagIndexesAsync));
+        if (request.SourceTreeId is not null && TreeTagIndexGate is { } gate)
+        {
+            await gate.Task;
+        }
+
         ThrowIfFaulted(nameof(ListTagIndexesAsync));
         var matching = TagIndexes
             .Where(index => request.SourceTreeId is null || (Covered.TryGetValue(index.IndexName, out var trees) && trees.Contains(request.SourceTreeId)))
             .ToList();
-        return Task.FromResult(new TagIndexCatalogPage { Entries = matching });
+        return new TagIndexCatalogPage { Entries = matching };
     }
 
     /// <inheritdoc />

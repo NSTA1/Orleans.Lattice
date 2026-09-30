@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -14,7 +15,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterTreePage : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<LatticeTreeAdminCapabilities> _access = ClusterLoad<LatticeTreeAdminCapabilities>.Loading;
     private TreeConfigurationReport? _config;
     private string? _missingUnder;
@@ -51,8 +52,7 @@ public partial class ClusterTreePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />
@@ -62,12 +62,22 @@ public partial class ClusterTreePage : IDisposable
         _access = await ClusterLoad<LatticeTreeAdminCapabilities>.RunAsync(
             ct => ClusterTreeAccess.ProbeAsync(Facades.RequireTreeAdmin(), TreeId, ct),
             token);
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
 
         if (_access.Value is { CanViewDiagnostics: true } or { CanAdministerTree: true })
         {
             var config = await ClusterLoad<TreeConfigurationReport>.RunAsync(
                 ct => Facades.RequireTreeAdmin().GetTreeConfigAsync(TreeId, ct),
                 token);
+            if (_lifetime.IsLeft)
+            {
+                // Another page may be on screen: it is not declared not found.
+                return;
+            }
+
             if (config.Value is { Exists: false })
             {
                 // Under a tenant other than the default the cluster reads a bare tree

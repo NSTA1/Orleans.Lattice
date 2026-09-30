@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Framing.Broker;
 
 namespace Orleans.Lattice.Explorer.UI.Framing;
@@ -31,7 +32,7 @@ public sealed partial class AppFrame : IAsyncDisposable
     internal static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
 
     private readonly string _frameId = "appframe-" + Guid.NewGuid().ToString("N");
-    private readonly CancellationTokenSource _disposal = new();
+    private readonly ComponentLifetime _disposal = new();
 
     private Phase _phase = Phase.Authorizing;
     private AppFrameFailure _failure;
@@ -133,10 +134,7 @@ public sealed partial class AppFrame : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _generation++;
-        if (!_disposal.IsCancellationRequested)
-        {
-            await _disposal.CancelAsync().ConfigureAwait(true);
-        }
+        _disposal.Leave();
 
         _session?.Close();
         _handshakeTimer?.Dispose();
@@ -153,7 +151,6 @@ public sealed partial class AppFrame : IAsyncDisposable
         }
 
         _interop?.Dispose();
-        _disposal.Dispose();
     }
 
     /// <inheritdoc />

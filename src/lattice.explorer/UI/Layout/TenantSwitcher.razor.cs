@@ -41,7 +41,7 @@ public partial class TenantSwitcher : IDisposable
     internal const string FilterPlaceholder = "Type to filter";
 
     private readonly string _panelId = LtIds.Next("lt-shell-tenant-panel");
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private TenantSwitchChoices _choices = TenantSwitchChoices.None;
     private ExplorerLocation? _readFor;
     private ElementReference _toggle;
@@ -77,8 +77,7 @@ public partial class TenantSwitcher : IDisposable
     {
         Switch.OpenRequested -= OnOpenRequested;
         Panels.Opened -= OnPanelOpened;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 

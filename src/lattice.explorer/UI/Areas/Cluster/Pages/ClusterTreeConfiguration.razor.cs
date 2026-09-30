@@ -32,7 +32,7 @@ public partial class ClusterTreeConfiguration : IDisposable
         new(nameof(TreeHistoryRetentionMode.Hybrid), "Hybrid"),
     ];
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeConfigurationReport> _config = ClusterLoad<TreeConfigurationReport>.Loading;
     private ClusterLoad<TreeHistoryRetention> _retention = ClusterLoad<TreeHistoryRetention>.Loading;
     private string? _publishEvents;
@@ -61,8 +61,7 @@ public partial class ClusterTreeConfiguration : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

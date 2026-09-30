@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -17,7 +18,7 @@ public partial class ClusterRegionDiagram : IDisposable
 {
     private const string ReplicationAreaKey = "replication";
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<ClusterRegionPicture> _picture = ClusterLoad<ClusterRegionPicture>.Loading;
 
     [Inject]
@@ -31,8 +32,7 @@ public partial class ClusterRegionDiagram : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

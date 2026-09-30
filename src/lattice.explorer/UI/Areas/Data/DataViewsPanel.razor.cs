@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// </summary>
 public partial class DataViewsPanel : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private readonly Dictionary<string, TreeViewStatus?> _statuses = new(StringComparer.Ordinal);
     private readonly HashSet<string> _administrable = new(StringComparer.Ordinal);
     private IReadOnlyList<DataTreeEntry> _views = [];
@@ -55,8 +55,7 @@ public partial class DataViewsPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -147,7 +146,7 @@ public partial class DataViewsPanel : IDisposable
                 _statuses[pending.View.StateId] = await StatusAsync(admin, pending.View);
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

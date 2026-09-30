@@ -25,7 +25,7 @@ public partial class BackupSchedulesPage : IDisposable
         new(IncrementalKind, "Incremental"),
     ];
 
-    private CancellationTokenSource _load = new();
+    private readonly ComponentLifetime _load = new();
     private ExplorerAddress? _loadedFor;
     private string? _treeInput;
     private string? _treeError;
@@ -77,8 +77,7 @@ public partial class BackupSchedulesPage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _load.Cancel();
-        _load.Dispose();
+        _load.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -126,10 +125,7 @@ public partial class BackupSchedulesPage : IDisposable
 
     private async Task LoadAsync()
     {
-        _load.Cancel();
-        _load.Dispose();
-        _load = new CancellationTokenSource();
-        var cancellationToken = _load.Token;
+        var cancellationToken = _load.Renew();
 
         _capabilities = null;
         _status = null;

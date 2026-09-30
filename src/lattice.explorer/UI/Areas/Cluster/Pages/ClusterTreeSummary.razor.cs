@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -12,7 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterTreeSummary : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeStatsReport> _stats = ClusterLoad<TreeStatsReport>.Loading;
     private ClusterLoad<TreeAliasResolution> _alias = ClusterLoad<TreeAliasResolution>.Loading;
     private ClusterLoad<TreeReshardStatus> _reshard = ClusterLoad<TreeReshardStatus>.Loading;
@@ -43,8 +44,7 @@ public partial class ClusterTreeSummary : IDisposable
     public void Dispose()
     {
         _poller?.Dispose();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

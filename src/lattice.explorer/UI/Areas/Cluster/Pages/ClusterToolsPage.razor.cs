@@ -19,7 +19,7 @@ public partial class ClusterToolsPage : IDisposable
     /// <summary>Entries sent per bulk-load chunk.</summary>
     internal const int ChunkSize = 256;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<LatticeTreeAdminCapabilities> _accessLoad = ClusterLoad<LatticeTreeAdminCapabilities>.Loading;
     private LatticeTreeAdminCapabilities _access = default!;
     private int? _shardCount;
@@ -69,8 +69,7 @@ public partial class ClusterToolsPage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Metrics;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -9,7 +10,7 @@ public partial class DataMetricsPanel : IDisposable
 {
     private const string Paused = "Paused";
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private string? _loadedFor;
     private TreeMetrics? _metrics;
     private IReadOnlyList<DataMeasure> _measures = [];
@@ -39,8 +40,7 @@ public partial class DataMetricsPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -97,7 +97,7 @@ public partial class DataMetricsPanel : IDisposable
             _measures = _metrics is null ? [] : Measures(_metrics);
             _sampledAt = Time.GetUtcNow();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

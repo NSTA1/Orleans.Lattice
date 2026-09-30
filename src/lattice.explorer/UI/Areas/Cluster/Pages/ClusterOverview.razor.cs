@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -20,7 +21,7 @@ public partial class ClusterOverview : IDisposable
         ("Orphaned leaves", "Survey, audit and repair leaves no descent reaches.", ClusterAddresses.Orphans()),
     ];
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<ClusterInfo> _info = ClusterLoad<ClusterInfo>.Loading;
     private ClusterLoad<ClusterStorageUsageSummary> _usage = ClusterLoad<ClusterStorageUsageSummary>.Loading;
     private bool _confirmDeep;
@@ -34,8 +35,7 @@ public partial class ClusterOverview : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

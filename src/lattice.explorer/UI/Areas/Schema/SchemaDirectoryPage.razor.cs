@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 public partial class SchemaDirectoryPage
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private SchemaDirectoryRead? _read;
     private IReadOnlyList<SchemaTreeRow> _rows = [];
     private IReadOnlyList<LtSelectOption> _scanTargets = [];
@@ -61,8 +61,7 @@ public partial class SchemaDirectoryPage
     {
         Signals.Requested -= OnCommandRequested;
         Ledger.Recorded -= OnComplianceRecorded;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -141,7 +140,7 @@ public partial class SchemaDirectoryPage
             _read = await Directory.GetAsync(refresh, _lifetime.Token);
             Project();
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             return;
         }

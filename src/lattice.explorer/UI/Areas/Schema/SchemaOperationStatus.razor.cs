@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -20,7 +21,7 @@ public partial class SchemaOperationStatus : IDisposable
         (SchemaOperationStage.Completed, "Finished"),
     ];
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private SchemaOperation? _local;
     private LatticeSchemaRemediationReport? _report;
     private string? _loadedTree;
@@ -100,8 +101,7 @@ public partial class SchemaOperationStatus : IDisposable
         Operations.Changed -= OnOperationChanged;
         _timer?.Dispose();
         _timer = null;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -154,7 +154,7 @@ public partial class SchemaOperationStatus : IDisposable
             _report = await Facades.RequireSchema().GetRemediationStatusAsync(workspace.TreeId, _lifetime.Token);
             _statusError = null;
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
@@ -198,7 +198,7 @@ public partial class SchemaOperationStatus : IDisposable
 
     private async Task TickAsync()
     {
-        if (_lifetime.IsCancellationRequested)
+        if (_lifetime.IsLeft)
         {
             return;
         }
@@ -217,7 +217,7 @@ public partial class SchemaOperationStatus : IDisposable
 
         _ = InvokeAsync(async () =>
         {
-            if (_lifetime.IsCancellationRequested)
+            if (_lifetime.IsLeft)
             {
                 return;
             }

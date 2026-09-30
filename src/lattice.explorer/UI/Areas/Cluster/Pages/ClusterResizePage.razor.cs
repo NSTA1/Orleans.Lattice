@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterResizePage : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeResizeStatus> _status = ClusterLoad<TreeResizeStatus>.Loading;
     private LatticeTreeAdminCapabilities _access = default!;
     private ClusterStatusPoller? _poller;
@@ -53,8 +53,7 @@ public partial class ClusterResizePage : IDisposable
     public void Dispose()
     {
         _poller?.Dispose();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

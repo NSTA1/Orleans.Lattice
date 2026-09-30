@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Core.DeadLetter;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -9,7 +10,7 @@ public partial class DataDeadLettersPanel : IDisposable
     /// <summary>How many dead letters one page asks for.</summary>
     internal const int PageSize = 50;
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private IReadOnlyList<DeadLetterEntry> _entries = [];
     private string? _loadedFor;
     private string? _continuation;
@@ -39,8 +40,7 @@ public partial class DataDeadLettersPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -100,7 +100,7 @@ public partial class DataDeadLettersPanel : IDisposable
             _entries = [.. _entries, .. page.Entries];
             _continuation = page.HasMore ? page.ContinuationToken : null;
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)

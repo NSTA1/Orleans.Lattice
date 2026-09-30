@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Telemetry;
 public partial class TelemetryPage : IDisposable
 {
     private readonly HashSet<string> _denied = new(StringComparer.Ordinal);
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
 
     private TelemetryQueryCatalog? _catalog;
     private IReadOnlyList<TelemetryBoardPlan> _plans = [];
@@ -189,8 +189,7 @@ public partial class TelemetryPage : IDisposable
     public void Dispose()
     {
         Catalog.Changed -= OnCatalogChanged;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />
@@ -246,7 +245,7 @@ public partial class TelemetryPage : IDisposable
             _catalog = await Catalog.GetAsync(_lifetime.Token);
             _plans = TelemetryBoards.Plan(_catalog, Tenancy.IsActive);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             return;
         }
@@ -264,6 +263,12 @@ public partial class TelemetryPage : IDisposable
 
     private void Resolve(ExplorerAddress address)
     {
+        if (_lifetime.IsLeft)
+        {
+            // Resolved after a read the page was left during: another page may be on screen.
+            return;
+        }
+
         var key = address.Path.Count == 0 ? null : address.Path[0];
         if (key is null)
         {

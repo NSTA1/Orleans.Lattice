@@ -25,7 +25,7 @@ public partial class BackupPage : IDisposable
         new(PointInTime, "Point-in-time replace (destructive)"),
     ];
 
-    private CancellationTokenSource _load = new();
+    private readonly ComponentLifetime _load = new();
     private string? _backupId;
     private BackupManifest? _manifest;
     private BackupTreeName? _tree;
@@ -108,8 +108,7 @@ public partial class BackupPage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _load.Cancel();
-        _load.Dispose();
+        _load.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -132,10 +131,7 @@ public partial class BackupPage : IDisposable
 
     private async Task LoadAsync()
     {
-        _load.Cancel();
-        _load.Dispose();
-        _load = new CancellationTokenSource();
-        var cancellationToken = _load.Token;
+        var cancellationToken = _load.Renew();
 
         _manifest = null;
         _tree = null;
@@ -162,6 +158,12 @@ public partial class BackupPage : IDisposable
         catch (Exception exception)
         {
             _error = BackupsFaults.Describe(exception);
+            return;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // Left, or replaced by a newer load: another page may be on screen.
             return;
         }
 
@@ -258,7 +260,10 @@ public partial class BackupPage : IDisposable
             Toasts.Show(
                 deleted ? "Deleted backup " + BackupsFormat.Name(manifest) + "." : "Backup " + BackupsFormat.Name(manifest) + " was already gone.",
                 deleted ? LtToastTone.Success : LtToastTone.Warning);
-            Navigator.NavigateTo(BackupsAddresses.Root);
+            if (!_load.IsLeft)
+            {
+                Navigator.NavigateTo(BackupsAddresses.Root);
+            }
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
         {

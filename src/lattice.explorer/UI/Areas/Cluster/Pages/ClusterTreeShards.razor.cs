@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -14,7 +15,7 @@ public partial class ClusterTreeShards : IDisposable
 {
     private const string Unknown = "-";
 
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<ShardMapInspection> _map = ClusterLoad<ShardMapInspection>.Loading;
     private ClusterLoad<TreeShardMapView> _registry = ClusterLoad<TreeShardMapView>.Loading;
     private ClusterLoad<TreeAdminDiagnosticReport> _diagnostics = ClusterLoad<TreeAdminDiagnosticReport>.Loading;
@@ -37,8 +38,7 @@ public partial class ClusterTreeShards : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />

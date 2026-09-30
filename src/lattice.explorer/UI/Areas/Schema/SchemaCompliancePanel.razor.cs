@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -9,8 +10,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 public partial class SchemaCompliancePanel : IDisposable
 {
-    private readonly CancellationTokenSource _lifetime = new();
-    private CancellationTokenSource? _scanning;
+    private readonly ComponentLifetime _lifetime = new();
+    private readonly ComponentLifetime _scans = new();
+    private CancellationToken? _scanning;
     private SchemaComplianceResult? _result;
     private string? _loadedTree;
     private string? _error;
@@ -30,10 +32,8 @@ public partial class SchemaCompliancePanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _scanning?.Cancel();
-        _scanning?.Dispose();
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _scans.Leave();
+        _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -71,19 +71,19 @@ public partial class SchemaCompliancePanel : IDisposable
             return;
         }
 
-        var scan = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var scan = _scans.Renew();
         _scanning = scan;
         _error = null;
         StateHasChanged();
         try
         {
-            var report = await Facades.RequireSchema().ScanComplianceAsync(workspace.TreeId, scan.Token);
+            var report = await Facades.RequireSchema().ScanComplianceAsync(workspace.TreeId, scan);
             Ledger.Record(workspace.TreeId, report, Time.GetUtcNow());
             _result = Ledger.Find(workspace.TreeId);
         }
         catch (OperationCanceledException) when (scan.IsCancellationRequested)
         {
-            if (!_lifetime.IsCancellationRequested)
+            if (!_lifetime.IsLeft)
             {
                 _error = "The scan was stopped before it finished.";
             }
@@ -94,14 +94,18 @@ public partial class SchemaCompliancePanel : IDisposable
         }
         finally
         {
-            if (ReferenceEquals(_scanning, scan))
+            if (_scanning == scan)
             {
                 _scanning = null;
             }
-
-            scan.Dispose();
         }
     }
 
-    private void CancelScan() => _scanning?.Cancel();
+    private void CancelScan()
+    {
+        if (_scanning is not null)
+        {
+            _scans.Renew();
+        }
+    }
 }

@@ -27,7 +27,7 @@ public partial class ReplicationTreesPage
     private ReplicationFilter _filter = ReplicationFilter.None;
     private bool _loaded;
     private bool _busy;
-    private readonly CancellationTokenSource _cancellation = new();
+    private readonly ComponentLifetime _cancellation = new();
 
     private bool _enableOpen;
     private bool _enableTreeFixed;
@@ -90,8 +90,7 @@ public partial class ReplicationTreesPage
     /// <inheritdoc />
     public void Dispose()
     {
-        _cancellation.Cancel();
-        _cancellation.Dispose();
+        _cancellation.Leave();
     }
 
     /// <inheritdoc />
