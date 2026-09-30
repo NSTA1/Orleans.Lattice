@@ -15,7 +15,8 @@
     script to be usable.
 
     The main landmark is gated: nothing renders before the circuit's session
-    (configuration and sign-in) is loaded, an area the caller may not see renders
+    (configuration and sign-in) is loaded, nothing renders under a tenant a
+    prerender could only have guessed, an area the caller may not see renders
     the not-found page, an unavailable one says why, and nothing renders an
     area's page before its availability is known.
 *@
@@ -86,6 +87,11 @@
                     {
                         @* No page asks the cluster anything until the circuit's configuration and sign-in are loaded, so nothing is read, or remembered, as the wrong caller. *@
                         <LtSkeleton Lines="6" Label="Loading" />
+                    }
+                    else if (_tenantPending)
+                    {
+                        @* A prerender that cannot read the tenant this caller last held, at an address that names none: nothing renders under a guessed tenant. *@
+                        <LtSkeleton Lines="6" Label="@TenantPendingLabel" />
                     }
                     else if (TenantResolving)
                     {

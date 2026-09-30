@@ -62,9 +62,25 @@ internal static class SampleTestHost
         }
     }
 
-    /// <summary>Fetches the console's server-rendered home page, as the automatically signed-in administrator.</summary>
+    /// <summary>
+    /// Fetches the console's server-rendered home page in the default tenant, where the automatically
+    /// signed-in administrator starts, following any redirect to its canonical address.
+    /// </summary>
+    /// <remarks>
+    /// The address names the tenant. At the bare root the server's prerender cannot read the tenant
+    /// the administrator last held (it is remembered in browser storage), so it renders the neutral
+    /// resolving state instead of a home page (issue #3999).
+    /// </remarks>
     /// <param name="sample">The started sample.</param>
     public static async Task<string> GetHomeAsync(ExplorerSample sample)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(1) };
+        return await client.GetStringAsync(new Uri(sample.Console.Url, "t/default"));
+    }
+
+    /// <summary>Fetches the console's server-rendered page at its bare root, as the automatically signed-in administrator.</summary>
+    /// <param name="sample">The started sample.</param>
+    public static async Task<string> GetRootAsync(ExplorerSample sample)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(1) };
         return await client.GetStringAsync(sample.Console.Url);
