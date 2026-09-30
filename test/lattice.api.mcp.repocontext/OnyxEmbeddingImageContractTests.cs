@@ -130,8 +130,14 @@ public sealed class OnyxEmbeddingImageContractTests
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start the docker process.");
-        output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+
+        // Both pipes must be drained concurrently. Reading one to completion before the other
+        // starts deadlocks as soon as the child fills the unread pipe's buffer, and the hang
+        // happens inside the read, so WaitForExit is never reached and bounds nothing.
+        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+        var standardErrorTask = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
+        output = standardOutputTask.GetAwaiter().GetResult() + standardErrorTask.GetAwaiter().GetResult();
         return process.ExitCode;
     }
 }

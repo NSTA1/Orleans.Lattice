@@ -250,9 +250,17 @@ public static class HygieneRepository
         {
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Starting 'git' returned no process.");
-            standardOutput = process.StandardOutput.ReadToEnd();
-            standardError = process.StandardError.ReadToEnd();
+
+            // Both pipes must be drained concurrently. Reading one to EOF while the
+            // other is unread deadlocks the moment the child fills the unread pipe's
+            // buffer, and it deadlocks INSIDE the read, before WaitForExit is ever
+            // reached. A repository large enough for 'git ls-files -z' to outrun the
+            // stdout buffer, or a git that writes warnings to stderr, reaches it.
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
             process.WaitForExit();
+            standardOutput = standardOutputTask.GetAwaiter().GetResult();
+            standardError = standardErrorTask.GetAwaiter().GetResult();
             exitCode = process.ExitCode;
         }
         catch (Exception ex)
