@@ -1348,9 +1348,16 @@ public sealed partial class LocalDeploymentRunbookHygieneTests
                 continue;
             }
 
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
+            // Both pipes must be drained concurrently. Reading one to EOF while the
+            // other is unread deadlocks the moment the child fills the unread pipe's
+            // buffer, and it deadlocks INSIDE the read, before WaitForExit is ever
+            // reached, so the 120s bound below cannot apply. A PowerShell script that
+            // fails verbosely writes an error record to stderr and reaches exactly that.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             process.WaitForExit(milliseconds: 120_000);
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
 
             if (process.ExitCode != 0)
             {
@@ -1674,14 +1681,24 @@ public sealed partial class LocalDeploymentRunbookHygieneTests
 
         Assert.That(process, Is.Not.Null, "expected `docker` to start.");
 
-        var stdout = process!.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        // Both pipes must be drained concurrently. Reading one to EOF while the other
+        // is unread deadlocks the moment the child fills the unread pipe's buffer, and
+        // it deadlocks INSIDE the read, before WaitForExit is ever reached, so the two
+        // minute bound below cannot apply. `docker compose config` is verbose on both
+        // streams - it echoes the resolved document to stdout while emitting one
+        // "required variable ... is missing a value" line per unset variable to stderr -
+        // which is precisely the case that reaches it.
+        var stdoutTask = process!.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
 
         if (!process.WaitForExit(milliseconds: 120_000))
         {
             try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
             Assert.Fail("`docker compose config` did not complete within two minutes.");
         }
+
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
 
         if (process.ExitCode != 0)
         {

@@ -220,9 +220,16 @@ public class TxRegistryReadCoalescerTests
         var rounds = new ConcurrentQueue<TaskCompletionSource<long>>();
         registry.GetDecisionsRevisionAsync().Returns(_ =>
         {
-            Interlocked.Increment(ref calls);
             var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            // Publish the round before the counter that advertises it. The
+            // barriers below open on `calls`, so incrementing first left a
+            // window in which the barrier saw the round but the queue was
+            // still empty, and the TryDequeue that follows returned false -
+            // surfacing as a bare NullReferenceException on the
+            // null-forgiving dereference rather than as a named failure.
             rounds.Enqueue(tcs);
+            Interlocked.Increment(ref calls);
             return tcs.Task;
         });
         factory.GetGrain<ITxRegistryGrain>("tree").Returns(registry);
@@ -231,12 +238,14 @@ public class TxRegistryReadCoalescerTests
         var early = coalescer.GetRevisionAsync("tree");
         await WaitUntilAsync(() => Volatile.Read(ref calls) == 1);
         var late = coalescer.GetRevisionAsync("tree");
-        rounds.TryDequeue(out var first);
+        Assert.That(rounds.TryDequeue(out var first), Is.True,
+            "the first registry round must have been published once its call was counted");
         first!.SetResult(10);
         Assert.That(await early.WaitAsync(Timeout), Is.EqualTo(10));
 
         await WaitUntilAsync(() => Volatile.Read(ref calls) == 2);
-        rounds.TryDequeue(out var second);
+        Assert.That(rounds.TryDequeue(out var second), Is.True,
+            "the second registry round must have been published once its call was counted");
         second!.SetResult(11);
 
         Assert.That(await late.WaitAsync(Timeout), Is.EqualTo(11));

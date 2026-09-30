@@ -61,7 +61,7 @@
       },
       {
         "name": "x-lattice-replication-origin",
-        "purpose": "Local cluster id stamped on peer calls for diagnostics, peer attribution, saga authorization fallback, and origin/body consistency checks.",
+        "purpose": "Local cluster id stamped on peer calls for diagnostics, peer attribution, saga authorization, origin/body consistency checks, and optional credential-to-origin binding.",
         "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs#OriginClusterIdHeader"
       }
     ],

@@ -85,7 +85,7 @@ The optional callback populates `OnyxEmbeddingOptions`. Every default matches th
 | `Dimension` | `int` | 768 | The vector dimension `ModelName` produces. Used to build the provider's embedding space and to fail-closed-reject any response whose vectors are a different length. |
 | `MaxContextLength` | `int` | 512 | The maximum context length, in tokens, sent with each embed request. Longer inputs are truncated by the model server. |
 | `NormalizeEmbeddings` | `bool` | `true` | Whether the server L2-normalizes the returned vectors. Reflected in the provider's embedding space. |
-| `RequestTimeout` | `TimeSpan?` | (unset) | Optional per-request timeout on the underlying HTTP client. When unset the ambient `HttpClient` default applies. A timeout elapsing is a fail-closed failure, not an exception surfaced to the caller. |
+| `RequestTimeout` | `TimeSpan?` | (unset) | Optional per-request timeout on the underlying HTTP client. When unset the ambient `HttpClient` default applies. A timeout elapsing is a fail-closed failure, not an exception surfaced to the caller. When set it must be strictly positive and at most `int.MaxValue` milliseconds (about 24.8 days), or `Timeout.InfiniteTimeSpan` for no timeout; any other value is rejected when the options are resolved. |
 
 Changing `ModelName`, `Dimension`, or `NormalizeEmbeddings` selects a **new embedding space** and must be paired with the matching model in the container - see [Embedding-space safety](#embedding-space-safety) below.
 

@@ -52,7 +52,8 @@ public sealed class LatticeBackupOptions
     /// <summary>
     /// The poll interval between successive in-flight observations while a
     /// cross-tree-consistent backup-set fence waits for sagas to drain. Must be
-    /// strictly positive. Defaults to 25 milliseconds.
+    /// strictly positive and no longer than a timer can wait (<c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days). Defaults to 25 milliseconds.
     /// </summary>
     public TimeSpan CrossTreeFencePollInterval { get; set; } = TimeSpan.FromMilliseconds(25);
 
@@ -85,7 +86,8 @@ public sealed class LatticeBackupOptions
     /// The maximum total wall-clock time the cross-cluster backup sink sharing
     /// probe may spend before it gives up and reports
     /// <see cref="BackupSinkSharingStatus.Unverified"/>. Bounds silo start, which
-    /// blocks on the probe. Must be strictly positive. Defaults to 15 seconds.
+    /// blocks on the probe. Must be strictly positive and no longer than a timer can
+    /// wait (<c>0xFFFFFFFE</c> milliseconds, about 49.7 days). Defaults to 15 seconds.
     /// </summary>
     public TimeSpan SinkSharingProbeTimeout { get; set; } = TimeSpan.FromSeconds(15);
 }

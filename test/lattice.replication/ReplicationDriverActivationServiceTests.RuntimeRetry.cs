@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -310,19 +311,16 @@ public partial class ReplicationDriverActivationServiceTests
     /// fixed interval, so the fire-and-forget activation is observed as soon as it
     /// lands and a genuine regression fails with a message rather than a timeout.
     /// </summary>
-    private static async Task WaitUntilAsync(Func<bool> condition, string because)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return;
-            }
-
-            await Task.Delay(5);
-        }
-
-        Assert.Fail($"Timed out after 30s waiting until {because}.");
-    }
+    /// <remarks>
+    /// Delegates to the shared <see cref="TestPoll"/> barrier rather than
+    /// hand-rolling the loop, so this fixture inherits the re-sample-after-the-
+    /// deadline behaviour that keeps a barrier from failing purely because a
+    /// scheduling hiccup straddled the deadline.
+    /// </remarks>
+    private static Task WaitUntilAsync(Func<bool> condition, string because) =>
+        TestPoll.UntilAsync(
+            condition,
+            because,
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(5));
 }

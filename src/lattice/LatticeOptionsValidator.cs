@@ -566,6 +566,53 @@ if (options.MaxLockLeaseDuration < options.DefaultLockLeaseDuration)
         + "(the ceiling is applied to the fallback lease as well, so a smaller ceiling would silently shorten every "
         + "default-duration lease below the configured default).");
 }
+foreach (var (field, value) in TimerArmedDurations(options))
+{
+    if (value != Timeout.InfiniteTimeSpan && value > MaxTimerDuration)
+    {
+        return ValidateOptionsResult.Fail(
+            $"{field} must be at most {MaxTimerDuration} (the longest wait a timer accepts; a longer finite value "
+            + "passes every other check and then throws ArgumentOutOfRangeException each time it is armed).");
+    }
+}
 return ValidateOptionsResult.Success;
     }
+
+    /// <summary>
+    /// The longest wait a timer-backed primitive accepts: <c>0xFFFFFFFE</c>
+    /// milliseconds, about 49.7 days. <see cref="CancellationTokenSource(TimeSpan)"/>,
+    /// <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>,
+    /// <see cref="Task.Delay(TimeSpan)"/> and <see cref="Task.WaitAsync(TimeSpan)"/>
+    /// throw <see cref="ArgumentOutOfRangeException"/> above it, and
+    /// <see cref="SemaphoreSlim.WaitAsync(TimeSpan, CancellationToken)"/> faults once
+    /// it has to wait.
+    /// </summary>
+    internal static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    /// <summary>
+    /// Every duration option the runtime arms as a timer-backed wait. The checks
+    /// above admit any positive value (or <see cref="Timeout.InfiniteTimeSpan"/>), so
+    /// without this a value such as <see cref="TimeSpan.MaxValue"/> - the common
+    /// spelling of "no timeout" - passed validation and then failed every WAL flush,
+    /// append, forward or publish that armed it. <see cref="Timeout.InfiniteTimeSpan"/>
+    /// is skipped by the caller; the options that accept it bypass the timer for it.
+    /// </summary>
+    private static (string Field, TimeSpan Value)[] TimerArmedDurations(LatticeOptions options) =>
+    [
+        (nameof(LatticeOptions.WalFlushTimeout), options.WalFlushTimeout),
+        (nameof(LatticeOptions.WalFlushPreflightTimeout), options.WalFlushPreflightTimeout),
+        (nameof(LatticeOptions.WalDrainBudget), options.WalDrainBudget),
+        (nameof(LatticeOptions.WalAppendDispatchTimeout), options.WalAppendDispatchTimeout),
+        (nameof(LatticeOptions.ShardForwardTimeout), options.ShardForwardTimeout),
+        (nameof(LatticeOptions.ActivationReadyTimeout), options.ActivationReadyTimeout),
+        (nameof(LatticeOptions.DigestPublishTimeout), options.DigestPublishTimeout),
+        (nameof(LatticeOptions.EmptyTreeProbeBudget), options.EmptyTreeProbeBudget),
+        (nameof(LatticeOptions.StarvationDriveBudget), options.StarvationDriveBudget),
+        (nameof(LatticeOptions.SetManyFanOutBudget), options.SetManyFanOutBudget),
+        (nameof(LatticeOptions.WalSaturationSampleInterval), options.WalSaturationSampleInterval),
+        (nameof(LatticeOptions.WalAdmissionSaturationWaitBudget), options.WalAdmissionSaturationWaitBudget),
+        (nameof(LatticeOptions.WalAdmissionSaturationCallBudget), options.WalAdmissionSaturationCallBudget),
+        (nameof(LatticeOptions.WalThrottledAdmissionPace), options.WalThrottledAdmissionPace),
+        (nameof(LatticeOptions.MaxScanPageStallDuration), options.MaxScanPageStallDuration ?? Timeout.InfiniteTimeSpan),
+    ];
 }

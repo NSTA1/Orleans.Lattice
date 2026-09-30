@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Authentication;
@@ -125,7 +126,17 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // registers them rooted at its base href, ahead of the Shell's TryAdd.
         ConfigureDataProtection(services, options);
         services.AddHttpContextAccessor();
-        services.TryAddSingleton<ICredentialStore, CookieCredentialStore>();
+
+
+        // Composed explicitly rather than by constructor selection: the endpoint
+        // binding is optional in the signature, so a greediest-constructor probe
+        // that failed to satisfy it would silently fall back to the unbound shape
+        // and drop the check. Both dependencies are singletons, as this store is.
+        services.TryAddSingleton<ICredentialStore>(sp => new CookieCredentialStore(
+            sp.GetRequiredService<IHttpContextAccessor>(),
+            sp.GetRequiredService<IDataProtectionProvider>(),
+            sp.GetService<IExplorerConfigStore>(),
+            sp.GetService<IExplorerConfigurationSeed>()));
         services.TryAddSingleton(new SessionSignInOptions
         {
             UseServerFormPost = true,

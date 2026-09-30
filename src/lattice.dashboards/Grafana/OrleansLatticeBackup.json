@@ -58,7 +58,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "query": "label_values(orleans_lattice_backup_captures_total, scope)",
+        "query": "label_values(orleans_lattice_backup_scope_last_run_status, scope)",
         "includeAll": true,
         "multi": true,
         "refresh": 2,
@@ -106,7 +106,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (rate(orleans_lattice_backup_captures_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum by (kind) (rate(orleans_lattice_backup_captures_total[5m]))",
           "legendFormat": "{{kind}}"
         }
       ]
@@ -134,17 +134,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_capture_duration_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_capture_duration_milliseconds_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_capture_duration_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_capture_duration_milliseconds_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_capture_duration_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_capture_duration_milliseconds_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -172,17 +172,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_restore_duration_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_restore_duration_milliseconds_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_restore_duration_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_restore_duration_milliseconds_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_restore_duration_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_restore_duration_milliseconds_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -210,7 +210,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum (rate(orleans_lattice_backup_restore_entries_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum (rate(orleans_lattice_backup_restore_entries_total[5m]))",
           "legendFormat": "entries/s"
         }
       ]
@@ -238,17 +238,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_bytes_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_bytes_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_bytes_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_bytes_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_bytes_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_bytes_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -276,17 +276,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_artifacts_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_artifacts_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_artifacts_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_artifacts_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_artifacts_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_artifacts_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -314,17 +314,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_entries_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_entries_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_entries_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_entries_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_entries_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_entries_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -352,12 +352,12 @@
       "targets": [
         {
           "refId": "E",
-          "expr": "sum (rate(orleans_lattice_backup_entries_processed_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum (rate(orleans_lattice_backup_entries_processed_total[5m]))",
           "legendFormat": "entries/s"
         },
         {
           "refId": "B",
-          "expr": "sum (rate(orleans_lattice_backup_bytes_processed_bytes_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum (rate(orleans_lattice_backup_bytes_processed_bytes_total[5m]))",
           "legendFormat": "bytes/s"
         }
       ]
@@ -441,17 +441,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_incremental_lag_entries_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_incremental_lag_entries_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_incremental_lag_entries_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_incremental_lag_entries_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_incremental_lag_entries_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_incremental_lag_entries_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -479,17 +479,17 @@
       "targets": [
         {
           "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_incremental_lag_age_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_backup_incremental_lag_age_milliseconds_bucket[5m])))",
           "legendFormat": "p50"
         },
         {
           "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_incremental_lag_age_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_backup_incremental_lag_age_milliseconds_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
           "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_incremental_lag_age_milliseconds_bucket{scope=~\"$scope\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_backup_incremental_lag_age_milliseconds_bucket[5m])))",
           "legendFormat": "p99"
         }
       ]
@@ -573,7 +573,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum (rate(orleans_lattice_backup_capture_retries_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum (rate(orleans_lattice_backup_capture_retries_total[5m]))",
           "legendFormat": "retries/s"
         }
       ]

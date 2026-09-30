@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -39,6 +40,8 @@ public static class LatticeMcpRepoContextEmbeddingServiceCollectionExtensions
             optionsBuilder.Configure(configure);
         }
 
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<OnyxEmbeddingOptions>, OnyxEmbeddingOptionsValidator>());
         services.AddHttpClient(OnyxEmbeddingProvider.HttpClientName);
         services.TryAddSingleton<IEmbeddingProvider, OnyxEmbeddingProvider>();
 

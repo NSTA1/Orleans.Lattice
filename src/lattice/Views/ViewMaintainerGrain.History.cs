@@ -66,6 +66,17 @@ internal sealed partial class ViewMaintainerGrain
     /// metadata per the active mode and stamps the age-bound expiry, then re-encodes.
     /// A non-Upsert write or one carrying no value (a delete or range-tombstone
     /// marker) passes through untouched.
+    /// <para>
+    /// The re-encode is skipped when shaping did not alter the row. The
+    /// projection never stamps <see cref="HistoryRow.RetentionShape"/>, so a row
+    /// arrives carrying the enum default - <see cref="HistoryRetentionMode.MetadataOnly"/>,
+    /// which is also the default policy - and under that policy a delete, a
+    /// range-tombstone marker and a CRDT delta are already in their stored shape.
+    /// Re-serialising them copied the whole row, delta payload included, to
+    /// reproduce bytes the write was already holding. The expiry is stamped on
+    /// the view entry rather than inside the row, so it is carried across without
+    /// touching the encoding.
+    /// </para>
     /// </summary>
     private ViewWrite ShapeHistoryWrite(ViewWrite write, HistoryRetentionPolicy policy, long nowTicks)
     {
@@ -75,7 +86,8 @@ internal sealed partial class ViewMaintainerGrain
         }
 
         var row = historyRowCodec.Decode(write.Value);
-        var (shaped, expiresAtTicks) = HistoryRetentionShaper.Shape(row, policy, nowTicks);
-        return ViewWrite.Upsert(write.Key, historyRowCodec.Encode(shaped), write.Timestamp, expiresAtTicks);
+        var (shaped, expiresAtTicks) = HistoryRetentionShaper.Shape(row, policy, nowTicks, out var changed);
+        var value = changed ? historyRowCodec.Encode(shaped) : write.Value;
+        return ViewWrite.Upsert(write.Key, value, write.Timestamp, expiresAtTicks);
     }
 }
