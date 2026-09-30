@@ -72,10 +72,16 @@ public sealed class AppFrameIsolationTests(string engine) : UiTestBase(engine)
                 // out; the Linux CI build refuses it), so the request may be sent, carrying at most
                 // what the app's consented bridge let it read. The behaviour is platform-dependent,
                 // so it is recorded rather than asserted either way.
-                var leaked = hostile.Escapes.WaitAsync(EscapeWait);
+                // The escape semaphore is shared by every case, so the wait on it must never outlive
+                // this case: a waiter left queued after the block wins would take the release the
+                // next case's request makes (#4020, CI red on navigate-out).
+                using var stop = new CancellationTokenSource(EscapeWait);
+                var leaked = hostile.Escapes.WaitAsync(Timeout.Infinite, stop.Token);
                 var blocked = page.EvaluateAsync<string>("() => window.__ltFrameBlocked");
                 var first = await Task.WhenAny(leaked, blocked, Task.Delay(EscapeWait));
-                var outcome = first == leaked && await leaked ? "leaked (the request reached the other origin)"
+                await stop.CancelAsync();
+                var escaped = await leaked.ContinueWith(static task => task.IsCompletedSuccessfully && task.Result, TaskScheduler.Default);
+                var outcome = escaped ? "leaked (the request reached the other origin)"
                     : first == blocked && blocked.IsCompletedSuccessfully ? $"blocked ({blocked.Result})"
                     : "not observed within the wait";
                 TestContext.Out.WriteLine($"WebKit self-navigation to another origin: {outcome}.");
