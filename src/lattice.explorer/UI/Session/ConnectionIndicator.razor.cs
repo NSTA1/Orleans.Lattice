@@ -11,8 +11,10 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// The connection indicator, rendered in the <c>header.connection</c> chrome
 /// slot: the connected endpoint, its state drawn in a health state role and
 /// always named in words, a Reconnect affordance when the connection is down, a
-/// Sign in affordance when the endpoint refused an anonymous call, and the way
-/// into the connection settings.
+/// Sign in affordance when the endpoint refused an anonymous call, and - only on
+/// a head that accepts browser-driven endpoint configuration
+/// (<see cref="SessionEndpointConfigurationOptions"/>) - the way into the
+/// connection settings.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,6 +40,9 @@ public partial class ConnectionIndicator
 
     [Inject]
     private SessionChromeState State { get; set; } = default!;
+
+    [Inject]
+    private SessionEndpointConfigurationOptions EndpointOptions { get; set; } = default!;
 
     private LatticeConnectionStatus Status => Explorer.Connection.Status;
 

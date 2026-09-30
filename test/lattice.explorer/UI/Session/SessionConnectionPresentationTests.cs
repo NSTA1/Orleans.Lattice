@@ -32,6 +32,7 @@ public sealed class SessionConnectionPresentationTests
         Assert.That(SessionConnectionPresentation.For(status, isConfigured), Is.EqualTo(new SessionConnectionPresentation(role, text)));
     }
 
+
     [Test]
     public void A_connected_probe_is_reachable()
     {
@@ -42,7 +43,7 @@ public sealed class SessionConnectionPresentationTests
             Assert.That(result.Outcome, Is.EqualTo(ConnectionTestOutcome.Reachable));
             Assert.That(result.Role, Is.EqualTo(LtStateRole.Healthy));
             Assert.That(result.Text, Is.EqualTo("Reachable"));
-            Assert.That(result.Message, Is.Null);
+            Assert.That(result.Hint, Is.Null);
         });
     }
 
@@ -57,14 +58,14 @@ public sealed class SessionConnectionPresentationTests
             Assert.That(result.Outcome, Is.EqualTo(ConnectionTestOutcome.SignInRequired));
             Assert.That(result.Role, Is.EqualTo(LtStateRole.Stalled));
             Assert.That(result.Text, Is.EqualTo("Reachable - sign-in required"));
-            Assert.That(result.Message, Is.EqualTo("Unauthenticated"));
+            Assert.That(result.Hint, Is.EqualTo("The endpoint answered and asks for a sign-in, which you can do after saving."));
         });
     }
 
     [TestCase(LatticeConnectionState.Faulted)]
     [TestCase(LatticeConnectionState.Reconnecting)]
     [TestCase(LatticeConnectionState.Disconnected)]
-    public void Anything_else_is_unreachable_with_the_endpoints_explanation(LatticeConnectionState state)
+    public void Anything_else_is_unreachable_in_fixed_words(LatticeConnectionState state)
     {
         var result = LatticeConnectionTester.Classify(new LatticeConnectionStatus(state, "https://x", "Connection refused."));
 
@@ -73,17 +74,27 @@ public sealed class SessionConnectionPresentationTests
             Assert.That(result.Outcome, Is.EqualTo(ConnectionTestOutcome.Unreachable));
             Assert.That(result.Role, Is.EqualTo(LtStateRole.Failed));
             Assert.That(result.Text, Is.EqualTo("Unreachable"));
-            Assert.That(result.Message, Is.EqualTo("Connection refused."));
+            Assert.That(result.Hint, Is.EqualTo("No Lattice API answered at this address. Check the endpoint and its transport settings."));
         });
     }
 
-    [Test]
-    public void Classify_and_test_reject_missing_arguments()
+    [TestCase(LatticeConnectionState.Faulted, false)]
+    [TestCase(LatticeConnectionState.Faulted, true)]
+    [TestCase(LatticeConnectionState.Disconnected, false)]
+    public void Classification_discards_the_endpoints_own_status_text(LatticeConnectionState state, bool requiresAuthentication)
     {
-        Assert.Multiple(() =>
-        {
-            Assert.That(() => LatticeConnectionTester.Classify(null!), Throws.ArgumentNullException);
-            Assert.ThrowsAsync<ArgumentNullException>(() => new LatticeConnectionTester().TestAsync(null!));
-        });
+        // The status text describes whatever answered at an address the visitor
+        // chose; carrying it into the result would make the test a scanning oracle.
+        const string Probe = "Status(StatusCode=Unavailable, Detail=\"connect to 10.0.0.5:8443 refused\")";
+
+        var result = LatticeConnectionTester.Classify(new LatticeConnectionStatus(state, "https://10.0.0.5:8443", Probe, requiresAuthentication));
+
+        Assert.That(result.ToString(), Does.Not.Contain("10.0.0.5"));
+    }
+
+    [Test]
+    public void Classify_rejects_a_missing_status()
+    {
+        Assert.That(() => LatticeConnectionTester.Classify(null!), Throws.ArgumentNullException);
     }
 }

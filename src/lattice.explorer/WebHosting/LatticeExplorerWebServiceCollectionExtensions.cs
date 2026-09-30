@@ -140,6 +140,14 @@ public static class LatticeExplorerWebServiceCollectionExtensions
             LoginPath = options.BaseHref + SessionSignInOptions.DefaultLoginPath,
             LogoutPath = options.BaseHref + SessionSignInOptions.DefaultLogoutPath,
         });
+
+        // The connection dialog's edit, test and save follow the same opt-in as the
+        // store: its Test connection dials whatever the visitor typed, so a head
+        // that refuses browser writes offers no test either.
+        services.TryAddSingleton(new SessionEndpointConfigurationOptions
+        {
+            AllowInteractiveEndpointConfiguration = options.AllowInteractiveEndpointConfiguration,
+        });
         services.AddExplorerAuth();
 
         // The Explorer itself: chrome, session, credential-aware transport, the

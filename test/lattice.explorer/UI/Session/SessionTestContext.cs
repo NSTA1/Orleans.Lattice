@@ -22,6 +22,11 @@ public abstract class SessionTestContext : ShellDesignTestContext
 {
     private SessionSignInOptions _options = new();
 
+    // The session chrome's own fixtures exercise the connection form, so the
+    // context models a head that opted in to browser-driven endpoint configuration.
+    // The Shell's real default refuses it; a read-only fixture opts back out.
+    private SessionEndpointConfigurationOptions _endpointOptions = new() { AllowInteractiveEndpointConfiguration = true };
+
     /// <summary>Registers the fakes and the chrome's own services.</summary>
     protected SessionTestContext()
     {
@@ -34,6 +39,7 @@ public abstract class SessionTestContext : ShellDesignTestContext
         Services.AddSingleton<IExplorerAuthSession>(Auth);
         Services.AddSingleton<IConnectionTester>(Tester);
         Services.AddSingleton(_ => _options);
+        Services.AddSingleton(_ => _endpointOptions);
         Services.AddScoped<SessionChromeState>();
         Services.AddScoped<ShellHeaderPanels>();
         Services.AddSingleton<AntiforgeryStateProvider, FakeAntiforgeryStateProvider>();
@@ -54,6 +60,9 @@ public abstract class SessionTestContext : ShellDesignTestContext
     /// <summary>Replaces the sign-in options before the first render.</summary>
     /// <param name="options">The options the head would register.</param>
     internal void UseOptions(SessionSignInOptions options) => _options = options;
+
+    /// <summary>Models a head that refuses browser-driven endpoint configuration, before the first render.</summary>
+    internal void UseReadOnlyEndpoint() => _endpointOptions = new SessionEndpointConfigurationOptions();
 
     /// <summary>A secure configuration for a remote endpoint.</summary>
     internal static ExplorerConfiguration RemoteConfiguration(string endpoint = "https://cluster.example:443") =>

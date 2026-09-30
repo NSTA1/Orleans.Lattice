@@ -121,6 +121,27 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
         Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void A_read_only_head_offers_no_connection_settings(bool configured)
+    {
+        UseReadOnlyEndpoint();
+        if (configured)
+        {
+            Explorer.Configured(RemoteConfiguration(Endpoint));
+            StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Faulted, Endpoint, "Unavailable"));
+        }
+
+        var cut = Render<ConnectionIndicator>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Buttons(cut), Has.No.Member("Connection settings"));
+            Assert.That(cut.FindAll("[aria-haspopup=dialog]"), Is.Empty);
+            Assert.That(Buttons(cut), configured ? Is.EqualTo(new[] { "Reconnect" }) : Is.Empty);
+        });
+    }
+
     [Test]
     public void Two_mounted_indicators_raise_no_toast_of_their_own_the_circuit_announces_once()
     {

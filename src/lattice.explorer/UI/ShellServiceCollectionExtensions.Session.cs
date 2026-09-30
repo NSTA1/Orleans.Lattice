@@ -18,8 +18,10 @@ internal static partial class ShellServiceCollectionExtensions
     /// preference and (optional) tenant services unchanged; the head registers
     /// those. Everything registered here that holds state is scoped, so each
     /// circuit has its own and no singleton ever reaches a circuit's credential or
-    /// connection. The one singleton, <see cref="SessionSignInOptions"/>, is
-    /// immutable configuration.
+    /// connection. The two singletons, <see cref="SessionSignInOptions"/> and
+    /// <see cref="SessionEndpointConfigurationOptions"/>, are immutable
+    /// configuration. The endpoint default refuses interactive configuration, so a
+    /// head that has not opted in never offers the connection test.
     /// </remarks>
     /// <param name="services">The service collection to register into.</param>
     static partial void AddSession(IServiceCollection services)
@@ -28,6 +30,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<SessionConnectionAnnouncer>();
         services.TryAddScoped<IConnectionTester, LatticeConnectionTester>();
         services.TryAddSingleton(new SessionSignInOptions());
+        services.TryAddSingleton(new SessionEndpointConfigurationOptions());
 
         services.AddShellSlot<ConnectionIndicator>(ShellSlotNames.HeaderConnection);
         services.AddShellSlot<IdentityMenu>(ShellSlotNames.HeaderIdentity);

@@ -170,6 +170,20 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
     }
 
     [Test]
+    public void Folded_a_read_only_head_offers_no_connection_settings()
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Faulted, Endpoint, "Unavailable"));
+
+        var cut = RenderAt<ConnectionIndicator>(LtBreakpoint.Compact);
+
+        Assert.That(
+            cut.FindAll(".lt-dialog__actions button").Select(button => button.TextContent),
+            Is.EqualTo(new[] { "Reconnect" }));
+    }
+
+    [Test]
     public void Folded_the_connection_actions_still_act()
     {
         Explorer.Configured(RemoteConfiguration(Endpoint));
