@@ -1,14 +1,17 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Replication;
 using Orleans.TestingHost;
 using static Orleans.Lattice.Tenancy.Tests.TestClocks;
 
 namespace Orleans.Lattice.Tenancy.Tests;
 
 /// <summary>
-/// Cluster-level regression test for issue #4030 on a real two-silo
+/// Cluster-level regression tests for issues #4030 (grants) and #4051 (residency) on a real two-silo
 /// <see cref="TestCluster"/>. A tenant-registry write is observed by the core
 /// change feed only on the silo hosting the registry leaf, so before the fix the
 /// other silo's compiled tenant-policy snapshot kept the pre-write grant state and
@@ -87,6 +90,66 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
         {
             var decision = await ReadAsync(silos[i]);
             Assert.That(decision.Allowed, Is.False, $"silo {i} must not admit a grant revoked through silo 0");
+        }
+    }
+
+    [Test]
+    public async Task Taking_a_tenant_offline_through_one_silo_is_refused_on_every_silo()
+    {
+        // Issue #4051: the residency view is refreshed off the same change feed, so
+        // before the fix a drain committed through one silo left every other silo
+        // reporting the tenant online, admitting it at the tenant gate and in the
+        // inbound replication isolation gate.
+        var silos = _cluster.Silos.OfType<InProcessSiloHandle>().Select(s => s.SiloHost.Services).ToArray();
+        var registry = silos[0].GetRequiredService<ITenantRegistry>();
+        var region = silos[0].GetRequiredService<IOptions<ClusterOptions>>().Value.ClusterId;
+        var gamma = TenantId.Parse("gamma");
+        const string gammaTree = "t/gamma/orders";
+
+        var record = TenantRecord.Create(gamma, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(1), "seed");
+        record.AddAdminSubject("carol", Clock(2), "seed");
+        record.SetRegionStatus(region, TenantRegionStatus.Online, Clock(3), "seed");
+        await registry.PutAsync(record);
+
+        foreach (var services in silos)
+        {
+            var policy = services.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>();
+            var residency = services.GetRequiredService<TenantResidencySnapshotMaintainer>();
+            await residency.LeaseEstablished.WaitAsync(TimeSpan.FromSeconds(60));
+            await policy.BackgroundRebuild;
+            await residency.BackgroundRebuild;
+            await policy.RebuildNowAsync();
+            await residency.RebuildNowAsync();
+            Assert.That(residency.IsSnapshotAuthoritative, Is.True, "precondition: a leased, rebuilt residency view is authoritative");
+            Assert.That((await OwnedReadAsync(services, gamma, gammaTree)).Allowed, Is.True, "precondition: online on every silo");
+            Assert.That(
+                await services.GetRequiredService<IReplicationTenantIsolationGate>().EvaluateAsync(gammaTree),
+                Is.EqualTo(ReplicationTenantIsolationDecision.Admit),
+                "precondition: inbound replication admitted on every silo");
+        }
+
+        var committed = await registry.GetAsync(gamma);
+        committed!.SetRegionStatus(region, TenantRegionStatus.Offline, Clock(1_000), "operator");
+        await registry.PutAsync(committed);
+
+        for (var i = 0; i < silos.Length; i++)
+        {
+            var decision = await OwnedReadAsync(silos[i], gamma, gammaTree);
+            Assert.That(decision.Allowed, Is.False, $"silo {i}'s tenant gate must not admit a tenant taken offline through silo 0");
+            Assert.That(
+                await silos[i].GetRequiredService<IReplicationTenantIsolationGate>().EvaluateAsync(gammaTree),
+                Is.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion),
+                $"silo {i} must not admit inbound replication for a tenant taken offline through silo 0");
+        }
+    }
+
+    private static async Task<LatticeAccessDecision> OwnedReadAsync(IServiceProvider services, TenantId tenant, string treeId)
+    {
+        var gate = services.GetRequiredService<ILatticeAccessGate>();
+        using (LatticeActiveTenantContext.With(tenant))
+        {
+            return await gate.AuthorizeAsync(
+                new LatticeAccessRequest(treeId, LatticeOperation.Read, new LatticeSubject("carol"), "k"));
         }
     }
 

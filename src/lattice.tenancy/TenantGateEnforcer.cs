@@ -94,6 +94,26 @@ internal sealed class TenantGateEnforcer(
     private static readonly LatticeAccessDecision ConfirmationRequired =
         LatticeAccessDecision.Deny(ConfirmationRequiredReason);
 
+    /// <summary>
+    /// The reason instance that marks <see cref="ResidencyConfirmationRequired"/>,
+    /// compared by reference like <see cref="ConfirmationRequiredReason"/>.
+    /// </summary>
+    private static readonly string ResidencyConfirmationRequiredReason = new('?', 1);
+
+    /// <summary>
+    /// The internal marker <see cref="EnforceResidency"/> returns when the policy
+    /// snapshot is authoritative but the residency view is not (issue #4051). Never
+    /// returned to a caller: <see cref="Enforce"/> denies it and
+    /// <see cref="EnforceAsync"/> confirms the active tenant's residency alone
+    /// against its registry record. (When the policy snapshot is not authoritative
+    /// either, <see cref="ConfirmAsync"/> answers residency from the record it
+    /// already reads.)
+    /// </summary>
+    private static readonly LatticeAccessDecision ResidencyConfirmationRequired =
+        LatticeAccessDecision.Deny(ResidencyConfirmationRequiredReason);
+
+    private readonly ITenantResidencyConfirmation? _residencyConfirmation = residency as ITenantResidencyConfirmation;
+
     /// <inheritdoc />
     public bool IsActive => true;
 
@@ -110,8 +130,13 @@ internal sealed class TenantGateEnforcer(
     public LatticeAccessDecision Enforce(in LatticeAccessRequest request)
     {
         var decision = Decide(in request);
-        return NeedsConfirmation(in decision)
-            ? DenyUnconfirmed(PendingConfirmation.From(in request))
+        if (NeedsConfirmation(in decision))
+        {
+            return DenyUnconfirmed(PendingConfirmation.From(in request));
+        }
+
+        return IsResidencyMarker(in decision)
+            ? DenyResidencyUnconfirmed(LatticeActiveTenantContext.Current.GetValueOrDefault())
             : decision;
     }
 
@@ -145,8 +170,26 @@ internal sealed class TenantGateEnforcer(
         }
 
         var decision = Decide(in request);
-        return NeedsConfirmation(in decision)
-            ? ConfirmAsync(PendingConfirmation.From(in request), cancellationToken)
+        return Complete(in decision, in request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Turns a <see cref="Decide"/> result into the final decision: confirms a
+    /// request, or a residency check alone, that the snapshots could not answer
+    /// authoritatively, and passes any other decision through synchronously.
+    /// </summary>
+    private ValueTask<LatticeAccessDecision> Complete(
+        in LatticeAccessDecision decision,
+        in LatticeAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (NeedsConfirmation(in decision))
+        {
+            return ConfirmAsync(PendingConfirmation.From(in request), cancellationToken);
+        }
+
+        return IsResidencyMarker(in decision)
+            ? ConfirmResidencyAsync(LatticeActiveTenantContext.Current.GetValueOrDefault(), cancellationToken)
             : new ValueTask<LatticeAccessDecision>(decision);
     }
 
@@ -174,9 +217,7 @@ internal sealed class TenantGateEnforcer(
         }
 
         var decision = Decide(in request);
-        return NeedsConfirmation(in decision)
-            ? await ConfirmAsync(PendingConfirmation.From(in request), cancellationToken).ConfigureAwait(false)
-            : decision;
+        return await Complete(in decision, in request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -332,6 +373,7 @@ internal sealed class TenantGateEnforcer(
         }
 
         var confirmed = CompileConfirmed(in pending, activeRecord, ownerRecord);
+        var active = activeRecord is not null && activeRecord.Id.Equals(pending.ActiveTenant) ? activeRecord : null;
 
         var validation = LatticeTenantPolicyEngine.ValidateActiveTenant(
             confirmed,
@@ -356,7 +398,54 @@ internal sealed class TenantGateEnforcer(
             }
         }
 
-        return EnforceResidency(pending.ActiveTenant);
+        // Residency last, from the active tenant's record this confirmation already
+        // read (issue #4051): no extra registry round trip, and no reliance on a
+        // residency view that may be as stale as the policy snapshot was. The
+        // validation above guarantees the record exists.
+        if (!residency.IsActive)
+        {
+            return LatticeAccessDecision.Allow();
+        }
+
+        if (_residencyConfirmation is { } confirmation && active is not null)
+        {
+            return confirmation.IsOnline(active) ? LatticeAccessDecision.Allow() : NotOnline(pending.ActiveTenant);
+        }
+
+        return residency.IsOnlineInServingRegion(pending.ActiveTenant)
+            ? LatticeAccessDecision.Allow()
+            : NotOnline(pending.ActiveTenant);
+    }
+
+    /// <summary>
+    /// Confirms against the active tenant's registry record whether it is online in
+    /// this serving region, for a residency check made while the policy snapshot was
+    /// authoritative but the residency view was not (issue #4051). Fail-closed: a
+    /// registry failure other than the caller's own cancellation denies.
+    /// </summary>
+    private async ValueTask<LatticeAccessDecision> ConfirmResidencyAsync(
+        TenantId tenant,
+        CancellationToken cancellationToken)
+    {
+        bool online;
+        try
+        {
+            online = await _residencyConfirmation!.ConfirmOnlineAsync(tenant, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not confirm tenant '{Tenant}''s residency against the tenant registry while the residency snapshot was not authoritative; the request was denied.",
+                tenant.Value);
+            return DenyResidencyUnconfirmed(tenant);
+        }
+
+        return online ? LatticeAccessDecision.Allow() : NotOnline(tenant);
     }
 
     /// <summary>
@@ -402,14 +491,37 @@ internal sealed class TenantGateEnforcer(
     /// </summary>
     private LatticeAccessDecision EnforceResidency(TenantId tenant)
     {
-        if (residency.IsActive && !residency.IsOnlineInServingRegion(tenant))
+        if (!residency.IsActive)
         {
-            return LatticeAccessDecision.Deny(
-                $"Tenant '{tenant}' is not online in this serving region.");
+            return LatticeAccessDecision.Allow();
         }
 
-        return LatticeAccessDecision.Allow();
+        // A resolver that can tell an authoritative answer from a stale one says so;
+        // a stale one is handed back for confirmation against the registry.
+        if (_residencyConfirmation is { } confirmation)
+        {
+            if (!confirmation.TryResolveOnline(tenant, out var online))
+            {
+                return ResidencyConfirmationRequired;
+            }
+
+            return online ? LatticeAccessDecision.Allow() : NotOnline(tenant);
+        }
+
+        return residency.IsOnlineInServingRegion(tenant) ? LatticeAccessDecision.Allow() : NotOnline(tenant);
     }
+
+    private static LatticeAccessDecision NotOnline(TenantId tenant) =>
+        LatticeAccessDecision.Deny($"Tenant '{tenant}' is not online in this serving region.");
+
+    /// <summary>The fail-closed denial for a residency check that could not be confirmed.</summary>
+    private static LatticeAccessDecision DenyResidencyUnconfirmed(TenantId tenant) =>
+        LatticeAccessDecision.Deny(
+            $"Tenant '{tenant}''s residency in this serving region could not be confirmed while the residency snapshot is being rebuilt.");
+
+    /// <summary><c>true</c> when <paramref name="decision"/> is the <see cref="ResidencyConfirmationRequired"/> marker.</summary>
+    private static bool IsResidencyMarker(in LatticeAccessDecision decision) =>
+        !decision.Allowed && ReferenceEquals(decision.Reason, ResidencyConfirmationRequiredReason);
 
     /// <summary>
     /// Builds a deny decision, falling back to a generic default-deny reason when

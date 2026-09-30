@@ -99,6 +99,10 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
                     && d.ImplementationType == typeof(TenantPolicyEpochSubscription)),
                 Is.EqualTo(1),
                 "every silo subscribes its snapshot to the epoch exactly once");
+            Assert.That(
+                builder.Services.Count(d => d.ServiceType == typeof(ITenantEpochSubscriber)),
+                Is.EqualTo(3),
+                "the compiled policy, residency and placement snapshots are each kept current by the epoch");
         });
     }
 

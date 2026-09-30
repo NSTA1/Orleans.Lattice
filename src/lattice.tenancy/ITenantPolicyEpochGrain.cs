@@ -19,8 +19,9 @@ internal interface ITenantPolicyEpochGrain : IGrainWithStringKey
     /// advances for as long as its lease is live.
     /// </summary>
     /// <param name="observer">The requesting silo's epoch observer.</param>
+    /// <param name="silo">The requesting silo's address, used to tell when every live silo has leased from this activation.</param>
     /// <returns>The current epoch and the granted lease duration.</returns>
-    Task<TenantPolicyEpochLease> LeaseAsync(ITenantPolicyEpochObserver observer);
+    Task<TenantPolicyEpochLease> LeaseAsync(ITenantPolicyEpochObserver observer, SiloAddress silo);
 
     /// <summary>
     /// Advances the epoch and returns only once every silo holding a live lease
