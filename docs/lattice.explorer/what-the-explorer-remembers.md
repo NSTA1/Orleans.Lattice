@@ -38,7 +38,11 @@ rewritten console does not use them.
 
 Tenancy is the one remembered value that shapes addresses. The tenant view restores
 `shell.tenant` only after revalidating it against the tenants the caller may reach
-now, and forgets it when it no longer resolves. The tenant switcher records
+now, and forgets it when it no longer resolves. It is read from the browser's
+preference store before the tenant is resolved, so the server prerender, which
+cannot read that store, never renders a page under a guessed tenant: for a caller
+who can reach more than one tenant it shows **Resolving your tenant** until the
+page is interactive. The tenant switcher records
 `shell.all-tenants` when an operator's all-tenants request is admitted. An explicit `/t/{tenant}` address still goes
 through the operator-gated switch and wins only if admitted; a successful switch
 updates `shell.tenant`.
