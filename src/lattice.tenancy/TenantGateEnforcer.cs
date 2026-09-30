@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Tenancy;
@@ -18,10 +19,21 @@ namespace Orleans.Lattice.Tenancy;
 /// via <see cref="LatticeTenantTrees.GetOwner"/> (T0/T1), reads the ambient
 /// active tenant from <see cref="LatticeActiveTenantContext"/> (T2), and gates
 /// on the nested <see cref="ITenantResidencyResolver"/> residency seam. None of
-/// these touch storage, so the enforcer is safe on the per-request hot path; the
-/// allow path allocates only the single tenant-id string
+/// these touch storage on the steady state, so the enforcer is safe on the
+/// per-request hot path; the allow path allocates only the single tenant-id string
 /// <see cref="LatticeTenantTrees.GetOwner"/> materialises, and a deny allocates
 /// its reason.
+/// </para>
+/// <para>
+/// The one exception is a cross-tenant crossing made while the compiled snapshot
+/// is not authoritative
+/// (<see cref="CompiledTenantPolicySnapshotMaintainer.IsSnapshotAuthoritative"/>
+/// is <c>false</c> while a registry-driven rebuild is outstanding or failing).
+/// The snapshot then still holds the pre-write grant state, so
+/// <see cref="EnforceAsync"/> confirms the grant against the authoritative
+/// <see cref="ITenantRegistry"/> and the synchronous <see cref="Enforce"/> denies
+/// it: a revoked grant never outlives its revocation, and an approved grant is
+/// read-your-writes (issue #4001).
 /// </para>
 /// <para>
 /// The four composed checks map to the tenancy spec:
@@ -48,7 +60,10 @@ namespace Orleans.Lattice.Tenancy;
 /// </remarks>
 internal sealed class TenantGateEnforcer(
     ITenantPolicyEngine engine,
-    ITenantResidencyResolver residency) : ITenantGateEnforcer
+    ITenantResidencyResolver residency,
+    CompiledTenantPolicySnapshotMaintainer policy,
+    ITenantRegistry registry,
+    ILogger<TenantGateEnforcer> logger) : ITenantGateEnforcer
 {
     /// <summary>
     /// The read-only operation capabilities. A request composed exclusively of
@@ -60,11 +75,71 @@ internal sealed class TenantGateEnforcer(
     private const LatticeOperation ReadOnlyMask =
         LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Backup;
 
+    /// <summary>
+    /// The reason instance that marks <see cref="ConfirmationRequired"/>. Compared
+    /// by reference, so it is a private string instance no other denial shares.
+    /// </summary>
+    private static readonly string ConfirmationRequiredReason = new('?', 1);
+
+    /// <summary>
+    /// The internal marker <see cref="Decide"/> returns for a crossing it cannot
+    /// answer authoritatively. Never returned to a caller: <see cref="Enforce"/>
+    /// denies it and <see cref="EnforceAsync"/> confirms it.
+    /// </summary>
+    private static readonly LatticeAccessDecision ConfirmationRequired =
+        LatticeAccessDecision.Deny(ConfirmationRequiredReason);
+
     /// <inheritdoc />
     public bool IsActive => true;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The synchronous form cannot consult the registry, so a cross-tenant
+    /// crossing that arrives while the compiled snapshot is not authoritative is
+    /// <b>denied</b> here: its grant state cannot be confirmed, and a grant revoked
+    /// moments ago must not keep admitting access. The auth gate calls
+    /// <see cref="EnforceAsync"/>, which confirms such a crossing against the
+    /// registry instead.
+    /// </remarks>
     public LatticeAccessDecision Enforce(in LatticeAccessRequest request)
+    {
+        var decision = Decide(in request);
+        return NeedsConfirmation(in decision)
+            ? DenyUnconfirmed(PendingCrossing.From(in request))
+            : decision;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Completes synchronously, with no allocation beyond <see cref="Enforce"/>'s,
+    /// on every path except one: a cross-tenant crossing that arrives while the
+    /// compiled snapshot is not authoritative (a tenant-registry write has
+    /// scheduled a rebuild that has not landed, or rebuilds are failing). That
+    /// crossing is confirmed against the authoritative <see cref="ITenantRegistry"/>
+    /// record of the owning tenant, exactly as
+    /// <see cref="ReplicationTenantIsolationGate"/> falls back, so a revoked or
+    /// rejected grant is refused at once and an approved one is admitted at once.
+    /// A registry failure denies (fail closed).
+    /// </remarks>
+    public ValueTask<LatticeAccessDecision> EnforceAsync(
+        in LatticeAccessRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var decision = Decide(in request);
+        return NeedsConfirmation(in decision)
+            ? ConfirmCrossingAsync(PendingCrossing.From(in request), cancellationToken)
+            : new ValueTask<LatticeAccessDecision>(decision);
+    }
+
+    /// <summary>
+    /// The shared decision. Returns the final decision, or - when the request is a
+    /// cross-tenant crossing whose grant the compiled snapshot cannot answer
+    /// authoritatively - the <see cref="ConfirmationRequired"/> marker, for the
+    /// caller to deny (sync) or confirm (async). A marker rather than an
+    /// <c>out</c> descriptor keeps the steady-state frame free of a zero-initialised
+    /// struct; the crossing is re-derived from the request only on the rare path.
+    /// </summary>
+    private LatticeAccessDecision Decide(in LatticeAccessRequest request)
     {
         var owner = LatticeTenantTrees.GetOwner(request.TreeId);
 
@@ -121,11 +196,27 @@ internal sealed class TenantGateEnforcer(
             // (3) Cross-tenant: the active tenant does not own the tree. A grant
             // the owning tenant issued to the active tenant, covering this scope
             // and operation, admits the crossing; otherwise deny.
+            var operation = ToGrantOperations(request.Operation);
+
+            // The compiled snapshot is only as current as its last rebuild, and a
+            // tenant-registry write (approve, reject, revoke) only SCHEDULES one.
+            // Until it lands the snapshot still holds the pre-write grant state,
+            // so trusting it would keep a revoked grant admitting access for a
+            // whole rebuild - indefinitely if rebuilds keep failing (issue #4001).
+            // IsSnapshotAuthoritative is false exactly in that window, so the
+            // crossing is handed back for confirmation against the registry (or
+            // denied on the synchronous path). Checked before the snapshot is
+            // read; the steady state pays three field reads and allocates nothing.
+            if (!policy.IsSnapshotAuthoritative)
+            {
+                return ConfirmationRequired;
+            }
+
             var grant = engine.ResolveCrossTenantGrant(
                 activeTenant,
                 owner.Tenant,
                 request.TreeId,
-                ToGrantOperations(request.Operation));
+                operation);
             return grant.Allowed
                 ? EnforceResidency(activeTenant)
                 : Deny(grant.Reason);
@@ -139,6 +230,62 @@ internal sealed class TenantGateEnforcer(
             ? LatticeAccessDecision.Allow()
             : Deny(noSelection.Reason);
     }
+
+    /// <summary>
+    /// Confirms a pending cross-tenant crossing against the owning tenant's
+    /// authoritative registry record, compiled and resolved by the same rule the
+    /// snapshot path uses (<see cref="LatticeTenantPolicyEngine.ResolveCrossTenantGrant(CompiledTenantPolicy, TenantId, TenantId, string, TenantGrantOperations)"/>).
+    /// Fail-closed: an unregistered owner denies, and a registry failure other than
+    /// the caller's own cancellation denies rather than admitting. Runs only in the
+    /// non-authoritative window, so its allocations are off the steady state.
+    /// </summary>
+    private async ValueTask<LatticeAccessDecision> ConfirmCrossingAsync(
+        PendingCrossing crossing,
+        CancellationToken cancellationToken)
+    {
+        TenantRecord? record;
+        try
+        {
+            record = await registry.GetAsync(crossing.Owner, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not confirm tenant '{GranteeTenant}''s cross-tenant grant on tree '{TreeId}' against the tenant registry while the compiled tenant-policy snapshot was not authoritative; the crossing was denied.",
+                crossing.ActiveTenant.Value,
+                crossing.TreeId);
+            return DenyUnconfirmed(in crossing);
+        }
+
+        if (record is null)
+        {
+            return Deny($"Target tenant '{crossing.Owner}' is not registered.");
+        }
+
+        var grant = LatticeTenantPolicyEngine.ResolveCrossTenantGrant(
+            CompiledTenantPolicy.Compile([record]),
+            crossing.ActiveTenant,
+            crossing.Owner,
+            crossing.TreeId,
+            crossing.Operation);
+        return grant.Allowed
+            ? EnforceResidency(crossing.ActiveTenant)
+            : Deny(grant.Reason);
+    }
+
+    /// <summary>
+    /// The fail-closed denial for a cross-tenant crossing whose grant state could
+    /// not be confirmed.
+    /// </summary>
+    private static LatticeAccessDecision DenyUnconfirmed(in PendingCrossing crossing) =>
+        LatticeAccessDecision.Deny(
+            $"The cross-tenant grant from tenant '{crossing.Owner}' to tenant '{crossing.ActiveTenant}' "
+            + "could not be confirmed while the tenant-policy snapshot is being rebuilt.");
 
     /// <summary>
     /// (4) Applies the residency / online gate: when the residency seam is active
@@ -182,4 +329,35 @@ internal sealed class TenantGateEnforcer(
         operation != LatticeOperation.None && (operation & ~ReadOnlyMask) == 0
             ? TenantGrantOperations.Read
             : TenantGrantOperations.Write;
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="decision"/> is the
+    /// <see cref="ConfirmationRequired"/> marker rather than a final decision. The
+    /// marker's reason is a private instance compared by reference, so no engine
+    /// denial can match it.
+    /// </summary>
+    private static bool NeedsConfirmation(in LatticeAccessDecision decision) =>
+        !decision.Allowed && ReferenceEquals(decision.Reason, ConfirmationRequiredReason);
+
+    /// <summary>
+    /// A cross-tenant crossing whose grant the compiled snapshot could not answer
+    /// authoritatively.
+    /// </summary>
+    private readonly record struct PendingCrossing(
+        TenantId ActiveTenant,
+        TenantId Owner,
+        string TreeId,
+        TenantGrantOperations Operation)
+    {
+        /// <summary>
+        /// Re-derives the crossing <see cref="Decide"/> marked, from the same
+        /// request and the same ambient active tenant it read.
+        /// </summary>
+        public static PendingCrossing From(in LatticeAccessRequest request) =>
+            new(
+                LatticeActiveTenantContext.Current.GetValueOrDefault(),
+                LatticeTenantTrees.GetOwner(request.TreeId).Tenant,
+                request.TreeId,
+                ToGrantOperations(request.Operation));
+    }
 }
