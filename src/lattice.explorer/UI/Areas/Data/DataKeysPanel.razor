@@ -2,8 +2,10 @@
     The key and prefix browser. The toolbar holds the prefix (?prefix=), an
     optional tag filter, the scan mode, the page size and the live-updates
     switch; the table pages through the tree with the cached pager, the key
-    in ?key= is the current row, and its entry opens below. A live cursor the
-    server has released is reported with a way to restart from the first page.
+    in ?key= is the current row, and its entry opens beside the table at the
+    expanded width (the list and the entry read side by side, the entry kept in
+    view while the list scrolls) and below it at narrower widths. A live cursor
+    the server has released is reported with a way to restart from the first page.
 *@
 
 @if (Workspace is not null)
@@ -57,6 +59,8 @@
         </div>
     }
 
+    <div class="@(IsSplit ? "lt-data-split" : null)">
+    <div class="@(IsSplit ? "lt-data-split__list" : null)">
     @if (_cursorExpired)
     {
         <LtEmptyState Title="This scan's cursor has expired" HeadingLevel="2">
@@ -123,8 +127,12 @@
         </nav>
     }
 
+    </div>
     @if (Workspace.Key is { } key)
     {
-        <DataEntryView Key="@key" Version="@_entryVersion" />
+        <div class="@(IsSplit ? "lt-data-split__detail" : null)">
+            <DataEntryView Key="@key" Version="@_entryVersion" />
+        </div>
     }
+    </div>
 }

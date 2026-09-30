@@ -5,31 +5,39 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// <summary>
 /// The Tenancy area's addresses. The area has two halves: the tenant directory
 /// and its administration pages are cluster-wide and never tenant-rooted
-/// (<c>/tenancy</c>, <c>/tenancy/{tenant}[/grants|access|regions]</c>), while
-/// "my tenant" is always rooted at the tenant it describes
-/// (<c>/t/{tenant}/tenancy[/{section}]</c>).
+/// (<c>/tenancy</c>, <c>/tenancy/{tenant}[/members|quota|regions|sharing]</c>),
+/// while "my tenant" is always rooted at the tenant it describes
+/// (<c>/t/{tenant}/tenancy[/{section}]</c>). Both halves name their sections
+/// with the same words, so an operator and a tenant admin describe a tenant
+/// alike.
 /// </summary>
 internal static class TenancyRoutes
 {
     /// <summary>The area key.</summary>
     public const string AreaKey = "tenancy";
 
-    /// <summary>The cross-tenant grants page of one tenant.</summary>
+    /// <summary>
+    /// The earlier segment of a tenant's sharing administration page, still
+    /// answered so a saved link keeps working; <see cref="TenantSharing"/> is the canonical address.
+    /// </summary>
     public const string GrantsSegment = "grants";
 
-    /// <summary>The admin-subject page of one tenant.</summary>
+    /// <summary>
+    /// The earlier segment of a tenant's members administration page, still
+    /// answered so a saved link keeps working; <see cref="TenantMembers"/> is the canonical address.
+    /// </summary>
     public const string AccessSegment = "access";
 
     /// <summary>The regions page of one tenant, and the regions section of my tenant.</summary>
     public const string RegionsSegment = "regions";
 
-    /// <summary>The my-tenant section listing the tenant's admin subjects.</summary>
+    /// <summary>The members (admin subjects) page of one tenant, and the members section of my tenant.</summary>
     public const string MembersSegment = "members";
 
-    /// <summary>The my-tenant section showing use against quota.</summary>
+    /// <summary>The quota page of one tenant, and the quota section of my tenant.</summary>
     public const string QuotaSegment = "quota";
 
-    /// <summary>The my-tenant section holding cross-tenant grants.</summary>
+    /// <summary>The sharing (cross-tenant grants) page of one tenant, and the sharing section of my tenant.</summary>
     public const string SharingSegment = "sharing";
 
     /// <summary>The query key that opens a page's create form, used by the palette's commands.</summary>
@@ -55,13 +63,17 @@ internal static class TenancyRoutes
         return ExplorerAddress.ForArea(AreaKey, tenantId);
     }
 
-    /// <summary>The cross-tenant grants administration page of <paramref name="tenantId"/>.</summary>
+    /// <summary>The sharing (cross-tenant grants) administration page of <paramref name="tenantId"/>.</summary>
     /// <param name="tenantId">The tenant id.</param>
-    public static ExplorerAddress TenantGrants(string tenantId) => TenantPage(tenantId, GrantsSegment);
+    public static ExplorerAddress TenantSharing(string tenantId) => TenantPage(tenantId, SharingSegment);
 
-    /// <summary>The admin-subject administration page of <paramref name="tenantId"/>.</summary>
+    /// <summary>The members (admin subjects) administration page of <paramref name="tenantId"/>.</summary>
     /// <param name="tenantId">The tenant id.</param>
-    public static ExplorerAddress TenantAccess(string tenantId) => TenantPage(tenantId, AccessSegment);
+    public static ExplorerAddress TenantMembers(string tenantId) => TenantPage(tenantId, MembersSegment);
+
+    /// <summary>The quota administration page of <paramref name="tenantId"/>.</summary>
+    /// <param name="tenantId">The tenant id.</param>
+    public static ExplorerAddress TenantQuota(string tenantId) => TenantPage(tenantId, QuotaSegment);
 
     /// <summary>The region administration page of <paramref name="tenantId"/>.</summary>
     /// <param name="tenantId">The tenant id.</param>

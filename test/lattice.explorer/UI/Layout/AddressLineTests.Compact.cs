@@ -3,15 +3,17 @@ using Bunit;
 namespace Orleans.Lattice.Explorer.Tests.UI.Layout;
 
 /// <summary>
-/// The address line below the small breakpoint: the last two nodes behind a
-/// "..." node that opens the full chain as a spine, a shorter prompt with no key
-/// hints, and the command palette as a full-screen sheet.
+/// The address line below the small breakpoint: the current node behind a "..."
+/// elision that opens the full chain as a spine, on one line with a shorter
+/// prompt and no key hints, and the command palette as a full-screen sheet.
 /// </summary>
 public sealed partial class AddressLineTests
 {
     [Test]
-    public void Compact_shows_the_last_two_nodes_behind_a_more_node()
+    public void Compact_shows_the_current_node_behind_a_more_elision_on_one_line()
     {
+        // #3987: two nodes and the prompt did not fit a 390px line, so the chain
+        // wrapped and the "..." carried a node dot as if it were a node itself.
         var cut = RenderLine(Location("/data/a/crm/orders"), compact: true);
 
         var more = cut.Find(".lt-shell-address-line__more");
@@ -20,8 +22,11 @@ public sealed partial class AddressLineTests
             Assert.That(more.TextContent, Is.EqualTo("..."));
             Assert.That(more.GetAttribute("aria-label"), Is.EqualTo("Show the full address"));
             Assert.That(more.GetAttribute("aria-expanded"), Is.EqualTo("false"));
-            Assert.That(cut.FindAll(".lt-chain__link .lt-chain__text").Select(node => node.TextContent), Is.EqualTo(new[] { "...", "crm", "orders" }));
+            Assert.That(cut.FindAll(".lt-chain__link .lt-chain__text").Select(node => node.TextContent), Is.EqualTo(new[] { "...", "orders" }));
+            Assert.That(more.ParentElement!.QuerySelectorAll(".lt-node"), Is.Empty, "the elision is not a node");
+            Assert.That(cut.Find(".lt-shell-address-line__compact-chain").ClassList, Does.Contain("lt-chain"));
             Assert.That(cut.Find("[aria-current='page']").TextContent, Is.EqualTo("orders"));
+            Assert.That(cut.Find("[aria-current='page']").GetAttribute("title"), Is.EqualTo("orders"), "a clipped node keeps its whole text");
             Assert.That(cut.FindAll("kbd"), Is.Empty, "a touch screen has no keyboard to hint at");
             Assert.That(cut.Find(".lt-shell-address-line__hint").TextContent, Is.EqualTo("Go to or search"));
         });

@@ -20,7 +20,7 @@ public sealed class SchemaCardModelTests
 
     private static IEnumerable<TestCaseData> EveryCard()
     {
-        yield return new TestCaseData("required", Card(SchemaCardKind.Required, "id"), "id must be present");
+        yield return new TestCaseData("required", Card(SchemaCardKind.Required, "id"), "id must be present as text, a number or true or false");
         yield return new TestCaseData("required object", Card(SchemaCardKind.Required, "a", card => card.Structural = true), "a must be present, as any value");
         foreach (var type in Enum.GetValues<SchemaValueType>())
         {
@@ -48,7 +48,7 @@ public sealed class SchemaCardModelTests
         yield return new TestCaseData("json", Card(SchemaCardKind.Encoding), "The value must be one JSON document");
         yield return new TestCaseData("size", Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "1024"), "The value must be at most 1,024 bytes");
         yield return new TestCaseData("optional", Card(SchemaCardKind.TextLength, "s", card => { card.Maximum = "3"; card.Optional = true; }), "s must be text of at most 3 characters, when present");
-        yield return new TestCaseData("any of", Card(SchemaCardKind.AnyOf, string.Empty, card => card.Alternatives = [Card(SchemaCardKind.Type, "a"), Card(SchemaCardKind.Required, "b")]), "At least one of these must hold: a must be text or b must be present");
+        yield return new TestCaseData("any of", Card(SchemaCardKind.AnyOf, string.Empty, card => card.Alternatives = [Card(SchemaCardKind.Type, "a"), Card(SchemaCardKind.Required, "b")]), "At least one of these must hold: a must be text or b must be present as text, a number or true or false");
     }
 
     [TestCaseSource(nameof(EveryCard))]

@@ -149,7 +149,7 @@ internal sealed class ExplorerTenantSwitch
         // shown belongs to the tenant just left, so it is read again, and the
         // layout is asked to synchronise with the new tenant without moving.
         await _tenancy.RefreshAsync(cancellationToken).ConfigureAwait(true);
-        _toasts.Show(ExplorerNavigator.SwitchedNotice(tenant));
+        _toasts.Announce(ExplorerNavigator.SwitchedNotice(tenant));
         _navigator.NavigateTo(current, replace: true);
         return TenantSwitchOutcome.Switched;
     }

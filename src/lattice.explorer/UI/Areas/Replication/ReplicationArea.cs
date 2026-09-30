@@ -70,6 +70,11 @@ internal sealed class ReplicationArea : IExplorerArea
     public IReadOnlyList<ExplorerCommand> Commands { get; }
 
     /// <inheritdoc />
+    /// <remarks>A tree's page, <c>/replication/trees/{tree-path}</c>, is the trees node then the whole tree id as one node.</remarks>
+    public IReadOnlyList<int>? GetChainSpans(Navigation.Address.ExplorerAddress address) =>
+        ReplicationAddresses.TreeIdOf(address) is null ? null : [1, address.Path.Count - 1];
+
+    /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
         if (!_data.HasStatus && !_data.HasControl)

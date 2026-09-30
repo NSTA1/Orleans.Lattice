@@ -62,6 +62,23 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
     }
 
     [Test]
+    public void A_default_version_config_reads_as_unversioned_and_offers_to_turn_versioning_on()
+    {
+        // The cluster reads an absent config as family 0 at version 0 (#3985).
+        UseTrees("scratch");
+        Schema.UnversionedReadsAsDefault = true;
+
+        var cut = Open("scratch");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("[role=tabpanel] .lt-empty__title").TextContent, Is.EqualTo("Unversioned"));
+            Assert.That(cut.FindAll("button").Count(button => button.TextContent.Trim() == "Turn on versioning"), Is.EqualTo(1));
+            Assert.That(cut.Find(".lt-schema-meta").TextContent, Does.Contain("Versioning: Unversioned"));
+        });
+    }
+
+    [Test]
     public void Turning_versioning_on_sets_a_first_config()
     {
         UseTrees("scratch");

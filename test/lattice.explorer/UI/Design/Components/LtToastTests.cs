@@ -68,6 +68,51 @@ public sealed class LtToastTests : ShellDesignTestContext
     }
 
     [Test]
+    public void Announce_replaces_the_announcement_without_queueing_a_toast()
+    {
+        var service = new LtToastService();
+        var changes = 0;
+        service.Changed += () => changes++;
+
+        var first = service.Announce("Scoped to tenant acme.");
+        var second = service.Announce("Scoped to tenant acme.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(service.Announcement, Is.SameAs(second));
+            Assert.That(second.Id, Is.GreaterThan(first.Id), "the same words announced again are a new announcement");
+            Assert.That(second.Message, Is.EqualTo("Scoped to tenant acme."));
+            Assert.That(service.Toasts, Is.Empty, "an announcement is never drawn over the page");
+            Assert.That(changes, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void An_empty_announcement_is_rejected(string? message)
+    {
+        Assert.That(() => new LtToastService().Announce(message!), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void The_region_reads_out_an_announcement_it_does_not_draw()
+    {
+        var cut = Render<LtToastRegion>();
+        var service = Services.GetRequiredService<LtToastService>();
+
+        cut.InvokeAsync(() => service.Announce("Scoped to tenant acme."));
+
+        var region = cut.Find(".lt-toasts");
+        Assert.Multiple(() =>
+        {
+            Assert.That(region.QuerySelector(".lt-visually-hidden")?.TextContent, Is.EqualTo("Scoped to tenant acme."));
+            Assert.That(cut.FindAll(".lt-toast"), Is.Empty);
+        });
+    }
+
+    [Test]
     public void The_region_is_always_present_as_a_polite_named_live_region()
     {
         var region = Render<LtToastRegion>().Find(".lt-toasts");

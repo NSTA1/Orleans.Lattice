@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
@@ -79,6 +80,19 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
 
     /// <summary>Forgets the remembered list, so the next read goes to the cluster.</summary>
     public void Invalidate() => _remembered = null;
+
+    /// <summary>
+    /// The tenant the catalogue is narrowed to when the circuit asserts
+    /// <paramref name="assertedTenant"/>: the cluster lists only that tenant's
+    /// trees under any tenant but the reserved default. <see langword="null"/>
+    /// when the listing is every tenant's - no tenant, or the default one.
+    /// </summary>
+    /// <param name="assertedTenant">The tenant the circuit asserts, or <see langword="null"/>.</param>
+    /// <returns>The narrowing tenant, or <see langword="null"/>.</returns>
+    public static string? NarrowingTenant(string? assertedTenant) =>
+        string.IsNullOrEmpty(assertedTenant) || string.Equals(assertedTenant, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal)
+            ? null
+            : assertedTenant;
 
     /// <summary>Projects catalogue entries onto logical trees, dropping every physical shadow.</summary>
     /// <param name="entries">The raw catalogue.</param>

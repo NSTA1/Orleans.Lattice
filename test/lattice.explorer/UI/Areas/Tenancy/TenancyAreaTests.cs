@@ -116,7 +116,7 @@ public sealed class TenancyAreaTests : TenancyTestContext
         Assert.Multiple(() =>
         {
             Assert.That(navigator.Canonicalize(TenancyRoutes.Directory).Format(), Is.EqualTo("/tenancy"));
-            Assert.That(navigator.Canonicalize(TenancyRoutes.TenantGrants("globex")).Format(), Is.EqualTo("/tenancy/globex/grants"));
+            Assert.That(navigator.Canonicalize(TenancyRoutes.TenantSharing("globex")).Format(), Is.EqualTo("/tenancy/globex/sharing"));
             Assert.That(navigator.Canonicalize(TenancyRoutes.MyTenant("acme", TenancyRoutes.QuotaSegment)).Format(), Is.EqualTo("/t/acme/tenancy/quota"));
             Assert.That(navigator.ReRoot(TenancyRoutes.Directory, "globex").Format(), Is.EqualTo("/tenancy"));
             Assert.That(navigator.ReRoot(TenancyRoutes.MyTenant("acme"), "globex").Format(), Is.EqualTo("/t/globex/tenancy"));

@@ -4,6 +4,7 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Navigation;
@@ -115,9 +116,11 @@ public sealed class ClusterAreaTests
     {
         _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>())
             .Returns(new ClusterStorageUsageSummary { TreeCount = 1204, TotalBytes = 3L * 1024 * 1024 * 1024 });
+        UseTrees("a/crm/orders", "orders", "t/acme/orders", "invoices");
         var area = CreateArea();
 
         var before = await area.GetHomeStatusAsync(CancellationToken.None);
+        var beforeBadge = await area.GetDirectoryBadgeAsync(CancellationToken.None);
         var availability = await area.GetAvailabilityAsync(CancellationToken.None);
         var status = await area.GetHomeStatusAsync(CancellationToken.None);
         var badge = await area.GetDirectoryBadgeAsync(CancellationToken.None);
@@ -125,9 +128,96 @@ public sealed class ClusterAreaTests
         Assert.Multiple(() =>
         {
             Assert.That(before, Is.Null, "nothing is known before the probe");
+            Assert.That(beforeBadge, Is.Null, "nor counted");
             Assert.That(availability, Is.EqualTo(AreaAvailability.Visible));
-            Assert.That(status, Is.EqualTo("1,204 trees, 3.0 GiB stored."));
-            Assert.That(badge, Is.EqualTo("1,204"));
+            Assert.That(status, Is.EqualTo("4 trees, plus 1,200 system trees, 3.0 GiB stored."), "the count the tree list shows, the rest named");
+            Assert.That(badge, Is.EqualTo("4"), "the badge counts what /cluster/trees lists");
+        });
+    }
+
+    [Test]
+    public async Task With_nothing_unlisted_the_status_names_only_the_listed_trees()
+    {
+        _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageSummary { TreeCount = 2, TotalBytes = 2048 });
+        UseTrees("orders", "invoices");
+        var area = CreateArea();
+
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("2 trees, 2.0 KiB stored."));
+    }
+
+    [Test]
+    public async Task When_the_tree_list_cannot_be_read_the_status_labels_the_total_and_there_is_no_badge()
+    {
+        _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageSummary { TreeCount = 22, TotalBytes = 2048 });
+        _session.Connection.ListTreesAsync(Arg.Any<CatalogRequest>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new TimeoutException());
+        var area = CreateArea();
+
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        var status = await area.GetHomeStatusAsync(CancellationToken.None);
+        var badge = await area.GetDirectoryBadgeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo("22 trees including system trees, 2.0 KiB stored."));
+            Assert.That(badge, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Under_a_tenant_the_status_says_whose_trees_it_counts()
+    {
+        _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageSummary { TreeCount = 23, TotalBytes = 2048 });
+        UseTrees("t/globex/factory-floor", "t/globex/orders");
+        var tenant = Substitute.For<ILatticeActiveTenantProvider>();
+        tenant.AssertedTenant.Returns("globex");
+        var facades = Facades(tenant: new ShellAssertedTenant(tenant));
+        var area = new ClusterArea(facades, new ClusterTreeCatalog(facades, _time), new ClusterCommandSignals());
+
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        var status = await area.GetHomeStatusAsync(CancellationToken.None);
+        var badge = await area.GetDirectoryBadgeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo("2 trees of tenant globex, 23 in the cluster, 2.0 KiB stored."));
+            Assert.That(badge, Is.EqualTo("2"));
+        });
+    }
+
+    [Test]
+    public void The_catalogue_is_narrowed_only_under_a_tenant_other_than_the_default()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ClusterTreeCatalog.NarrowingTenant(null), Is.Null);
+            Assert.That(ClusterTreeCatalog.NarrowingTenant(string.Empty), Is.Null);
+            Assert.That(ClusterTreeCatalog.NarrowingTenant("default"), Is.Null);
+            Assert.That(ClusterTreeCatalog.NarrowingTenant("globex"), Is.EqualTo("globex"));
+        });
+    }
+
+    [Test]
+    public void A_tree_page_is_one_chain_node_for_the_whole_tree_id()
+    {
+        var area = CreateArea();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster/trees/t/acme/a/crm/orders")), Is.EqualTo(new[] { 1, 5 }));
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster/trees/t/acme/orders/resize?x=1")), Is.EqualTo(new[] { 1, 3, 1 }));
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster/trees/jobs/tools/overview")), Is.EqualTo(new[] { 1, 2, 1 }));
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster/trees/orders?tab=lifecycle")), Is.EqualTo(new[] { 1, 1 }));
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster/trees")), Is.Null);
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster/wal?tree=a%2Fb")), Is.Null);
+            Assert.That(area.GetChainSpans(ExplorerAddress.Parse("/cluster")), Is.Null);
         });
     }
 
@@ -283,10 +373,14 @@ public sealed class ClusterAreaTests
         _session.Connection.ListTreesAsync(Arg.Any<CatalogRequest>(), Arg.Any<CancellationToken>())
             .Returns(new TreeCatalogPage { Entries = [.. ids.Select(id => ClusterTestContext.Tree(id))] });
 
-    private ClusterFacades Facades(bool withAdmin = true, FakeExplorerSession? session = null)
+    private ClusterFacades Facades(bool withAdmin = true, FakeExplorerSession? session = null, ShellAssertedTenant? tenant = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IExplorerSession>(session ?? _session);
+        if (tenant is not null)
+        {
+            services.AddSingleton(tenant);
+        }
         if (withAdmin)
         {
             services.AddKeyedSingleton(ShellFacades.Key, _admin);

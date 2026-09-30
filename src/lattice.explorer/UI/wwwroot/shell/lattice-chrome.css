@@ -99,6 +99,13 @@
   padding-inline: var(--lt-space-3);
 }
 
+/* Compact, the mark sits closer to a slightly smaller name, so "Lattice
+   Explorer" fits whole between the two controls on a 360px screen. */
+.lt-shell--compact .lt-shell-brand {
+  gap: var(--lt-space-1);
+  font-size: var(--lt-text-sm);
+}
+
 .lt-shell-brand {
   display: inline-flex;
   align-items: center;
@@ -183,6 +190,18 @@
 .lt-shell-tenant__toggle {
   gap: var(--lt-space-2);
   max-width: 16rem;
+}
+
+/* The toggle is a disclosure: the marker fill means "open" and nothing else, so
+   a pointer resting on it after the panel closes - or where the button lands on
+   a fresh page - shades it no further than the quiet hover every row uses. */
+.lt-shell-tenant__toggle:hover {
+  background: var(--lt-op-row-hover);
+}
+
+.lt-shell-tenant__toggle[aria-expanded="true"] {
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
 }
 
 .lt-shell-tenant__term {
@@ -302,6 +321,27 @@
   padding: var(--lt-space-2) 0 var(--lt-space-3);
 }
 
+/* Compact, the line holds the elision, the current node and the prompt on one
+   row: the chain gives way first and clips its node's text, the prompt never. */
+.lt-shell--compact .lt-shell-address-line .lt-chain-nav {
+  flex: 1 1 auto;
+}
+
+.lt-shell--compact .lt-shell-address-line__edit {
+  flex: 0 0 auto;
+}
+
+.lt-shell-address-line__compact-chain {
+  flex-wrap: nowrap;
+}
+
+.lt-shell-address-line__compact-chain .lt-chain__text--current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lt-shell-address-line--editing {
   display: block;
 }
@@ -377,7 +417,9 @@
   cursor: pointer;
 }
 
-.lt-shell-combobox__option:hover {
+/* The pointer shades an option only once it has moved over the list, so a list
+   opening under a resting pointer shows one highlight: the active option. */
+.lt-shell-combobox__popup--pointer .lt-shell-combobox__option:hover {
   background: var(--lt-op-row-hover);
   color: var(--lt-ink);
 }
@@ -578,6 +620,13 @@
 .lt-shell--compact .lt-toolbar {
   flex-direction: column;
   align-items: stretch;
+}
+
+/* Stacked, the row's main axis is vertical, so an item's flex basis would be a
+   height: a search field meant to take the spare width of a row would stand
+   18rem tall instead. Each stacked item is as tall as its content. */
+.lt-shell--compact .lt-toolbar > * {
+  flex: 0 0 auto;
 }
 
 /* ==========================================================================

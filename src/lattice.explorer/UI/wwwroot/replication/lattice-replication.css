@@ -53,9 +53,31 @@
 }
 
 .lt-replication-sections__link:focus-visible,
+.lt-replication-back__link:focus-visible,
 .lt-replication-map__peer-link:focus-visible {
   outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
   outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+/* One tree's page is below both sections: the way back to the enrolled trees
+   stands where the row would, on the same hairline. */
+.lt-replication-back {
+  margin: 0 0 var(--lt-space-5);
+  padding-bottom: var(--lt-space-2);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-replication-back__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  color: var(--lt-link);
+  font-weight: var(--lt-weight-label);
+  text-underline-offset: 0.15em;
+}
+
+.lt-replication-back__link:hover {
+  color: var(--lt-link-hover);
 }
 
 /* ==========================================================================

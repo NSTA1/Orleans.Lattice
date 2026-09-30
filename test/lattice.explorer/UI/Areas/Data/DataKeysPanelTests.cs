@@ -99,6 +99,56 @@ public sealed class DataKeysPanelTests : DataTestContext
     }
 
     [Test]
+    public void At_the_expanded_width_an_open_entry_stands_beside_the_key_table()
+    {
+        // #3987: the entry rendered below the whole table, so opening a key meant
+        // scrolling past the list to read it.
+        Client.WithTree("orders");
+        Client.Entries["orders"]["doc"] = FakeStateClient.Entry("doc", "{\"a\":1}");
+
+        var cut = RenderAt("data/orders?key=doc");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-split__detail .lt-data-entry"), Has.Count.EqualTo(1)));
+        var split = cut.Find(".lt-data-split");
+        Assert.Multiple(() =>
+        {
+            Assert.That(split.Children.Select(child => child.ClassName), Is.EqualTo(new[] { "lt-data-split__list", "lt-data-split__detail" }));
+            Assert.That(split.QuerySelector(".lt-data-split__list table"), Is.Not.Null, "the key table is the list side");
+            Assert.That(split.QuerySelector(".lt-data-split__list .lt-data-pager"), Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public void Without_an_open_entry_there_is_no_split()
+    {
+        Client.WithTree("orders");
+        Client.Entries["orders"]["doc"] = FakeStateClient.Entry("doc", "{\"a\":1}");
+
+        var cut = RenderAt("data/orders");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("table"), Has.Count.EqualTo(1)));
+        Assert.That(cut.FindAll(".lt-data-split, .lt-data-entry"), Is.Empty);
+    }
+
+    [Test]
+    public void At_the_compact_width_the_entry_stays_below_the_list()
+    {
+        Client.WithTree("orders");
+        Client.Entries["orders"]["doc"] = FakeStateClient.Entry("doc", "{\"a\":1}");
+
+        var cut = RenderAt("data/orders?key=doc", compact: true);
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-entry"), Has.Count.EqualTo(1)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-data-split, .lt-data-split__detail"), Is.Empty);
+            var list = cut.Find(".lt-table-list");
+            var entry = cut.Find(".lt-data-entry");
+            Assert.That(list.CompareDocumentPosition(entry).HasFlag(AngleSharp.Dom.DocumentPositions.Following), Is.True, "stacked, the entry follows the list");
+        });
+    }
+
+    [Test]
     public void Each_value_renderer_draws_the_same_bytes_its_own_way()
     {
         Client.WithTree("orders");
