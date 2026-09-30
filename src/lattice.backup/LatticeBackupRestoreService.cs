@@ -1231,7 +1231,7 @@ internal sealed class LatticeBackupRestoreService(
                     $"Backup '{manifest.Id}' references artifact '{descriptor.ArtifactId}', which is absent from the sink.");
             }
 
-            var actual = Convert.ToHexStringLower(hasher.GetHashAndReset());
+            var actual = BackupContentHash.ToHexLowerAndReset(hasher);
             if (!string.Equals(actual, descriptor.ContentHash, StringComparison.Ordinal))
             {
                 throw new LatticeRestoreValidationException(

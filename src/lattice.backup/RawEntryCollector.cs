@@ -103,7 +103,7 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
             }
         }
 
-        _contentHash = Convert.ToHexStringLower(_hasher.GetHashAndReset());
+        _contentHash = BackupContentHash.ToHexLowerAndReset(_hasher);
         _hasher.Dispose();
     }
 

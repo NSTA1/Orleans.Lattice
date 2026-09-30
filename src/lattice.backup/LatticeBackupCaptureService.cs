@@ -1129,6 +1129,6 @@ internal sealed class LatticeBackupCaptureService(
             hasher.AppendData("\n"u8);
         }
 
-        return Convert.ToHexStringLower(hasher.GetHashAndReset());
+        return BackupContentHash.ToHexLowerAndReset(hasher);
     }
 }
