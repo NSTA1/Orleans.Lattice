@@ -168,14 +168,22 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   `ILatticeAccessGate` is made tenant-aware: a request is denied unless the
   subject's active tenant owns the target tree (prefix match), or an explicit
   cross-tenant grant or platform-operator scope authorizes it.
-- **Grant changes take effect at once.** The gate answers from a compiled snapshot
-  of the tenant registry, and a registry write (approving, rejecting, or revoking a
-  grant) only schedules a background rebuild of it. While that rebuild is
-  outstanding, or while rebuilds are failing, the gate confirms a cross-tenant
-  crossing against the registry itself, so a revoked grant stops admitting access
-  as soon as the revocation commits and an approved one admits the next request.
-  A crossing whose grant cannot be confirmed is denied. Only crossings in that
-  window pay the registry read; the steady state stays an in-memory decision.
+- **Membership, status and grant changes take effect at once.** The gate answers
+  from a compiled snapshot of the tenant registry, and a registry write (adding or
+  removing a tenant admin, suspending or deleting a tenant, approving, rejecting, or
+  revoking a grant) only schedules a background rebuild of it. While that rebuild
+  is outstanding, or while rebuilds are failing, the gate confirms every request
+  that acts as an asserted active tenant against the registry itself: the active
+  tenant's record must exist, be `Active`, and list the subject as an admin (the
+  same rule the snapshot applies), and a cross-tenant crossing must also find an
+  active grant in the owning tenant's record. Both checks must pass on their own.
+  So a removed admin, or a subject acting as a just-suspended or deleted tenant, is
+  refused on that tenant's own trees as soon as the write commits, a revoked grant
+  stops admitting access, and an added admin or an approved grant admits the next
+  request. An owned-tree request reads one record and a crossing reads its two
+  records concurrently. A request that cannot be confirmed (for example because the
+  registry read fails) is denied. Only requests in that window pay the registry
+  read; the steady state stays an in-memory decision.
 - **Every silo sees the change.** The change feed that drives the rebuild fires only
   on the silo whose grain committed the registry write, so each silo's snapshot is
   also kept current by a cluster-wide tenant-policy epoch. Before a registry write
@@ -186,7 +194,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   of `PolicySnapshotLeaseDuration`) and has compiled the latest epoch it has seen.
   A silo that cannot know it is current - its lease has lapsed, it has been told of a
   change it has not compiled, or it could not publish a write of its own - confirms
-  crossings against the registry (or denies) exactly as above, and the inbound
+  active-tenant requests and crossings against the registry (or denies) exactly as above, and the inbound
   replication isolation gate falls back to the registry for tenant existence and
   status in the same windows. The steady state pays only a few field reads and a
   timestamp read. A restarted epoch holds each write open for one lease, so no silo
