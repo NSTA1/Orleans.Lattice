@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
@@ -153,20 +154,68 @@ public class AzureTableWalStorageProviderParallelismTests
         // and disposes the loser; if the race were lost, two
         // workers would coexist for one shard and break strict
         // offset ordering.
+        //
+        // The participants run on dedicated threads, not Task.Run: 64
+        // thread-pool work items all blocked in SignalAndWait deadlock
+        // a cold pool smaller than 64 threads (issue #4034). Dedicated
+        // threads keep the genuine 64-way simultaneous release, and
+        // every wait is bounded so a regression fails fast instead of
+        // hanging the run.
         await using var sut = CreateProvider();
 
         const int concurrency = 64;
-        using var barrier = new Barrier(concurrency);
-        var observed = new PhaseTwoWorker[concurrency];
+        var budget = TimeSpan.FromSeconds(30);
+        var barrier = new Barrier(concurrency);
+        var observed = new PhaseTwoWorker?[concurrency];
+        var failures = new ConcurrentQueue<Exception>();
 
-        var tasks = Enumerable.Range(0, concurrency).Select(i => Task.Run(() =>
+        var threads = new Thread[concurrency];
+        for (var i = 0; i < concurrency; i++)
         {
-            barrier.SignalAndWait();
-            observed[i] = sut.GetOrCreatePhaseTwoWorker("racing-tree", 0);
-        })).ToArray();
+            var index = i;
+            threads[i] = new Thread(() =>
+            {
+                try
+                {
+                    if (barrier.SignalAndWait(budget))
+                    {
+                        observed[index] = sut.GetOrCreatePhaseTwoWorker("racing-tree", 0);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Enqueue(ex);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = $"phase-two-race-{index}",
+            };
+        }
 
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        foreach (var thread in threads)
+        {
+            thread.Start();
+        }
 
+        var deadline = DateTime.UtcNow + budget;
+        var unfinished = threads.Count(thread =>
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            return !thread.Join(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+        });
+
+        Assert.That(unfinished, Is.Zero,
+            $"every racing thread must finish within {budget.TotalSeconds}s; a hang here is a harness or election defect, not a pass");
+
+        // Disposed only once every participant has left the barrier:
+        // disposing a Barrier with threads still inside it is undefined.
+        barrier.Dispose();
+
+        Assert.That(failures, Is.Empty,
+            "no racing thread may throw from the barrier or from GetOrCreatePhaseTwoWorker");
+        Assert.That(observed, Has.All.Not.Null,
+            "every participant must pass the barrier and observe a worker; a null means SignalAndWait timed out");
         Assert.That(observed.Distinct().Count(), Is.EqualTo(1),
             "concurrent GetOrCreatePhaseTwoWorker calls for the same shard must converge on one winner");
         Assert.That(sut._phaseTwoWorkers.Count, Is.EqualTo(1),
