@@ -1226,6 +1226,8 @@ concepts:
       in_scope:
         - statement: "Only matching keys or values cross the wire."
           source: "FEATURES.md"
+        - statement: "Structural node kinds (TypeOf, Length, Every, Self) test a value's shape and are built on LatticePredicateNode directly, not translated from a lambda."
+          source: "docs/lattice/predicated-operations.md"
       out_of_scope:
         - statement: "Does not run arbitrary client-side code outside the documented expression surface."
           source: "docs/lattice/predicated-operations.md"

@@ -526,6 +526,11 @@
           "name": "Children",
           "type": "LatticePredicateNode[]?",
           "required": false
+        },
+        {
+          "name": "ValueKind",
+          "type": "LatticeValueKind",
+          "required": true
         }
       ],
       "source": "src/lattice/Predicates/LatticePredicateNode.cs#LatticePredicateNode"
@@ -537,7 +542,11 @@
         "Constant",
         "Compare",
         "Boolean",
-        "StringMethod"
+        "StringMethod",
+        "TypeOf",
+        "Length",
+        "Every",
+        "Self"
       ],
       "source": "src/lattice/Predicates/LatticePredicateNodeKind.cs#LatticePredicateNodeKind"
     },
@@ -677,6 +686,20 @@
         }
       ],
       "source": "src/lattice/LatticeTreeOwnershipDeniedException.cs#LatticeTreeOwnershipDeniedException"
+    },
+    "LatticeValueKind": {
+      "kind": "enum",
+      "values": [
+        "Present",
+        "Null",
+        "Boolean",
+        "Number",
+        "Integer",
+        "String",
+        "Object",
+        "Array"
+      ],
+      "source": "src/lattice/Predicates/LatticeValueKind.cs#LatticeValueKind"
     },
     "LeafProjectionDigest": {
       "kind": "struct",

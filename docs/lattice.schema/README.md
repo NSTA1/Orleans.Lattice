@@ -74,6 +74,42 @@ To layer further option delegates after registration, use
 `ConfigureLatticeSchemaEnforcement(Action<LatticeSchemaEnforcementOptions>)` and
 `ConfigureLatticeSchemaVersioning(Action<LatticeSchemaVersioningOptions>)`.
 
+## Previewing a policy
+
+`LatticeSchemaPolicyValidator` checks values against a `LatticeSchemaPolicy`
+exactly as enforcement does, without writing anything. It compiles the rules once,
+with the same checks setting the policy runs, so a rule that could not be set (a
+structurally invalid rule, or a pattern that does not compile) throws
+`ArgumentException` from its constructor. `Validate` then judges a value against
+every rule in order and returns `null` when it complies, or the first failing
+rule's reason. `ValidateRule` judges it against one rule by its zero-based
+position. A console or a tool uses it to preview a draft policy against sample
+values before setting it; the Explorer's schema rule builder does exactly that.
+
+```csharp verify
+using Orleans.Lattice.Schema;
+
+var policy = new LatticeSchemaPolicy(
+[
+    LatticeSchemaRule.Json(),
+    LatticeSchemaRule.Structured(
+        LatticePredicateNode.TypeOf("id", LatticeValueKind.Present),
+        description: "id is required"),
+]);
+
+var validator = new LatticeSchemaPolicyValidator(policy);
+
+// null when the value complies; otherwise the first failing rule's reason.
+string? reason = validator.Validate(Encoding.UTF8.GetBytes("""{"name":"widget"}"""));
+
+// Judge one rule on its own, by its position in policy.Rules.
+string? idRule = validator.ValidateRule(1, Encoding.UTF8.GetBytes("""{"id":"a1"}"""));
+```
+
+The validator judges the bytes it is given. For a tree that also uses schema
+versioning, strip the version envelope from a stored value first
+(`LatticeSchemaEnvelope.StripToBody`), because a policy judges the body.
+
 ## Documents
 
 | Document | What it covers |
