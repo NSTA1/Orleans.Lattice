@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -36,6 +37,16 @@ namespace Orleans.Lattice.Explorer.Web;
 /// the presented cookie value in-process, and <see cref="GetAsync"/> refuses a revoked
 /// value, whether or not the delete header could be sent.
 /// </para>
+/// <para>
+/// That revocation ledger is process-local, bounded, and lost on restart, so it is
+/// not by itself sufficient to hold the endpoint binding: a restart, a second web-head
+/// replica, or an eviction would each resurrect a signed-out cookie. The binding is
+/// therefore recorded in the payload itself - <see cref="SetAsync"/> stamps the
+/// endpoint the credential was minted for and <see cref="GetAsync"/> refuses any
+/// credential whose stamp is not recognisably the endpoint now configured, failing
+/// closed when no endpoint can be resolved. The ledger remains as the prompt,
+/// same-process half of a sign-out.
+/// </para>
 /// </remarks>
 public sealed class CookieCredentialStore : ICredentialStore
 {
@@ -52,6 +63,8 @@ public sealed class CookieCredentialStore : ICredentialStore
 
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IDataProtector _protector;
+    private readonly IExplorerConfigStore? _configStore;
+    private readonly IExplorerConfigurationSeed? _configurationSeed;
 
     // Cookie values whose credential has been revoked by ClearAsync. Keyed by a
     // SHA-256 digest of the value rather than the value itself, so the revocation
@@ -66,21 +79,52 @@ public sealed class CookieCredentialStore : ICredentialStore
     public CookieCredentialStore(
         IHttpContextAccessor httpContextAccessor,
         IDataProtectionProvider dataProtectionProvider)
+        : this(httpContextAccessor, dataProtectionProvider, configStore: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates the cookie store, binding each persisted credential to the endpoint
+    /// it was minted for.
+    /// </summary>
+    /// <param name="httpContextAccessor">Accessor for the current request context.</param>
+    /// <param name="dataProtectionProvider">The Data Protection provider used to encrypt the cookie payload.</param>
+    /// <param name="configStore">
+    /// The process-wide configuration document naming the endpoint every circuit
+    /// dials. Supplied, the store stamps that endpoint into the cookie payload and
+    /// refuses on read a credential minted for a different one. Omitted, no binding
+    /// is recorded and the endpoint check cannot run, so a host that wants it must
+    /// register a store. It is a singleton, as this store is, so reading it here
+    /// captures no per-circuit state.
+    /// </param>
+    /// <param name="configurationSeed">
+    /// The first-run seed consulted when nothing is persisted yet, mirroring the
+    /// order <c>ExplorerSession</c> itself loads in. Without it an endpoint supplied
+    /// by environment variable would resolve as absent, and the fail-closed read
+    /// below would refuse every credential on a launcher-configured head.
+    /// </param>
+    public CookieCredentialStore(
+        IHttpContextAccessor httpContextAccessor,
+        IDataProtectionProvider dataProtectionProvider,
+        IExplorerConfigStore? configStore,
+        IExplorerConfigurationSeed? configurationSeed = null)
     {
         ArgumentNullException.ThrowIfNull(httpContextAccessor);
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
         _httpContextAccessor = httpContextAccessor;
         _protector = dataProtectionProvider.CreateProtector(Purpose);
+        _configStore = configStore;
+        _configurationSeed = configurationSeed;
     }
 
     /// <inheritdoc />
-    public Task<StoredCredential?> GetAsync(CancellationToken cancellationToken = default)
+    public async Task<StoredCredential?> GetAsync(CancellationToken cancellationToken = default)
     {
         var context = _httpContextAccessor.HttpContext;
         var cookie = context?.Request.Cookies[CookieName];
         if (string.IsNullOrEmpty(cookie))
         {
-            return Task.FromResult<StoredCredential?>(null);
+            return null;
         }
 
         // A revoked value is treated as absent. ClearAsync cannot always delete the
@@ -88,22 +132,63 @@ public sealed class CookieCredentialStore : ICredentialStore
         // was signed out; honouring it here is what would replay it.
         if (IsRevoked(cookie))
         {
-            return Task.FromResult<StoredCredential?>(null);
+            return null;
+        }
+
+        string json;
+        try
+        {
+            json = _protector.Unprotect(cookie);
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
+        {
+            return null;
+        }
+
+        CredentialEnvelope? envelope;
+        try
+        {
+            envelope = JsonSerializer.Deserialize<CredentialEnvelope>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        // The bound shape. Honour it only for the endpoint it was minted for: the
+        // revocation ledger above is process-local and bounded, so it cannot be the
+        // only thing standing between a surviving cookie and a replay of this
+        // password to whoever now answers at a new address.
+        if (envelope?.Credential is { } bound)
+        {
+            var current = await ResolveEndpointAsync(cancellationToken).ConfigureAwait(false);
+
+            // Fail closed: an endpoint that cannot be resolved, or one that is not
+            // recognisably the endpoint this credential was minted for, refuses.
+            return IsSameEndpoint(envelope.Endpoint, current) ? bound : null;
+        }
+
+        // The legacy unbound shape, written before this store stamped an endpoint or
+        // by a host that registered no configuration store. There is nothing to check
+        // it against, so it is served only when this store could not have bound it in
+        // the first place; a host that binds refuses what it cannot verify.
+        if (_configStore is not null)
+        {
+            return null;
         }
 
         try
         {
-            var json = _protector.Unprotect(cookie);
-            return Task.FromResult(JsonSerializer.Deserialize<StoredCredential>(json));
+            return JsonSerializer.Deserialize<StoredCredential>(json);
         }
-        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or JsonException or FormatException)
+        catch (JsonException)
         {
-            return Task.FromResult<StoredCredential?>(null);
+            return null;
         }
     }
 
     /// <inheritdoc />
-    public Task SetAsync(StoredCredential credential, CancellationToken cancellationToken = default)
+    public async Task SetAsync(StoredCredential credential, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(credential);
 
@@ -118,10 +203,25 @@ public sealed class CookieCredentialStore : ICredentialStore
         // state, so skip the write and let the next /auth/login request reconcile it.
         if (context.Response.HasStarted)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        var payload = _protector.Protect(JsonSerializer.Serialize(credential));
+        // Stamp the endpoint this credential is being minted for, so a later read
+        // against a different endpoint can refuse it. A host with no configuration
+        // store records the legacy unbound shape, which that read serves only when
+        // no binding was possible.
+        string payloadJson;
+        if (_configStore is null)
+        {
+            payloadJson = JsonSerializer.Serialize(credential);
+        }
+        else
+        {
+            var endpoint = await ResolveEndpointAsync(cancellationToken).ConfigureAwait(false);
+            payloadJson = JsonSerializer.Serialize(new CredentialEnvelope(endpoint, credential));
+        }
+
+        var payload = _protector.Protect(payloadJson);
         context.Response.Cookies.Append(CookieName, payload, new CookieOptions
         {
             HttpOnly = true,
@@ -129,8 +229,6 @@ public sealed class CookieCredentialStore : ICredentialStore
             SameSite = SameSiteMode.Strict,
             IsEssential = true,
         });
-
-        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -146,8 +244,15 @@ public sealed class CookieCredentialStore : ICredentialStore
         // of a sign-out; this is the half that has to hold, because on a Blazor circuit
         // the accessor returns the long-lived SignalR request whose response headers
         // are already sent and no delete can be written at all.
+        //
+        // Only a value this store actually minted is admitted to the bounded ledger.
+        // The presented cookie is caller-supplied and /auth/logout needs no sign-in,
+        // so admitting junk would let an anonymous caller enqueue MaxRevocations
+        // fabricated values and evict a genuine revocation - flushing the ledger and
+        // bringing a signed-out credential back to life. A value that does not
+        // unprotect can never be honoured by GetAsync anyway, so it needs no slot.
         var presented = context.Request.Cookies[CookieName];
-        if (!string.IsNullOrEmpty(presented))
+        if (!string.IsNullOrEmpty(presented) && IsMintedHere(presented))
         {
             Revoke(presented);
         }
@@ -197,4 +302,83 @@ public sealed class CookieCredentialStore : ICredentialStore
 
     private static string Digest(string cookieValue) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cookieValue)));
+
+    /// <summary>
+    /// Reports whether <paramref name="cookieValue"/> is a payload this store
+    /// protected, and so is capable of being honoured on a later read.
+    /// </summary>
+    private bool IsMintedHere(string cookieValue)
+    {
+        try
+        {
+            _protector.Unprotect(cookieValue);
+            return true;
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads the endpoint the console is currently pointed at, or
+    /// <see langword="null"/> when no configuration store is registered or the
+    /// document names none.
+    /// </summary>
+    private async Task<string?> ResolveEndpointAsync(CancellationToken cancellationToken)
+    {
+        if (_configStore is null)
+        {
+            return null;
+        }
+
+        ExplorerConfiguration? configuration;
+        try
+        {
+            configuration = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Fail closed: an unreadable configuration resolves no endpoint, and an
+            // unresolvable endpoint refuses the credential rather than replaying it.
+            return null;
+        }
+
+        // Nothing persisted yet: fall back to the first-run seed, in the same order
+        // ExplorerSession.InitializeAsync loads in. A launcher-configured head names
+        // its endpoint by environment variable and never writes the document, so
+        // consulting only the store would resolve no endpoint there and refuse every
+        // credential the head itself had just minted.
+        configuration ??= _configurationSeed?.TrySeed();
+
+        return configuration?.Endpoint;
+    }
+
+    /// <summary>
+    /// Compares the endpoint a credential was minted for against the current one.
+    /// Deliberately conservative, matching the auth session's own comparison:
+    /// anything that is not recognisably the same endpoint is a different one.
+    /// </summary>
+    private static bool IsSameEndpoint(string? mintedFor, string? current)
+    {
+        if (string.IsNullOrWhiteSpace(mintedFor) || string.IsNullOrWhiteSpace(current))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            mintedFor.TrimEnd('/'),
+            current.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The persisted cookie payload: a credential together with the endpoint it was
+    /// minted for. The legacy shape serialized a bare <see cref="StoredCredential"/>,
+    /// which deserializes here with a null <see cref="Credential"/> and is how the
+    /// two are told apart.
+    /// </summary>
+    /// <param name="Endpoint">The endpoint the credential was minted for.</param>
+    /// <param name="Credential">The credential itself.</param>
+    private sealed record CredentialEnvelope(string? Endpoint, StoredCredential? Credential);
 }

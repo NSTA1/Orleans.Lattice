@@ -79,8 +79,20 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
 
         services.AddLatticeExplorerWeb();
 
+        // Resolved rather than read off the descriptor: the store is composed by an
+        // explicit factory (so the optional endpoint binding cannot be dropped by a
+        // failed constructor probe), and a factory descriptor carries no
+        // ImplementationType. Resolving asserts the same thing more strongly - that
+        // what a host actually gets is the cookie store, and that its dependencies
+        // are all satisfiable from this registration.
+        using var provider = services.BuildServiceProvider();
         var descriptor = services.Single(d => d.ServiceType == typeof(ICredentialStore));
-        Assert.That(descriptor.ImplementationType, Is.EqualTo(typeof(CookieCredentialStore)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            Assert.That(provider.GetRequiredService<ICredentialStore>(), Is.TypeOf<CookieCredentialStore>());
+        });
     }
 
     [Test]
