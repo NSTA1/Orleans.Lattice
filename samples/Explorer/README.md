@@ -44,6 +44,14 @@ sample runs until you press Ctrl+C.
 Pass switches after `--`, for example
 `dotnet run --project samples/Explorer/Explorer.csproj -- --sign-in-as acme-admin`.
 
+The sample keeps its terminal quiet: it clears every logging provider. The one
+record the console region writes there is a circuit fault, Blazor's own `Error`
+record of an unhandled exception that ended the console's circuit, with its stack
+trace, so a console that stops responding always leaves a reason behind. It logs
+no user input. When the sample runs in Development (set
+`ASPNETCORE_ENVIRONMENT=Development`), Blazor's `DetailedErrors` is also on, so
+the browser is sent the fault's detail too.
+
 ### What runs
 
 | | `east` | `west` |
@@ -355,6 +363,7 @@ console's sign-in. See
 | `PeerLink.cs` | The switch that pauses cross-region replication. |
 | `ReplicationWriter.cs` | The bounded background writer. |
 | `DemoBasicAuthenticator.cs` | The trusted-token authenticator behind the Basic sign-in. |
+| `SampleCircuitDiagnostics.cs` | The console region's terminal log of circuit faults, and `DetailedErrors` in Development. |
 | `test/` | `Explorer.Tests`: option parsing and the sample's parts, plus smoke tests that start the sample in-process and check every area is visible to the bootstrap administrator. |
 
 The smoke tests run in the samples CI lane:

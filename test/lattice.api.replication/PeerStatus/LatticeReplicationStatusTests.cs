@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Api.Replication.Tests.PeerStatus;
 /// Unit tests for <see cref="LatticeReplicationStatus"/> over a real, manually
 /// clocked telemetry state: field mapping and derived health, the local region
 /// id, fail-closed permission scoping, filters, paging (including skipping rows
-/// the caller may not see), and the logical, sanitised rendering of tenant and
-/// app tree ids.
+/// the caller may not see), and the effective, tenant-qualified reporting of
+/// tenant and app tree ids (issue #4000).
 /// </summary>
 [TestFixture]
 public sealed class LatticeReplicationStatusTests
@@ -297,7 +297,7 @@ public sealed class LatticeReplicationStatusTests
     }
 
     [Test]
-    public async Task GetPeerStatusAsync_reports_an_app_tree_in_its_logical_form_for_a_tenant()
+    public async Task GetPeerStatusAsync_reports_a_tenant_tree_by_its_effective_qualified_id()
     {
         var reader = new StatsBackedPeerStatusReader();
         reader.Stats.RecordSuccess("t/acme/a/crm/contacts", "east");
@@ -306,11 +306,11 @@ public sealed class LatticeReplicationStatusTests
 
         var page = await CreateStatus(reader, tenantResolver: tenant).GetPeerStatusAsync(ReplicationPeerStatusQuery.All);
 
-        Assert.That(page.Peers.Select(p => p.TreeId), Is.EqualTo(new[] { "a/crm/contacts", "orders" }));
+        Assert.That(page.Peers.Select(p => p.TreeId), Is.EqualTo(new[] { "t/acme/a/crm/contacts", "t/acme/orders" }));
     }
 
     [Test]
-    public async Task GetPeerStatusAsync_authorizes_the_effective_id_behind_the_logical_one()
+    public async Task GetPeerStatusAsync_authorizes_the_effective_id_it_reports()
     {
         var reader = new StatsBackedPeerStatusReader();
         reader.Stats.RecordSuccess("t/acme/a/crm/contacts", "east");
@@ -322,7 +322,7 @@ public sealed class LatticeReplicationStatusTests
     }
 
     [Test]
-    public async Task GetPeerStatusAsync_filters_on_the_logical_app_tree_id()
+    public async Task GetPeerStatusAsync_filters_on_a_tenant_local_app_tree_name()
     {
         var reader = new StatsBackedPeerStatusReader();
         reader.Stats.RecordSuccess("t/acme/a/crm/contacts", "east");
@@ -333,13 +333,13 @@ public sealed class LatticeReplicationStatusTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(page.Peers.Select(p => p.TreeId), Is.EqualTo(new[] { "a/crm/contacts" }));
+            Assert.That(page.Peers.Select(p => p.TreeId), Is.EqualTo(new[] { "t/acme/a/crm/contacts" }));
             Assert.That(reader.Reads.Select(r => r.TreeId), Has.All.EqualTo("t/acme/a/crm/contacts"));
         });
     }
 
     [Test]
-    public async Task GetPeerStatusAsync_continuation_never_carries_the_composed_tenant_id()
+    public async Task GetPeerStatusAsync_continuation_carries_the_effective_id_the_caller_was_shown()
     {
         var reader = new StatsBackedPeerStatusReader();
         reader.Stats.RecordSuccess("t/acme/a/crm/contacts", "east");
@@ -352,9 +352,8 @@ public sealed class LatticeReplicationStatusTests
         var cursor = ReplicationPeerStatusContinuation.Decode(pages[0].ContinuationToken);
         Assert.Multiple(() =>
         {
-            Assert.That(all.Select(p => p.TreeId), Is.EqualTo(new[] { "a/crm/contacts", "a/crm/deals" }));
-            Assert.That(cursor?.Tree, Is.EqualTo("a/crm/contacts"));
-            Assert.That(cursor?.Tree, Does.Not.Contain("t/acme"));
+            Assert.That(all.Select(p => p.TreeId), Is.EqualTo(new[] { "t/acme/a/crm/contacts", "t/acme/a/crm/deals" }));
+            Assert.That(cursor?.Tree, Is.EqualTo(pages[0].Peers[^1].TreeId));
         });
     }
 
@@ -366,11 +365,7 @@ public sealed class LatticeReplicationStatusTests
 
         var page = await CreateStatus(reader).GetPeerStatusAsync(ReplicationPeerStatusQuery.All);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(page.Peers.Single().TreeId, Is.EqualTo("a/crm/contacts"));
-            Assert.That(reader.Reads.Select(r => r.StripPrefix), Has.All.Null);
-        });
+        Assert.That(page.Peers.Single().TreeId, Is.EqualTo("a/crm/contacts"));
     }
 
     [Test]
@@ -383,7 +378,7 @@ public sealed class LatticeReplicationStatusTests
 
         var page = await CreateStatus(reader, tenantResolver: resolver).GetPeerStatusAsync(ReplicationPeerStatusQuery.All);
 
-        Assert.That(page.Peers.Single().TreeId, Is.EqualTo("orders"));
+        Assert.That(page.Peers.Single().TreeId, Is.EqualTo("t/acme/orders"));
     }
 
     [Test]
