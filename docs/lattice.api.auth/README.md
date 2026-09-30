@@ -185,6 +185,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 |---|---|---|
 | `PageSize` | `int` | Maximum entries per page. Defaults to `AuthPageRequest.DefaultPageSize` (100); a value below 1 falls back to that default and a value above `AuthPageRequest.MaxPageSize` (1000) is clamped to it. `EffectivePageSize` reports the size actually applied. |
 | `PageToken` | `string?` | The exclusive continuation cursor - the previous page's `NextPageToken` - or `null` to start from the beginning. |
+| `ActiveTenantOnly` | `bool` | When `true`, `ListRulesAsync` lists only the rules whose governed tree is one of the caller's active tenant's own trees (`t/{tenant}/{name}`, or a bare tree id for the reserved default tenant). Cluster-wide `Tree:*` rules and rules on platform trees belong to no tenant and are never listed; read them with `ListRulesForTreeAsync` for `*`. The tenant is never taken from the request: it is the caller's validated active-tenant assertion, or the default tenant when the call asserts none, and an assertion the caller may not make is refused, never defaulted. The narrowing happens before the page is cut, so every page but the last is full. `false` (the default) lists the whole catalogue. Ignored by `ListGroupsAsync` and `ListRulesForTreeAsync`. |
 
 `AuthGroupPage` (returned by `ListGroupsAsync`) and `AuthRulePage` (returned by `ListRulesAsync` and `ListRulesForTreeAsync`):
 
@@ -192,6 +193,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 |---|---|---|
 | `Entries` | `IReadOnlyList<AuthGroup>` / `IReadOnlyList<LatticeAuthorizationRule>` | The page's groups, ordered by group id, or its rules, ordered by `(governed tree id, rule id)`. |
 | `NextPageToken` | `string?` | The cursor to pass back as the next request's `PageToken`, or `null` on the final page. |
+| `Tenant` | `string?` | `AuthRulePage` only. The tenant a narrowed listing (`ActiveTenantOnly`) was narrowed to, or `null` for a page of the whole catalogue. A caller that asked for a narrowed page and reads `null` here was answered by a server that predates the narrowing, which ignores the flag and lists the whole catalogue. |
 
 `AuthGroup` (input to `UpsertGroupAsync`; returned by `GetGroupAsync` and inside `AuthGroupPage`):
 

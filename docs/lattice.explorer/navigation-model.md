@@ -191,17 +191,27 @@ tenant is the root node of Home and of every tenant-scoped address:
 scoped to the reserved `default` tenant who is not a platform operator (on a
 cluster without the tenancy add-on, that is every caller who cannot see the
 Access area), and in a head that does not register the tenant view.
-Access and Cluster are cluster-wide and never carry a tenant root. The Tenancy
-area's operator directory at `/tenancy` is cluster-wide, while its My tenant
-pages at `/t/{tenant}/tenancy` are tenant-rooted. Every other area is
-tenant-scoped.
+Access and Cluster have both shapes: `/access` and `/cluster` are cluster-wide
+and stay plain, while `/t/{tenant}/access` and `/t/{tenant}/cluster` keep their
+tenant root and show only that tenant's rules or trees. The Tenancy area's
+operator directory at `/tenancy` is cluster-wide, while its My tenant pages at
+`/t/{tenant}/tenancy` are tenant-rooted. Every other area is tenant-scoped.
+
+At a tenant-rooted address every area lists only that tenant's items: its
+listings, and the counts, Home status lines, spine badges, address completions
+and pickers that summarise them. The reserved `default` tenant owns the bare
+(unprefixed) trees and never sees another tenant's items. A tenant-rooted deep
+link to another tenant's rule, tree, backup or schema tree is not found, and is
+never read. See [Tenant scope](tenant-scope.md#what-is-scoped).
 
 The Explorer keeps every address canonical for your tenancy:
 
 - **Tenancy off.** No address carries a tenant root, and an address that has one
   is redirected to the same address without it.
 - **Tenancy on.** An address without a tenant root is rooted at the active
-  tenant. A cluster-wide area's address loses any tenant root it was given.
+  tenant. A cluster-wide area's address loses any tenant root it was given,
+  except that Access and Cluster keep one they were given, as their
+  tenant-rooted form.
 - **Another tenant's address.** Arriving at `/t/{other}/...` is a request to
   switch to that tenant. It goes through the operator-gated tenant switch. If the
   switch succeeds, the Explorer says so. If it is refused, the Explorer redirects
@@ -230,7 +240,8 @@ cannot be read, the prerender fails closed to the neutral state.
 
 To re-root the current address, type `t/` in the address line. It completes the
 tenants you may reach, marking the active one. Choosing one keeps the rest of the
-address and replaces its tenant root; a cluster-wide address is unchanged.
+address and replaces its tenant root; a cluster-wide address, including plain
+`/access` and `/cluster`, is unchanged.
 
 A caller scoped to the reserved `default` tenant who is not a platform operator
 sees no tenancy chrome: addresses stay plain, and `/t/default/...` is

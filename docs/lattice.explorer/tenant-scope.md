@@ -13,9 +13,19 @@ Tenant ownership is derived from physical tree ids. A tree named `t/{tenant}/{na
 The visible address determines whether the tenant root is kept:
 
 - Tenant-scoped areas keep `/t/{tenant}` when tenancy is active. The native areas that do not opt out are Data, Apps, Schema, Replication, Backups and Telemetry.
-- Access and Cluster are cluster-wide. They never keep a tenant root.
+- Access and Cluster have both shapes. `/access...` and `/cluster...` are cluster-wide and stay plain. `/t/{tenant}/access...` and `/t/{tenant}/cluster...` keep their tenant root and show only that tenant's items: at `/t/{tenant}/access` the rules that govern the tenant's own trees, and at `/t/{tenant}/cluster` the tenant's own trees and the storage they use.
 - Tenancy has both shapes: `/tenancy` and `/tenancy/{tenant}...` are cluster-wide administration addresses, while `/t/{tenant}/tenancy...` is that tenant's workspace.
 - Home is tenant-rooted when tenancy is active, unless the current caller is on the hidden `default` path described below.
+
+At a tenant-rooted address every area lists only that tenant's items, and so do the counts, Home status lines, spine badges, address completions and pickers drawn from those listings:
+
+- **Rules.** The listing is the rules whose governed tree is one of the tenant's own trees. Cluster-wide rules (`Tree:*`) belong to no tenant, so they are not listed; one quiet line counts those that also apply and links to `/access/rules`. The same holds for an explanation's effective permissions.
+- **Groups.** Groups belong to the whole cluster, not to a tenant, so `/t/{tenant}/access/groups` lists none and links to the cluster's groups. No group completes or is found at a tenant-rooted address.
+- **Trees and storage.** `/t/{tenant}/cluster` counts and measures only the tenant's own trees. Regions, WAL placement and orphaned leaves belong to the whole cluster, so the overview replaces them with one quiet line that links to the cluster-wide overview.
+- **Not found.** A tenant-rooted deep link to another tenant's rule, tree, backup or schema tree is not found, and is never read. Under a tenant other than `default`, a bare tree name is that tenant's own tree, as the cluster reads it.
+- **The default tenant.** `default` owns the bare trees, and the cluster answers it with every tenant's trees, rules and backups. The Explorer narrows every listing to `default`'s own, so it never shows another tenant's items.
+
+The rule and backup listings are narrowed by the cluster itself, on the tenant the call asserts (see [Every call carries the tenant](#every-call-carries-the-tenant)), and every row is checked again in the console, so a cluster that predates the narrowing still shows nothing of another tenant's.
 
 Core applies the same rule to listings. The active-tenant view keeps only items owned by the active tenant. The all-tenant view returns the list unchanged only when the caller requested all tenants and the platform-operator gate validates them. A non-operator all-tenant request falls back to the active tenant.
 

@@ -167,6 +167,11 @@
           "name": "NextPageToken",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "Tenant",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Backup/Model/BackupCatalogPage.cs#BackupCatalogPage"
@@ -229,6 +234,11 @@
           "name": "CreatedPrefix",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "ActiveTenantOnly",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.api.abstractions/Backup/Model/BackupCatalogRequest.cs#BackupCatalogRequest"

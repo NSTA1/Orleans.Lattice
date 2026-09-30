@@ -10,13 +10,13 @@ tenant or key is a type-ahead [picker](navigation-model.md#pickers).
 | --- | --- | --- | --- | --- |
 | Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | Reads one tree-catalogue page. No state reader, no served state API, or a permission denial makes the area Hidden. A disconnected first load is Unavailable with a sign-in or connect reason; other catalogue faults are Unavailable with a fixed retry sentence. |
 | Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden. |
-| Access | `access`, `/access` | `ILatticeAuthAdmin` | Cluster-wide | Reads the smallest group catalogue page. A successful page makes the area Visible. A missing facade hides it. An anonymous denial is Unavailable with "Sign in to administer access on this cluster."; a signed-in denial or any other fault hides it. |
+| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin` | Mixed: `/access` is cluster-wide; the tenant-rooted form lists only that tenant's rules | Reads the smallest group catalogue page. A successful page makes the area Visible. A missing facade hides it. An anonymous denial is Unavailable with "Sign in to administer access on this cluster."; a signed-in denial or any other fault hides it. |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or fault is Hidden. |
 | Tenancy | `tenancy`, `/tenancy` and `/t/{tenant}/tenancy` | Tenant self-service, lifecycle, access, grant, region and quota facades; apps control for installed-app counts | Mixed: the directory is cluster-wide; `/t/{tenant}/tenancy` follows the active tenant | Requires tenancy to be active and the self-service facade to exist. It proves whether the caller is an operator or administers the scoped tenant. Operators and scoped tenant admins see it; refused anonymous callers see Unavailable with "Sign in to see the tenants you administer."; refused signed-in callers and other faults are Hidden. |
 | Replication | `replication`, `/replication` | `ILatticeReplicationStatus`, `ILatticeReplicationControl` | Tenant-scoped addresses, over the caller's admitted replication view | Reads the peer-status report, or falls back to the enrolment report. Status success makes the area Visible. If status fails but enrolment names at least one manageable tree, it is Visible. Missing facades, denied reads and other faults are Hidden. |
 | Backups | `backups`, `/backups` | `ILatticeBackupControl` | Tenant-scoped | Probes backup capabilities against a reserved scope. `CanList` makes the area Visible. A denied or grantless caller sees Unavailable with "You do not hold a backup grant on this cluster. Ask an administrator for one."; an unserved, unconfigured, unreachable or faulted control facade is Hidden. |
 | Telemetry | `telemetry`, `/telemetry` | `ILatticeTelemetry` | Tenant-scoped while tenancy is on | Reads the telemetry catalogue once. Any successful catalogue read, including an empty catalogue, makes the area Visible. A refused caller, a cluster with no telemetry facade, or a catalogue fault is Hidden. |
-| Cluster | `cluster`, `/cluster` | `ILatticeTreeAdmin`, `ILatticeReplicationStatus`, and the state connection for cluster identity and tree catalogue | Cluster-wide | Requires a tree-admin facade and a configured cluster connection. It probes shallow storage usage. Success makes it Visible; a denied probe is Hidden; no connection is Unavailable with "Connect to a cluster to see its estate."; an unserved tree-admin operation is Unavailable; transient faults are Unavailable and are not remembered. |
+| Cluster | `cluster`, `/cluster` and `/t/{tenant}/cluster` | `ILatticeTreeAdmin`, `ILatticeReplicationStatus`, and the state connection for cluster identity and tree catalogue | Mixed: `/cluster` is cluster-wide; the tenant-rooted form shows only that tenant's trees and storage | Requires a tree-admin facade and a configured cluster connection. It probes shallow storage usage. Success makes it Visible; a denied probe is Hidden; no connection is Unavailable with "Connect to a cluster to see its estate."; an unserved tree-admin operation is Unavailable; transient faults are Unavailable and are not remembered. |
 
 ## Data
 
@@ -124,8 +124,11 @@ review and lifecycle flows.
 
 ## Access
 
-Access is the cluster-wide policy area for auth rules, groups and explaining an
-access decision. It is visible only to callers who can read the group catalogue
+Access is the policy area for auth rules, groups and explaining an access
+decision. `/access` is cluster-wide; `/t/{tenant}/access` shows only the rules
+that govern that tenant's own trees, with one quiet line for the cluster-wide
+rules that also apply, and lists no groups, since groups belong to the whole
+cluster. It is visible only to callers who can read the group catalogue
 through `ILatticeAuthAdmin`; anonymous refusal stays visible as an Unavailable
 sign-in prompt, while signed-in refusal hides the area. Its commands are
 `access.explain`, `access.create-rule` and `access.create-group`. See
@@ -311,8 +314,11 @@ read carries on for the next reader.
 
 ## Cluster
 
-Cluster is the cluster-wide operations area. It never follows the active tenant,
-although the router accepts tenant-rooted forms so the layout can redirect them.
+Cluster is the operations area. `/cluster` is cluster-wide. A tenant-rooted
+form, `/t/{tenant}/cluster`, shows only that tenant's own trees and the storage
+they use; regions, WAL placement and orphaned leaves belong to the whole
+cluster, so there they are one quiet line linking to the cluster-wide overview,
+and a deep link to another tenant's tree is not found.
 It reads `ILatticeTreeAdmin` for administration, the state connection for
 cluster identity and tree catalogue, and `ILatticeReplicationStatus` for the
 region diagram.
