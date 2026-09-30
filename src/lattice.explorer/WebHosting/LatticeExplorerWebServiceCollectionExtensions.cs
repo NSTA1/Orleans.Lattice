@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Session;
@@ -37,6 +39,8 @@ public static class LatticeExplorerWebServiceCollectionExtensions
     /// <see cref="LatticeExplorerWebOptions.AllowInteractiveEndpointConfiguration"/>).
     /// The secret-free endpoint seed is unaffected, so a head is still configured
     /// by <c>LATTICE_EXPLORER_ENDPOINT</c> or a pre-provisioned document.
+    /// In Development, the framework's record of an unhandled circuit exception is never
+    /// filtered out, so a terminated circuit always leaves its stack trace in the log.
     /// </remarks>
     /// <param name="services">The consuming application's service collection.</param>
     /// <param name="configure">
@@ -64,6 +68,10 @@ public static class LatticeExplorerWebServiceCollectionExtensions
                 hub.MaximumReceiveMessageSize ?? 0,
                 MinimumCircuitMessageBytes));
 
+        // A circuit the framework terminates is logged at Error with its exception; in
+        // Development that record is never filtered out, so a dead console always leaves
+        // its stack trace behind (issue #4011).
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<LoggerFilterOptions>, ExplorerCircuitErrorLogging>());
         // The config backing store, shared connection, and session live in DI. The
         // JSON store path is taken from the options, else the LATTICE_EXPLORER_CONFIG
         // environment variable, else the per-user local app-data default.

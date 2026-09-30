@@ -63,12 +63,16 @@ public partial class AppReviewPage : IDisposable
     };
 
     /// <summary>Stops listening to the flow; the flow itself keeps running in the circuit.</summary>
+    /// <remarks>
+    /// The source is cancelled, never disposed: a read already on its way can resume after
+    /// this page is gone, and reading a disposed source's token would throw out of a
+    /// lifecycle method and end the circuit (issue #4011).
+    /// </remarks>
     public void Dispose()
     {
         Detach();
         Intents.Posted -= OnIntentPosted;
         _lifetime.Cancel();
-        _lifetime.Dispose();
     }
 
     /// <inheritdoc />
@@ -106,6 +110,12 @@ public partial class AppReviewPage : IDisposable
             return;
         }
 
+        if (_lifetime.IsCancellationRequested)
+        {
+            // Left while the probe answered: a page that is gone decides nothing.
+            return;
+        }
+
         if (!snapshot.CanReview || Facades.Catalog is not { } catalog)
         {
             NotFound();
@@ -121,6 +131,12 @@ public partial class AppReviewPage : IDisposable
         catch (Exception error) when (error is not OperationCanceledException)
         {
             // The description itself still answers; without the summary the flow assumes a static source.
+        }
+
+        if (_lifetime.IsCancellationRequested)
+        {
+            // Left while the sources were listed: no flow is started for a page that is gone.
+            return;
         }
 
         Attach(Flows.GetOrCreate(new AppInstallFlowKey(Address.Tenant, path[1], slug, version), source));

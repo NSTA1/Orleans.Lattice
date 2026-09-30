@@ -39,11 +39,15 @@ public partial class AppsPage : IDisposable
     };
 
     /// <summary>Stops listening for changes and cancels outstanding icon reads.</summary>
+    /// <remarks>
+    /// The source is cancelled, never disposed: a read already on its way can resume after
+    /// this page is gone, and reading a disposed source's token would throw out of a
+    /// lifecycle method and end the circuit (issue #4011).
+    /// </remarks>
     public void Dispose()
     {
         Access.Changed -= OnAccessChanged;
         _lifetime.Cancel();
-        _lifetime.Dispose();
     }
 
     /// <inheritdoc />

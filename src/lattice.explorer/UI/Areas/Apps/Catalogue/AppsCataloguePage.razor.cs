@@ -36,7 +36,7 @@ public partial class AppsCataloguePage : IDisposable
     private readonly List<AvailableAppSummary> _rows = [];
     private IReadOnlyList<AvailableAppSummary> _items = [];
     private Dictionary<string, int> _offeredBy = new(StringComparer.Ordinal);
-    private CancellationTokenSource _load = new();
+    private readonly CancellationTokenSource _load = new();
     private AppsAccessSnapshot? _snapshot;
     private ImmutableArray<AvailableAppSummary> _index = [];
     private ImmutableArray<AppSourceSummary>? _sources;
@@ -105,11 +105,15 @@ public partial class AppsCataloguePage : IDisposable
     };
 
     /// <summary>Cancels outstanding reads.</summary>
+    /// <remarks>
+    /// The source is cancelled, never disposed: a read already on its way can resume after
+    /// this page is gone, and reading a disposed source's token would throw out of a
+    /// lifecycle method and end the circuit (issue #4011).
+    /// </remarks>
     public void Dispose()
     {
         Access.Changed -= OnAccessChanged;
         _load.Cancel();
-        _load.Dispose();
     }
 
     /// <inheritdoc />
@@ -117,6 +121,12 @@ public partial class AppsCataloguePage : IDisposable
     {
         Access.Changed += OnAccessChanged;
         _snapshot = await Access.GetAsync(_load.Token);
+        if (_load.IsCancellationRequested)
+        {
+            // Left while the probe answered: a page that is gone decides nothing.
+            return;
+        }
+
         if (!_snapshot.CanBrowseCatalogue || Facades.Catalog is null)
         {
             // A caller without AppInstall learns nothing about what exists: not found, never an error.
@@ -135,13 +145,18 @@ public partial class AppsCataloguePage : IDisposable
             _error = AppsFailureMessages.Describe(error, "list the sources of", "the catalogue");
         }
 
+        if (_load.IsCancellationRequested)
+        {
+            return;
+        }
+
         _index = await Access.GetCompletionIndexAsync(_load.Token);
     }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
-        if (_denied || _sources is null || Equals(_loadedFor, Address))
+        if (_denied || _sources is null || _load.IsCancellationRequested || Equals(_loadedFor, Address))
         {
             return;
         }

@@ -103,6 +103,14 @@ internal sealed class SampleRegion : IAsyncDisposable
             ApplicationName = typeof(SampleRegion).Assembly.GetName().Name,
         });
         builder.Logging.ClearProviders();
+        if (plan.Console is not null)
+        {
+            // The one record the console region writes to the terminal: a circuit fault,
+            // with its stack trace.
+            SampleCircuitDiagnostics.ConfigureLogging(builder.Logging);
+            SampleCircuitDiagnostics.ConfigureCircuits(builder.Services, builder.Environment);
+        }
+
         builder.WebHost.UseSetting(WebHostDefaults.ServerUrlsKey, string.Empty);
         builder.WebHost.ConfigureKestrel(kestrel =>
         {

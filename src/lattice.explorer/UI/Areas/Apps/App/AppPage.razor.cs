@@ -66,11 +66,15 @@ public partial class AppPage : IDisposable
         && (Address.Path.Count <= 2 || string.Equals(Address.Path[1], AppPageTabs.Open, StringComparison.Ordinal));
 
     /// <summary>Stops any load in flight.</summary>
+    /// <remarks>
+    /// The source is cancelled, never disposed: a read already on its way can resume after
+    /// this page is gone, and reading a disposed source's token would throw out of a
+    /// lifecycle method and end the circuit (issue #4011).
+    /// </remarks>
     public void Dispose()
     {
         Access.Changed -= OnAppsChanged;
         _loading?.Cancel();
-        _loading?.Dispose();
         _loading = null;
         GC.SuppressFinalize(this);
     }
@@ -213,8 +217,9 @@ public partial class AppPage : IDisposable
 
     private async Task LoadAsync((string? Tenant, string Slug, string Tab) key, bool keepShowing)
     {
+        // The load it replaces is cancelled, not disposed: that load is still suspended
+        // and reads its own source's token when it resumes.
         _loading?.Cancel();
-        _loading?.Dispose();
         var loading = _loading = new CancellationTokenSource();
 
         if (!keepShowing)

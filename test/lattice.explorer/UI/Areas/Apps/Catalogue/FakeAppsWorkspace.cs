@@ -37,9 +37,26 @@ internal sealed class FakeAppsWorkspace : ILatticeAppWorkspace
     public Task<WorkspaceAppDescriptor?> DescribeMyAppAsync(string appSlug, CancellationToken cancellationToken = default) =>
         Task.FromResult<WorkspaceAppDescriptor?>(null);
 
+    /// <summary>
+    /// When set, <see cref="GetIconAsync"/> waits for it before answering and ignores its
+    /// token, as a reply already on its way when the caller gave up does.
+    /// </summary>
+    public TaskCompletionSource? IconGate { get; set; }
+
+    /// <summary>How many icons were read.</summary>
+    public int IconReads { get; private set; }
+
     /// <inheritdoc />
-    public Task<AppIconAsset?> GetIconAsync(string appSlug, CancellationToken cancellationToken = default) =>
-        Task.FromResult(Icons.GetValueOrDefault(appSlug));
+    public async Task<AppIconAsset?> GetIconAsync(string appSlug, CancellationToken cancellationToken = default)
+    {
+        IconReads++;
+        if (IconGate is { } gate)
+        {
+            await gate.Task;
+        }
+
+        return Icons.GetValueOrDefault(appSlug);
+    }
 
     /// <inheritdoc />
     public Task<AppUiAsset?> GetUiAssetAsync(string appSlug, string path, CancellationToken cancellationToken = default) =>
