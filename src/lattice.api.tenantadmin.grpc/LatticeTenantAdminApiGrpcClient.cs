@@ -162,7 +162,7 @@ public sealed class LatticeTenantAdminApiGrpcClient
     /// administer tenants; fails closed otherwise.
     /// </summary>
     /// <param name="tenantId">The tenant id whose quotas to author. Must not be <c>null</c> or empty.</param>
-    /// <param name="quotas">The quotas to apply. <see cref="TenantQuotasDescriptor.BurstPercent"/> must be non-negative.</param>
+    /// <param name="quotas">The quotas to apply. <see cref="TenantQuotasDescriptor.BurstPercent"/> and every bounded ceiling must be non-negative.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The update result, carrying the quotas now in effect for the tenant.</returns>
     /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>

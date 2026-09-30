@@ -56,7 +56,9 @@ public readonly record struct LatticeSchemaRule
 
     /// <summary>
     /// For a <see cref="LatticeSchemaEncodingKind.MaxByteLength"/> encoding rule:
-    /// the inclusive maximum number of value bytes. <c>null</c> for other kinds.
+    /// the inclusive maximum number of value bytes, which must be non-negative (a
+    /// policy carrying a negative limit is rejected when it is set). <c>null</c> for
+    /// other kinds.
     /// </summary>
     [Id(5)]
     public int? MaxByteLength { get; init; }

@@ -17,6 +17,14 @@ internal sealed class AppStartupReconciler(
     IOptionsMonitor<LatticeAppsOptions> options,
     ILogger<AppStartupReconciler> logger) : BackgroundService
 {
+    /// <summary>
+    /// The longest delay <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts:
+    /// <c>0xFFFFFFFE</c> milliseconds, about 49.7 days. The options validator admits any
+    /// positive delay, including <see cref="TimeSpan.MaxValue"/> as "no cap", so the retry
+    /// delay is held here rather than letting <c>Task.Delay</c> throw out of the retry loop.
+    /// </summary>
+    internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
@@ -74,7 +82,8 @@ internal sealed class AppStartupReconciler(
     private async Task<List<AppRegistryRecord>> ListEnabledAsync(CancellationToken cancellationToken)
     {
         var settings = options.CurrentValue;
-        var delay = settings.StartupRetryDelay;
+        var maxDelay = ClampRetryDelay(settings.StartupRetryMaxDelay);
+        var delay = ClampRetryDelay(settings.StartupRetryDelay);
         while (true)
         {
             try
@@ -94,8 +103,22 @@ internal sealed class AppStartupReconciler(
             {
                 logger.LogDebug(ex, "App registry not yet readable; retrying the startup reconcile in {Delay}.", delay);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, settings.StartupRetryMaxDelay.Ticks));
+                delay = NextRetryDelay(delay, maxDelay);
             }
         }
+    }
+
+    /// <summary>Holds a configured retry delay to <see cref="MaxRetryDelay"/>.</summary>
+    internal static TimeSpan ClampRetryDelay(TimeSpan delay) => delay > MaxRetryDelay ? MaxRetryDelay : delay;
+
+    /// <summary>
+    /// Doubles <paramref name="current"/>, capped at <paramref name="maxDelay"/> and at
+    /// <see cref="MaxRetryDelay"/>. <paramref name="current"/> is itself held to the timer
+    /// ceiling, so the doubling cannot overflow.
+    /// </summary>
+    internal static TimeSpan NextRetryDelay(TimeSpan current, TimeSpan maxDelay)
+    {
+        var doubled = TimeSpan.FromTicks(ClampRetryDelay(current).Ticks * 2);
+        return ClampRetryDelay(doubled < maxDelay ? doubled : maxDelay);
     }
 }

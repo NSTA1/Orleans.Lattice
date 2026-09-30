@@ -177,6 +177,68 @@ public sealed class AppStartupReconcilerTests
         Assert.That(reconciler.ExecuteTask.IsFaulted, Is.False);
     }
 
+    // Regression for #4098: a retry delay above the timer ceiling made Task.Delay throw
+    // ArgumentOutOfRangeException out of the retry loop, ending the startup reconcile for
+    // good. With the delay held to the ceiling the loop keeps waiting until cancelled.
+    [TestCase(60d, 60d)]
+    [TestCase(60d, double.PositiveInfinity)]
+    public void A_retry_delay_above_the_timer_ceiling_keeps_retrying_until_cancelled(double delayDays, double maxDelayDays)
+    {
+        var registry = Substitute.For<IAppRegistry>();
+        var calls = 0;
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls++;
+            throw new InvalidOperationException("silo not ready");
+        });
+        var reconciler = Create(registry, Substitute.For<IAppActivationPipeline>(), new LatticeAppsOptions
+        {
+            StartupRetryDelay = TimeSpan.FromDays(delayDays),
+            StartupRetryMaxDelay = double.IsPositiveInfinity(maxDelayDays) ? TimeSpan.MaxValue : TimeSpan.FromDays(maxDelayDays),
+        });
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        Assert.That(
+            async () => await reconciler.ReconcileEnabledAppsAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void NextRetryDelay_doubles_up_to_the_configured_maximum()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppStartupReconciler.NextRetryDelay(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30)), Is.EqualTo(TimeSpan.FromSeconds(2)));
+            Assert.That(AppStartupReconciler.NextRetryDelay(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30)), Is.EqualTo(TimeSpan.FromSeconds(30)));
+        });
+    }
+
+    [Test]
+    public void NextRetryDelay_saturates_at_the_timer_ceiling_when_the_maximum_is_uncapped()
+    {
+        var ceiling = AppStartupReconciler.MaxRetryDelay;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ceiling, Is.EqualTo(TimeSpan.FromMilliseconds(0xFFFFFFFE)));
+            Assert.That(AppStartupReconciler.NextRetryDelay(TimeSpan.FromDays(40), TimeSpan.MaxValue), Is.EqualTo(ceiling));
+            Assert.That(AppStartupReconciler.NextRetryDelay(ceiling, TimeSpan.MaxValue), Is.EqualTo(ceiling));
+            Assert.That(AppStartupReconciler.NextRetryDelay(TimeSpan.MaxValue, TimeSpan.MaxValue), Is.EqualTo(ceiling));
+        });
+    }
+
+    [Test]
+    public void ClampRetryDelay_holds_only_delays_above_the_timer_ceiling()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppStartupReconciler.ClampRetryDelay(TimeSpan.FromSeconds(30)), Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(AppStartupReconciler.ClampRetryDelay(AppStartupReconciler.MaxRetryDelay), Is.EqualTo(AppStartupReconciler.MaxRetryDelay));
+            Assert.That(AppStartupReconciler.ClampRetryDelay(TimeSpan.MaxValue), Is.EqualTo(AppStartupReconciler.MaxRetryDelay));
+        });
+    }
+
     private sealed class StaticOptionsMonitor(LatticeAppsOptions value) : IOptionsMonitor<LatticeAppsOptions>
     {
         public LatticeAppsOptions CurrentValue => value;

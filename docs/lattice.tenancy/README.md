@@ -340,7 +340,9 @@ Each tenant carries **aggregate quotas** across all of its trees, expressed by
 | Request rate | `MaxOpsPerSecond` | Cluster-wide ops/sec ceiling. |
 | Burst | `BurstPercent` | Percentage overage above the steady-state caps. |
 
-A `null` cap on a dimension means unlimited on that dimension. The reserved
+A `null` cap on a dimension means unlimited on that dimension; a bounded cap, like
+`BurstPercent`, must be non-negative, and a negative one is rejected with an
+`ArgumentException` when the quotas are authored. The reserved
 `default` tenant is permanently unbounded (it can never be given quotas), and every
 newly created tenant starts with no caps until an operator sets them, so opt-in
 never suddenly throttles an existing workload.
