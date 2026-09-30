@@ -15,8 +15,9 @@ use the same two extension methods:
 
 - `AddLatticeExplorerWeb(...)` registers interactive Razor components, the
   Explorer UI, the connection and configuration services, the cookie-backed
-  credential store, the app frame host, the native areas, and the launcher
-  environment bootstrap.
+  credential store, the app frame host, the native areas, the launcher
+  environment bootstrap, and, in Development, the circuit-fault logging rule
+  described under [Diagnosing a console that stops responding](#diagnosing-a-console-that-stops-responding).
 - `MapLatticeExplorer()` maps the Explorer under the configured base path: static
   assets, the `auth/login` and `auth/logout` server form-post endpoints, the
   Lattice App frame route, and the interactive Razor components.
@@ -177,6 +178,28 @@ The app-frame route has its own headers. Files on `/_apps/frame/v1/` carry
 `Cross-Origin-Resource-Policy: cross-origin`, `Access-Control-Allow-Origin: *`,
 and an immutable cache lifetime. `frame.html` also carries the sandboxed app
 frame CSP.
+
+## Diagnosing a console that stops responding
+
+When Blazor Server meets an unhandled exception in a circuit, it terminates the
+circuit: the console stays on screen but no longer answers, and the browser shows
+only that an unhandled exception occurred on the current circuit. The framework
+logs that termination at `Error` under the
+`Microsoft.AspNetCore.Components.Server.Circuits` category, with the exception
+and its stack trace.
+
+A host whose logging filters silence that category (for example
+`"Microsoft": "None"`) would lose the record, so in Development the web head
+keeps it: `AddLatticeExplorerWeb` adds a logging filter rule that shows the
+`Microsoft.AspNetCore.Components.Server.Circuits` category at `Error` or above.
+A host that already names that category at `Error` or below keeps its own rule,
+and outside Development nothing is added, so production logging stays the host's
+decision. The rule logs nothing new: the record is the framework's own, carrying
+the exception and the circuit id, and no user input or values.
+
+To also send the fault's detail to the browser while developing, set Blazor
+Server's `CircuitOptions.DetailedErrors` to `true` in Development; the web head
+does not change it.
 
 ## Sign-in endpoints
 
