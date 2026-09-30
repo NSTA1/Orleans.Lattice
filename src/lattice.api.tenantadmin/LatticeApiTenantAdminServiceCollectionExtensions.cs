@@ -88,14 +88,21 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         // that every transport binding (for example gRPC, MCP) adapts over. The
         // membership context is resolved optionally so create can seed the calling
         // subject as the new tenant's admin subject; without it a create that
-        // supplies no subjects leaves the tenant subject-less.
+        // supplies no subjects leaves the tenant subject-less. The identity
+        // directory and its options are resolved optionally, exactly as for the
+        // access-administration facade below, so an explicitly supplied seed
+        // admin-subject set is validated against the upstream directory wherever
+        // validation is required and a real provider is registered (issue #4003):
+        // create must not be a way around the check that add enforces.
         builder.Services.TryAddSingleton<ILatticeTenantAdmin>(sp => new LatticeTenantAdmin(
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetRequiredService<TenantAdminAccessAuthorizer>(),
             sp.GetRequiredService<ITenantAdminClock>(),
             sp.GetRequiredService<ITenantTreeCascade>(),
             sp.GetRequiredService<IOptions<ClusterOptions>>(),
-            sp.GetService<ILatticeMembershipContext>()));
+            sp.GetService<ILatticeMembershipContext>(),
+            sp.GetService<ILatticeIdentityDirectory>(),
+            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
 
         // T20 per-tenant region residency. The two-tier fail-closed authorizer
         // (operator authorizes the allowed set; tenant-admin sets residency within
@@ -123,8 +130,8 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         // operator-only TenantAdminAccessAuthorizer that gates the lifecycle
         // mutations above. The identity directory is resolved optionally so a
         // granted subject id is validated against the upstream directory wherever
-        // one is configured. (The tenant-lifecycle facade above is registered
-        // without a directory, so its create path does not validate a seed set.)
+        // one is configured, as the tenant-lifecycle facade above does for the
+        // seed set a create supplies.
         builder.Services.TryAddSingleton<ILatticeTenantAccessAdmin>(sp => new LatticeTenantAccessAdmin(
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
