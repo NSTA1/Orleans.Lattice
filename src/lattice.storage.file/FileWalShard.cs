@@ -114,7 +114,11 @@ internal sealed class FileWalShard : IDisposable
 
     private long _readPressureDegradations;
 
-    /// <summary>Appends a dense, non-overlapping batch atomically.</summary>
+    /// <summary>
+    /// Appends a dense, non-overlapping batch atomically. A batch that reuses an
+    /// offset at or below the trim watermark is rejected, because recovery would
+    /// discard it.
+    /// </summary>
     internal async Task AppendAsync(IReadOnlyList<PreparedWalRecord> records, CancellationToken cancellationToken)
     {
         if (records.Count == 0)
@@ -1088,12 +1092,26 @@ internal sealed class FileWalShard : IDisposable
 
     private void RejectOverlap(IReadOnlyList<PreparedWalRecord> records)
     {
+        var first = records[0].Offset;
+
+        // A trimmed offset was persisted, so reusing it is an overlap even when
+        // the live list no longer holds it. RecoverFromDisk discards every entry
+        // at or below the durable watermark, so accepting one here would
+        // acknowledge a write the next open silently drops (issue #4073). The
+        // batch is dense and ascending, so its first offset is its lowest.
+        if (first <= _trimWatermark)
+        {
+            throw new InvalidOperationException(
+                $"Append batch for '{_directory}' starts at offset {first}, at or below the trim watermark "
+                + $"{_trimWatermark}. Offsets through the watermark were already persisted and trimmed, and "
+                + "recovery discards any entry that reuses one.");
+        }
+
         if (_entries.Count == 0)
         {
             return;
         }
 
-        var first = records[0].Offset;
         var last = records[^1].Offset;
         var insertAt = LowerBound(first);
         if (insertAt < _entries.Count && _entries[insertAt].Offset <= last)

@@ -246,6 +246,92 @@ public class VectorKeyDictionaryBatchingTests
     }
 
     [Test]
+    public async Task RemoveAsync_discards_a_buffered_record_so_a_later_flush_cannot_resurrect_the_mapping()
+    {
+        // Issue #4074: the buffered record outlived the removal, so the flush
+        // wrote it back after RemoveAsync had deleted it and a reload found the
+        // removed identifier mapped again.
+        var store = new InMemoryVectorIndexStore();
+        var keys = new VectorKeyDictionary(store, Prefix, ReservationBlock);
+
+        await keys.GetOrAddBufferedAsync("a");
+        await keys.GetOrAddBufferedAsync("b");
+
+        await keys.RemoveAsync("a");
+        Assert.That(keys.PendingWriteCount, Is.EqualTo(1), "only the surviving identifier stays buffered");
+
+        await keys.FlushPendingAsync();
+
+        var reopened = new VectorKeyDictionary(store, Prefix, ReservationBlock);
+        await reopened.LoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reopened.TryGetKey("a", out _), Is.False, "the removed identifier must stay removed");
+            Assert.That(reopened.TryGetKey("b", out _), Is.True);
+            Assert.That(reopened.Count, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task RemoveAsync_after_a_failed_flush_is_not_undone_by_the_retry()
+    {
+        // The shape DurableVectorIndex reaches: a build slice's key flush fails and
+        // keeps its buffer, the identifier is then retired, and the next slice's
+        // flush retries the buffer.
+        var store = new InMemoryVectorIndexStore();
+        var keys = new VectorKeyDictionary(store, Prefix, ReservationBlock);
+
+        await keys.GetOrAddBufferedAsync("a");
+        await keys.GetOrAddBufferedAsync("b");
+
+        store.FailAfterWrites = 0;
+        Assert.That(async () => await keys.FlushPendingAsync(), Throws.Exception);
+        store.FailAfterWrites = -1;
+
+        await keys.RemoveAsync("a");
+        await keys.FlushPendingAsync();
+
+        var reopened = new VectorKeyDictionary(store, Prefix, ReservationBlock);
+        await reopened.LoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reopened.TryGetKey("a", out _), Is.False);
+            Assert.That(reopened.TryGetKey("b", out _), Is.True, "the retry must still land the surviving record");
+        });
+    }
+
+    [Test]
+    public async Task ClearAsync_discards_the_buffer_so_a_later_flush_cannot_write_the_cleared_mapping_back()
+    {
+        var store = new InMemoryVectorIndexStore();
+        var keys = new VectorKeyDictionary(store, Prefix, ReservationBlock);
+
+        await keys.GetOrAddBufferedAsync("a");
+        await keys.GetOrAddBufferedAsync("b");
+
+        await keys.ClearAsync();
+        Assert.That(keys.PendingWriteCount, Is.Zero);
+
+        // A rebuild re-assigns only what the source still holds.
+        var rebuilt = await keys.GetOrAddBufferedAsync("c");
+        await keys.FlushPendingAsync();
+
+        var reopened = new VectorKeyDictionary(store, Prefix, ReservationBlock);
+        await reopened.LoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reopened.TryGetKey("a", out _), Is.False, "a cleared identifier must not come back");
+            Assert.That(reopened.TryGetKey("b", out _), Is.False, "a cleared identifier must not come back");
+            Assert.That(reopened.TryGetKey("c", out var found), Is.True);
+            Assert.That(found, Is.EqualTo(rebuilt));
+            Assert.That(reopened.Count, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void GetOrAddBufferedAsync_rejects_a_null_or_empty_identifier()
     {
         var keys = new VectorKeyDictionary(new InMemoryVectorIndexStore(), Prefix, ReservationBlock);

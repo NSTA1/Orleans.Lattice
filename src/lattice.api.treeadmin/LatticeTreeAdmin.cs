@@ -1240,6 +1240,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(destinationTreeId);
+        ThrowIfUndefinedSnapshotMode(mode);
 
         // BOTH ids are caller-supplied and BOTH name a tree, so both are composed:
         // scoping only the source would let a tenant drain its own tree into a bare,
@@ -1845,6 +1846,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfUndefinedRetentionMode(mode);
         if (window is { } w && w <= TimeSpan.Zero)
         {
             throw new ArgumentException("The retention window must be strictly positive.", nameof(window));
@@ -2170,21 +2172,57 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private static SnapshotMode ToSnapshotMode(TreeSnapshotMode mode) => mode switch
     {
         TreeSnapshotMode.Online => SnapshotMode.Online,
-        _ => SnapshotMode.Offline,
+        TreeSnapshotMode.Offline => SnapshotMode.Offline,
+        _ => throw UndefinedMode(mode, nameof(mode)),
     };
 
     /// <summary>
     /// Maps the transport-agnostic <see cref="TreeHistoryRetentionMode"/> onto the core
     /// engine's <see cref="HistoryRetentionMode"/>, or <see langword="null"/> through to
-    /// clear the override (the core falls back to its default).
+    /// clear the override (the core falls back to its default). Only <see langword="null"/>
+    /// clears it; an undefined value is rejected rather than read as a clear.
     /// </summary>
     private static HistoryRetentionMode? ToRetentionMode(TreeHistoryRetentionMode? mode) => mode switch
     {
+        null => null,
         TreeHistoryRetentionMode.FullValue => HistoryRetentionMode.FullValue,
         TreeHistoryRetentionMode.Hybrid => HistoryRetentionMode.Hybrid,
         TreeHistoryRetentionMode.MetadataOnly => HistoryRetentionMode.MetadataOnly,
-        _ => null,
+        _ => throw UndefinedMode(mode.Value, nameof(mode)),
     };
+
+    /// <summary>
+    /// Rejects a <see cref="TreeSnapshotMode"/> outside the declared set before any tree
+    /// is resolved or authorized. Every transport hands the value through unchecked (the
+    /// gRPC service passes the wire field verbatim), and the mapping used to read any
+    /// unknown value as <see cref="TreeSnapshotMode.Offline"/>, which quiesces the source
+    /// for the whole copy (issue #4075).
+    /// </summary>
+    private static void ThrowIfUndefinedSnapshotMode(TreeSnapshotMode mode)
+    {
+        if (!Enum.IsDefined(mode))
+        {
+            throw UndefinedMode(mode, nameof(mode));
+        }
+    }
+
+    /// <summary>
+    /// Rejects a non-null <see cref="TreeHistoryRetentionMode"/> outside the declared set
+    /// before any tree is resolved or authorized. The mapping used to read any unknown
+    /// value as <see langword="null"/>, clearing the override, which the contract reserves
+    /// for an explicit <see langword="null"/> (issue #4075).
+    /// </summary>
+    private static void ThrowIfUndefinedRetentionMode(TreeHistoryRetentionMode? mode)
+    {
+        if (mode is { } value && !Enum.IsDefined(value))
+        {
+            throw UndefinedMode(value, nameof(mode));
+        }
+    }
+
+    private static ArgumentOutOfRangeException UndefinedMode<TMode>(TMode mode, string paramName)
+        where TMode : struct, Enum
+        => new(paramName, mode, $"'{mode}' is not a defined {typeof(TMode).Name} value.");
 
     /// <summary>Projects the core engine's effective retention settings onto the transport-agnostic DTO.</summary>
     private static TreeHistoryRetention ToRetention(string treeId, HistoryRetentionSettings settings) => new()
