@@ -204,7 +204,7 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
         builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge>(
             new StubBridge(new LatticeCredential("agent")));
         builder.Services.AddSingleton<ILatticeApiMcpPermissionResolver>(
-            new StubResolver(LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data)));
+            new StubResolver(TestAccessSets.Granting(LatticeApiMcpGroup.Data)));
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer());
         builder.Services.AddSingleton<ILatticeDataApi>(new FoundDataApi());
 
@@ -257,7 +257,7 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
         builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge>(
             new StubBridge(new LatticeCredential("agent")));
         builder.Services.AddSingleton<ILatticeApiMcpPermissionResolver>(
-            new StubResolver(LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data)));
+            new StubResolver(TestAccessSets.Granting(LatticeApiMcpGroup.Data)));
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer());
         builder.Services.AddSingleton<ILatticeDataApi>(new FoundDataApi());
 

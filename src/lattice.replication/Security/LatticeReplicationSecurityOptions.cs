@@ -46,13 +46,13 @@ public sealed class LatticeReplicationSecurityOptions
     public bool RequireAuthentication { get; set; } = true;
 
     /// <summary>
-    /// When <see langword="true"/>, an authenticated inbound call must additionally
-    /// present the secret this cluster would itself use to call the origin cluster
-    /// it claims, resolved through
+    /// When <see langword="true"/> (the default), an authenticated inbound call must
+    /// additionally present the secret this cluster would itself use to call the
+    /// origin cluster it claims, resolved through
     /// <see cref="ILatticeReplicationSecretSource.GetOutboundSecretAsync"/>. Calls
     /// that claim no origin, or that claim one whose configured secret is absent or
     /// does not match the presented credential, are rejected as
-    /// <c>PermissionDenied</c>. Defaults to <see langword="false"/>.
+    /// <c>PermissionDenied</c>.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -68,16 +68,25 @@ public sealed class LatticeReplicationSecurityOptions
     /// cursor.
     /// </para>
     /// <para>
-    /// It is opt-in because it is only meaningful when secrets are partitioned per
-    /// peer and the estate is symmetric (the secret this cluster sends to peer
-    /// <c>X</c> is the one <c>X</c> presents back). Under a single cluster-wide
-    /// secret every peer resolves the same value, so the check passes for every
-    /// origin and binds nothing - enabling it there costs a resolution per call and
-    /// buys no isolation. Operators running an asymmetric per-peer scheme must leave
-    /// it off, as the presented secret is not the one this cluster would send.
+    /// It defaults to on because leaving it off makes the claimed origin a
+    /// self-assertion, and the receiver-side origin checks that consume it then
+    /// compare two caller-chosen values. The in-box sender always stamps its
+    /// configured local cluster id alongside the secret, and every origin-taking
+    /// verb already refuses an unstamped call, so a standard estate is unaffected.
+    /// Under a single cluster-wide secret every peer resolves the same value, so
+    /// the check passes for every origin and costs only a resolution per call.
+    /// Under a symmetric per-peer scheme it binds the origin to the credential,
+    /// which is the isolation it exists to provide.
+    /// </para>
+    /// <para>
+    /// Operators running an <i>asymmetric</i> per-peer scheme - where the secret a
+    /// peer presents is deliberately not the one this cluster would send it - must
+    /// set this to <see langword="false"/>, as the comparison cannot succeed for
+    /// them. That estate gives up origin binding in exchange, and must not rely on
+    /// a claimed origin for any security decision.
     /// </para>
     /// </remarks>
-    public bool BindCredentialToOriginCluster { get; set; }
+    public bool BindCredentialToOriginCluster { get; set; } = true;
 
     /// <summary>
     /// How long the auth-credential cache retains a snapshot of

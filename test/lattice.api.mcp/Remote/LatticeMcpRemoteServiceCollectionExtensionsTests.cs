@@ -552,7 +552,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
 
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Telemetry),
             endpointSource,
             new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"));
 
@@ -572,7 +572,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     {
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Telemetry),
             endpointSource: null,
             unsupportedToolSource: null,
             new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"));
@@ -613,7 +613,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
 
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.State),
+            TestAccessSets.Granting(LatticeApiMcpGroup.State),
             endpointSource,
             new FakeToolGroup(LatticeApiMcpGroup.State, "state_read"));
 
@@ -642,11 +642,11 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
 
         var stateCaller = CreateConfigurator(
             new LatticeCredential("alice"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.State),
+            TestAccessSets.Granting(LatticeApiMcpGroup.State),
             endpointSource, stateGroup, authGroup);
         var authCaller = CreateConfigurator(
             new LatticeCredential("bob"),
-            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Auth),
+            TestAccessSets.Granting(LatticeApiMcpGroup.Auth),
             endpointSource, stateGroup, authGroup);
 
         var statePlan = await stateCaller.BuildSessionPlanAsync(HttpContext(), CancellationToken.None);
@@ -791,11 +791,11 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     private static LatticeApiMcpAccessSet FullAccess()
-        => LatticeApiMcpAccessSet.None
-            .With(LatticeApiMcpGroup.State)
-            .With(LatticeApiMcpGroup.Data)
-            .With(LatticeApiMcpGroup.Auth)
-            .With(LatticeApiMcpGroup.Backup);
+        => TestAccessSets.Granting(
+            LatticeApiMcpGroup.State,
+            LatticeApiMcpGroup.Data,
+            LatticeApiMcpGroup.Auth,
+            LatticeApiMcpGroup.Backup);
 
     private static LatticeApiMcpSessionConfigurator CreateConfigurator(
         LatticeCredential? credential,

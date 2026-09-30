@@ -214,9 +214,9 @@ public sealed class LatticeMcpTenantRegionWorkflowEndToEndTests
         builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge>(
             new WorkflowCredentialBridge());
         builder.Services.AddSingleton<ILatticeApiMcpPermissionResolver>(
-            new WorkflowPermissionResolver(LatticeApiMcpAccessSet.None
-                .With(LatticeApiMcpGroup.Data)
-                .With(LatticeApiMcpGroup.TenantAdmin)));
+            new WorkflowPermissionResolver(TestAccessSets.Granting(
+                LatticeApiMcpGroup.Data,
+                LatticeApiMcpGroup.TenantAdmin)));
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer());
         builder.Services.AddSingleton<ILatticeApiMcpActiveTenantBridge>(new WorkflowTenantBridge());
         builder.Services.AddSingleton<ILatticeDataApi>(ResidencyAwareDataApi(state));
