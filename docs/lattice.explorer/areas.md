@@ -377,21 +377,38 @@ still be recovered. Purge is accept-then-poll: the call can return while the sha
 walk is still running, so the tab says the purge was accepted, follows it with a
 "N of M shards purged" bar, and says the tree is purged only once the status
 reports the purge complete (or warns if it stopped before finishing). The
-Shards tab can run a confirmed deep read to count tombstones because it walks
-every leaf. The Storage tab links to the WAL page.
+Shards tab lists one row per physical shard the live shard map routes to; the
+diagnostics and hotness reads only fill in those rows, so a shard a shrink has
+retired, which a cached read can still name, never gains a row. Without the map,
+the rows are the shards those reports name. The tab can run a confirmed deep
+read to count tombstones because it walks every leaf. The Storage tab links to
+the WAL page.
 
 The tools page exposes only the tools the capability probe admits. Compaction
 requires admin authority, asks for a shard index, and opens a destructive
 confirmation because it forces an out-of-cycle tombstone pass. Projection digest
 requires diagnostic authority and reads a shard hash for replica comparison.
+Both take a shard index the live shard map routes to, not simply 0 to the shard
+count less one: a shrink retires indices, and a later grow allocates fresh ones
+above every retired index. The field's hint names the valid indices (a range
+when they are contiguous from 0, otherwise the indices themselves), and an index
+the map does not route to is refused.
 Bulk load requires the bulk-load grant, accepts strictly ascending `key=value`
 lines, sends chunks of 256 entries, and can resume from the first
 unacknowledged chunk under the same operation id after a failure.
 
 Reshard, Resize and Snapshot are resumable operation pages. They read current
 status, stage user input, show a Review section and then require destructive
-confirmation before starting. Reshard only grows, with a maximum target of 4096
-physical shards. Resize rebuilds the tree into a shadow at the requested node
+confirmation before starting. Reshard grows or shrinks a tree's physical shard
+count online: a larger count splits the largest shards a few at a time, and a
+smaller one folds adjacent shards together, routing swapping per split or fold.
+The target runs from 2 to the smaller of 4096 and the tree's virtual slot count,
+and a target equal to the current count is refused. A shrink's review states the
+trade-off: fewer shards lower the tree's write and point-read throughput ceiling,
+so a hot key range saturates sooner, while scans, counts, snapshots and resizes
+fan out to fewer shards and fewer activations stay resident. Each retired
+shard's storage is released before a shrink completes. Once started a reshard
+runs to its target; to go back, reshard again to the previous count. Resize rebuilds the tree into a shadow at the requested node
 capacity, can be undone while the old tree remains recoverable, and warns that
 undo loses writes that reached only the resized copy. Snapshot copies live
 entries into a new tree, either online or offline, and allows optional sizing.
@@ -412,7 +429,7 @@ on the operation's own page and on the tree's summary tab:
 | --- | --- | --- |
 | Resize | Copying the tree at the new size, pointing the tree's name at the copy, turning requests away from the old copy, retiring the old copy | One per shard the copy drains, then one for each of the three steps after the copy: "3 of 8 shards copied, then 3 steps to finish", then "Copy complete. Step 2 of 3 to finish." |
 | Snapshot | Taking the source out of service (offline) or starting to forward live writes (online), copying shards, returning a copied shard to service (offline) | Shards copied: "3 of 8 shards copied." |
-| Reshard | Splitting shards | The bar measures the physical shards added since the reshard started, out of the shards it adds; the line reads the current count against the target: "5 of 8 physical shards." |
+| Reshard | Splitting shards (growing), Folding shards together (shrinking), Releasing retired shards (a shrink at its target), Finishing (a grow at its target) | Shards moved from the starting count toward the target, in either direction, plus one unit for the step that completes the reshard, so a running reshard never reads 100%. A shrink that has reached its target count shows Releasing retired shards until the cluster reports it no longer in progress. Growing, the line reads the current count against the target: "5 of 8 physical shards."; shrinking: "6 physical shards now, down to 4." |
 | Purge | Purging shards, then Purged | Shards purged: "3 of 8 shards purged." |
 
 A bar is determinate only when the cluster reports a total; otherwise it is
@@ -449,7 +466,7 @@ The Cluster palette commands are:
 
 | Command id | Label | Effect |
 | --- | --- | --- |
-| `cluster.reshard-tree` | Reshard tree... | Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. |
+| `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. |
 | `cluster.plan-wal-move` | Plan WAL move... | Opens the WAL move planner on `/cluster/wal`, then navigates to the query-addressed plan. |
 
 Cluster faults are shown as fixed, short sentences. An authorisation denial is
