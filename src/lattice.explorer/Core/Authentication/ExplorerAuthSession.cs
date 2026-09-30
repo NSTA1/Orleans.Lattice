@@ -551,10 +551,18 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     private sealed record MintedSignIn(ExplorerAuthSignIn SignIn, string? Endpoint);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The gate is deliberately not disposed. A sign-in replay (<see cref="InitializeAsync"/>)
+    /// can still hold it across an await when the circuit is torn down, and its
+    /// <c>finally { _gate.Release(); }</c> then ran against a disposed semaphore and threw
+    /// <see cref="ObjectDisposedException"/> out of the chrome's initialisation, which Blazor
+    /// logs as an unhandled circuit exception (issue #4093). A <see cref="SemaphoreSlim"/>
+    /// needs disposal only once its <see cref="SemaphoreSlim.AvailableWaitHandle"/> is
+    /// allocated, which this type never does, so the GC reclaims it and nothing leaks.
+    /// </remarks>
     public void Dispose()
     {
         _session.ConfigurationChanged -= OnConfigurationChanged;
         DisposeCurrentProvider();
-        _gate.Dispose();
     }
 }
