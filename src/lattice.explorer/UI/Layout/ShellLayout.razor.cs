@@ -4,6 +4,7 @@ using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Slots;
@@ -55,6 +56,8 @@ public partial class ShellLayout : IAsyncDisposable
     private ILatticeStateConnection? _watchedConnection;
     private LatticeConnectionState _connectionState;
     private bool _sessionReady;
+    private bool _tenantProvisional;
+    private bool _tenantPending;
     private string? _entriesTenant;
     private (bool Authenticated, string? User)? _tenantResolvedFor;
 
@@ -114,6 +117,9 @@ public partial class ShellLayout : IAsyncDisposable
     /// <summary>What a signed-in caller is told when their tenant could not be established.</summary>
     internal const string TenantUnresolvedReason =
         "Your tenant could not be established, so nothing scoped to a tenant is shown. Reload the page or sign in again to retry.";
+
+    /// <summary>What a caller whose tenant is not known yet is shown in place of the page.</summary>
+    internal const string TenantPendingLabel = "Resolving your tenant";
 
     // A signed-in caller at a tenant-scoped address with tenancy on and no tenant
     // established: every call would reach the cluster as the reserved default
@@ -258,6 +264,18 @@ public partial class ShellLayout : IAsyncDisposable
             return;
         }
 
+        var arrived = Navigator.Current ?? ExplorerAddress.Home;
+        var mayGuess = await MayGuessTenantAsync(token);
+        if (version != _version)
+        {
+            return;
+        }
+
+        // Only the address can settle a tenant the prerender would otherwise guess.
+        var pending = mayGuess && !(arrived.Tenant is not null && Navigator.IsTenantScoped(arrived));
+        _tenantPending = pending;
+        Tenancy.IsTenantPending = pending;
+
         // Only now may a page ask the cluster anything: the configuration, the
         // sign-in and the caller's tenant are all established.
         _sessionReady = true;
@@ -271,10 +289,35 @@ public partial class ShellLayout : IAsyncDisposable
             return;
         }
 
-        var arrived = Navigator.Current ?? ExplorerAddress.Home;
+        if (pending)
+        {
+            // With no tenant active, canonicalising only drops a root a cluster-wide
+            // address never carries; nothing is rooted at, or resolved against, the
+            // guessed tenant.
+            var canonical = Navigator.Canonicalize(arrived);
+            if (!canonical.Equals(arrived))
+            {
+                Navigator.NavigateTo(canonical, replace: true);
+                return;
+            }
+
+            HoldForTenant(arrived);
+            return;
+        }
+
         var resolution = await Navigator.ResolveAsync(arrived, token);
         if (version != _version)
         {
+            return;
+        }
+
+        if (mayGuess && !string.Equals(resolution.Address.Tenant, arrived.Tenant, StringComparison.Ordinal))
+        {
+            // The address named a tenant the switch refused, and the fallback it
+            // would redirect to is the guess: withheld like any other address.
+            _tenantPending = true;
+            Tenancy.IsTenantPending = true;
+            HoldForTenant(arrived);
             return;
         }
 
@@ -389,25 +432,90 @@ public partial class ShellLayout : IAsyncDisposable
     /// runs, an active view has no tenant and scopes every catalogue to nothing.
     /// A head without tenancy registers no resolver, and this does nothing.
     /// </summary>
+    /// <remarks>
+    /// The remembered tenant lives in the preference store, so the store is read
+    /// first: the resolver then restores it on the circuit's first navigation rather
+    /// than establishing a fallback that nothing reconsiders. A server prerender
+    /// cannot read the store, so what the resolver establishes there is provisional,
+    /// and it is resolved again on the next navigation until the store is readable.
+    /// </remarks>
     private async Task ResolveTenantIdentityAsync(CancellationToken token)
     {
         var identity = (AuthSession.IsAuthenticated, AuthSession.Username);
-        if (_tenantResolvedFor == identity
+        if ((_tenantResolvedFor == identity && !_tenantProvisional)
             || Services.GetService(typeof(IExplorerTenantIdentityResolver)) is not IExplorerTenantIdentityResolver resolver)
         {
             return;
+        }
+
+        var preferences = Services.GetService(typeof(IExplorerShellPreferences)) as IExplorerShellPreferences;
+        if (preferences is { IsLoaded: false })
+        {
+            try
+            {
+                await preferences.EnsureLoadedAsync(token);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Unreadable (a prerender): the establishment below is provisional.
+            }
         }
 
         try
         {
             await resolver.ResolveAsync(token);
             _tenantResolvedFor = identity;
+            _tenantProvisional = AuthSession.IsAuthenticated
+                && preferences is { IsLoaded: false }
+                && Services.GetService(typeof(IExplorerTenantView)) is IExplorerTenantView { IsActive: true };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // Unresolved stays fail-closed: no active tenant, nothing scoped in.
         }
     }
+
+    /// <summary>
+    /// Whether the tenant the resolver established is one this render could only
+    /// have guessed: a server prerender that could not read the caller's remembered
+    /// tenant, for a caller who can reach more than one tenant. Only the address can
+    /// then settle it; otherwise nothing may render under the guess.
+    /// </summary>
+    /// <remarks>
+    /// The live circuit never guesses: it reads the store before it resolves, and a
+    /// store it still cannot read leaves the documented fallback standing rather
+    /// than a page that never renders. A reachable list that cannot be read counts
+    /// as more than one tenant, so a fault fails closed to the neutral state.
+    /// </remarks>
+    /// <param name="token">Cancels the reachable-tenant read.</param>
+    private async Task<bool> MayGuessTenantAsync(CancellationToken token)
+    {
+        if (!_tenantProvisional || RendererInfo.IsInteractive)
+        {
+            return false;
+        }
+
+        if (Services.GetService(typeof(IExplorerAccessibleTenantSource)) is not IExplorerAccessibleTenantSource tenants)
+        {
+            // With no reachable list nothing remembered can be restored, so the
+            // fallback is the only tenant the circuit can hold.
+            return false;
+        }
+
+        try
+        {
+            return (await tenants.GetAccessibleTenantsAsync(token)).Count > 1;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return true;
+        }
+    }
+
+    // The tenant is not known: the address stays as the browser gave it, and no
+    // stop is asked for its availability under the guess.
+    private void HoldForTenant(ExplorerAddress arrived) =>
+        _location = _location with { Address = arrived, TenancyActive = Tenancy.IsActive, Entries = [], EntriesLoaded = false };
 
     private async Task RefreshEntriesAsync(int version, CancellationToken token)
     {

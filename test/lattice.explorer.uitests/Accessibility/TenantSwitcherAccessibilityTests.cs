@@ -18,6 +18,7 @@ public sealed class TenantSwitcherAccessibilityTests : UiTestBase
     {
         var world = await UiHosts.TenantWorldAsync();
         var page = await OpenAsync(world.Head, "/data", WorldIdentities.Admin);
+        await Expect(page).ToHaveURLAsync(world.Head.Url("/t/default/data"));
         var toggle = TenantSwitcherJourneyTests.Toggle(page);
         await Expect(toggle).ToBeVisibleAsync();
 
@@ -37,6 +38,10 @@ public sealed class TenantSwitcherAccessibilityTests : UiTestBase
     {
         var world = await UiHosts.TenantWorldAsync();
         var page = await OpenAsync(world.Head, "/data", WorldIdentities.Admin, width: Shell.SmallWidth);
+
+        // The prerender cannot know the operator's tenant, so the live circuit roots the
+        // address; the sheet is opened once it has, not across that navigation.
+        await Expect(page).ToHaveURLAsync(world.Head.Url("/t/default/data"));
         await Expect(TenantSwitcherJourneyTests.Toggle(page)).ToHaveCountAsync(0);
 
         await Shell.Banner(page).GetByRole(AriaRole.Button, new() { Name = "Directory", Exact = true }).ClickAsync();

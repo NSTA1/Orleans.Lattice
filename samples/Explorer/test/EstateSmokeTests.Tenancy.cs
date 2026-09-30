@@ -13,6 +13,21 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 public sealed partial class EstateSmokeTests
 {
     [Test]
+    public async Task The_operators_console_root_prerenders_the_neutral_state_and_never_the_default_tenant()
+    {
+        // The administrator can reach default, acme and globex, and the prerender cannot
+        // read which one they last held, so it names none of them (issue #3999).
+        var root = await SampleTestHost.GetRootAsync(_sample);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(root, Does.Contain("Resolving your tenant"));
+            Assert.That(root, Does.Not.Contain("href=\"t/default"), "nothing links to a guessed tenant");
+            Assert.That(root, Does.Not.Contain("data-lt-command=\"tenant.switch\""), "the switcher names no guessed tenant");
+        });
+    }
+
+    [Test]
     public async Task The_operators_tenancy_and_access_stops_open_their_pages_from_the_default_tenant()
     {
         var home = await SampleTestHost.GetHomeAsync(_sample);
@@ -24,14 +39,17 @@ public sealed partial class EstateSmokeTests
 
         Assert.Multiple(() =>
         {
+            // The stops are cluster-wide addresses, which name no tenant, so the prerender of
+            // each is the neutral resolving state (issue #3999); the live circuit renders the
+            // pages themselves, which AreaSwitchJourneyTests drives in a browser.
             Assert.That(targets["tenancy"], Is.EqualTo("tenancy"), "the operator's Tenancy stop leads to the tenant directory from /t/default");
             Assert.That(tenancyAddress.AbsolutePath, Is.EqualTo("/tenancy"));
-            Assert.That(tenancy, Does.Contain("<h1 class=\"lt-shell-page-title\">Tenancy</h1>"), "the tenant directory renders");
+            Assert.That(tenancy, Does.Contain("Resolving your tenant"));
             Assert.That(tenancy, Does.Not.Contain("This tenant could not be read"));
             Assert.That(workspaceAddress.AbsolutePath, Is.EqualTo("/tenancy"), "the default tenant's workspace root is the directory");
             Assert.That(workspace, Does.Not.Contain("This tenant could not be read"));
             Assert.That(accessAddress.AbsolutePath, Is.EqualTo("/access"));
-            Assert.That(access, Does.Contain("<h1 class=\"lt-shell-page-title\">Access</h1>"), "the Access area renders");
+            Assert.That(access, Does.Contain("Resolving your tenant"));
             Assert.That(access, Does.Not.Contain("Nothing lives at this address"));
         });
     }

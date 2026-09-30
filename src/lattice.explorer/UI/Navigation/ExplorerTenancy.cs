@@ -94,8 +94,20 @@ internal sealed class ExplorerTenancy
         _verdictTenant = active.Value;
     }
 
-    /// <summary>The active tenant's id, or <see langword="null"/> when tenancy is off or none is established.</summary>
-    public string? ActiveTenant => IsActive ? _view!.ActiveTenant?.Value : null;
+    /// <summary>
+    /// Whether the tenant this circuit will hold is not known yet: a server prerender
+    /// that cannot read the caller's remembered tenant, at an address that does not
+    /// name one. The layout sets it on every navigation. While it is set no tenant is
+    /// reported active and no switch is offered, so nothing in the chrome is drawn
+    /// or addressed under the tenant the prerender would otherwise have guessed.
+    /// </summary>
+    public bool IsTenantPending { get; set; }
+
+    /// <summary>
+    /// The active tenant's id, or <see langword="null"/> when tenancy is off, none is
+    /// established, or it is not known yet (<see cref="IsTenantPending"/>).
+    /// </summary>
+    public string? ActiveTenant => IsActive && !IsTenantPending ? _view!.ActiveTenant?.Value : null;
 
     /// <summary>
     /// Whether tenancy is on but no tenant is established for this circuit, for
@@ -121,14 +133,15 @@ internal sealed class ExplorerTenancy
     /// <summary>
     /// Whether this caller may switch tenant at all: tenancy is on and the
     /// operator-gated switcher proves the caller's standing. Every fault, a head
-    /// without a switcher and tenancy off all read as "may not", so an affordance
+    /// without a switcher, tenancy off and a tenant not known yet all read as "may
+    /// not", so an affordance
     /// that depends on it fails closed; the switch itself is still re-checked.
     /// </summary>
     /// <param name="cancellationToken">Cancels the operator validation.</param>
     /// <returns><see langword="true"/> only for a proven operator with tenancy on.</returns>
     public async ValueTask<bool> CanSwitchAsync(CancellationToken cancellationToken = default)
     {
-        if (!IsActive || _switcher is null)
+        if (!IsActive || IsTenantPending || _switcher is null)
         {
             return false;
         }
