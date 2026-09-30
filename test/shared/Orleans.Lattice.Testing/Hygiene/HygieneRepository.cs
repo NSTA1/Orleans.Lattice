@@ -229,6 +229,41 @@ public static class HygieneRepository
         candidate.Equals(root, StringComparison.OrdinalIgnoreCase)
         || candidate.StartsWith(DirectoryPrefix(root), StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// How long <c>git ls-files</c> is allowed to take before the wait is
+    /// abandoned. Generous enough that no healthy repository on any CI runner
+    /// approaches it, so tripping it is always a real hang rather than a slow
+    /// machine.
+    /// </summary>
+    private static readonly TimeSpan GitTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Terminates a child that overran its budget, along with anything it
+    /// spawned. Failure is swallowed deliberately: the caller is already on its
+    /// way to throwing a diagnosis, and a secondary kill error (the process
+    /// exited in the race between the timeout and the kill, most often) would
+    /// replace that diagnosis with a less useful one.
+    /// </summary>
+    private static void Kill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited.
+        }
+        catch (NotSupportedException)
+        {
+            // Process tree termination unavailable on this platform.
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The OS refused the kill; the timeout diagnosis is still the useful one.
+        }
+    }
+
     private static string[] LoadTrackedFiles(string repoRoot)
     {
         var startInfo = new ProcessStartInfo("git")
@@ -258,10 +293,34 @@ public static class HygieneRepository
             // stdout buffer, or a git that writes warnings to stderr, reaches it.
             var standardOutputTask = process.StandardOutput.ReadToEndAsync();
             var standardErrorTask = process.StandardError.ReadToEndAsync();
-            process.WaitForExit();
+
+            // Bounded. Both pipes are already draining, so the only thing left to
+            // hang is the child itself - a git that blocks on an index.lock, on a
+            // credential prompt, or on a filter process. An unbounded wait turns
+            // that into a CI abort naming no fixture and no assertion, and this
+            // helper backs EVERY hygiene gate, so the abort would not even
+            // identify which gate was running.
+            if (!process.WaitForExit((int)GitTimeout.TotalMilliseconds))
+            {
+                Kill(process);
+                throw new TimeoutException(
+                    "'git ls-files' did not exit within " + GitTimeout.TotalSeconds + "s in '" + repoRoot
+                    + "'. Both output pipes were being drained, so the child itself is stuck - commonly on an "
+                    + "index.lock left by a crashed git, on a credential prompt, or on a smudge/clean filter. "
+                    + "The hygiene gates all enumerate files through this call, so an unbounded wait here "
+                    + "hangs the whole suite instead of failing it.");
+            }
+
             standardOutput = standardOutputTask.GetAwaiter().GetResult();
             standardError = standardErrorTask.GetAwaiter().GetResult();
             exitCode = process.ExitCode;
+        }
+        catch (TimeoutException)
+        {
+            // Already carries the actionable diagnosis; wrapping it in the
+            // "git must be on PATH" message below would misdiagnose a hang as a
+            // missing executable.
+            throw;
         }
         catch (Exception ex)
         {
