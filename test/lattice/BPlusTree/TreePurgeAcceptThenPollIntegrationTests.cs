@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
@@ -21,6 +23,16 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// out, the status read queued behind the walk, and nothing reported the purge as
 /// running.
 /// </para>
+/// <para>
+/// The short timeout is meant for the purge section only, not for seeding the
+/// tree (issue #4032). The first write to a freshly named tree walks a cold
+/// activation chain, and on a loaded runner that alone can outlast 4 s. So every
+/// setup step goes through the silo's own grain factory while the silo's runtime
+/// response timeout is relaxed, and is then put back to 4 s before the purge
+/// section starts. The external client is never relaxed and keeps 4 s throughout.
+/// The configured options stay at 4 s the whole time as well, so the purge wait
+/// budget the grain derives from them is the one under test.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -29,10 +41,15 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
     /// <summary>The response timeout the silo and client are given.</summary>
     private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(4);
 
+    /// <summary>The silo's runtime response timeout while a test seeds its tree.</summary>
+    private static readonly TimeSpan SetupResponseTimeout = TimeSpan.FromSeconds(60);
+
     /// <summary>How long a purge call or status read may take to answer while a shard is held.</summary>
     private static readonly TimeSpan PromptAnswer = TimeSpan.FromSeconds(10);
 
     private TestCluster _cluster = null!;
+    private IGrainFactory _siloGrains = null!;
+    private SiloResponseTimeout _siloTimeout = null!;
 
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
@@ -42,6 +59,11 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
         builder.AddClientBuilderConfigurator<ClientConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+
+        var services = ((InProcessSiloHandle)_cluster.Primary).SiloHost.Services;
+        _siloGrains = services.GetRequiredService<IGrainFactory>();
+        _siloTimeout = SiloResponseTimeout.Resolve(services);
+        Assert.That(_siloTimeout.Current, Is.EqualTo(ResponseTimeout), "precondition: the silo starts at the short timeout");
     }
 
     [OneTimeTearDown]
@@ -56,10 +78,14 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
     public async Task A_purge_whose_shard_outlasts_the_response_timeout_is_accepted_reported_and_completed()
     {
         var treeId = $"purge-accept-{Guid.NewGuid():N}";
-        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
-        await WriteAsync(tree);
-        await tree.DeleteTreeAsync();
+        await SeedAsync(async grains =>
+        {
+            var seed = grains.GetGrain<ILattice>(treeId);
+            await WriteAsync(seed);
+            await seed.DeleteTreeAsync();
+        });
 
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
         var deletion = _cluster.Client.GetGrain<ITreeDeletionGrain>(treeId);
         var hold = PurgeGate.Arm(shardKey => shardKey == $"{treeId}/0");
         try
@@ -131,18 +157,23 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
     public async Task An_aliased_tree_s_purge_is_accepted_while_its_copy_s_shard_is_held_and_completes()
     {
         var treeId = $"purge-accept-alias-{Guid.NewGuid():N}";
-        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
-        await WriteAsync(tree);
-        await tree.ResizeAsync(64, 64);
-        await TestPoll.UntilAsync(
-            () => tree.IsResizeCompleteAsync(),
-            "the resize to finish",
-            timeout: TimeSpan.FromSeconds(60));
-        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var copy = await registry.ResolveAsync(treeId);
-        Assert.That(copy, Is.Not.EqualTo(treeId), "precondition: the resize aliased the tree to a copy");
-        await tree.DeleteTreeAsync();
+        var copy = string.Empty;
+        await SeedAsync(async grains =>
+        {
+            var seed = grains.GetGrain<ILattice>(treeId);
+            await WriteAsync(seed);
+            await seed.ResizeAsync(64, 64);
+            await TestPoll.UntilAsync(
+                () => seed.IsResizeCompleteAsync(),
+                "the resize to finish",
+                timeout: TimeSpan.FromSeconds(60));
+            copy = await grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).ResolveAsync(treeId);
+            Assert.That(copy, Is.Not.EqualTo(treeId), "precondition: the resize aliased the tree to a copy");
+            await seed.DeleteTreeAsync();
+        });
 
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var deletion = _cluster.Client.GetGrain<ITreeDeletionGrain>(treeId);
         var hold = PurgeGate.Arm(shardKey => shardKey == $"{copy}/0");
         try
@@ -175,6 +206,27 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
             Assert.That(await registry.ExistsAsync(copy), Is.False, "the copy is unregistered");
         });
         await AnswerPromptlyAsync(tree.PurgeTreeAsync(), "a purge call after completion");
+    }
+
+    /// <summary>
+    /// Runs a test's setup through the silo's grain factory with the silo's runtime
+    /// response timeout relaxed, then puts it back to <see cref="ResponseTimeout"/>
+    /// and checks it is back before the section under test starts.
+    /// </summary>
+    private async Task SeedAsync(Func<IGrainFactory, Task> seed)
+    {
+        _siloTimeout.Set(SetupResponseTimeout);
+        try
+        {
+            await seed(_siloGrains);
+        }
+        finally
+        {
+            _siloTimeout.Set(ResponseTimeout);
+        }
+
+        Assert.That(_siloTimeout.Current, Is.EqualTo(ResponseTimeout),
+            "precondition: the purge section runs under the short response timeout");
     }
 
     private static async Task WriteAsync(ILattice tree)
@@ -253,6 +305,37 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>
+    /// The silo's runtime response timeout. The configured
+    /// <see cref="SiloMessagingOptions.ResponseTimeout"/> is only read once, when the
+    /// runtime client is built, so relaxing it for setup has to go through the
+    /// runtime client, which Orleans keeps internal. Grain calls sent from the silo
+    /// take both their deadline and their message expiry from this value.
+    /// </summary>
+    private sealed class SiloResponseTimeout(object runtimeClient, MethodInfo get, MethodInfo set)
+    {
+        internal static SiloResponseTimeout Resolve(IServiceProvider services)
+        {
+            var type = typeof(MessagingOptions).Assembly.GetType("Orleans.Runtime.IRuntimeClient");
+            Assert.That(type, Is.Not.Null,
+                "Orleans.Runtime.IRuntimeClient was renamed or moved; update how this fixture relaxes its setup timeout.");
+            var get = type!.GetMethod("GetResponseTimeout", Type.EmptyTypes);
+            var set = type.GetMethod("SetResponseTimeout", [typeof(TimeSpan)]);
+            var client = services.GetService(type);
+            Assert.Multiple(() =>
+            {
+                Assert.That(get, Is.Not.Null, "IRuntimeClient.GetResponseTimeout was renamed; update this fixture.");
+                Assert.That(set, Is.Not.Null, "IRuntimeClient.SetResponseTimeout was renamed; update this fixture.");
+                Assert.That(client, Is.Not.Null, "the silo no longer registers IRuntimeClient; update this fixture.");
+            });
+            return new SiloResponseTimeout(client!, get!, set!);
+        }
+
+        public TimeSpan Current => (TimeSpan)get.Invoke(runtimeClient, null)!;
+
+        public void Set(TimeSpan timeout) => set.Invoke(runtimeClient, [timeout]);
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator
