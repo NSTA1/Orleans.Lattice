@@ -133,6 +133,7 @@ public sealed class ClusterTreeListTests : ClusterTestContext
 
         cut.Find($"[data-lt-command=\"{command.Id}\"]").Click();
         Assert.That(cut.Find(".lt-dialog h2").TextContent, Is.EqualTo("Reshard a tree"));
+        Assert.That(cut.Find(".lt-dialog").TextContent, Does.Contain("Name the tree to grow or shrink.").And.Not.Contain("Name the tree to grow."));
     }
 
     [Test]

@@ -144,6 +144,18 @@ public class ExplorerGlossaryTests
         });
     }
 
+    [Test]
+    public void The_reshard_term_explains_both_directions_and_their_trade_off()
+    {
+        var explanation = ExplorerGlossary.Get(ExplorerTermIds.Reshard).Explanation;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(explanation, Does.Contain("Growing or shrinking"), "a reshard can shrink a tree since #4069");
+            Assert.That(explanation, Does.Contain("fewer make scans cheaper"));
+        });
+    }
+
     // -------------------------------------------------------------- Terms/Count
 
     [Test]

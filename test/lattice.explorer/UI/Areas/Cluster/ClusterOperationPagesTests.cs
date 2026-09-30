@@ -30,7 +30,7 @@ public sealed class ClusterOperationPagesTests : ClusterTestContext
         Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Reshard a/crm/orders"));
 
         Stage(cut, "4");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Resharding only grows: enter more than 4."));
+        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("The tree already has 4 physical shards"));
         Stage(cut, "5000");
         Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 4096"));
         Stage(cut, "eight");
