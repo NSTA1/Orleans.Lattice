@@ -23,7 +23,8 @@ internal static partial class ShellServiceCollectionExtensions
         // with ValidateOnBuild stays valid.
         services.TryAddScoped(provider => new AccessCatalog(
             provider.GetRequiredShellFacade<ILatticeAuthAdmin>(),
-            provider.GetService<ShellAssertedTenant>()));
+            provider.GetService<ShellAssertedTenant>(),
+            ShellCaller.Of(provider)));
         services.AddExplorerArea<AccessArea>();
     }
 }

@@ -17,7 +17,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// </summary>
 /// <remarks>
 /// The chrome's tenancy reading is resolved lazily, at call time, because it in
-/// turn reads the accessible-tenant list this catalogue supplies.
+/// turn reads the accessible-tenant list this catalogue supplies. Every memo is
+/// filed under the caller (<see cref="Caller"/>: the sign-in, the endpoint and the
+/// asserted tenant) and the active tenant, so no answer outlives the caller it was
+/// read for.
 /// </remarks>
 internal sealed class TenancyCatalog
 {
@@ -25,10 +28,10 @@ internal sealed class TenancyCatalog
     public const int ResidencySurveyLimit = 50;
 
     private readonly IServiceProvider _services;
-    private (bool Authenticated, string? User, string? Active, TenancyStanding Standing)? _standing;
-    private (bool Authenticated, string? User, string? Active, IReadOnlyList<TenantDescriptor> Tenants)? _tenants;
-    private (string Tenant, int? Count)? _apps;
-    private (string? User, string? Active, TenancyResidencySurvey Survey)? _survey;
+    private (MemoKey Key, TenancyStanding Standing)? _standing;
+    private (MemoKey Key, IReadOnlyList<TenantDescriptor> Tenants)? _tenants;
+    private (MemoKey Key, string Tenant, int? Count)? _apps;
+    private (MemoKey Key, TenancyResidencySurvey Survey)? _survey;
 
     /// <summary>Creates the catalogue over the circuit's services.</summary>
     /// <param name="services">The circuit's services.</param>
@@ -44,7 +47,11 @@ internal sealed class TenancyCatalog
         Quota = services.GetShellFacade<ILatticeTenantQuotaUsage>();
         Apps = services.GetShellFacade<ILatticeAppsControl>();
         Session = services.GetService<IExplorerAuthSession>();
+        Caller = ShellCaller.Of(services);
     }
+
+    /// <summary>The circuit's caller, which every memo here is filed under.</summary>
+    public ShellCaller Caller { get; }
 
     /// <summary>The read-only self-service facade, or <see langword="null"/> when not registered.</summary>
     public ILatticeTenantSelfService? SelfService { get; }
@@ -76,8 +83,12 @@ internal sealed class TenancyCatalog
     /// <summary>The tenant the Explorer is scoped to, or <see langword="null"/>.</summary>
     public string? ActiveTenant => _services.GetService<ExplorerTenancy>()?.ActiveTenant;
 
-    /// <summary>The last standing proven on this circuit, or <see langword="null"/> before the first.</summary>
-    public TenancyStanding? LastStanding => _standing?.Standing;
+    /// <summary>
+    /// The last standing proven for the caller and active tenant now, or
+    /// <see langword="null"/> before the first; a standing proven for another caller
+    /// is never returned.
+    /// </summary>
+    public TenancyStanding? LastStanding => _standing is { } memo && memo.Key == Key() ? memo.Standing : null;
 
     /// <summary>
     /// The caller's standing, proven with the cheapest reads that establish it
@@ -89,13 +100,9 @@ internal sealed class TenancyCatalog
     public async Task<TenancyStanding> GetStandingAsync(CancellationToken cancellationToken)
     {
         var selfService = SelfService ?? throw new NotSupportedException(TenancyFailure.NotServedMessage);
-        var authenticated = Session?.IsAuthenticated == true;
-        var user = Session?.Username;
-        var active = ActiveTenant;
-        if (_standing is { } memo
-            && memo.Authenticated == authenticated
-            && string.Equals(memo.User, user, StringComparison.Ordinal)
-            && string.Equals(memo.Active, active, StringComparison.Ordinal))
+        var key = Key();
+        var active = key.Active;
+        if (_standing is { } memo && memo.Key == key)
         {
             return memo.Standing;
         }
@@ -107,7 +114,11 @@ internal sealed class TenancyCatalog
         var isAdmin = !isOperator && await AdministersAsync(workspace, cancellationToken).ConfigureAwait(true);
 
         var standing = new TenancyStanding(isOperator, current.TenantId, active, isAdmin);
-        _standing = (authenticated, user, active, standing);
+        if (Key() == key)
+        {
+            _standing = (key, standing);
+        }
+
         return standing;
     }
 
@@ -120,13 +131,8 @@ internal sealed class TenancyCatalog
     /// <param name="cancellationToken">Cancels the read.</param>
     public async Task<IReadOnlyList<TenantDescriptor>> GetTenantsAsync(CancellationToken cancellationToken)
     {
-        var authenticated = Session?.IsAuthenticated == true;
-        var user = Session?.Username;
-        var active = ActiveTenant;
-        if (_tenants is { } memo
-            && memo.Authenticated == authenticated
-            && string.Equals(memo.User, user, StringComparison.Ordinal)
-            && string.Equals(memo.Active, active, StringComparison.Ordinal))
+        var key = Key();
+        if (_tenants is { } memo && memo.Key == key)
         {
             return memo.Tenants;
         }
@@ -134,7 +140,11 @@ internal sealed class TenancyCatalog
         var selfService = SelfService ?? throw new NotSupportedException(TenancyFailure.NotServedMessage);
         var tenants = await selfService.ListAccessibleTenantsAsync(cancellationToken).ConfigureAwait(true) ?? [];
         IReadOnlyList<TenantDescriptor> sorted = [.. tenants.Where(tenant => tenant is not null).OrderBy(tenant => tenant.TenantId, StringComparer.Ordinal)];
-        _tenants = (authenticated, user, active, sorted);
+        if (Key() == key)
+        {
+            _tenants = (key, sorted);
+        }
+
         return sorted;
     }
 
@@ -154,7 +164,8 @@ internal sealed class TenancyCatalog
             return null;
         }
 
-        if (_apps is { } memo && string.Equals(memo.Tenant, tenantId, StringComparison.Ordinal))
+        var key = Key();
+        if (_apps is { } memo && memo.Key == key && string.Equals(memo.Tenant, tenantId, StringComparison.Ordinal))
         {
             return memo.Count;
         }
@@ -170,7 +181,11 @@ internal sealed class TenancyCatalog
             count = null;
         }
 
-        _apps = (tenantId, count);
+        if (Key() == key)
+        {
+            _apps = (key, tenantId, count);
+        }
+
         return count;
     }
 
@@ -194,11 +209,8 @@ internal sealed class TenancyCatalog
     /// <returns>The count, and whether it covers only the first tenants.</returns>
     public async Task<TenancyResidencySurvey> GetResidencySurveyAsync(CancellationToken cancellationToken)
     {
-        var user = Session?.Username;
-        var active = ActiveTenant;
-        if (_survey is { } memo
-            && string.Equals(memo.User, user, StringComparison.Ordinal)
-            && string.Equals(memo.Active, active, StringComparison.Ordinal))
+        var key = Key();
+        if (_survey is { } memo && memo.Key == key)
         {
             return memo.Survey;
         }
@@ -207,7 +219,11 @@ internal sealed class TenancyCatalog
         var surveyed = tenants.Take(ResidencySurveyLimit).ToArray();
         var answers = await Task.WhenAll(surveyed.Select(tenant => HasResidencySetAsync(tenant.TenantId, cancellationToken))).ConfigureAwait(true);
         var survey = new TenancyResidencySurvey(answers.Count(answer => answer == false), tenants.Length > surveyed.Length);
-        _survey = (user, active, survey);
+        if (Key() == key)
+        {
+            _survey = (key, survey);
+        }
+
         return survey;
     }
 
@@ -263,6 +279,8 @@ internal sealed class TenancyCatalog
         }
     }
 
+    private MemoKey Key() => new(Caller.Current, ActiveTenant);
+
     private async Task<bool> AdministersAsync(string tenantId, CancellationToken cancellationToken)
     {
         if (Access is null || string.Equals(tenantId, TenantId.DefaultId, StringComparison.Ordinal))
@@ -280,4 +298,7 @@ internal sealed class TenancyCatalog
             return false;
         }
     }
+
+    /// <summary>What a memo is filed under: the caller and the active tenant.</summary>
+    private readonly record struct MemoKey(ShellCallerKey Caller, string? Active);
 }

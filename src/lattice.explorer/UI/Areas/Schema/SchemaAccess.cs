@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -17,10 +18,11 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// is refused is told to sign in; a signed-in one who is refused sees no area.
 /// </para>
 /// <para>
-/// A definite answer (visible, or refused) is remembered until the sign-in or the
-/// connection changes, and only for the tenant the circuit asserted when it was
-/// read, so a tenant switch asks again. A fault is not remembered, so the next
-/// navigation asks again.
+/// A definite answer (visible, or refused) is remembered only for the caller it
+/// was read for (<see cref="SchemaFacades.Caller"/>: the sign-in, the endpoint and
+/// the asserted tenant), and dropped as soon as the sign-in or the connection
+/// changes, so a new caller or a tenant switch asks again. A fault is not
+/// remembered, so the next navigation asks again.
 /// </para>
 /// </remarks>
 internal sealed class SchemaAccess : IDisposable
@@ -36,8 +38,8 @@ internal sealed class SchemaAccess : IDisposable
 
     private readonly SchemaFacades _facades;
     private readonly TimeProvider _time;
-    private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, string? Tenant)> _trees = new(StringComparer.Ordinal);
-    private Tuple<AreaAvailability, string?>? _availability;
+    private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, ShellCallerKey Caller)> _trees = new(StringComparer.Ordinal);
+    private Tuple<AreaAvailability, ShellCallerKey>? _availability;
 
     /// <summary>Creates the access answer over the circuit's facades.</summary>
     /// <param name="facades">The area's facades.</param>
@@ -64,8 +66,8 @@ internal sealed class SchemaAccess : IDisposable
     /// <returns>The area's availability.</returns>
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
-        var tenant = _facades.AssertedTenant;
-        if (Volatile.Read(ref _availability) is { } remembered && SameTenant(remembered.Item2, tenant))
+        var caller = _facades.Caller;
+        if (Volatile.Read(ref _availability) is { } remembered && remembered.Item2 == caller)
         {
             return remembered.Item1;
         }
@@ -99,11 +101,11 @@ internal sealed class SchemaAccess : IDisposable
             : _facades.Auth is { IsAuthenticated: false }
                 ? AreaAvailability.Unavailable(SignInReason)
                 : AreaAvailability.Hidden;
-        // Remembered only for the tenant it was read under, and only while the
-        // circuit still asserts it.
-        if (SameTenant(_facades.AssertedTenant, tenant))
+        // Remembered only for the caller it was read for, and only while that is
+        // still the caller.
+        if (_facades.Caller == caller)
         {
-            Volatile.Write(ref _availability, Tuple.Create(answer, tenant));
+            Volatile.Write(ref _availability, Tuple.Create(answer, caller));
         }
 
         return answer;
@@ -117,10 +119,10 @@ internal sealed class SchemaAccess : IDisposable
     public async Task<SchemaGrants> GetGrantsAsync(string treeId, bool refresh, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var tenant = _facades.AssertedTenant;
+        var caller = _facades.Caller;
         if (!refresh
             && _trees.TryGetValue(treeId, out var remembered)
-            && SameTenant(remembered.Tenant, tenant)
+            && remembered.Caller == caller
             && _time.GetUtcNow() - remembered.ReadAt < GrantFreshness)
         {
             return remembered.Grants;
@@ -145,9 +147,9 @@ internal sealed class SchemaAccess : IDisposable
             return SchemaGrants.None;
         }
 
-        if (SameTenant(_facades.AssertedTenant, tenant))
+        if (_facades.Caller == caller)
         {
-            _trees[treeId] = (grants, _time.GetUtcNow(), tenant);
+            _trees[treeId] = (grants, _time.GetUtcNow(), caller);
         }
 
         return grants;
@@ -159,8 +161,6 @@ internal sealed class SchemaAccess : IDisposable
         Volatile.Write(ref _availability, null);
         _trees.Clear();
     }
-
-    private static bool SameTenant(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
 
     /// <inheritdoc />
     public void Dispose()

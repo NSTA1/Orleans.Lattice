@@ -40,7 +40,7 @@ public sealed class SuggestionSourceTests
         var status = Status("eu-west");
         var tenant = new FakeActiveTenantProvider("acme");
         var time = new ManualTimeProvider();
-        var source = new RegionSuggestionSource(status, new ShellAssertedTenant(tenant), time);
+        var source = new RegionSuggestionSource(status, new ShellCaller(tenant: new ShellAssertedTenant(tenant)), time);
 
         await source.SuggestAsync("e", 5, CancellationToken.None);
         await source.SuggestAsync("eu", 5, CancellationToken.None);

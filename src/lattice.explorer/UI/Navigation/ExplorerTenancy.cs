@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.Core.Tenancy;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -19,21 +20,26 @@ internal sealed class ExplorerTenancy
     private readonly IExplorerTenantView? _view;
     private readonly IExplorerTenantSwitcher? _switcher;
     private readonly IExplorerAccessibleTenantSource? _tenants;
+    private readonly ShellCaller _caller;
     private bool _operatorVerdict;
     private string? _verdictTenant;
+    private ShellCallerKey _verdictCaller;
 
     /// <summary>Reads tenancy from whichever of Core's seams the head registered.</summary>
     /// <param name="view">The tenant view, or <see langword="null"/> when tenancy is not registered.</param>
     /// <param name="switcher">The operator-gated switcher, or <see langword="null"/>.</param>
     /// <param name="tenants">The accessible-tenant source, or <see langword="null"/>.</param>
+    /// <param name="caller">The circuit's caller, which the operator verdict is filed under, or <see langword="null"/> for none.</param>
     public ExplorerTenancy(
         IExplorerTenantView? view = null,
         IExplorerTenantSwitcher? switcher = null,
-        IExplorerAccessibleTenantSource? tenants = null)
+        IExplorerAccessibleTenantSource? tenants = null,
+        ShellCaller? caller = null)
     {
         _view = view;
         _switcher = switcher;
         _tenants = tenants;
+        _caller = caller ?? new ShellCaller();
     }
 
     /// <summary>
@@ -52,11 +58,16 @@ internal sealed class ExplorerTenancy
     /// </remarks>
     public bool IsActive => _view is { IsActive: true } && !HidesDefaultTenant;
 
-    /// <summary>Whether the active tenant is the reserved default and the caller has not proven operator standing for it.</summary>
+    /// <summary>
+    /// Whether the active tenant is the reserved default and the caller has not proven
+    /// operator standing for it. A verdict read for another caller proves nothing.
+    /// </summary>
     private bool HidesDefaultTenant =>
         _view!.ActiveTenant is { } active
         && string.Equals(active.Value, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal)
-        && !(_operatorVerdict && string.Equals(_verdictTenant, active.Value, StringComparison.Ordinal));
+        && !(_operatorVerdict
+            && string.Equals(_verdictTenant, active.Value, StringComparison.Ordinal)
+            && _verdictCaller == _caller.Current);
 
     /// <summary>
     /// Refreshes the cached operator verdict that decides whether a caller scoped
@@ -77,6 +88,7 @@ internal sealed class ExplorerTenancy
             return;
         }
 
+        var caller = _caller.Current;
         var verdict = false;
         if (_switcher is not null)
         {
@@ -92,6 +104,7 @@ internal sealed class ExplorerTenancy
 
         _operatorVerdict = verdict;
         _verdictTenant = active.Value;
+        _verdictCaller = caller;
     }
 
     /// <summary>

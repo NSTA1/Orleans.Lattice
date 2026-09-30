@@ -1,6 +1,7 @@
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
@@ -13,8 +14,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// Visibility fails closed on the cluster-wide storage summary, the cheapest read
 /// that needs cluster telemetry authority: no tree administration facade hides the
 /// area, a denial hides it, and an unconfigured connection or a facade the cluster
-/// does not serve says why. A verdict is remembered for the circuit until the
-/// connection changes; a transient failure is not remembered.
+/// does not serve says why. A verdict is remembered for the caller it was read for
+/// (<see cref="ClusterFacades.Caller"/>: the sign-in, the endpoint and the asserted
+/// tenant), so a sign-in, a sign-out, a new connection or a tenant switch asks
+/// again; a transient failure is not remembered.
 /// </remarks>
 internal sealed class ClusterArea : IExplorerArea, IDisposable
 {
@@ -28,7 +31,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     private readonly ClusterTreeCatalog _catalog;
     private AreaAvailability? _verdict;
     private ClusterStorageUsageSummary? _usage;
-    private string? _verdictTenant;
+    private ShellCallerKey _verdictCaller;
 
     /// <summary>Creates the area for one circuit.</summary>
     /// <param name="facades">The facades the area reads.</param>
@@ -99,13 +102,13 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             return AreaAvailability.Unavailable("Connect to a cluster to see its estate.");
         }
 
-        // The verdict and the usage it read belong to the tenant asserted when they
-        // were read; under another tenant the cluster is asked again.
-        var tenant = _facades.AssertedTenant;
-        if (!string.Equals(_verdictTenant, tenant, StringComparison.Ordinal))
+        // The verdict and the usage it read belong to the caller they were read
+        // for; for another sign-in, endpoint or tenant the cluster is asked again.
+        var caller = _facades.Caller;
+        if (_verdictCaller != caller)
         {
             Forget();
-            _verdictTenant = tenant;
+            _verdictCaller = caller;
         }
 
         if (_verdict is { } remembered)
@@ -136,10 +139,10 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         }
 
         var answer = _verdict.Value;
-        if (!string.Equals(_facades.AssertedTenant, tenant, StringComparison.Ordinal))
+        if (_facades.Caller != caller)
         {
-            // The circuit moved to another tenant while the probe ran: answer this
-            // caller, but remember nothing read under the tenant it left.
+            // The caller changed while the probe ran: answer this caller, but
+            // remember nothing read for the one it left.
             Forget();
         }
 
@@ -195,7 +198,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     }
 
     private ClusterStorageUsageSummary? CurrentUsage() =>
-        _usage is { } usage && string.Equals(_verdictTenant, _facades.AssertedTenant, StringComparison.Ordinal) ? usage : null;
+        _usage is { } usage && _verdictCaller == _facades.Caller ? usage : null;
 
     // The tree list's own count, read through the circuit's remembered catalogue;
     // a failed read has no count rather than a guessed one.

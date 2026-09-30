@@ -80,6 +80,7 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddSingleton<IShellGrpcChannelFactory, ShellGrpcChannelFactory>();
         services.TryAddSingleton<ShellTransportSerializer>();
         services.TryAddScoped(provider => new ShellAssertedTenant(provider.GetService<ILatticeActiveTenantProvider>()));
+        services.TryAddScoped(ShellCaller.Create);
         services.TryAddScoped<ShellTransportChannel>();
 
         services.TryAddKeyedScoped<ILatticeAuthAdmin, ShellAuthAdminTransport>(ShellFacades.Key);

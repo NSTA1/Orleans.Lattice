@@ -20,9 +20,10 @@ namespace Orleans.Lattice.Explorer.UI.Navigation;
 /// </para>
 /// <para>
 /// <b>The offer is filed under who asked.</b> The last offer is remembered with
-/// the identity, the asserted tenant and the active tenant it was read for, and
-/// <see cref="Current"/> hands it out only while all three still hold, so a
-/// sign-in, a sign-out or a switch never shows the previous caller's list.
+/// the caller (<see cref="ShellCaller"/>: the sign-in, the endpoint and the
+/// asserted tenant) and the active tenant it was read for, and
+/// <see cref="Current"/> hands it out only while both still hold, so a sign-in, a
+/// sign-out, a new connection or a switch never shows the previous caller's list.
 /// </para>
 /// <para>
 /// <b>The switch is the address line's switch.</b> At a tenant-scoped address it
@@ -39,7 +40,7 @@ internal sealed class ExplorerTenantSwitch
     private readonly ExplorerNavigator _navigator;
     private readonly LtToastService _toasts;
     private readonly IExplorerAuthSession? _auth;
-    private readonly ShellAssertedTenant? _asserted;
+    private readonly ShellCaller _caller;
     private Snapshot? _last;
     private bool _openRequested;
 
@@ -49,12 +50,14 @@ internal sealed class ExplorerTenantSwitch
     /// <param name="toasts">Where a switch made in place is announced.</param>
     /// <param name="auth">The circuit's sign-in, or <see langword="null"/> when none is registered.</param>
     /// <param name="asserted">The tenant the circuit's calls assert, or <see langword="null"/>.</param>
+    /// <param name="caller">The circuit's caller; when <see langword="null"/>, a caller over <paramref name="auth"/> and <paramref name="asserted"/>.</param>
     public ExplorerTenantSwitch(
         ExplorerTenancy tenancy,
         ExplorerNavigator navigator,
         LtToastService toasts,
         IExplorerAuthSession? auth = null,
-        ShellAssertedTenant? asserted = null)
+        ShellAssertedTenant? asserted = null,
+        ShellCaller? caller = null)
     {
         ArgumentNullException.ThrowIfNull(tenancy);
         ArgumentNullException.ThrowIfNull(navigator);
@@ -64,7 +67,7 @@ internal sealed class ExplorerTenantSwitch
         _navigator = navigator;
         _toasts = toasts;
         _auth = auth;
-        _asserted = asserted;
+        _caller = caller ?? ShellCaller.Unobserved(auth, tenant: asserted);
     }
 
     /// <summary>Raised when the palette asks for the switcher to open.</summary>
@@ -183,13 +186,9 @@ internal sealed class ExplorerTenantSwitch
         return choices.Offered ? choices : TenantSwitchChoices.None;
     }
 
-    private SnapshotKey Key() => new(
-        _auth?.IsAuthenticated == true,
-        _auth?.Username,
-        _asserted?.AssertedTenant,
-        _tenancy.ActiveTenant);
+    private SnapshotKey Key() => new(_caller.Current, _tenancy.ActiveTenant);
 
-    private readonly record struct SnapshotKey(bool Authenticated, string? User, string? Asserted, string? Active);
+    private readonly record struct SnapshotKey(ShellCallerKey Caller, string? Active);
 
     private sealed record Snapshot(SnapshotKey Key, TenantSwitchChoices Choices);
 }

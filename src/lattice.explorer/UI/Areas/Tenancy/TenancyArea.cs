@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -45,7 +46,7 @@ internal sealed class TenancyArea : IExplorerArea
     public const string ChangeResidencyCommandId = "tenancy.change-residency";
 
     private readonly TenancyCatalog _catalog;
-    private (bool Authenticated, string? User, string? Active, AreaAvailability Availability)? _verdict;
+    private (ShellCallerKey Caller, string? Active, AreaAvailability Availability)? _verdict;
 
     /// <summary>Creates the area over the circuit's services, any of which may be absent.</summary>
     /// <param name="services">The circuit's services.</param>
@@ -150,19 +151,21 @@ internal sealed class TenancyArea : IExplorerArea
             return AreaAvailability.Hidden;
         }
 
-        var authenticated = _catalog.Session?.IsAuthenticated == true;
-        var user = _catalog.Session?.Username;
+        var caller = _catalog.Caller.Current;
         var active = _catalog.ActiveTenant;
         if (_verdict is { } memo
-            && memo.Authenticated == authenticated
-            && string.Equals(memo.User, user, StringComparison.Ordinal)
+            && memo.Caller == caller
             && string.Equals(memo.Active, active, StringComparison.Ordinal))
         {
             return memo.Availability;
         }
 
-        var availability = await ProbeAsync(authenticated, cancellationToken).ConfigureAwait(true);
-        _verdict = (authenticated, user, active, availability);
+        var availability = await ProbeAsync(caller.Authenticated, cancellationToken).ConfigureAwait(true);
+        if (_catalog.Caller.Current == caller && string.Equals(_catalog.ActiveTenant, active, StringComparison.Ordinal))
+        {
+            _verdict = (caller, active, availability);
+        }
+
         return availability;
     }
 

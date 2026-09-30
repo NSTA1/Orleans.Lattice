@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
@@ -12,10 +13,11 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// <remarks>
 /// The probe runs detached from any one caller's token, so a waiter that gives up
 /// (the directory's time box) does not poison the memo for the next one.
-/// <see cref="Invalidate"/> drops the memo after a lifecycle change or sign-in.
-/// Every memo is keyed on the tenant the circuit asserts
-/// (<see cref="AppsFacades.AssertedTenant"/>), so a tenant switch re-probes and an
-/// answer read under one tenant is never served under another.
+/// <see cref="Invalidate"/> drops the memo after a lifecycle change.
+/// Every memo is keyed on the caller (<see cref="AppsFacades.Caller"/>: the
+/// sign-in, the endpoint and the asserted tenant), so a sign-in, a sign-out, a new
+/// connection or a tenant switch re-probes, and an answer read for one caller is
+/// never served to another.
 /// </remarks>
 /// <param name="facades">The circuit's facades.</param>
 /// <param name="logger">Where a failing probe is reported.</param>
@@ -33,53 +35,53 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
     private readonly ILogger _logger = logger ?? NullLogger<AppsAccess>.Instance;
     private readonly object _gate = new();
     private Task<AppsAccessSnapshot>? _snapshot;
-    private string? _snapshotTenant;
+    private ShellCallerKey _snapshotCaller;
     private AppsAccessSnapshot? _last;
-    private string? _lastTenant;
+    private ShellCallerKey _lastCaller;
     private Task<ImmutableArray<AvailableAppSummary>>? _index;
-    private string? _indexTenant;
+    private ShellCallerKey _indexCaller;
 
     /// <summary>Raised after <see cref="Invalidate"/>, so a page can reload what it shows.</summary>
     public event Action? Changed;
 
     /// <summary>
-    /// The most recent completed snapshot for the tenant the circuit asserts now -
-    /// the previous one while a re-probe after <see cref="Invalidate"/> is still
-    /// running - or <see langword="null"/> before the first probe for that tenant
-    /// completes. A snapshot read under another tenant is never returned.
+    /// The most recent completed snapshot for the caller now - the previous one while
+    /// a re-probe after <see cref="Invalidate"/> is still running - or
+    /// <see langword="null"/> before the first probe for that caller completes. A
+    /// snapshot read for another caller is never returned.
     /// </summary>
     public AppsAccessSnapshot? Current
     {
         get
         {
-            var tenant = facades.AssertedTenant;
+            var caller = facades.Caller;
             lock (_gate)
             {
-                if (_snapshot is { IsCompletedSuccessfully: true } task && SameTenant(_snapshotTenant, tenant))
+                if (_snapshot is { IsCompletedSuccessfully: true } task && _snapshotCaller == caller)
                 {
                     return task.Result;
                 }
 
-                return SameTenant(_lastTenant, tenant) ? _last : null;
+                return _lastCaller == caller ? _last : null;
             }
         }
     }
 
     /// <summary>
-    /// The caller's snapshot, probing on first use and again whenever the circuit
-    /// asserts a different tenant from the one the memo was read under.
+    /// The caller's snapshot, probing on first use and again whenever the caller
+    /// (sign-in, endpoint or asserted tenant) differs from the one the memo was read for.
     /// </summary>
     /// <param name="cancellationToken">Stops this caller waiting; the probe itself continues.</param>
     public Task<AppsAccessSnapshot> GetAsync(CancellationToken cancellationToken = default)
     {
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         Task<AppsAccessSnapshot> task;
         lock (_gate)
         {
-            if (_snapshot is null || !SameTenant(_snapshotTenant, tenant))
+            if (_snapshot is null || _snapshotCaller != caller)
             {
-                _snapshot = ProbeAsync(tenant);
-                _snapshotTenant = tenant;
+                _snapshot = ProbeAsync(caller);
+                _snapshotCaller = caller;
                 _index = null;
             }
 
@@ -102,14 +104,14 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
             return [];
         }
 
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         Task<ImmutableArray<AvailableAppSummary>> task;
         lock (_gate)
         {
-            if (_index is null || !SameTenant(_indexTenant, tenant))
+            if (_index is null || _indexCaller != caller)
             {
                 _index = LoadIndexAsync(catalog);
-                _indexTenant = tenant;
+                _indexCaller = caller;
             }
 
             task = _index;
@@ -132,11 +134,11 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
     /// <param name="slug">The app that changed, or <see langword="null"/> for a change to no one app, such as a sign-in.</param>
     public void Invalidate(string? slug)
     {
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         lock (_gate)
         {
-            _snapshot = ProbeAsync(tenant);
-            _snapshotTenant = tenant;
+            _snapshot = ProbeAsync(caller);
+            _snapshotCaller = caller;
             _index = null;
             if (slug is not null)
             {
@@ -161,7 +163,7 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
         }
     }
 
-    private async Task<AppsAccessSnapshot> ProbeAsync(string? tenant)
+    private async Task<AppsAccessSnapshot> ProbeAsync(ShellCallerKey caller)
     {
         var catalogCapabilities = Task.FromResult(new LatticeAppCatalogCapabilities());
         var controlCapabilities = Task.FromResult(new LatticeAppsCapabilities());
@@ -222,24 +224,23 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
 
         lock (_gate)
         {
-            if (SameTenant(facades.AssertedTenant, tenant))
+            if (facades.Caller == caller)
             {
                 _last = complete;
-                _lastTenant = tenant;
+                _lastCaller = caller;
             }
-            else if (SameTenant(_snapshotTenant, tenant))
+            else if (_snapshotCaller == caller)
             {
-                // The circuit changed tenant while this probe ran, so some of its
-                // calls may have asserted the new one: it is answered to its own
-                // waiters but never remembered as this tenant's answer.
+                // The caller changed while this probe ran (a sign-in, a new
+                // connection or a tenant switch), so some of its calls may have
+                // carried the new one: it is answered to its own waiters but never
+                // remembered as this caller's answer.
                 _snapshot = null;
             }
         }
 
         return complete;
     }
-
-    private static bool SameTenant(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
 
     private Task<ImmutableArray<AvailableAppSummary>> LoadIndexAsync(ILatticeAppCatalog catalog) =>
         GuardAsync(

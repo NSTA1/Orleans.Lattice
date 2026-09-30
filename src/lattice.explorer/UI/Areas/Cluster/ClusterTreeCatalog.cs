@@ -1,5 +1,6 @@
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Tenancy;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 
@@ -13,7 +14,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// registry beside the logical tree that aliases it, and the Cluster area never
 /// shows a physical id (a restore shadow is flagged by the registry; a resize
 /// shadow is the target of another entry's alias). The remembered list is keyed
-/// on the tenant the circuit asserts, so a tenant switch reads it again.
+/// on the caller (<see cref="ClusterFacades.Caller"/>), so a sign-in, a sign-out, a
+/// new connection or a tenant switch reads it again.
 /// </remarks>
 /// <param name="facades">The area's facades.</param>
 /// <param name="time">The clock the freshness window is measured on.</param>
@@ -37,10 +39,10 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
     /// <exception cref="InvalidOperationException">No cluster connection is configured.</exception>
     public async ValueTask<IReadOnlyList<ClusterTreeEntry>> GetAsync(bool refresh, CancellationToken cancellationToken)
     {
-        var tenant = facades.AssertedTenant;
+        var caller = facades.Caller;
         if (!refresh
             && _remembered is { } remembered
-            && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal)
+            && remembered.Caller == caller
             && time.GetUtcNow() - remembered.ReadAt < Freshness)
         {
             return remembered.Trees;
@@ -68,11 +70,11 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
         Truncated = token is not null;
         var trees = Project(entries);
 
-        // Remembered only for the tenant it was read under, and only while the
-        // circuit still asserts it.
-        if (string.Equals(facades.AssertedTenant, tenant, StringComparison.Ordinal))
+        // Remembered only for the caller it was read for, and only while that is
+        // still the caller.
+        if (facades.Caller == caller)
         {
-            _remembered = new Remembered(trees, tenant, time.GetUtcNow());
+            _remembered = new Remembered(trees, caller, time.GetUtcNow());
         }
 
         return trees;
@@ -118,6 +120,6 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
             .ToArray();
     }
 
-    /// <summary>A read catalogue, the tenant it was read under, and when.</summary>
-    private sealed record Remembered(IReadOnlyList<ClusterTreeEntry> Trees, string? Tenant, DateTimeOffset ReadAt);
+    /// <summary>A read catalogue, the caller it was read for, and when.</summary>
+    private sealed record Remembered(IReadOnlyList<ClusterTreeEntry> Trees, ShellCallerKey Caller, DateTimeOffset ReadAt);
 }

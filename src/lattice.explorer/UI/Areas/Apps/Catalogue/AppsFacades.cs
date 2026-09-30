@@ -25,6 +25,7 @@ internal sealed class AppsFacades(IServiceProvider services)
     private readonly Lazy<ILatticeAuthAdmin?> _auth = new(services.GetShellFacade<ILatticeAuthAdmin>);
     private readonly Lazy<ILatticeAppRoleBindings?> _roleBindings = new(services.GetShellFacade<ILatticeAppRoleBindings>);
     private readonly Lazy<ILatticeActiveTenantProvider?> _tenant = new(services.GetService<ILatticeActiveTenantProvider>);
+    private readonly Lazy<ShellCaller> _caller = new(() => ShellCaller.Of(services));
 
     /// <summary>
     /// The tenant the circuit's calls assert right now, or <see langword="null"/>
@@ -32,6 +33,13 @@ internal sealed class AppsFacades(IServiceProvider services)
     /// answer read under one tenant is never served under another.
     /// </summary>
     public string? AssertedTenant => _tenant.Value?.AssertedTenant;
+
+    /// <summary>
+    /// The caller now - sign-in, endpoint and asserted tenant - which everything the
+    /// area remembers is filed under, so an answer read for one caller is never
+    /// served to the next.
+    /// </summary>
+    public ShellCallerKey Caller => _caller.Value.Current;
 
     /// <summary>The administrative catalogue, or <see langword="null"/> when the head serves none.</summary>
     public ILatticeAppCatalog? Catalog => Resolve(_catalog);
