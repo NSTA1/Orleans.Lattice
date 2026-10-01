@@ -8,11 +8,14 @@ It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
 a strongly-typed `LatticeBackupApiGrpcClient` that re-exposes the remote-safe
 subset of the control surface over the wire: capturing full, incremental, and
 backup-set backups, listing the catalog (paged unary and bounded-memory
-server-streaming), describing a restore chain, deleting a backup, restoring and
-reverting, streaming a backup's artifacts back chunk-wise, scheduling, scope
-status, capability probing, and backup health. Inventory, catalog rebuild /
-scrub, and cold restore stay in-process only. Every wire message rides the
-Orleans serializer, so the contract stays versioned and additive-only.
+server-streaming), describing a restore chain, deleting a backup, accept-then-poll
+backup and restore operations with progress and cancellation, reverting,
+streaming a backup's artifacts back chunk-wise, scheduling, scope status,
+capability probing, and backup health. Inventory and catalog rebuild / scrub stay
+in-process only. The blocking create and restore client methods are deprecated and
+will be removed in the next major version; migrate at
+https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs. Every wire message rides the Orleans
+serializer, so the contract stays versioned and additive-only.
 
 Wiring is two calls on the co-hosting silo:
 

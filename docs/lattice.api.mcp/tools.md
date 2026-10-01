@@ -136,7 +136,7 @@ The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; e
 
 ## Backup tools (`lattice_backup_*`)
 
-Backup control over `ILatticeBackupControl`. Registered by `AddBackupTools(enableControl)`. The five inspect tools are always exposed; the five control tools require `enableControl: true`.
+Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Registered by `AddBackupTools(enableControl)`. The seven read-only tools are always exposed; the ten control tools require `enableControl: true` (the count includes the three deprecated aliases).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -145,11 +145,20 @@ Backup control over `ILatticeBackupControl`. Registered by `AddBackupTools(enabl
 | `lattice_backup_inventory` | inspect | Catalog-wide inventory summary. |
 | `lattice_backup_scope_status` | inspect | A scope's schedule and last-run status. |
 | `lattice_backup_export_artifact` | inspect | Export one bounded, base64-encoded page of a backup artifact's bytes, resumed from `chunkOffset` until `endOfStream`. |
-| `lattice_backup_create` | control | Capture a full backup. |
-| `lattice_backup_create_incremental` | control | Capture an incremental backup. |
-| `lattice_backup_restore` | control | Restore a backup. |
-| `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore. |
+| `lattice_backup_operation_status` | inspect | Read a tracked backup or restore operation by operation id; returns `found` plus the operation view when visible. |
+| `lattice_backup_operation_list` | inspect | Page the caller's tracked backup and restore operations newest-first. |
+| `lattice_backup_start` | control | Start a tracked full backup and return `{ operationId, kind, treeIds, created, statusTool }`. |
+| `lattice_backup_start_incremental` | control | Start a tracked incremental backup layered on a base backup and return an operation handle. |
+| `lattice_backup_start_set` | control | Start a tracked backup set over `treeIds` and return an operation handle. |
+| `lattice_backup_start_restore` | control | Start a tracked restore and return an operation handle; a succeeded status includes `restoreResult` for `lattice_backup_revert_restore`. |
+| `lattice_backup_operation_cancel` | control | Request cancellation of a tracked backup or restore operation. |
+| `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore from a prior restore result. |
 | `lattice_backup_delete` | control | Delete a backup and its unshared artifacts. |
+| `lattice_backup_create` | control | Deprecated alias for `lattice_backup_start`; will be removed in the next major version and now returns an operation handle instead of blocking. |
+| `lattice_backup_create_incremental` | control | Deprecated alias for `lattice_backup_start_incremental`; will be removed in the next major version and now returns an operation handle instead of blocking. |
+| `lattice_backup_restore` | control | Deprecated alias for `lattice_backup_start_restore`; will be removed in the next major version and keeps its `operationId` argument as the restore engine idempotency key. |
+
+The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 17.
 
 ## Auth tools (`lattice_auth_*`)
 

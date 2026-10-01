@@ -227,6 +227,28 @@ The per-restore admission controller the restore stream consults once per record
 
 An in-process control value only (no serializer surface).
 
+## Operation constants and helpers
+
+### `BackupOperationKinds`
+
+Public constants for tracked backup operation kinds. `Prefix` is `backup.`, and the concrete kinds are `Capture` (`backup.capture`), `IncrementalCapture` (`backup.incremental-capture`), `SetCapture` (`backup.set-capture`), `Restore` (`backup.restore`), and `ColdRestore` (`backup.cold-restore`).
+
+### `BackupOperationPhases`
+
+Public constants for progress phases reported by tracked operations: `Capturing`, `CapturingMembers`, `Cataloguing`, `Bootstrapping`, `Validating`, `Applying`, and `Replaying`. A kind reports only the phases that apply to the work in hand.
+
+### `BackupOperationUnits`
+
+Public constants for progress unit names: `Entries` (`entries`), `Shards` (`shards`), `Members` (`members`), and `Manifests` (`manifests`).
+
+### `BackupOperationResultKeys`
+
+Public constants for the string result map carried by a succeeded tracked operation: `backupId`, `setId`, `memberBackupIds`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `shadowPhysicalTreeId`, `previousPhysicalTreeId`, `deadLetteredCrossTenant`, and `deadLetteredOverQuota`.
+
+### `BackupOperationResults`
+
+Helpers for reading operation result maps. `TryReadRestoreResult(IReadOnlyDictionary<string, string> result, out LatticeRestoreResult? restore)` reconstructs the full restore result when the map has the restore keys, and `ReadMemberBackupIds(IReadOnlyDictionary<string, string> result)` parses the comma-separated set-member backup ids.
+
 ## Requests and results
 
 ### `LatticeBackupCaptureRequest`

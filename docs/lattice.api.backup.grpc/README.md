@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Backup](../lattice.api.backup/R
 
 It provides:
 
-- **A code-first gRPC service.** RPCs for the remote-safe facade subset - unary for capture, backup-set capture, list, describe, delete, restore, revert, auth-scheme, schedule / cancel, scope status, capability, and health operations, plus server-streaming whole-catalog draining and artifact export - bound from C# definitions rather than a `.proto`. Some facade and engine operations remain in-process-only and have no RPC, including inventory, catalog rebuild / scrub, cold restore, and backup-set restore.
+- **A code-first gRPC service.** RPCs for the remote-safe facade subset - accept-then-poll start, status, list, and cancel operations for backup and restore; deprecated blocking capture and restore calls kept until the next major version; unary list, describe, delete, revert, auth-scheme, schedule / cancel, scope status, capability, and health operations; plus server-streaming whole-catalog draining and artifact export - bound from C# definitions rather than a `.proto`. Some facade and engine operations remain in-process-only and have no RPC, including inventory, catalog rebuild / scrub, and backup-set restore.
 - **A public typed client.** `LatticeBackupApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
 - **Shared Orleans marshalling.** Wire messages are the package's `[GenerateSerializer]` request / response records, serialized with the Orleans binary serializer and wrapping facade DTOs where needed, so client and server stay in lock-step by construction.
 - **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge except the unauthenticated `GetAuthScheme` discovery RPC, and the facade's own scope authorization re-authorizes the resolved caller. The transport gate defaults to deny for protected operations; the facade gate refuses an unauthorized or anonymous caller whenever an authorization add-on is registered, and with only the core no-op gate it allows at zero cost.
@@ -28,14 +28,22 @@ The gRPC service name is `orleans.lattice.api.backup`.
 
 | RPC | Kind | Facade operation |
 |---|---|---|
-| `CreateBackup` | unary | Create backup |
-| `CreateIncrementalBackup` | unary | Create incremental backup |
-| `CreateBackupSet` | unary | Create backup set |
+| `StartBackup` | unary | Start tracked full capture |
+| `StartIncrementalBackup` | unary | Start tracked incremental capture |
+| `StartBackupSet` | unary | Start tracked backup-set capture |
+| `StartRestore` | unary | Start tracked restore |
+| `StartColdRestore` | unary | Start tracked catalog-free cold restore |
+| `GetBackupOperationStatus` | unary | Read tracked operation status |
+| `ListBackupOperations` | unary | List tracked backup operations |
+| `CancelBackupOperation` | unary | Request tracked operation cancellation |
+| `CreateBackup` | unary | Deprecated blocking create backup |
+| `CreateIncrementalBackup` | unary | Deprecated blocking create incremental backup |
+| `CreateBackupSet` | unary | Deprecated blocking create backup set |
 | `ListBackups` | unary | List backups (paged) |
 | `StreamBackups` | server-streaming | Stream backups (whole catalog) |
 | `DescribeBackup` | unary | Describe backup |
 | `DeleteBackup` | unary | Delete backup |
-| `RestoreBackup` | unary | Restore backup |
+| `RestoreBackup` | unary | Deprecated blocking restore backup |
 | `RevertRestore` | unary | Revert restore |
 | `ExportArtifact` | server-streaming | Export artifact |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes |
@@ -47,6 +55,8 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `CheckBackupHealth` | unary | Verify one backup now and persist the report |
 | `GetBackupHealth` | unary | Read the latest stored health report |
 | `ConfigureBackupHealth` | unary | Override one backup's health-monitor settings |
+
+The start RPC request messages (`BackupCaptureRequestMessage`, `BackupIncrementalCaptureRequestMessage`, `BackupSetCaptureRequestMessage`, and `RestoreRequestMessage`) carry optional `TrackingOperationId`, the idempotency id of the tracked operation. `RestoreRequestMessage.OperationId` keeps its existing meaning as the restore engine's own key; pass `TrackingOperationId` separately for the tracked operation. `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, and `RestoreBackup` stay on the wire but are deprecated and will be removed in the next major version. A server registered only with `ILatticeBackupControl` still serves the old RPCs; if that control does not also implement `ILatticeBackupOperations`, the new RPCs return gRPC `Unimplemented`.
 
 ## Quick Start
 
@@ -79,9 +89,12 @@ IServiceProvider serializerProvider = null!;
 using var channel = GrpcChannel.ForAddress("https://backup-admin.example:443");
 var backupClient = LatticeBackupApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
 
-var capture = await backupClient.CreateBackupAsync(
+var handle = await backupClient.StartBackupAsync(
     new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree("orders")),
+    operationId: "orders-nightly",
     cancellationToken);
+
+var status = await backupClient.GetBackupOperationStatusAsync(handle.OperationId, cancellationToken);
 
 await foreach (var manifest in backupClient.StreamBackupsAsync(cancellationToken))
 {
