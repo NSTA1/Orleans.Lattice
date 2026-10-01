@@ -21,7 +21,9 @@ namespace Orleans.Lattice.Apps.Tests;
 /// </summary>
 /// <remarks>
 /// Lives beside the apps ownership tests because this project already hosts the auth and
-/// membership add-ons and can address the internal registry; the defect is core's.
+/// membership add-ons and can address the internal registry; the defect is core's. Each test gets
+/// a fresh cluster rather than sharing a <c>[OneTimeSetUp]</c> one, because each needs a silo
+/// whose gate has never warmed and whose reserved trees were never registered.
 /// </remarks>
 [TestFixture]
 [Category("Integration")]
