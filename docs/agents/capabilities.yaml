@@ -548,6 +548,8 @@ capabilities:
         source: "docs/lattice.backup/README.md"
       - statement: "Cold restore can recover a tree into a fresh cluster from the sink alone."
         source: "docs/lattice.backup/disaster-recovery.md"
+      - statement: "The backup facade exposes accept-then-poll operations with durable status, progress units, result maps, and cancellation."
+        source: "docs/lattice.api.backup/operations.md"
       - statement: "A backup's consistency-cut HlcTimestamp is the wall-clock component of the highest HLC stamp the capture read, and an incremental pins the WAL at that frontier while it drains forward from its base."
         source: "docs/lattice.backup/api.md"
     non_guarantees:
@@ -559,6 +561,8 @@ capabilities:
         source: "docs/lattice.backup/disaster-recovery.md"
       - statement: "Cold restore restores one tree per backup id, so a backup set is recovered one member at a time."
         source: "docs/lattice.backup/disaster-recovery.md"
+      - statement: "A tracked backup or restore operation is not resumed after accepting-silo loss; it is marked Failed and must be started again."
+        source: "docs/lattice.api.abstractions/operations.md"
     unsafe_sequences:
       - sequence:
           - "configure each replicated cluster with an isolated backup sink"
@@ -577,10 +581,14 @@ capabilities:
         source: "docs/lattice.backup/README.md"
       - statement: "Every catalogued backup is auto-enrolled in periodic health verification."
         source: "docs/lattice.backup/disaster-recovery.md"
+      - statement: "Reusing a caller-supplied backup operation id returns the existing operation handle instead of starting duplicate work."
+        source: "docs/lattice.api.backup/operations.md"
     sources:
       - "FEATURES.md"
       - "docs/lattice.backup/README.md"
       - "docs/lattice.backup/disaster-recovery.md"
+      - "docs/lattice.api.backup/operations.md"
+      - "docs/lattice.api.abstractions/operations.md"
   - id: bulk-loading
     name: "Bulk loading"
     packages:

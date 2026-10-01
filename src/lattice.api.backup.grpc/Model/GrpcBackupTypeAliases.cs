@@ -116,4 +116,10 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupHealthConfigureResponse"/>.</summary>
     public const string BackupHealthConfigureResponse = "oibg.hcfgresp";
+
+    /// <summary>Alias for <see cref="BackupOperationRequestMessage"/>.</summary>
+    public const string BackupOperationRequestMessage = "oibg.opreq";
+
+    /// <summary>Alias for <see cref="BackupOperationStatusResponse"/>.</summary>
+    public const string BackupOperationStatusResponse = "oibg.opstat";
 }

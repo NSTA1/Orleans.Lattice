@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 
 namespace Orleans.Lattice.Api.Mcp;
@@ -31,19 +32,6 @@ internal static class BackupToolMappings
             SetId = manifest.SetId,
             SetName = manifest.SetName,
             CapturingClusterId = manifest.CapturingClusterId,
-        };
-    }
-
-    /// <summary>Projects a capture result onto its MCP DTO.</summary>
-    /// <param name="result">The capture result. Must not be <c>null</c>.</param>
-    /// <returns>The MCP capture-result DTO.</returns>
-    public static McpBackupCaptureResult ToMcp(LatticeBackupCaptureResult result)
-    {
-        ArgumentNullException.ThrowIfNull(result);
-        return new McpBackupCaptureResult
-        {
-            BackupId = result.BackupId,
-            Manifest = ToMcp(result.Manifest),
         };
     }
 
@@ -188,6 +176,42 @@ internal static class BackupToolMappings
             PreviousPhysicalTreeId = result.PreviousPhysicalTreeId,
         };
     }
+
+    /// <summary>Projects a tracked operation's status onto the MCP DTO.</summary>
+    public static McpBackupOperation ToMcp(LatticeOperationStatus status) =>
+        new()
+        {
+            OperationId = status.OperationId,
+            Kind = status.Kind,
+            TreeIds = status.Scope.TreeIds,
+            State = status.State.ToString(),
+            Phase = status.Phase,
+            PhaseIndex = status.PhaseIndex,
+            PhaseCount = status.PhaseCount,
+            CompletedUnits = status.CompletedUnits,
+            TotalUnits = status.TotalUnits,
+            UnitName = status.UnitName,
+            StartedAtUtc = status.StartedAtUtc,
+            FinishedAtUtc = status.FinishedAtUtc,
+            FailureReason = status.FailureReason,
+            ResultReference = status.ResultReference,
+            Result = status.Result,
+            RestoreResult = status.State == LatticeOperationState.Succeeded
+                && BackupOperationResults.TryReadRestoreResult(status.Result, out var restore)
+                    ? ToMcp(restore)
+                    : null,
+            CancelRequested = status.CancelRequested,
+        };
+
+    /// <summary>Projects a start verb's handle onto the MCP DTO.</summary>
+    public static McpBackupOperationHandle ToMcp(LatticeOperationHandle handle) =>
+        new()
+        {
+            OperationId = handle.OperationId,
+            Kind = handle.Kind,
+            TreeIds = handle.Scope.TreeIds,
+            Created = handle.Created,
+        };
 
     /// <summary>
     /// Rebuilds a <see cref="BackupScopeSelector"/> from the three wire fields an

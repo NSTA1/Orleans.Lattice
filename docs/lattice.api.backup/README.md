@@ -8,7 +8,7 @@ A transport-agnostic backup / restore control facade for [Orleans.Lattice.Backup
 
 It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and read-write [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) data-plane facades:
 
-- **A transport-agnostic facade.** A single control surface (`ILatticeBackupControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes capture, incremental, backup-set capture, list, stream, describe, delete, restore, cold restore, revert, artifact export, inventory, catalog repair, scheduling, health, capability, and scope-status operations over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** A single control surface (the `ILatticeBackupControl` and `ILatticeBackupOperations` public contracts in the shared `Orleans.Lattice.Api.Abstractions` package) exposes capture, incremental, backup-set capture, list, stream, describe, delete, accept-then-poll backup and restore operations, cold restore, revert, artifact export, inventory, catalog repair, scheduling, health, capability, and scope-status operations over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Backup.Grpc`](../lattice.api.backup.grpc/README.md) package) that projects this facade onto a remotely callable service and typed client. This package ships no transport of its own; it is the contract every binding adapts over. The [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) backup tools (`AddBackupTools()`) adapt the same facade for language-model agents.
 
 ## Core properties
@@ -25,19 +25,25 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 ## Surface
 
-The facade operations. The gRPC binding exposes the remote-safe subset as RPCs; inventory, catalog rebuild / scrub, and cold restore are in-process-only today.
+The facade operations. Long captures and restores should use the accept-then-poll `ILatticeBackupOperations` start verbs, which return a handle immediately and are polled through the shared operation status surface. The older blocking capture and restore verbs still behave as before, but are deprecated with warning `LATTICE0002` and will be removed in the next major version. The gRPC binding exposes the remote-safe subset as RPCs; inventory and catalog rebuild / scrub are in-process-only today.
 
 | Operation | Purpose |
 |---|---|
-| Create backup | Capture a full backup of a scope. |
-| Create incremental backup | Capture an incremental layered on a base backup. |
-| Create backup set | Capture one full backup per scope under a shared set manifest. |
+| Start backup | Accept a tracked full capture and return an operation handle. |
+| Start incremental backup | Accept a tracked incremental capture and return an operation handle. |
+| Start backup set | Accept a tracked backup-set capture and return an operation handle. |
+| Start restore | Accept a tracked restore and return an operation handle. |
+| Start cold restore | Accept a tracked catalog-free restore from the sink and return an operation handle. |
+| Get / list / cancel backup operations | Poll progress, page recent operations, and request cancellation. |
+| Create backup | Deprecated blocking wrapper for full capture; use Start backup. |
+| Create incremental backup | Deprecated blocking wrapper for incremental capture; use Start incremental backup. |
+| Create backup set | Deprecated blocking wrapper for backup-set capture; use Start backup set. |
 | List backups | One deterministic, cursor-resumable, read-filtered catalog page. |
 | Stream backups | Drain the whole readable catalog with bounded memory. |
 | Describe backup | A manifest and its base-first restore chain, or absent. |
 | Delete backup | Remove a manifest and its unshared artifacts. |
-| Restore backup | Restore a backup into its target tree. |
-| Cold restore | Restore a backup into a fresh cluster from the durable sink alone (in-process only). |
+| Restore backup | Deprecated blocking wrapper for restore; use Start restore. |
+| Cold restore | Deprecated blocking wrapper for catalog-free disaster restore; use Start cold restore. |
 | Revert restore | Undo a shadow-cutover restore. |
 | Export artifact | Stream one of a backup's artifacts back chunk-wise. |
 | Get inventory | A catalog-wide inventory summary of every readable backup (in-process only). |
@@ -55,6 +61,7 @@ The facade operations. The gRPC binding exposes the remote-safe subset as RPCs; 
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.
+- [Backup operations](operations.md) - accept-then-poll backup and restore, status polling, cancellation, and migration from deprecated blocking verbs.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
 - [Architecture](architecture.md) - how the facade authorizes, walks chains, deletes safely, and pages.
 

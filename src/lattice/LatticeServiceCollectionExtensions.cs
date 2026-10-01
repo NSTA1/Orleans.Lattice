@@ -71,6 +71,9 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<IValidateOptions<LatticeTagIndexReconciliationOptions>, LatticeTagIndexReconciliationOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
+        builder.Services.AddOptions<Operations.LatticeOperationOptions>();
+        builder.Services.TryAddSingleton<Operations.ILatticeOperationSiloLiveness, Operations.ClusterMembershipOperationSiloLiveness>();
+        builder.Services.TryAddSingleton<Operations.LatticeOperationRunner>();
         builder.Services.AddSingleton<BPlusTree.Grains.TxRegistryReadCoalescer>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
         builder.Services.AddSingleton<TreeAliasObserverDispatcher>();

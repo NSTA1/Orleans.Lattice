@@ -31,7 +31,8 @@
     "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
     "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
     "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
-    "docs/lattice.api.mcp.apps/README.md"
+    "docs/lattice.api.mcp.apps/README.md",
+    "src/lattice.api.mcp/Tools/Backup/McpBackupOperation.cs"
   ],
   "in_process": {
     "interface": "ILatticeApiMcpToolGroup",
@@ -1120,14 +1121,14 @@
     },
     {
       "id": "lattice_backup_create",
-      "in_process": "BackupToolInvocations.CreateBackupAsync",
+      "in_process": "BackupToolInvocations.StartBackupAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
-      "facade_operation": "api/backup.json#create-backup",
+      "facade_operation": "api/backup.json#start-backup",
       "tool_annotations": {
         "read_only": false,
         "destructive": true,
-        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateCreateBackupTool"
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateStartBackupTool"
       },
       "request": [
         {
@@ -1164,6 +1165,13 @@
           "notes": "Raw-entry drain page size; <= 0 uses the server default."
         },
         {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
           "name": "region",
           "type": "string",
           "required": false,
@@ -1171,8 +1179,8 @@
         }
       ],
       "response": {
-        "type": "McpBackupCaptureResult",
-        "shape": "Structured JSON projection of McpBackupCaptureResult returned by the handler."
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON operation handle returned by the deprecated alias."
       },
       "errors": [
         {
@@ -1185,34 +1193,39 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry captures a fresh current snapshot without a caller idempotency key.",
-        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureTreeAsync"
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupAsync"
       },
       "idempotency": {
-        "idempotent": false,
-        "basis": "A full capture has no caller operation id, mints a fresh artifact id from time and Guid, and captures the current tree snapshot.",
-        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#BuildArtifactId"
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
-        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.CreateBackupAsync",
-        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
-      ]
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.StartBackupAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#StartBackupAsync"
+      ],
+      "deprecated": {
+        "replacement": "lattice_backup_start",
+        "removal": "will be removed in the next major version"
+      }
     },
     {
       "id": "lattice_backup_create_incremental",
-      "in_process": "BackupToolInvocations.CreateIncrementalBackupAsync",
+      "in_process": "BackupToolInvocations.StartIncrementalBackupAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
-      "facade_operation": "api/backup.json#create-incremental-backup",
+      "facade_operation": "api/backup.json#start-incremental-backup",
       "tool_annotations": {
         "read_only": false,
         "destructive": true,
-        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateCreateIncrementalTool"
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateStartIncrementalTool"
       },
       "request": [
         {
@@ -1255,6 +1268,13 @@
           "notes": "Raw-entry drain page size; <= 0 uses the server default."
         },
         {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
           "name": "region",
           "type": "string",
           "required": false,
@@ -1262,8 +1282,8 @@
         }
       ],
       "response": {
-        "type": "McpBackupCaptureResult",
-        "shape": "Structured JSON projection of McpBackupCaptureResult returned by the handler."
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON operation handle returned by the deprecated alias."
       },
       "errors": [
         {
@@ -1276,23 +1296,28 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry reads the current WAL delta from the base and has no caller idempotency key.",
-        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureIncrementalAsync"
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartIncrementalBackupAsync"
       },
       "idempotency": {
-        "idempotent": false,
-        "basis": "An incremental capture has no caller operation id, mints a fresh artifact id, and captures the current WAL delta from the base backup frontier.",
-        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureIncrementalAsync"
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
-        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.CreateIncrementalBackupAsync",
-        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
-      ]
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.StartIncrementalBackupAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#StartBackupAsync"
+      ],
+      "deprecated": {
+        "replacement": "lattice_backup_start_incremental",
+        "removal": "will be removed in the next major version"
+      }
     },
     {
       "id": "lattice_backup_delete",
@@ -1614,15 +1639,197 @@
       ]
     },
     {
-      "id": "lattice_backup_restore",
-      "in_process": "BackupToolInvocations.RestoreBackupAsync",
+      "id": "lattice_backup_operation_cancel",
+      "in_process": "BackupToolInvocations.CancelOperationAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
-      "facade_operation": "api/backup.json#restore-backup",
+      "facade_operation": "api/backup.json#cancel-backup-operation",
       "tool_annotations": {
         "read_only": false,
         "destructive": true,
-        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateRestoreTool"
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationCancelTool"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id to cancel."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retrying the same cancel request is safe; terminal operations are returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Cancellation records a durable request once; repeated requests keep the same requested state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Cancel records a request; the operation stays non-terminal until the running work observes it at a heartbeat or progress report.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationCancelTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_operation_list",
+      "in_process": "BackupToolInvocations.ListOperationsAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#list-backup-operations",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationListTool"
+      },
+      "request": [
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Maximum operations per page; <= 0 uses the server default."
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Continuation cursor."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationPage",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only paged list; retry the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Listings are newest-first, scoped to visible backup operation kinds, and include terminal operations until retention prunes them.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationListTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_operation_status",
+      "in_process": "BackupToolInvocations.GetOperationStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#get-backup-operation-status",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationStatusTool"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id from a start tool handle."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to visible backup operation kinds and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationStatusTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_restore",
+      "in_process": "BackupToolInvocations.StartRestoreAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-restore",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateRestoreAliasTool"
       },
       "request": [
         {
@@ -1650,7 +1857,7 @@
           "type": "string?",
           "required": false,
           "default": "null",
-          "notes": "Idempotency key that makes a retried restore a no-op; null derives one."
+          "notes": "Deprecated alias keeps this as the restore engine idempotency key; the tracked operation id is generated."
         },
         {
           "name": "region",
@@ -1660,8 +1867,8 @@
         }
       ],
       "response": {
-        "type": "McpRestoreResult",
-        "shape": "Structured JSON projection of McpRestoreResult returned by the handler."
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON operation handle returned by the deprecated alias."
       },
       "errors": [
         {
@@ -1675,22 +1882,27 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry by reissuing the same request; OperationId makes a retried restore a no-op, and a missing OperationId is deterministically derived from the request.",
-        "source": "src/lattice.backup/LatticeRestoreRequest.cs#OperationId"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartRestoreAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "A restore carries an idempotency key, or derives one from BackupId, target tree, scope, and mode; re-running the same request converges to the same state.",
-        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#DeriveOperationId"
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
       },
       "concurrency": {
-        "rule": "The backup facade authorizes a resolved target scope before the restore engine runs; the restore engine authorizes the target before coordinated dispatch and also requires Backup authority on every distinct captured source tree for cross-tree retargets.",
-        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AuthorizeCapturedSourcesAsync"
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
-        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.RestoreBackupAsync",
-        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
-      ]
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.StartRestoreAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#StartBackupAsync"
+      ],
+      "deprecated": {
+        "replacement": "lattice_backup_start_restore",
+        "removal": "will be removed in the next major version"
+      }
     },
     {
       "id": "lattice_backup_revert_restore",
@@ -1867,6 +2079,367 @@
       "sources": [
         "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.GetScopeStatusAsync",
         "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_backup_start",
+      "in_process": "BackupToolInvocations.StartBackupAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-backup",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartBackupTool"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The human-readable backup name recorded on the manifest."
+        },
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The tree id to capture."
+        },
+        {
+          "name": "scopeKind",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Scope extent: WholeTree (default), Prefix, or Key."
+        },
+        {
+          "name": "keyOrPrefix",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "The exact key or key prefix for a Prefix/Key scope; null for WholeTree."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Raw-entry drain page size; <= 0 uses the server default."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartBackupTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_incremental",
+      "in_process": "BackupToolInvocations.StartIncrementalBackupAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-incremental-backup",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartIncrementalTool"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The human-readable backup name recorded on the manifest."
+        },
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The tree id to capture."
+        },
+        {
+          "name": "scopeKind",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Scope extent: WholeTree (default), Prefix, or Key."
+        },
+        {
+          "name": "keyOrPrefix",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "The exact key or key prefix for a Prefix/Key scope; null for WholeTree."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Raw-entry drain page size; <= 0 uses the server default."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        },
+        {
+          "name": "baseBackupId",
+          "type": "string",
+          "required": true,
+          "notes": "The id of the base backup this increment is layered on."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartIncrementalBackupAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartIncrementalTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_restore",
+      "in_process": "BackupToolInvocations.StartRestoreAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-restore",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartRestoreTool"
+      },
+      "request": [
+        {
+          "name": "backupId",
+          "type": "string",
+          "required": true,
+          "notes": "The content-addressed id of the backup to restore."
+        },
+        {
+          "name": "targetTreeId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "The tree to restore into; null restores into the captured tree."
+        },
+        {
+          "name": "mode",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Restore mode."
+        },
+        {
+          "name": "restoreOperationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "The restore engine idempotency key; null derives one."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartRestoreAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartRestoreTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_set",
+      "in_process": "BackupToolInvocations.StartBackupSetAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-backup-set",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartBackupSetTool"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The human-readable set name."
+        },
+        {
+          "name": "treeIds",
+          "type": "IReadOnlyList<string>",
+          "required": true,
+          "notes": "The tree ids to capture."
+        },
+        {
+          "name": "crossTreeConsistent",
+          "type": "bool",
+          "required": false,
+          "default": "false",
+          "notes": "Whether to use a cross-tree causal fence."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Raw-entry drain page size."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupSetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartBackupSetTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
       ]
     },
     {

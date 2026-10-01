@@ -152,6 +152,46 @@ public sealed class LatticeBackupApiGrpcAuthInterceptorUnitTests
             LatticeBackupApiOperation.ConfigureBackupHealth,
             (string?)"b-cfg").SetName("ConfigureBackupHealth_targets_backup");
         yield return new TestCaseData(
+            LatticeBackupGrpcMethods.StartBackupMethodName,
+            (object)new BackupCaptureRequestMessage { Name = "n", Scope = Orleans.Lattice.Backup.BackupScopeSelector.WholeTree("t-start") },
+            LatticeBackupApiOperation.StartBackup,
+            (string?)"t-start").SetName("StartBackup_targets_tree");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.StartIncrementalBackupMethodName,
+            (object)new BackupIncrementalCaptureRequestMessage { Name = "n", Scope = Orleans.Lattice.Backup.BackupScopeSelector.WholeTree("t-inc"), BaseBackupId = "b" },
+            LatticeBackupApiOperation.StartIncrementalBackup,
+            (string?)"t-inc").SetName("StartIncrementalBackup_targets_tree");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.StartBackupSetMethodName,
+            (object)new BackupSetCaptureRequestMessage { Name = "n", Scopes = [Orleans.Lattice.Backup.BackupScopeSelector.WholeTree("t")] },
+            LatticeBackupApiOperation.StartBackupSet,
+            (string?)null).SetName("StartBackupSet_no_single_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.StartRestoreMethodName,
+            (object)new RestoreRequestMessage { BackupId = "b-restore" },
+            LatticeBackupApiOperation.StartRestore,
+            (string?)"b-restore").SetName("StartRestore_targets_backup");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.StartColdRestoreMethodName,
+            (object)new RestoreRequestMessage { BackupId = "b-cold" },
+            LatticeBackupApiOperation.StartColdRestore,
+            (string?)"b-cold").SetName("StartColdRestore_targets_backup");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.GetBackupOperationStatusMethodName,
+            (object)new BackupOperationRequestMessage { OperationId = "op" },
+            LatticeBackupApiOperation.GetBackupOperationStatus,
+            (string?)null).SetName("GetBackupOperationStatus_no_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.ListBackupOperationsMethodName,
+            (object)new Orleans.Lattice.Api.Operations.LatticeOperationListRequest(),
+            LatticeBackupApiOperation.ListBackupOperations,
+            (string?)null).SetName("ListBackupOperations_no_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.CancelBackupOperationMethodName,
+            (object)new BackupOperationRequestMessage { OperationId = "op" },
+            LatticeBackupApiOperation.CancelBackupOperation,
+            (string?)null).SetName("CancelBackupOperation_no_target");
+        yield return new TestCaseData(
             "SomeFutureRpc",
             (object)new BackupHealthAvailabilityRequest(),
             LatticeBackupApiOperation.Unknown,

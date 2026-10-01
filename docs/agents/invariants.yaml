@@ -639,6 +639,36 @@ invariants:
     sources:
       - "docs/lattice.replication/coordinated-restore.md"
       - "docs/lattice.backup/architecture.md"
+  - id: backup-operation-runner-liveness
+    name: "Backup operation runner liveness"
+    description: "A tracked backup or restore operation runs on the accepting silo, heartbeats while active, and is marked Failed rather than left Running when that silo is lost or its lease lapses."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Backup"
+        - "Orleans.Lattice.Backup"
+      components:
+        - "ILatticeBackupOperations"
+        - "LatticeOperationStatus"
+        - "LatticeOperationRunner"
+    violation_modes:
+      - "An operation remains Running after the accepting silo is declared dead."
+      - "A background backup or restore silently resumes without a caller starting a new operation."
+      - "A failure reason omits that the runner silo was lost or stopped heartbeating."
+    detection_signals:
+      - type: status
+        name: "LatticeOperationStatus.State"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+      - type: status
+        name: "LatticeOperationStatus.FailureReason"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+    remediation:
+      - step: "Treat Failed after silo loss as terminal and start a new tracked operation if the backup or restore is still needed."
+        source: "docs/lattice.api.abstractions/operations.md"
+      - step: "Use the previous status and backup catalog to decide whether partial work produced an artifact before retrying."
+        source: "docs/lattice.api.backup/operations.md"
+    sources:
+      - "docs/lattice.api.abstractions/operations.md"
+      - "docs/lattice.api.backup/operations.md"
   - id: crdt-buffer-ownership
     name: "CRDT byte-buffer ownership"
     description: "Registers and sequences store caller-authored byte arrays by handoff, set primitives encode them instead of retaining them, peer-folded winners are copied, and every public egress projection is copied."

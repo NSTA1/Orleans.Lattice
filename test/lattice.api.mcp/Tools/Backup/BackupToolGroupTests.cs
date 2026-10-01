@@ -22,15 +22,24 @@ public sealed class BackupToolGroupTests
         "lattice_backup_inventory",
         "lattice_backup_scope_status",
         "lattice_backup_export_artifact",
+        "lattice_backup_operation_status",
+        "lattice_backup_operation_list",
     };
 
     private static readonly string[] ControlToolNames =
     {
+        "lattice_backup_start",
+        "lattice_backup_start_incremental",
+        "lattice_backup_start_set",
+        "lattice_backup_start_restore",
+        "lattice_backup_operation_cancel",
+        "lattice_backup_revert_restore",
+        "lattice_backup_delete",
+
+        // Deprecated aliases of the start tools, kept for one release.
         "lattice_backup_create",
         "lattice_backup_create_incremental",
         "lattice_backup_restore",
-        "lattice_backup_revert_restore",
-        "lattice_backup_delete",
     };
 
     private static BackupToolGroup CreateGroup(bool enableControl)
@@ -42,6 +51,19 @@ public sealed class BackupToolGroupTests
     private static McpServerTool Tool(BackupToolGroup group, string name)
         => group.Tools.Single(t => t.ProtocolTool.Name == name);
 
+    [TestCase("lattice_backup_create", "lattice_backup_start")]
+    [TestCase("lattice_backup_create_incremental", "lattice_backup_start_incremental")]
+    [TestCase("lattice_backup_restore", "lattice_backup_start_restore")]
+    public void Deprecated_alias_tools_point_at_their_replacement_and_the_removal(string alias, string replacement)
+    {
+        var description = Tool(CreateGroup(enableControl: true), alias).ProtocolTool.Description;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(description, Does.StartWith($"Use {replacement}."));
+            Assert.That(description, Does.Contain("removed in the next major version"));
+        });
+    }
     [Test]
     public void Group_is_the_backup_facade_group()
     {

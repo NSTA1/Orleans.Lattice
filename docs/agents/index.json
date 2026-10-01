@@ -94,7 +94,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Backup facade (Orleans.Lattice.Api.Backup, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Backup facade (Orleans.Lattice.Api.Backup, .Grpc): blocking and accept-then-poll operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "api/data.json",
@@ -115,7 +115,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext, .Apps): registration, authorization gate, every tool with parameters, results, errors, tool annotations and the facade operation it delegates to."
+      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext, .Apps): registration, authorization gate, every tool including backup operation tools and deprecated aliases, parameters, results, errors, tool annotations and the facade operation it delegates to."
     },
     {
       "path": "api/replication.json",

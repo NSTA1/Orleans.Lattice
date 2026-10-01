@@ -37,6 +37,7 @@ public sealed class BackupToolGroupInvocationTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILatticeBackupControl>(_control);
+        services.AddSingleton<ILatticeBackupOperations>(_control);
         if (withHttpContext)
         {
             services.AddSingleton<IHttpContextAccessor>(
@@ -183,65 +184,146 @@ public sealed class BackupToolGroupInvocationTests
 
     // ---- mutating control tools --------------------------------------------
 
-    [Test]
-    public async Task Create_tool_delegate_forwards_the_name_and_scope()
+    [TestCase("lattice_backup_start")]
+    [TestCase("lattice_backup_create")]
+    public async Task Start_tool_delegate_forwards_the_name_scope_and_operation_id(string toolName)
     {
-        var result = await CallAsync<McpBackupCaptureResult>(
-            "lattice_backup_create",
+        var handle = await CallAsync<McpBackupOperationHandle>(
+            toolName,
             ("name", "nightly"),
             ("treeId", "orders"),
             ("scopeKind", "Prefix"),
             ("keyOrPrefix", "eu/"),
-            ("pageSize", 64));
+            ("pageSize", 64),
+            ("operationId", "nightly-op"));
+        var manifest = await ResolveManifestAsync(handle);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Manifest.Name, Is.EqualTo("nightly"),
+            Assert.That(handle.OperationId, Is.EqualTo("nightly-op"),
+                "The delegate must forward the tracked operation id.");
+            Assert.That(handle.Kind, Is.EqualTo(BackupOperationKinds.Capture));
+            Assert.That(manifest.Name, Is.EqualTo("nightly"),
                 "The delegate must forward the bound name, not the tree id.");
-            Assert.That(result.Manifest.TreeId, Is.EqualTo("orders"));
-            Assert.That(result.Manifest.KeyOrPrefix, Is.EqualTo("eu/"),
+            Assert.That(manifest.TreeId, Is.EqualTo("orders"));
+            Assert.That(manifest.KeyOrPrefix, Is.EqualTo("eu/"),
                 "The delegate must forward the scope's key prefix.");
         });
     }
 
-    [Test]
-    public async Task Create_incremental_tool_delegate_forwards_the_base_backup_id()
+    [TestCase("lattice_backup_start_incremental")]
+    [TestCase("lattice_backup_create_incremental")]
+    public async Task Start_incremental_tool_delegate_forwards_the_base_backup_id(string toolName)
     {
         var baseBackup = await _control.CreateBackupAsync(Capture("full", "orders"));
 
-        var result = await CallAsync<McpBackupCaptureResult>(
-            "lattice_backup_create_incremental",
+        var handle = await CallAsync<McpBackupOperationHandle>(
+            toolName,
             ("name", "delta"),
             ("treeId", "orders"),
             ("baseBackupId", baseBackup.BackupId));
+        var manifest = await ResolveManifestAsync(handle);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Manifest.Name, Is.EqualTo("delta"));
-            Assert.That(result.Manifest.BaseBackupId, Is.EqualTo(baseBackup.BackupId),
+            Assert.That(handle.Kind, Is.EqualTo(BackupOperationKinds.IncrementalCapture));
+            Assert.That(manifest.Name, Is.EqualTo("delta"));
+            Assert.That(manifest.BaseBackupId, Is.EqualTo(baseBackup.BackupId),
                 "The delegate must forward the base backup id the increment layers on.");
         });
     }
 
     [Test]
-    public async Task Restore_tool_delegate_forwards_the_mode_and_operation_id()
+    public async Task Start_set_tool_delegate_forwards_every_tree()
     {
-        var result = await CallAsync<McpRestoreResult>(
-            "lattice_backup_restore",
-            ("backupId", "bk-0"),
-            ("targetTreeId", "orders-copy"),
-            ("mode", "ShadowCutover"),
-            ("operationId", "op-42"));
+        var handle = await CallAsync<McpBackupOperationHandle>(
+            "lattice_backup_start_set",
+            ("name", "set"),
+            ("treeIds", new[] { "orders", "users" }),
+            ("crossTreeConsistent", true));
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.TargetTreeId, Is.EqualTo("orders-copy"));
-            Assert.That(result.Mode, Is.EqualTo(nameof(LatticeRestoreMode.ShadowCutover)),
-                "The delegate must forward the requested restore mode.");
-            Assert.That(result.OperationId, Is.EqualTo("op-42"));
+            Assert.That(handle.Kind, Is.EqualTo(BackupOperationKinds.SetCapture));
+            Assert.That(_control.LastSetRequest!.Scopes.Select(s => s.TreeId), Is.EqualTo(new[] { "orders", "users" }));
+            Assert.That(_control.LastSetRequest.CrossTreeConsistent, Is.True);
         });
     }
 
+    [Test]
+    public async Task Start_restore_tool_delegate_forwards_the_mode_and_both_ids()
+    {
+        var handle = await CallAsync<McpBackupOperationHandle>(
+            "lattice_backup_start_restore",
+            ("backupId", "bk-0"),
+            ("targetTreeId", "orders-copy"),
+            ("mode", "ShadowCutover"),
+            ("restoreOperationId", "op-42"),
+            ("operationId", "restore-op"));
+        var status = await CallAsync<McpBackupOperationResult>(
+            McpBackupOperationHandle.StatusToolName, ("operationId", handle.OperationId));
+        var restore = status.Operation!.RestoreResult!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handle.OperationId, Is.EqualTo("restore-op"));
+            Assert.That(restore.TargetTreeId, Is.EqualTo("orders-copy"));
+            Assert.That(restore.Mode, Is.EqualTo(nameof(LatticeRestoreMode.ShadowCutover)),
+                "The delegate must forward the requested restore mode.");
+            Assert.That(restore.OperationId, Is.EqualTo("op-42"),
+                "The restore's own idempotency key must reach the engine request.");
+            Assert.That(restore.ShadowPhysicalTreeId, Is.EqualTo("phys-new"));
+        });
+    }
+
+    [Test]
+    public async Task Restore_alias_tool_delegate_treats_operation_id_as_the_restore_key()
+    {
+        var handle = await CallAsync<McpBackupOperationHandle>(
+            "lattice_backup_restore",
+            ("backupId", "bk-0"),
+            ("mode", "InPlace"),
+            ("operationId", "op-42"));
+        var status = await CallAsync<McpBackupOperationResult>(
+            McpBackupOperationHandle.StatusToolName, ("operationId", handle.OperationId));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handle.OperationId, Is.Not.EqualTo("op-42"),
+                "The alias keeps its shipped meaning: operationId is the restore key, not the tracking id.");
+            Assert.That(status.Operation!.RestoreResult!.OperationId, Is.EqualTo("op-42"));
+        });
+    }
+
+    [Test]
+    public async Task Operation_list_and_cancel_tool_delegates_reach_the_operations_facade()
+    {
+        _control.SeedOperation(new Orleans.Lattice.Api.Operations.LatticeOperationStatus
+        {
+            OperationId = "long",
+            Kind = BackupOperationKinds.Capture,
+            Scope = new Orleans.Lattice.Api.Operations.LatticeOperationScope { TenantId = "default", TreeIds = ["orders"] },
+            State = Orleans.Lattice.Api.Operations.LatticeOperationState.Running,
+            Phase = BackupOperationPhases.Capturing,
+        });
+
+        var page = await CallAsync<McpBackupOperationPage>("lattice_backup_operation_list", ("pageSize", 10));
+        var cancelled = await CallAsync<McpBackupOperationResult>("lattice_backup_operation_cancel", ("operationId", "long"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Operations.Select(o => o.OperationId), Does.Contain("long"));
+            Assert.That(cancelled.Found, Is.True);
+            Assert.That(cancelled.Operation!.CancelRequested, Is.True);
+        });
+    }
+
+    private async Task<McpBackupManifest> ResolveManifestAsync(McpBackupOperationHandle handle)
+    {
+        var status = await _control.GetOperationStatusAsync(handle.OperationId);
+        var described = await _control.DescribeBackupAsync(status!.ResultReference!);
+        return BackupToolMappings.ToMcp(described!.Manifest);
+    }
     [Test]
     public async Task Revert_restore_tool_delegate_reconstructs_the_restore_result()
     {

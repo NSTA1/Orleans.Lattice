@@ -12,6 +12,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
+- **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)
+
 - **Explorer - Reshard can shrink a tree.** The Reshard page folds shards together as well as splitting them, from 2 up to the tree's virtual slot count, and a shrink's review states its throughput trade-off. The Shards tab and the compaction and digest tools follow the live shard map. ([#4076](https://github.com/NSTA1/Orleans.Lattice/issues/4076)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A rewritten console with Lattice Apps built in.** Native areas replace plugins, every page has one address, and it adapts from phone to desktop and targets WCAG 2.2 AA. Apps are browsed, reviewed and run in place, their UI in a sandboxed frame whose data access the cluster enforces. ([#1716](https://github.com/NSTA1/Orleans.Lattice/issues/1716), [#1845](https://github.com/NSTA1/Orleans.Lattice/issues/1845), [#3807](https://github.com/NSTA1/Orleans.Lattice/issues/3807)) (`Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.AppKit`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.Entra.Web`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Replication`, `Orleans.Lattice.Api.Replication.Grpc`)
@@ -109,6 +113,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Performance - Clean leaf deactivations skip an acknowledged pin flush.** The `frontier_pin` barrier is elided when this deactivation already acknowledged a dominating pin, counted by `orleans.lattice.leaf.deactivation.barrier.elided`; a faulted pin write no longer counts as acknowledged. ([#3643](https://github.com/NSTA1/Orleans.Lattice/issues/3643)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Shard - Folds release the retired donor's storage.** A committed shard consolidation, healing's included, clears the donor's leaves and internal nodes, freeing their WAL pins; the donor stays a routing tombstone, and no fold takes a shard an in-flight split still drains into. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059), [#4104](https://github.com/NSTA1/Orleans.Lattice/issues/4104)) (`Orleans.Lattice`)
+
+### Deprecated
+
+- **Backup - Blocking capture and restore verbs.** `CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Fixed
 
