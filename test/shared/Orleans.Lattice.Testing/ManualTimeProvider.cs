@@ -56,6 +56,45 @@ public sealed class ManualTimeProvider : TimeProvider
     /// <summary>Always UTC, so a test cannot read differently on a machine in another zone.</summary>
     public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
 
+    /// <summary>
+    /// How many timers are currently armed against this clock.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a test needs this.</b> <see cref="Advance"/> fires the timers that
+    /// exist when it is called, so a fixture that advances before its subject has
+    /// armed its timer moves the clock past a deadline nobody is waiting on, and
+    /// the subject then waits forever against a clock that will not move again.
+    /// That failure presents as a <i>hang</i>, or as a barrier timing out with no
+    /// diagnostic, and it looks exactly like a subject that is broken rather than
+    /// a fixture that advanced too early.
+    /// </para>
+    /// <para>
+    /// The race is real and easy to walk into: a
+    /// <see cref="System.Threading.Tasks.Task"/>-returning worker does not
+    /// necessarily reach its first <c>await</c> before the method that started it
+    /// returns - a <c>BackgroundService</c> on .NET 10 does not - so "I awaited
+    /// StartAsync" is not evidence that a timer exists. Poll this to zero-in on
+    /// the moment the subject is actually waiting, then advance.
+    /// </para>
+    /// <para>
+    /// A timer is removed when it is disposed, which <c>Task.Delay</c> does as
+    /// soon as its delay elapses. A worker that loops therefore returns to zero
+    /// between iterations and rises to one again when it re-arms, so a test can
+    /// wait for each successive wait rather than only for the first.
+    /// </para>
+    /// </remarks>
+    public int PendingTimerCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count;
+            }
+        }
+    }
+
     /// <summary>Ticks per second, matching the units <see cref="GetTimestamp"/> returns.</summary>
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 

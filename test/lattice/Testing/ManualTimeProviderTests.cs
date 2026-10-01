@@ -288,4 +288,90 @@ public sealed class ManualTimeProviderTests
 
         Assert.That(Volatile.Read(ref fired), Is.EqualTo(1));
     }
+
+    [Test]
+    public void PendingTimerCount_is_zero_on_a_clock_nothing_is_waiting_on()
+    {
+        var clock = new ManualTimeProvider(Start);
+
+        Assert.That(clock.PendingTimerCount, Is.Zero);
+    }
+
+    [Test]
+    public void PendingTimerCount_counts_each_armed_timer_and_drops_it_again_on_dispose()
+    {
+        var clock = new ManualTimeProvider(Start);
+
+        var first = clock.CreateTimer(
+            _ => { }, state: null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        var second = clock.CreateTimer(
+            _ => { }, state: null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        var armed = clock.PendingTimerCount;
+
+        first.Dispose();
+        var afterOne = clock.PendingTimerCount;
+        second.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(armed, Is.EqualTo(2));
+            Assert.That(afterOne, Is.EqualTo(1));
+            Assert.That(clock.PendingTimerCount, Is.Zero);
+        });
+    }
+
+    /// <summary>
+    /// The property exists so a fixture can wait for its subject to actually be
+    /// waiting before it advances. This pins the coupling that makes that work:
+    /// a <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> is
+    /// visible while it is pending and gone once it has elapsed, so a test can
+    /// wait for each successive wait rather than guessing.
+    /// </summary>
+    [Test]
+    public async Task PendingTimerCount_reports_a_pending_task_delay_until_it_elapses()
+    {
+        var clock = new ManualTimeProvider(Start);
+
+        var delay = Task.Delay(TimeSpan.FromSeconds(5), clock, CancellationToken.None);
+        var whilePending = clock.PendingTimerCount;
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await delay;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(whilePending, Is.EqualTo(1), "the delay arms exactly one timer");
+            Assert.That(
+                clock.PendingTimerCount,
+                Is.Zero,
+                "Task.Delay disposes its timer once the delay elapses");
+        });
+    }
+
+    /// <summary>
+    /// The counterexample the property exists to prevent: advancing before the
+    /// subject has armed anything moves the clock past a deadline nobody is
+    /// waiting on, and the wait then never completes however long the test waits.
+    /// A fixture that hits this reads as a broken subject rather than as a
+    /// fixture that advanced too early.
+    /// </summary>
+    [Test]
+    public async Task Advancing_before_a_timer_is_armed_never_fires_it()
+    {
+        var clock = new ManualTimeProvider(Start);
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var delay = Task.Delay(TimeSpan.FromSeconds(5), clock, CancellationToken.None);
+
+        var finished = await Task.WhenAny(delay, Task.Delay(TimeSpan.FromMilliseconds(250)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ReferenceEquals(finished, delay),
+                Is.False,
+                "the advance happened before the timer existed, so it cannot have fired it");
+            Assert.That(clock.PendingTimerCount, Is.EqualTo(1));
+        });
+    }
 }
