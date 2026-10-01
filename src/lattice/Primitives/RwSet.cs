@@ -253,7 +253,7 @@ public sealed class RwSet : ICrdt<RwSet>
             if (dots.Count == 0) continue;
             if (noRemoves || !HasLiveRemove(key)) live.Add(key);
         }
-        live.Sort(StringComparer.Ordinal);
+        live.Sort(OrdinalStringOrder.Comparison);
         foreach (var key in live)
         {
             yield return Convert.FromBase64String(key);
@@ -310,7 +310,7 @@ public sealed class RwSet : ICrdt<RwSet>
         }
         if (live.Count == 0) return Array.Empty<byte[]>();
 
-        live.Sort(StringComparer.Ordinal);
+        live.Sort(OrdinalStringOrder.Comparison);
         var values = new byte[live.Count][];
         for (var i = 0; i < live.Count; i++)
         {

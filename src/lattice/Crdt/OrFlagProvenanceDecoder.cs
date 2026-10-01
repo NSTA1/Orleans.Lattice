@@ -89,7 +89,7 @@ public sealed class OrFlagProvenanceDecoder : ICrdtProvenanceDecoder
         var result = new List<CrdtMemberChange>(total);
         FlagProvenance.EmitDots(result, flag.Enables, CrdtMemberChangeKind.Added, null);
         FlagProvenance.EmitDots(result, flag.Tombstones, CrdtMemberChangeKind.Removed, null);
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 

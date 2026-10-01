@@ -714,7 +714,7 @@ internal sealed class AtomicWriteGrain(
     {
         var sortedKeys = new string[entries.Count];
         for (int i = 0; i < entries.Count; i++) sortedKeys[i] = entries[i].Key;
-        Array.Sort(sortedKeys, StringComparer.Ordinal);
+        Array.Sort(sortedKeys, OrdinalStringOrder.Comparison);
 
         return ComputeKeyFingerprintCore(sortedKeys);
     }

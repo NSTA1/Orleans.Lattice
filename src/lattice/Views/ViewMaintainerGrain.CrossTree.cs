@@ -106,7 +106,7 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
-        waitSet.Sort(StringComparer.Ordinal);
+        waitSet.Sort(OrdinalStringOrder.Comparison);
         return waitSet;
     }
 
