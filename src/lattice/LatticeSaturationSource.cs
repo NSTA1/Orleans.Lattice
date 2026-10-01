@@ -219,4 +219,40 @@ public enum LatticeSaturationSource
     /// </para>
     /// </summary>
     TxRegistryCapacity = 6,
+
+    /// <summary>
+    /// The whole-envelope refusal from <c>LatticeGrain.SetManyAsyncCore</c>,
+    /// raised when a batch write has consumed
+    /// <see cref="LatticeOptions.SetManyEnvelopeBudget"/> across <em>all</em> of
+    /// its stages - <c>gate</c>, <c>route</c>, <c>bucket</c> and <c>fanout</c>
+    /// together - rather than in the fan-out alone.
+    /// <para>
+    /// <b>It is a distinct source from <see cref="SetManyFanOut"/> because it
+    /// answers a different question.</b> A fan-out refusal says the fan-out was
+    /// slow. This one says the fan-out may have been entirely healthy and the
+    /// call still ran out of time, because the stages <em>summed</em> past the
+    /// deadline. Issue #2685 measured that case directly: a <c>gate</c> of
+    /// 4,108.96 ms - 12,085x its 0.34 ms healthy baseline - plus a
+    /// <c>fanout</c> of 26,709.17 ms, totalling 30,818 ms against a 30,000 ms
+    /// response timeout, with neither stage breaching alone. Attributing both to
+    /// one source would erase exactly the distinction an operator needs, and
+    /// would send a fan-out investigation after a gate regression.
+    /// </para>
+    /// <para>
+    /// <b>Not automatically retryable</b>, on the same terms as
+    /// <see cref="SetManyFanOut"/>: the budget has been spent against a tree
+    /// that is not settling, so an immediate retry re-fans the batch into the
+    /// same regime. Back off, then retry.
+    /// </para>
+    /// <para>
+    /// <b>The refusal rolls nothing back.</b> <c>SetManyAsync</c> is not atomic
+    /// across shards, so branches that already committed stay committed and
+    /// branches still in flight are left to run rather than cancelled. The
+    /// durable outcome is the one an unbounded wait would have produced; what
+    /// changes is when the caller is told and what it is told - the refusal
+    /// carries the per-stage breakdown, so the next occurrence is
+    /// self-diagnosing instead of an anonymous timeout.
+    /// </para>
+    /// </summary>
+    SetManyEnvelope = 7,
 }

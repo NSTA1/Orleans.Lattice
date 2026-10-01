@@ -245,13 +245,14 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes (global; read from the default options) |
 | [`WalAdmissionSaturationWaitBudget`](#waladmissionsaturationwaitbudget) | `TimeSpan` | 5 seconds | Yes |
 | [`SetManyFanOutBudget`](#setmanyfanoutbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
+| [`SetManyEnvelopeBudget`](#setmanyenvelopebudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Timeout and budget ceiling
 
-The timeout, budget and cadence options the runtime arms as timers - `ActivationReadyTimeout`, `DigestPublishTimeout`, `EmptyTreeProbeBudget`, `HotShardSampleInterval`, `MaxScanPageStallDuration`, `SetManyFanOutBudget`, `ShardForwardTimeout`, `ShardHealingInterval`, `StarvationDriveBudget`, `WalAdmissionSaturationCallBudget`, `WalAdmissionSaturationWaitBudget`, `WalAppendDispatchTimeout`, `WalDrainBudget`, `WalFlushPreflightTimeout`, `WalFlushTimeout`, `WalSaturationSampleInterval` and `WalThrottledAdmissionPace` - must be at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest wait a .NET timer accepts and the longest period an Orleans grain timer accepts (`HotShardSampleInterval` and `ShardHealingInterval` are grain-timer periods). Options validation rejects a longer finite value such as `TimeSpan.MaxValue`, which would otherwise pass and then fail every operation that armed it. Where an option documents `Timeout.InfiniteTimeSpan`, use that to remove the bound instead.
+The timeout, budget and cadence options the runtime arms as timers - `ActivationReadyTimeout`, `DigestPublishTimeout`, `EmptyTreeProbeBudget`, `HotShardSampleInterval`, `MaxScanPageStallDuration`, `SetManyEnvelopeBudget`, `SetManyFanOutBudget`, `ShardForwardTimeout`, `ShardHealingInterval`, `StarvationDriveBudget`, `WalAdmissionSaturationCallBudget`, `WalAdmissionSaturationWaitBudget`, `WalAppendDispatchTimeout`, `WalDrainBudget`, `WalFlushPreflightTimeout`, `WalFlushTimeout`, `WalSaturationSampleInterval` and `WalThrottledAdmissionPace` - must be at most `0xFFFFFFFE` milliseconds (about 49.7 days), the longest wait a .NET timer accepts and the longest period an Orleans grain timer accepts (`HotShardSampleInterval` and `ShardHealingInterval` are grain-timer periods). Options validation rejects a longer finite value such as `TimeSpan.MaxValue`, which would otherwise pass and then fail every operation that armed it. Where an option documents `Timeout.InfiniteTimeSpan`, use that to remove the bound instead.
 
 ### Structural sizing (registry-pinned)
 
@@ -1671,6 +1672,28 @@ Without this budget the wait is unbounded, which means the fan-out queues load i
 Unlike `WalAdmissionSaturationWaitBudget`, `TimeSpan.Zero` is **not** a disable sentinel and is rejected by the validator: a zero budget would refuse every batch immediately, which is never a useful configuration and is far more likely to be a mistake than an intention. `Timeout.InfiniteTimeSpan` is the default and awaits every branch however long it takes. The validator rejects every other non-positive value.
 
 This option can be changed freely at any time. The new value takes effect on the next `SetManyAsync` call that fans out across more than one shard; single-shard batches never consult it, because there is no slowest branch to bound.
+
+### `SetManyEnvelopeBudget`
+
+Wall-clock budget for the **whole** `ILattice.SetManyAsync` call - every stage it runs, not one of them - before refusing it with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) carrying `LatticeSaturationSource.SetManyEnvelope` (default: `Timeout.InfiniteTimeSpan`, i.e. unbounded - the bound is opt-in).
+
+**What it bounds that `SetManyFanOutBudget` cannot.** A batched write runs four stages in sequence: `gate` (registering the tree's tombstone-compaction reminder and arming its autonomic loops), `route`, `bucket`, then `fanout`. Each carries its own stage timer, and a per-stage budget can only ever observe one of them. [#2685](https://github.com/NSTA1/Orleans.Lattice/issues/2685) measured a call that breached by *summing*: a `gate` of 4,108.96 ms - 12,085x its 0.34 ms healthy baseline, because an uncached arming path ran on every write - plus a `fanout` of 26,709.17 ms, totalling 30,818 ms against a 30,000 ms Orleans response timeout. **Neither stage breached on its own.** A fan-out budget sized for the fan-out (30 s is the figure [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) supports) never fires at 26.7 s, so the caller received an anonymous `TimeoutException` from Orleans naming no stage at all.
+
+That has a consequence worth stating plainly, because it determines what a useful guard looks like: **any assertion made about a single stage against the deadline passes both before and after a regression of this kind**, since no single stage is ever the thing that breaches. Only the running total moves.
+
+**It composes with `SetManyFanOutBudget` rather than replacing it.** The fan-out waits for the narrower of the two, so a deployment that sets both keeps its per-fan-out ceiling *and* stops the fan-out being granted a fresh full window by a call that already spent most of the caller's patience upstream. Setting only this one is the simpler configuration.
+
+**It applies to single-shard batches, which `SetManyFanOutBudget` deliberately does not.** A single-shard tree has no branch dispersion to bound, which is why the fan-out budget skips it - but it does have an envelope, and before this option a single-shard tree could not have its batch writes bounded by anything. That is the shape the incident was measured on.
+
+**The refusal carries a per-stage breakdown**, for example `gate=4109.0ms, route=0.6ms, bucket=0.0ms, fan-out=26709.2ms; elapsed=30818.0ms of a 25000ms envelope budget`. Absolute magnitude says where time is spent and the ratio against a healthy baseline says what *moved*, and only the second is diagnostic for a system that was healthy hours earlier - ranking these stages by magnitude finds the fan-out, which had not changed much, while the gate is the stage that degraded by four orders of magnitude.
+
+**Sizing.** Set it *below* the response timeout governing the call - the silo's `SiloMessagingOptions.ResponseTimeout` for a silo-to-silo write, or the client's `ClientMessagingOptions.ResponseTimeout` for an external one - with enough margin for the refusal to be built and marshalled back while the caller is still listening. Above that deadline it is dead configuration: the caller's own RPC deadline expires first and it sees the generic Orleans timeout this option exists to replace. Against the 30-second Orleans default, **25 seconds** leaves a 5-second margin, mirroring `DefaultMaxScanPageStallHeadroom`.
+
+**Refusal sheds the caller; it does not roll anything back.** `SetManyAsync` is not atomic across shards, so branches that already committed stay committed and outstanding branches run to completion. The durable outcome is identical to the unbounded wait - only the moment the caller is told, and what it is told, changes. Callers needing all-or-nothing semantics across shards should use the atomic-write saga instead.
+
+**The default is unbounded, so this option is opt-in**, for the same reason as `SetManyFanOutBudget`: a finite default would change when `LatticeSaturatedException` first surfaces for a conforming caller on a released package. `TimeSpan.Zero` is rejected by the validator - it would refuse every batch write immediately - as is every other non-positive value except `Timeout.InfiniteTimeSpan`.
+
+This option can be changed freely at any time. The new value takes effect on the next `SetManyAsync` call.
 
 ### `WalAdmissionSaturationCallBudget`
 
