@@ -83,10 +83,11 @@ When a fold commits, the retired donor's storage is released: every leaf and int
 
 A donor that the live map still routes a slot to, or that refuses retirement because another migration or an online resize holds it, keeps its storage, and the fold completes as a routing-only retirement.
 
-Four rules keep a retired shard from ever being read or reused while something still depends on it:
+Five rules keep a retired shard from ever being read or reused while something still depends on it:
 
 - **A fold waits out a snapshot or merge before it releases anything.** Its final step, and with it the release of the donor's storage, is held while a snapshot of, or merge into, the tree runs, because those read the shards they recorded when they started. A shrink also starts no new fold while one runs. A resize is not waited for; a donor an online resize is forwarding refuses retirement and keeps its storage instead.
 - **A merge notices a source shard that retired under it.** Before a merge completes it checks that every source shard it recorded is still in the source's routing map. If a fold retired one while the merge ran, it re-drains the source's current shards; every entry carries its original timestamp, so re-merging is harmless.
+- **A fold never takes a shard another migration still owes writes to.** A split records its migration only on its source shard, yet its target is in the routing map from the split's swap onwards and still receives the split's final drain. A fold therefore refuses a pair when either side is the target of any in-flight migration, and retries once that migration has finished. Folding such a target away would retire it under the drain, leaving the split unable to complete. Symmetrically, a retired shard refuses to become a split source, so a split planned against an older map is abandoned rather than left retrying.
 - **A retired index is never handed out again.** The fold's routing swap raises the tree's split allocation high-water past the donor, so a later grow or adaptive split allocates a fresh index rather than splitting into a tombstone.
 - **The empty-tree path revives what it reuses.** An observably empty tree is re-pinned to an identity map over indices `0..n-1`, which may include retired shards; those are returned to service first, as empty shards, before the new map is published. Each keeps its routing tombstone for any slot the new map sends elsewhere, so a caller holding an older map is still redirected.
 

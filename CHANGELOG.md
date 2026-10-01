@@ -96,7 +96,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Clean leaf deactivations skip an acknowledged pin flush.** The `frontier_pin` barrier is elided when this deactivation already acknowledged a dominating pin, counted by `orleans.lattice.leaf.deactivation.barrier.elided`; a faulted pin write no longer counts as acknowledged. ([#3643](https://github.com/NSTA1/Orleans.Lattice/issues/3643)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
-- **Shard - Folds release the retired donor's storage.** A committed shard consolidation, healing's included, clears the donor's leaves and internal nodes, retiring their WAL pins so the trim horizon can advance; the donor stays as a routing tombstone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`)
+- **Shard - Folds release the retired donor's storage.** A committed shard consolidation, healing's included, clears the donor's leaves and internal nodes, freeing their WAL pins; the donor stays a routing tombstone, and no fold takes a shard an in-flight split still drains into. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059), [#4104](https://github.com/NSTA1/Orleans.Lattice/issues/4104)) (`Orleans.Lattice`)
 
 ### Fixed
 

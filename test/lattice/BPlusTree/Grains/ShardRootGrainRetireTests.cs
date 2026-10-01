@@ -215,6 +215,42 @@ public class ShardRootGrainRetireTests
     }
 
     [Test]
+    public async Task A_retired_shard_refuses_to_become_a_migration_source_as_a_refusal_not_a_stale_route()
+    {
+        // The split and consolidation coordinators unwind the intent they
+        // persisted only on InvalidOperationException. A stale-routing fault
+        // here would leave a split coordinator in progress against a shard it
+        // can never open, retrying forever.
+        var h = CreateHarness();
+        await h.Grain.RetireAsync();
+
+        Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Grain.BeginSplitAsync(2, [5], VirtualShardCount));
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.State.SplitInProgress, Is.Null);
+            Assert.That(h.State.State.RootNodeId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task GetMigrationTargetShardIndex_reports_the_in_flight_target_and_null_otherwise()
+    {
+        var h = CreateHarness();
+        Assert.That(await h.Grain.GetMigrationTargetShardIndexAsync(), Is.Null);
+
+        h.State.State.SplitInProgress = new ShardSplitInProgress
+        {
+            Phase = ShardSplitPhase.Drain,
+            ShadowTargetShardIndex = 7,
+            MovedSlots = [5],
+            VirtualShardCount = VirtualShardCount,
+        };
+
+        Assert.That(await h.Grain.GetMigrationTargetShardIndexAsync(), Is.EqualTo(7));
+    }
+
+    [Test]
     public async Task Revive_returns_a_retired_shard_to_service_and_lifts_the_fence_on_the_slots_it_owns_again()
     {
         var h = CreateHarness();

@@ -88,13 +88,17 @@ public partial class ReshardIntegrationTests
         // Keep writing - overwrites and new keys - until the shrink has fully
         // finished, so the writes overlap every fold's drain, freeze, swap,
         // finalise and retirement rather than landing before the first tick.
+        // The drive waits for the writer to finish a further full round after
+        // every pass, so the overlap is guaranteed rather than left to how the
+        // writer's thread happens to be scheduled.
         using var stop = new CancellationTokenSource();
+        var completedRounds = 0;
         var writer = Task.Run(async () =>
         {
             var written = new Dictionary<string, byte[]>();
-            var round = 0;
             while (!stop.IsCancellationRequested)
             {
+                var round = Volatile.Read(ref completedRounds);
                 for (int i = 0; i < 25; i++)
                 {
                     var key = $"live-{i:D3}";
@@ -102,15 +106,28 @@ public partial class ReshardIntegrationTests
                     await tree.SetAsync(key, value);
                     written[key] = value;
                 }
-                round++;
+                Interlocked.Increment(ref completedRounds);
             }
-            return (written, round);
+            return written;
         });
 
-        await DriveShrinkToCompletionAsync(treeId);
+        async Task AwaitAnotherWriterRoundAsync()
+        {
+            var seen = Volatile.Read(ref completedRounds);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (Volatile.Read(ref completedRounds) == seen)
+            {
+                if (writer.IsCompleted) await writer;
+                if (DateTime.UtcNow > deadline) Assert.Fail("The writer made no progress across a fold pass.");
+                await Task.Delay(5);
+            }
+        }
+
+        await DriveShrinkToCompletionAsync(treeId, AwaitAnotherWriterRoundAsync);
         await tree.SetAsync("after-drive", [1]);
         stop.Cancel();
-        var (live, rounds) = await writer;
+        var live = await writer;
+        var rounds = Volatile.Read(ref completedRounds);
 
         Assert.That(rounds, Is.GreaterThan(1), "precondition: the writer must have overlapped several fold ticks");
         foreach (var (key, value) in live) expected[key] = value;
@@ -211,7 +228,7 @@ public partial class ReshardIntegrationTests
     /// completion synchronously, for the same reason
     /// <see cref="DriveReshardToCompletionAsync"/> drives split coordinators.
     /// </summary>
-    private async Task DriveShrinkToCompletionAsync(string treeId)
+    private async Task DriveShrinkToCompletionAsync(string treeId, Func<Task>? afterEachPass = null)
     {
         var reshard = _cluster.GrainFactory.GetGrain<ITreeReshardGrain>(treeId);
         for (int i = 0; i < 200; i++)
@@ -225,6 +242,7 @@ public partial class ReshardIntegrationTests
                     await fold.RunConsolidationPassAsync();
             }
 
+            if (afterEachPass is not null) await afterEachPass();
             await Task.Delay(50);
         }
 
