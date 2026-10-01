@@ -124,7 +124,9 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
 
     /// <inheritdoc />
     public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
         => _client.CheckBackupHealthAsync(backupId, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)

@@ -41,4 +41,34 @@ public static class BackupOperationResultKeys
 
     /// <summary>Records dead-lettered for exceeding the active tenant's quota.</summary>
     public const string DeadLetteredOverQuota = "deadLetteredOverQuota";
+
+    /// <summary>The verdict of a health check (<see cref="BackupHealthStatus"/> name).</summary>
+    public const string HealthStatus = "healthStatus";
+
+    /// <summary>The number of artifacts a health check found missing or uncommitted.</summary>
+    public const string MissingArtifactCount = "missingArtifactCount";
+
+    /// <summary>The number of artifacts a health check found whose content no longer matches the recorded hash.</summary>
+    public const string HashMismatchArtifactCount = "hashMismatchArtifactCount";
+
+    /// <summary>The number of manifests a catalog rebuild read from the sink, or rows a scrub probed.</summary>
+    public const string ScannedCount = "scannedCount";
+
+    /// <summary>The number of manifests a catalog rebuild added to the catalog.</summary>
+    public const string RegisteredCount = "registeredCount";
+
+    /// <summary>The number of manifests a catalog rebuild reconciled in place.</summary>
+    public const string ReconciledCount = "reconciledCount";
+
+    /// <summary>The number of orphan rows a scrub found.</summary>
+    public const string OrphanCount = "orphanCount";
+
+    /// <summary>The number of orphan rows a scrub removed.</summary>
+    public const string RemovedCount = "removedCount";
+
+    /// <summary>Whether a scrub pruned its orphans (<c>true</c> or <c>false</c>).</summary>
+    public const string Pruned = "pruned";
+
+    /// <summary>The orphan backup ids a scrub found, comma-separated in catalog order.</summary>
+    public const string OrphanBackupIds = "orphanBackupIds";
 }

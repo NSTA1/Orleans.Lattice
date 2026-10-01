@@ -85,6 +85,41 @@ internal sealed partial class ShellBackupControlTransport : ILatticeBackupOperat
     }
 
     /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartBackupHealthCheckAsync(
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return CallAsync(
+            (BackupId: backupId, OperationId: operationId),
+            static (client, state, ct) => client.StartBackupHealthCheckAsync(state.BackupId, state.OperationId, ct),
+            backupId,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartCatalogRebuildAsync(
+        string? operationId = null,
+        CancellationToken cancellationToken = default) =>
+        CallAsync(
+            operationId,
+            static (client, state, ct) => client.StartCatalogRebuildAsync(state, ct),
+            null,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartCatalogScrubAsync(
+        bool pruneOrphans = false,
+        string? operationId = null,
+        CancellationToken cancellationToken = default) =>
+        CallAsync(
+            (PruneOrphans: pruneOrphans, OperationId: operationId),
+            static (client, state, ct) => client.StartCatalogScrubAsync(state.PruneOrphans, state.OperationId, ct),
+            null,
+            cancellationToken);
+
+    /// <inheritdoc />
     public Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);

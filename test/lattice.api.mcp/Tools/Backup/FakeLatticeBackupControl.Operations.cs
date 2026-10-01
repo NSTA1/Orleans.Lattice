@@ -98,6 +98,54 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupOperation
         LatticeRestoreRequest request, string? operationId = null, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 
+    /// <summary>The last backup id a health-check start was given, for assertions.</summary>
+    public string? LastHealthCheckBackupId { get; private set; }
+
+    /// <summary>The prune flag the last catalog-scrub start was given, for assertions.</summary>
+    public bool? LastScrubPruneOrphans { get; private set; }
+
+    public Task<LatticeOperationHandle> StartBackupHealthCheckAsync(
+        string backupId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        Gate();
+        LastHealthCheckBackupId = backupId;
+        return Task.FromResult(Record(operationId, BackupOperationKinds.HealthCheck, "orders", backupId,
+            new Dictionary<string, string>
+            {
+                [BackupOperationResultKeys.BackupId] = backupId,
+                [BackupOperationResultKeys.HealthStatus] = "Healthy",
+            }));
+    }
+
+    public Task<LatticeOperationHandle> StartCatalogRebuildAsync(
+        string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        Gate();
+        return Task.FromResult(Record(operationId, BackupOperationKinds.CatalogRebuild, "sys-backup-catalog", null,
+            new Dictionary<string, string>
+            {
+                [BackupOperationResultKeys.ScannedCount] = "2",
+                [BackupOperationResultKeys.RegisteredCount] = "1",
+                [BackupOperationResultKeys.ReconciledCount] = "1",
+            }));
+    }
+
+    public Task<LatticeOperationHandle> StartCatalogScrubAsync(
+        bool pruneOrphans = false, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        Gate();
+        LastScrubPruneOrphans = pruneOrphans;
+        return Task.FromResult(Record(operationId, BackupOperationKinds.CatalogScrub, "sys-backup-catalog", null,
+            new Dictionary<string, string>
+            {
+                [BackupOperationResultKeys.ScannedCount] = "2",
+                [BackupOperationResultKeys.OrphanCount] = "0",
+                [BackupOperationResultKeys.RemovedCount] = "0",
+                [BackupOperationResultKeys.Pruned] = pruneOrphans ? "True" : "False",
+                [BackupOperationResultKeys.OrphanBackupIds] = string.Empty,
+            }));
+    }
+
     public Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)
     {
         Gate();
@@ -151,7 +199,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupOperation
     }
 
     private LatticeOperationHandle Record(
-        string? operationId, string kind, string treeId, string resultReference, IReadOnlyDictionary<string, string> result)
+        string? operationId, string kind, string treeId, string? resultReference, IReadOnlyDictionary<string, string> result)
     {
         LastOperationId = operationId;
         var id = operationId ?? $"op-{_nextOperation++}";

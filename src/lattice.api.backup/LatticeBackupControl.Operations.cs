@@ -74,6 +74,39 @@ internal sealed partial class LatticeBackupControl
     }
 
     /// <inheritdoc />
+    public async Task<LatticeOperationHandle> StartBackupHealthCheckAsync(
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        var (_, launch) = await StartHealthCheckCoreAsync(backupId, ResolveOperationId(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return ToHandle(launch);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeOperationHandle> StartCatalogRebuildAsync(
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (_, launch) = await StartCatalogRebuildCoreAsync(ResolveOperationId(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return ToHandle(launch);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeOperationHandle> StartCatalogScrubAsync(
+        bool pruneOrphans = false,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (_, launch) = await StartCatalogScrubCoreAsync(pruneOrphans, ResolveOperationId(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return ToHandle(launch);
+    }
+
+    /// <inheritdoc />
     public async Task<LatticeOperationStatus?> GetOperationStatusAsync(
         string operationId,
         CancellationToken cancellationToken = default)
@@ -129,7 +162,7 @@ internal sealed partial class LatticeBackupControl
         // starting it needed, and a caller without it is refused outright.
         foreach (var scope in BackupOperationScopes.FromOperation(record.TreeIds, record.Attributes)!)
         {
-            if (IsRestoreKind(record.Kind))
+            if (RequiresRestoreGrant(record.Kind))
             {
                 await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
             }
@@ -291,6 +324,53 @@ internal sealed partial class LatticeBackupControl
         return (tenantId, launch);
     }
 
+    private async Task<(string TenantId, LatticeOperationLaunch<BackupHealthReport> Launch)> StartHealthCheckCoreAsync(
+        string backupId,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"No backup with id '{backupId}' exists in the catalog.");
+
+        // Manifest-derived scope: already effective, never re-composed. The
+        // operation is recorded over that same scope, so its visibility and cancel
+        // are authorized against the backup's own tree.
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+        var tenantId = (await ResolveActiveTenantAsync(cancellationToken).ConfigureAwait(false)).Value;
+        var launch = await _operations.StartHealthCheckAsync(tenantId, operationId, backupId, [manifest.Scope])
+            .ConfigureAwait(false);
+        return (tenantId, launch);
+    }
+
+    private async Task<(string TenantId, LatticeOperationLaunch<BackupCatalogRebuildReport> Launch)> StartCatalogRebuildCoreAsync(
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        // Cluster-wide administrative action: authorized fail-closed at the reserved
+        // catalog tree with the Restore authority, exactly as the blocking verb is.
+        // The catalog tree is a platform-owned constant, never tenant-composed.
+        var catalogScope = BackupScopeSelector.WholeTree(BackupConstants.CatalogTree);
+        await _authorizer.AuthorizeRestoreAsync(catalogScope, cancellationToken).ConfigureAwait(false);
+        var tenantId = (await ResolveActiveTenantAsync(cancellationToken).ConfigureAwait(false)).Value;
+        var launch = await _operations.StartCatalogRebuildAsync(tenantId, operationId, [catalogScope])
+            .ConfigureAwait(false);
+        return (tenantId, launch);
+    }
+
+    private async Task<(string TenantId, LatticeOperationLaunch<BackupCatalogScrubReport> Launch)> StartCatalogScrubCoreAsync(
+        bool pruneOrphans,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        // As StartCatalogRebuildCoreAsync: the catalog tree, the Restore authority.
+        var catalogScope = BackupScopeSelector.WholeTree(BackupConstants.CatalogTree);
+        await _authorizer.AuthorizeRestoreAsync(catalogScope, cancellationToken).ConfigureAwait(false);
+        var tenantId = (await ResolveActiveTenantAsync(cancellationToken).ConfigureAwait(false)).Value;
+        var launch = await _operations.StartCatalogScrubAsync(tenantId, operationId, pruneOrphans, [catalogScope])
+            .ConfigureAwait(false);
+        return (tenantId, launch);
+    }
+
     /// <summary>
     /// The deprecated blocking verbs' wait: awaits the in-process work this call
     /// started and returns the engine's own result or rethrows its own exception.
@@ -332,7 +412,7 @@ internal sealed partial class LatticeBackupControl
             return false;
         }
 
-        var restoreKind = IsRestoreKind(record.Kind);
+        var restoreKind = RequiresRestoreGrant(record.Kind);
         foreach (var scope in scopes)
         {
             if (!await IsReadAuthorizedAsync(scope, cancellationToken).ConfigureAwait(false)
@@ -345,9 +425,17 @@ internal sealed partial class LatticeBackupControl
         return true;
     }
 
-    private static bool IsRestoreKind(string kind) =>
+    /// <summary>
+    /// Whether starting (and so cancelling) an operation of <paramref name="kind"/>
+    /// needs the restore grant rather than the backup grant: a restore, or a
+    /// cluster-wide catalog rebuild or scrub, which is authorized at the reserved
+    /// catalog tree with the restore authority.
+    /// </summary>
+    private static bool RequiresRestoreGrant(string kind) =>
         string.Equals(kind, BackupOperationKinds.Restore, StringComparison.Ordinal)
-        || string.Equals(kind, BackupOperationKinds.ColdRestore, StringComparison.Ordinal);
+        || string.Equals(kind, BackupOperationKinds.ColdRestore, StringComparison.Ordinal)
+        || string.Equals(kind, BackupOperationKinds.CatalogRebuild, StringComparison.Ordinal)
+        || string.Equals(kind, BackupOperationKinds.CatalogScrub, StringComparison.Ordinal);
 
     private static string ResolveOperationId(string? operationId)
     {

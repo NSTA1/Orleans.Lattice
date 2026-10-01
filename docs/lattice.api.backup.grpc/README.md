@@ -33,6 +33,9 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `StartBackupSet` | unary | Start tracked backup-set capture |
 | `StartRestore` | unary | Start tracked restore |
 | `StartColdRestore` | unary | Start tracked catalog-free cold restore |
+| `StartBackupHealthCheck` | unary | Start tracked backup health check |
+| `StartCatalogRebuild` | unary | Start tracked catalog rebuild from the sink |
+| `StartCatalogScrub` | unary | Start tracked catalog scrub against the sink |
 | `GetBackupOperationStatus` | unary | Read tracked operation status |
 | `ListBackupOperations` | unary | List tracked backup operations |
 | `CancelBackupOperation` | unary | Request tracked operation cancellation |
@@ -52,7 +55,7 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `CancelSchedule` | unary | Remove a runtime recurring schedule |
 | `GetScopeStatus` | unary | Read scope schedule and last-run status |
 | `IsHealthMonitoringAvailable` | unary | Report whether health monitoring applies |
-| `CheckBackupHealth` | unary | Verify one backup now and persist the report |
+| `CheckBackupHealth` | unary | Deprecated blocking verify of one backup that persists the report |
 | `GetBackupHealth` | unary | Read the latest stored health report |
 | `ConfigureBackupHealth` | unary | Override one backup's health-monitor settings |
 

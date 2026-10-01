@@ -126,4 +126,90 @@ public sealed class BackupOperationResultsTests
                 "An operation with no trees authorizes against nothing, so it is never visible.");
         });
     }
+
+    [Test]
+    public void A_catalog_rebuild_report_round_trips_through_its_result_map()
+    {
+        var map = BackupOperationResults.ToResultMap(new BackupCatalogRebuildReport(7, 3, 4));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BackupOperationResults.TryReadCatalogRebuildReport(map, out var report), Is.True);
+            Assert.That(report, Is.EqualTo(new BackupCatalogRebuildReport(7, 3, 4)));
+            Assert.That(BackupOperationResults.TryReadCatalogScrubReport(map, out _), Is.False, "A rebuild is not a scrub.");
+        });
+    }
+
+    [Test]
+    public void A_catalog_scrub_report_round_trips_through_its_result_map()
+    {
+        var map = BackupOperationResults.ToResultMap(new BackupCatalogScrubReport(5, 2, 2, pruned: true, ["x", "y"]));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BackupOperationResults.TryReadCatalogScrubReport(map, out var report), Is.True);
+            Assert.That(report!.ScannedCount, Is.EqualTo(5));
+            Assert.That(report.OrphanCount, Is.EqualTo(2));
+            Assert.That(report.RemovedCount, Is.EqualTo(2));
+            Assert.That(report.Pruned, Is.True);
+            Assert.That(report.OrphanBackupIds, Is.EqualTo(new[] { "x", "y" }));
+            Assert.That(BackupOperationResults.TryReadCatalogRebuildReport(map, out _), Is.False, "A scrub is not a rebuild.");
+        });
+    }
+
+    [Test]
+    public void A_scrub_with_no_orphans_reads_back_an_empty_list()
+    {
+        var map = BackupOperationResults.ToResultMap(new BackupCatalogScrubReport(3, 0, 0, pruned: false, []));
+
+        Assert.That(BackupOperationResults.TryReadCatalogScrubReport(map, out var report), Is.True);
+        Assert.That(report!.OrphanBackupIds, Is.Empty);
+    }
+
+    [Test]
+    public void A_health_check_map_carries_the_verdict_and_counts()
+    {
+        var map = BackupOperationResults.ToResultMap(new BackupHealthReport(
+            "b1",
+            BackupHealthStatus.Warning,
+            manifestPresent: true,
+            missingArtifactIds: ["a1"],
+            hashMismatchArtifactIds: ["a2", "a3"],
+            DateTimeOffset.UnixEpoch,
+            "explanation"));
+
+        Assert.That(map, Is.EquivalentTo(new Dictionary<string, string>
+        {
+            [BackupOperationResultKeys.BackupId] = "b1",
+            [BackupOperationResultKeys.HealthStatus] = "Warning",
+            [BackupOperationResultKeys.MissingArtifactCount] = "1",
+            [BackupOperationResultKeys.HashMismatchArtifactCount] = "2",
+        }));
+    }
+
+    [Test]
+    public void Malformed_maintenance_maps_are_not_reports()
+    {
+        var badPruned = new Dictionary<string, string>
+        {
+            [BackupOperationResultKeys.ScannedCount] = "1",
+            [BackupOperationResultKeys.OrphanCount] = "0",
+            [BackupOperationResultKeys.RemovedCount] = "0",
+            [BackupOperationResultKeys.Pruned] = "maybe",
+        };
+        var badCount = new Dictionary<string, string>
+        {
+            [BackupOperationResultKeys.ScannedCount] = "-1",
+            [BackupOperationResultKeys.RegisteredCount] = "0",
+            [BackupOperationResultKeys.ReconciledCount] = "0",
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BackupOperationResults.TryReadCatalogScrubReport(badPruned, out _), Is.False);
+            Assert.That(BackupOperationResults.TryReadCatalogRebuildReport(badCount, out _), Is.False);
+            Assert.That(() => BackupOperationResults.TryReadCatalogScrubReport(null!, out _), Throws.ArgumentNullException);
+            Assert.That(() => BackupOperationResults.TryReadCatalogRebuildReport(null!, out _), Throws.ArgumentNullException);
+        });
+    }
 }

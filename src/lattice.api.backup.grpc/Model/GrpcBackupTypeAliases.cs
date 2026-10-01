@@ -122,4 +122,10 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupOperationStatusResponse"/>.</summary>
     public const string BackupOperationStatusResponse = "oibg.opstat";
+
+    /// <summary>Alias for <see cref="BackupCatalogRebuildRequestMessage"/>.</summary>
+    public const string BackupCatalogRebuildRequestMessage = "oibg.crbreq";
+
+    /// <summary>Alias for <see cref="BackupCatalogScrubRequestMessage"/>.</summary>
+    public const string BackupCatalogScrubRequestMessage = "oibg.cscreq";
 }

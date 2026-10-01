@@ -20,7 +20,11 @@ internal sealed class BackupOperationService(
     ILatticeBackupCaptureService capture,
     ILatticeBackupIncrementalCaptureService incremental,
     ILatticeBackupRestoreService restore,
-    ILatticeBackupColdRestoreService coldRestore)
+    ILatticeBackupColdRestoreService coldRestore,
+    ILatticeBackupHealthService health,
+    ILatticeBackupHealthStore healthStore,
+    ILatticeBackupCatalogRebuildService catalogRebuild,
+    ILatticeBackupCatalogScrubService catalogScrub)
 {
     /// <summary>The phases a full or incremental capture reports.</summary>
     internal static readonly IReadOnlyList<string> CapturePhases =
@@ -43,6 +47,16 @@ internal sealed class BackupOperationService(
         BackupOperationPhases.Replaying,
         BackupOperationPhases.Cataloguing,
     ];
+
+    /// <summary>The phases a health check reports.</summary>
+    internal static readonly IReadOnlyList<string> HealthCheckPhases = [BackupOperationPhases.Verifying];
+
+    /// <summary>The phases a catalog rebuild reports.</summary>
+    internal static readonly IReadOnlyList<string> CatalogRebuildPhases = [BackupOperationPhases.RebuildingCatalog];
+
+    /// <summary>The phases a catalog scrub reports; a scrub that does not prune never enters the second.</summary>
+    internal static readonly IReadOnlyList<string> CatalogScrubPhases =
+        [BackupOperationPhases.ScrubbingCatalog, BackupOperationPhases.PruningOrphans];
 
     /// <summary>The shared runner, for status, list and cancel.</summary>
     internal LatticeOperationRunner Runner => runner;
@@ -86,6 +100,38 @@ internal sealed class BackupOperationService(
             Start(tenantId, operationId, BackupOperationKinds.ColdRestore, scopes, ColdRestorePhases),
             (_, ct) => coldRestore.ColdRestoreAsync(request, ct),
             static r => LatticeOperationCompletion.Succeeded(r.BackupId, BackupOperationResults.ToResultMap(r)));
+
+    /// <summary>
+    /// Starts a health check: verifies the backup against the sink and persists the
+    /// fresh report as its latest health state, exactly as the blocking verb does.
+    /// </summary>
+    internal Task<LatticeOperationLaunch<BackupHealthReport>> StartHealthCheckAsync(
+        string tenantId, string operationId, string backupId, IReadOnlyList<BackupScopeSelector> scopes) =>
+        runner.StartAsync(
+            Start(tenantId, operationId, BackupOperationKinds.HealthCheck, scopes, HealthCheckPhases),
+            async (_, ct) =>
+            {
+                var report = await health.VerifyAsync(backupId, ct).ConfigureAwait(false);
+                await healthStore.SetReportAsync(report, ct).ConfigureAwait(false);
+                return report;
+            },
+            static r => LatticeOperationCompletion.Succeeded(r.BackupId, BackupOperationResults.ToResultMap(r)));
+
+    /// <summary>Starts a catalog rebuild from the sink.</summary>
+    internal Task<LatticeOperationLaunch<BackupCatalogRebuildReport>> StartCatalogRebuildAsync(
+        string tenantId, string operationId, IReadOnlyList<BackupScopeSelector> scopes) =>
+        runner.StartAsync(
+            Start(tenantId, operationId, BackupOperationKinds.CatalogRebuild, scopes, CatalogRebuildPhases),
+            (_, ct) => catalogRebuild.RebuildFromSinkAsync(ct),
+            static r => LatticeOperationCompletion.Succeeded(null, BackupOperationResults.ToResultMap(r)));
+
+    /// <summary>Starts a catalog scrub against the sink, pruning orphans when asked.</summary>
+    internal Task<LatticeOperationLaunch<BackupCatalogScrubReport>> StartCatalogScrubAsync(
+        string tenantId, string operationId, bool pruneOrphans, IReadOnlyList<BackupScopeSelector> scopes) =>
+        runner.StartAsync(
+            Start(tenantId, operationId, BackupOperationKinds.CatalogScrub, scopes, CatalogScrubPhases),
+            (_, ct) => catalogScrub.ScrubAsync(pruneOrphans, ct),
+            static r => LatticeOperationCompletion.Succeeded(null, BackupOperationResults.ToResultMap(r)));
 
     private static LatticeOperationStart Start(
         string tenantId,
