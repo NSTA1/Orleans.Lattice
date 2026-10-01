@@ -100,3 +100,31 @@
   min-height: 2.75rem;
   text-decoration: none;
 }
+
+/* Why the caller holds no role in an app, and how to get one (issue #4150). */
+.lt-app-holding {
+  max-width: 42rem;
+  margin-block: var(--lt-space-4) 0;
+  padding: var(--lt-space-3) var(--lt-space-4);
+  border: 1px solid var(--lt-op-state-drift);
+  border-radius: var(--lt-radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-app-holding p {
+  margin: 0 0 var(--lt-space-2);
+}
+
+.lt-app-holding__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  align-items: center;
+}
+
+.lt-app-holding__actions > .lt-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  text-decoration: none;
+}

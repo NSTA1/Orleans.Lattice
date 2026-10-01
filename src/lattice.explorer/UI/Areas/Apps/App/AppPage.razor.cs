@@ -42,9 +42,13 @@ public partial class AppPage : IDisposable
     private AppPageLoad? _load;
     private (string? Tenant, string Slug, string Tab)? _loadedFor;
     private bool _settling;
+    private AppsCallerGroups _caller = AppsCallerGroups.Unknown;
 
     [Inject]
     internal AppPageLoader Loader { get; set; } = default!;
+
+    [Inject]
+    internal AppsMembership Membership { get; set; } = default!;
 
     [Inject]
     internal AppsAccess Access { get; set; } = default!;
@@ -155,6 +159,16 @@ public partial class AppPage : IDisposable
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
 
+    /// <summary>
+    /// Why an <c>AppInstall</c> holder who holds no role in the app cannot open it, read from its
+    /// recorded bindings and the caller's groups alone; <see langword="null"/> for a role holder,
+    /// or for an app that declares no role.
+    /// </summary>
+    private AppRoleHoldingAssessment? Holding(AppPageModel model) =>
+        model.CallerRoleNames.IsDefaultOrEmpty && model.Admin is { Roles.IsDefaultOrEmpty: false } admin
+            ? AppRoleHoldingAssessment.Assess(admin, _caller)
+            : null;
+
     private void SelectSection(string section)
     {
         if (!string.IsNullOrEmpty(Slug))
@@ -254,6 +268,20 @@ public partial class AppPage : IDisposable
         if (loading.IsCancellationRequested)
         {
             return;
+        }
+
+        // An AppInstall holder who holds no role is told why from their own groups (issue #4150),
+        // read on every load so that "Check again" after joining a group sees the change.
+        if (load.Model is { CallerRoleNames.IsDefaultOrEmpty: true, Admin: not null })
+        {
+            try
+            {
+                _caller = await Membership.ReadAsync(loading);
+            }
+            catch (OperationCanceledException) when (loading.IsCancellationRequested)
+            {
+                return;
+            }
         }
 
         _load = load;

@@ -61,6 +61,7 @@ else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && Is
             </Actions>
         </LtEmptyState>
     </div>
+    @HoldingNotice(enabled, checkAgain: false)
 }
 else if (_load.Model is not { } model || !IsSectionAddress || !AppPageTabs.IsOffered(model, Tab))
 {
@@ -183,6 +184,22 @@ else
             <p class="lt-app-actions">
                 <a class="lt-btn" href="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Open))">Open @model.DisplayName</a>
             </p>
+        }
+        else
+        {
+            @HoldingNotice(model)
+        }
+    </text>;
+
+    private RenderFragment HoldingNotice(AppPageModel model, bool checkAgain = true) => @<text>
+        @if (Holding(model) is { } holding)
+        {
+            <CascadingValue Value="holding">
+                <AppRoleHoldingNotice AppName="@model.DisplayName"
+                                      Enabled="@(model.State == AppLifecycleState.Enabled)"
+                                      RebindHref="@Href(AppPageAddresses.Reconsent(Address.Tenant, model.SourceKey, model.Slug))"
+                                      OnCheckAgain="@(checkAgain ? EventCallback.Factory.Create(this, RetryAsync) : default)" />
+            </CascadingValue>
         }
     </text>;
 

@@ -212,6 +212,20 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     }
 
     /// <summary>
+    /// Removes <paramref name="memberId"/> from <paramref name="groupId"/> if it is a member,
+    /// so a journey that joins it starts from the same state however often the world has run it.
+    /// </summary>
+    /// <param name="groupId">The group id.</param>
+    /// <param name="memberId">The member id.</param>
+    public async Task RemoveMemberAsync(string groupId, string memberId)
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Head.Services.GetRequiredService<ILatticeMembershipDirectory>().RemoveMemberAsync(groupId, memberId);
+        }
+    }
+
+    /// <summary>
     /// The region this world serves: its cluster id. A tenant with residency is
     /// served here only while its status in this region is Online.
     /// </summary>

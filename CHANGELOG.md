@@ -108,6 +108,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Explorer - An app's installer is told when they will hold no role in it.** Binding roles, the install's confirmation, Your apps and the app's page say whether you are in each bound group, and offer to join it or re-bind instead of a missing Open. ([#4150](https://github.com/NSTA1/Orleans.Lattice/issues/4150)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. On a host with an access gate, a resize swap driven by its own phase timer runs as system origin. It is no longer refused as an anonymous alias change on every tick. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
 
 - **Schema - Remediation status answers while a run is in progress.** Reading a tree's remediation or migration status no longer waits for a running remediate or migrate to finish, so the Explorer's Schema operation page shows the live phase and count instead of timing out. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)

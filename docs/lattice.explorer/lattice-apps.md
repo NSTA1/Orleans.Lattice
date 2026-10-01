@@ -108,6 +108,27 @@ user's own identity.
 One definition serves every surface, so Your apps, the app frame and the MCP tools
 cannot disagree about who holds a role.
 
+Because a role is held only through a group, installing an app does not by itself let
+you open it, and the Apps area says so wherever it matters:
+
+- **While binding roles** (at install, and when changing role bindings), each role says
+  whether you are in the group it is bound to. When you are not, it offers
+  **Add me to {group}**, a link to that group in Access, or binding the role to a group
+  you are in, and warns when the bindings would leave you no role at all. The warning is
+  advisory and never blocks.
+- **After install**, the confirmation names the tenant the app was installed into, shows
+  its address there (`/t/{tenant}/apps/{slug}`), and says whether you can open it.
+- **On Your apps and on the app's own page**, an installed app you hold no role in says
+  so, with its bound groups and the way to fix it - join a bound group, or bind a role to
+  a group you are in - where **Open** would otherwise just be missing. **Manage** stays.
+- Your apps also points at an install this session made in another tenant, with its
+  tenant-rooted address.
+
+Your group membership is read through the auth facade under your own credential. When it
+cannot be read - you may not read membership, or you signed in with a token, whose shown
+name is not your subject id - it is reported as unknown rather than guessed. None of
+this changes who holds a role.
+
 App-supplied text (names, descriptions, categories) is shown as text only, and icons
 only through `<img>`. An app can never inject markup into the Explorer.
 

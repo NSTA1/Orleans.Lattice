@@ -145,9 +145,10 @@
         case AppInstallStage.Rebound:
             <div class="lt-apps-status" role="status">
                 <p>The role bindings of @_flow.DisplayName v@(_flow.Installed?.Version) are changed@(_flow.Installed?.State == AppLifecycleState.Enabled ? " and its access rules replaced" : string.Empty).</p>
+                @HoldingOutcome(_flow.Installed?.State == AppLifecycleState.Enabled)
                 <div class="lt-apps-actions">
                     <LtButton Variant="LtButtonVariant.Quiet" OnClick="_flow.Back">Back to the review</LtButton>
-                    <a class="lt-apps-link" href="@Href(AppsRoutes.App(Address.Tenant, _flow.Key.Slug))">Go to the app</a>
+                    <a class="lt-apps-link" href="@AppHref" data-lt-app-link="true">Go to the app</a>
                 </div>
             </div>
             break;
@@ -162,13 +163,15 @@
 
         case AppInstallStage.Installed:
             <div class="lt-apps-status" role="status">
-                <p>@_flow.DisplayName v@(_flow.Descriptor!.Version) is @(_flow.Mode == AppInstallMode.Reconsent ? "re-consented" : "installed") and not enabled yet.</p>
+                <p>@_flow.DisplayName v@(_flow.Descriptor!.Version) is @(_flow.Mode == AppInstallMode.Reconsent ? "re-consented" : "installed")@InstallTenantPhrase and not enabled yet.</p>
+                <p>Its page is <code class="lt-shell-mono" data-lt-app-address="true">@AppAddressText</code>.</p>
+                @HoldingOutcome(enabled: false)
                 <div class="lt-apps-actions">
                     @if (Access.Current?.Control.CanEnable == true)
                     {
                         <LtButton OnClick="() => _flow.EnableAsync()">Enable now</LtButton>
                     }
-                    <a class="lt-apps-link" href="@Href(AppsRoutes.App(Address.Tenant, _flow.Key.Slug))">Go to the app</a>
+                    <a class="lt-apps-link" href="@AppHref" data-lt-app-link="true">Go to the app</a>
                     <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
                 </div>
             </div>
@@ -176,12 +179,39 @@
 
         case AppInstallStage.Enabled:
             <div class="lt-apps-status" role="status">
-                <p>@_flow.DisplayName v@(_flow.Descriptor!.Version) is enabled.</p>
+                <p>@_flow.DisplayName v@(_flow.Descriptor!.Version) is enabled@(InstallTenantPhrase).</p>
+                <p>Its page is <code class="lt-shell-mono" data-lt-app-address="true">@AppAddressText</code>.</p>
+                @HoldingOutcome(enabled: true)
                 <div class="lt-apps-actions">
-                    <a class="lt-apps-link" href="@Href(AppsRoutes.App(Address.Tenant, _flow.Key.Slug))">Go to the app</a>
+                    <a class="lt-apps-link" href="@AppHref" data-lt-app-link="true">Go to the app</a>
                     <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
                 </div>
             </div>
             break;
     }
 </CascadingValue>
+
+@code {
+    private RenderFragment HoldingOutcome(bool enabled) => __builder =>
+    {
+        if (_flow is not { } flow)
+        {
+            return;
+        }
+
+        var holding = AppRoleHoldingAssessment.Assess(flow.SettledRoleGroups, _caller);
+        if (holding.HoldsAny == true)
+        {
+            var roles = holding.HeldRoles;
+            var groups = holding.MemberGroups;
+            var reason = $"you are in {string.Join(" and ", groups)}, the group{(groups.Count == 1 ? string.Empty : "s")} its {string.Join(" and ", roles)} role{(roles.Count == 1 ? " is" : "s are")} bound to.";
+            <p data-lt-can-open="yes">@(enabled ? "You can open it: " + reason : "You will be able to open it once it is enabled: " + reason)</p>
+        }
+        else
+        {
+            <CascadingValue Value="holding">
+                <AppRoleHoldingNotice AppName="@flow.DisplayName" Enabled="enabled" RebindHref="@RebindHref" />
+            </CascadingValue>
+        }
+    };
+}
