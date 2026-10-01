@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -108,21 +109,13 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
         }
     }
 
-    private static async Task<bool> WaitFor(Func<bool> condition, int timeoutMs = 10000)
-    {
-        var start = Environment.TickCount64;
-        while (Environment.TickCount64 - start < timeoutMs)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20);
-        }
-
-        return condition();
-    }
+    /// <summary>
+    /// Budget and cadence the private barrier this fixture used to carry ran at,
+    /// preserved verbatim so the pump is given the same time to tick after the
+    /// move onto <see cref="TestPoll"/>.
+    /// </summary>
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Cadence = TimeSpan.FromMilliseconds(20);
 
     // ---- Poll-cadence clamp ----------------------------------------------
 
@@ -139,7 +132,8 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
 
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
-        Assert.That(await WaitFor(() => clock.RequestedDueTimes.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => clock.RequestedDueTimes.Count > 0,
+            "the pump must schedule its first poll", Budget, Cadence);
         await cts.CancelAsync();
         await service.StopAsync(default);
 
@@ -159,7 +153,8 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
 
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
-        Assert.That(await WaitFor(() => clock.RequestedDueTimes.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => clock.RequestedDueTimes.Count > 0,
+            "the pump must schedule its first poll", Budget, Cadence);
         await cts.CancelAsync();
         await service.StopAsync(default);
 
@@ -177,7 +172,8 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
 
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
-        Assert.That(await WaitFor(() => clock.RequestedDueTimes.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => clock.RequestedDueTimes.Count > 0,
+            "the pump must schedule its first poll", Budget, Cadence);
         await cts.CancelAsync();
         await service.StopAsync(default);
 
@@ -200,7 +196,8 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
 
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
-        Assert.That(await WaitFor(() => clock.RequestedDueTimes.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => clock.RequestedDueTimes.Count > 0,
+            "the pump must schedule its first poll", Budget, Cadence);
 
         provider.Dispose();
         clock.Advance(TimeSpan.FromSeconds(2));
@@ -236,18 +233,19 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
 
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
-        Assert.That(await WaitFor(() => pumpClock.RequestedDueTimes.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => pumpClock.RequestedDueTimes.Count > 0,
+            "the pump must schedule its first poll", Budget, Cadence);
 
         providerClock.Armed = true;
         pumpClock.Advance(TimeSpan.FromSeconds(2));
 
-        Assert.That(await WaitFor(() => logger.Warnings.Count > 0), Is.True,
-            "a failed training pass must be logged");
+        await TestPoll.UntilAsync(() => logger.Warnings.Count > 0,
+            "a failed training pass must be logged", Budget, Cadence);
         var warning = logger.Warnings[0];
 
         // The pump must still be running and must schedule the next poll.
-        Assert.That(await WaitFor(() => pumpClock.RequestedDueTimes.Count > 1), Is.True,
-            "the pump must schedule another poll after absorbing the fault");
+        await TestPoll.UntilAsync(() => pumpClock.RequestedDueTimes.Count > 1,
+            "the pump must schedule another poll after absorbing the fault", Budget, Cadence);
 
         Assert.Multiple(() =>
         {
@@ -276,15 +274,22 @@ public sealed class AutoSharedDictionaryTrainingServicePumpTests
 
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
-        Assert.That(await WaitFor(() => pumpClock.RequestedDueTimes.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => pumpClock.RequestedDueTimes.Count > 0,
+            "the pump must schedule its first poll", Budget, Cadence);
 
         providerClock.Armed = true;
         pumpClock.Advance(TimeSpan.FromSeconds(2));
-        Assert.That(await WaitFor(() => logger.Warnings.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => logger.Warnings.Count > 0,
+            "the armed fault must be logged before the recovery tick", Budget, Cadence);
         Assert.That(provider.CurrentDictionaryId, Is.EqualTo(0u));
 
         providerClock.Armed = false;
-        for (var i = 0; i < 5 && provider.CurrentDictionaryId == 0u; i++)
+
+        // Keep ticking the pump until it publishes. The bound is a monotonic
+        // budget rather than a fixed five iterations, so a loaded agent cannot
+        // exhaust the attempts before the pump has had a chance to train.
+        var recoveryDeadline = Environment.TickCount64 + (long)Budget.TotalMilliseconds;
+        while (provider.CurrentDictionaryId == 0u && Environment.TickCount64 < recoveryDeadline)
         {
             pumpClock.Advance(TimeSpan.FromSeconds(2));
             await Task.Delay(50);

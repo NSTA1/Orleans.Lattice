@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
+using Orleans.Lattice.Testing;
 using Orleans.Runtime;
 using static Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host.LockAttributionTestSupport;
 
@@ -31,6 +32,14 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
 {
     private const string LeafState = RepoContextGrainStorageLockRetryPolicy.LeafStateNamePrefix;
     private const string ShardRootState = RepoContextGrainStorageLockRetryPolicy.ShardRootStateNamePrefix;
+
+    /// <summary>
+    /// Budget and cadence the private barrier this fixture used to carry ran at,
+    /// preserved verbatim so convoy timing is unchanged by the move onto
+    /// <see cref="TestPoll"/>.
+    /// </summary>
+    private static readonly TimeSpan ConvoyTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ConvoyCadence = TimeSpan.FromMilliseconds(5);
 
     /// <summary>
     /// The shipped prefix set with the backoff taken out, so the fixtures exercise the
@@ -140,7 +149,11 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
             .Select(i => storage.WriteStateAsync(LeafState, Grain($"k{i}"), new GrainState<string>()))
             .ToArray();
 
-        await WaitUntilAsync(() => meter.Convoy.WritesInFlight == Permits && gate.Queued == 24 - Permits);
+        await TestPoll.UntilAsync(
+            () => meter.Convoy.WritesInFlight == Permits && gate.Queued == 24 - Permits,
+            $"the convoy must settle at {Permits} writes in flight with {24 - Permits} queued behind them",
+            ConvoyTimeout,
+            ConvoyCadence);
         var peakWhileHeld = meter.Convoy.PeakWritesInFlight;
         release.Release(24);
         await Task.WhenAll(writers).WaitAsync(TimeSpan.FromSeconds(30));
@@ -239,7 +252,11 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
             .Select(i => storage.WriteStateAsync(LeafState, Grain($"k{i}"), new GrainState<string>()))
             .ToArray();
 
-        await WaitUntilAsync(() => meter.Convoy.WritesInFlight == 12);
+        await TestPoll.UntilAsync(
+            () => meter.Convoy.WritesInFlight == 12,
+            "an unbounded meter must let all twelve writers reach flight at once",
+            ConvoyTimeout,
+            ConvoyCadence);
         release.Release(12);
         await Task.WhenAll(writers).WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -254,19 +271,5 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
                         RepoContextGrainStorageWriteGateOutcome.Unbounded.TagValue())),
                 Is.EqualTo(12d));
         });
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                Assert.Fail("The decorator did not reach the expected state within the timeout.");
-            }
-
-            await Task.Delay(5);
-        }
     }
 }

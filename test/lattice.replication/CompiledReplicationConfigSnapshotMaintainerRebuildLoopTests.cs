@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -32,21 +33,13 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerRebuildLoopTests
         return entry;
     }
 
-    private static async Task<bool> WaitFor(Func<bool> condition, int timeoutMs = 10000)
-    {
-        var start = Environment.TickCount64;
-        while (Environment.TickCount64 - start < timeoutMs)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20);
-        }
-
-        return condition();
-    }
+    /// <summary>
+    /// Budget and cadence the private barrier this fixture used to carry ran at,
+    /// preserved verbatim so the rebuild loop is given the same time to converge
+    /// after the move onto <see cref="TestPoll"/>.
+    /// </summary>
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Cadence = TimeSpan.FromMilliseconds(20);
 
     [Test]
     public async Task A_burst_during_an_in_flight_rebuild_collapses_to_one_follow_up()
@@ -60,7 +53,7 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerRebuildLoopTests
             store, NullLogger<CompiledReplicationConfigSnapshotMaintainer>.Instance);
 
         await maintainer.OnMutationAsync(ConfigMutation, CancellationToken.None);
-        Assert.That(await WaitFor(() => store.Calls >= 1), Is.True, "the first rebuild must start");
+        await TestPoll.UntilAsync(() => store.Calls >= 1, "the first rebuild must start", Budget, Cadence);
 
         store.Entries["orders"] = Enabled();
         for (var i = 0; i < 3; i++)
@@ -72,8 +65,8 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerRebuildLoopTests
 
         store.Release();
 
-        Assert.That(await WaitFor(() => maintainer.CurrentEpoch >= 2), Is.True,
-            "the queued follow-up must run once the in-flight rebuild finishes");
+        await TestPoll.UntilAsync(() => maintainer.CurrentEpoch >= 2,
+            "the queued follow-up must run once the in-flight rebuild finishes", Budget, Cadence);
         // Let any (incorrect) extra follow-up settle before counting.
         await Task.Delay(200);
         Assert.Multiple(() =>
@@ -96,16 +89,17 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerRebuildLoopTests
             store, NullLogger<CompiledReplicationConfigSnapshotMaintainer>.Instance);
 
         await maintainer.OnMutationAsync(ConfigMutation, CancellationToken.None);
-        Assert.That(await WaitFor(() => store.Calls >= 1), Is.True);
+        await TestPoll.UntilAsync(() => store.Calls >= 1, "the first rebuild must start", Budget, Cadence);
         await maintainer.OnMutationAsync(ConfigMutation, CancellationToken.None);
         store.Release();
-        Assert.That(await WaitFor(() => maintainer.CurrentEpoch >= 2), Is.True);
+        await TestPoll.UntilAsync(() => maintainer.CurrentEpoch >= 2,
+            "the coalesced follow-up must drain before the loop can go idle", Budget, Cadence);
 
         store.Entries["late"] = Enabled();
         await maintainer.OnMutationAsync(ConfigMutation, CancellationToken.None);
 
-        Assert.That(await WaitFor(() => maintainer.CurrentEpoch >= 3), Is.True,
-            "a mutation after the loop went idle must schedule a fresh rebuild");
+        await TestPoll.UntilAsync(() => maintainer.CurrentEpoch >= 3,
+            "a mutation after the loop went idle must schedule a fresh rebuild", Budget, Cadence);
         Assert.That(maintainer.Current.TryGetTree("late", out _), Is.True);
     }
 
@@ -124,8 +118,8 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerRebuildLoopTests
         store.FaultOnCall = 2;
         await maintainer.OnMutationAsync(ConfigMutation, CancellationToken.None);
 
-        Assert.That(await WaitFor(() => logger.Warnings.Count > 0), Is.True,
-            "a failed background rescan must be logged");
+        await TestPoll.UntilAsync(() => logger.Warnings.Count > 0,
+            "a failed background rescan must be logged", Budget, Cadence);
         Assert.Multiple(() =>
         {
             Assert.That(logger.Warnings[0].Message, Does.Contain("previous snapshot remains in effect"));
@@ -147,14 +141,15 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerRebuildLoopTests
         var maintainer = new CompiledReplicationConfigSnapshotMaintainer(store, logger);
 
         maintainer.EnsureWarmStarted();
-        Assert.That(await WaitFor(() => logger.Warnings.Count > 0), Is.True);
+        await TestPoll.UntilAsync(() => logger.Warnings.Count > 0,
+            "the failed warm-up rescan must be logged", Budget, Cadence);
         Assert.That(maintainer.CurrentEpoch, Is.EqualTo(0), "the failed warm-up built nothing");
 
         store.Entries["orders"] = Enabled();
         await maintainer.OnMutationAsync(ConfigMutation, CancellationToken.None);
 
-        Assert.That(await WaitFor(() => maintainer.CurrentEpoch >= 1), Is.True,
-            "the maintainer must recover and rebuild on the next config mutation");
+        await TestPoll.UntilAsync(() => maintainer.CurrentEpoch >= 1,
+            "the maintainer must recover and rebuild on the next config mutation", Budget, Cadence);
         Assert.That(maintainer.Current.TryGetTree("orders", out _), Is.True);
     }
 
