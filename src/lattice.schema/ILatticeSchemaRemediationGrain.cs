@@ -1,3 +1,5 @@
+using Orleans.Concurrency;
+
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
@@ -63,6 +65,17 @@ internal interface ILatticeSchemaRemediationGrain : IGrainWithStringKey
     Task<LatticeSchemaRemediationReport> StartVersionMigrationAsync(
         uint schemaId, uint targetVersion, CancellationToken cancellationToken = default);
 
-    /// <summary>Reads the current or last-known remediation status for the tree.</summary>
+    /// <summary>
+    /// Reads the current or last-known remediation status for the tree.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so a status read never queues
+    /// behind a running <see cref="StartAsync"/> or
+    /// <see cref="StartVersionMigrationAsync"/> (issue #4123). It answers from an
+    /// immutable snapshot the coordinator publishes only after each durable state
+    /// write succeeds, so it never observes an in-memory transition that is still
+    /// awaiting its write, or one a failed write rolls back.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task<LatticeSchemaRemediationReport> GetStatusAsync();
 }
