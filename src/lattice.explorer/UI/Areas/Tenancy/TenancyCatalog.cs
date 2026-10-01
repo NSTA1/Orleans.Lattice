@@ -228,8 +228,9 @@ internal sealed class TenancyCatalog
     }
 
     /// <summary>
-    /// Whether <paramref name="tenantId"/> has residency set, or
-    /// <see langword="null"/> when its status cannot be read.
+    /// Whether <paramref name="tenantId"/> has residency set, as the tenancy engine
+    /// counts it - any region with a lifecycle status, even one that is Offline or
+    /// Removed - or <see langword="null"/> when its status cannot be read.
     /// </summary>
     /// <param name="tenantId">The tenant id.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
@@ -244,7 +245,7 @@ internal sealed class TenancyCatalog
         try
         {
             var status = await SelfService.GetTenantAsync(tenantId, cancellationToken).ConfigureAwait(true);
-            return status?.Regions is { } regions ? TenancyFormat.ResidentRegions(regions).Count > 0 : null;
+            return status?.Regions is { } regions ? TenancyFormat.HasResidency(regions) : null;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

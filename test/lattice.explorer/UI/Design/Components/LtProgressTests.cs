@@ -131,4 +131,48 @@ public sealed class LtProgressTests : ShellDesignTestContext
     {
         Assert.That(() => Render<LtProgress>(p => p.Add(x => x.Label, " ")), Throws.InvalidOperationException);
     }
+
+    [Test]
+    public void A_stepped_bar_reads_the_step_it_has_reached_and_never_a_percentage()
+    {
+        var cut = Render<LtProgress>(p => p
+            .Add(x => x.Label, "Residency change in us-east")
+            .Add(x => x.Phase, "Removing: Offline")
+            .Add(x => x.Value, 2)
+            .Add(x => x.Maximum, 3)
+            .Add(x => x.Stepped, true)
+            .Add(x => x.Detail, "Next: Removed."));
+
+        var bar = cut.Find("[role=progressbar]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Instance.StepText, Is.EqualTo("Step 2 of 3"));
+            Assert.That(cut.Find(".lt-progress__figure").TextContent, Is.EqualTo("Step 2 of 3"));
+            Assert.That(bar.GetAttribute("aria-valuemin"), Is.EqualTo("0"));
+            Assert.That(bar.GetAttribute("aria-valuemax"), Is.EqualTo("3"), "a stepped bar ranges over its steps, not 0 to 100");
+            Assert.That(bar.GetAttribute("aria-valuenow"), Is.EqualTo("2"));
+            Assert.That(bar.GetAttribute("aria-valuetext"), Is.EqualTo("Step 2 of 3, Removing: Offline, Next: Removed."));
+            Assert.That(cut.Find(".lt-progress").TextContent, Does.Not.Contain("%"), "no percentage is shown");
+            Assert.That(bar.GetAttribute("aria-valuetext"), Does.Not.Contain("%"));
+            Assert.That(cut.Find(".lt-progress__ticks").GetAttribute("style"), Is.EqualTo("--lt-progress-segments: 3"), "one segment per step");
+        });
+    }
+
+    [Test]
+    public void A_bar_that_is_not_stepped_has_no_step_text()
+    {
+        var cut = Render<LtProgress>(p => p.Add(x => x.Label, "Progress").Add(x => x.Value, 1).Add(x => x.Maximum, 3));
+
+        Assert.That(cut.Instance.StepText, Is.Null);
+    }
+
+    [Test]
+    public void A_bar_whose_host_announces_its_phase_has_no_live_region_of_its_own()
+    {
+        var cut = Render<LtProgress>(p => p.Add(x => x.Label, "Progress").Add(x => x.Phase, "Removing: Draining").Add(x => x.AnnouncePhase, false));
+
+        cut.Render(p => p.Add(x => x.Phase, "Removing: Offline"));
+
+        Assert.That(cut.FindAll("[aria-live]"), Is.Empty, "the host announces the change once, in its own words");
+    }
 }
