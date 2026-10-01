@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Grpc.Core;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Api.Schema.Grpc;
@@ -187,6 +188,7 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The terminal migration report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    [Obsolete("AdvanceAndMigrateAsync calls a blocking RPC, so a long remediation or migration is cut off by the call deadline. Use StartAdvanceAndMigrateAsync and poll GetSchemaOperationStatusAsync instead. AdvanceAndMigrateAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
     {
@@ -203,6 +205,7 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The terminal migration report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    [Obsolete("MigrateToTargetVersionAsync calls a blocking RPC, so a long remediation or migration is cut off by the call deadline. Use StartMigrationAsync and poll GetSchemaOperationStatusAsync instead. MigrateToTargetVersionAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
         string treeId, CancellationToken cancellationToken = default)
     {
@@ -237,6 +240,7 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <returns>The terminal remediation report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
+    [Obsolete("RemediateAsync calls a blocking RPC, so a long remediation or migration is cut off by the call deadline. Use StartRemediationAsync and poll GetSchemaOperationStatusAsync instead. RemediateAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeSchemaRemediationReport> RemediateAsync(
         string treeId,
         LatticeValueTransform transform,
@@ -321,6 +325,120 @@ public sealed class LatticeSchemaApiGrpcClient
         return response.Schemes;
     }
 
+    /// <summary>
+    /// Starts a tracked remediation of <paramref name="treeId"/> and returns as soon
+    /// as it is accepted; poll <see cref="GetSchemaOperationStatusAsync"/> for its
+    /// phase, values processed and outcome.
+    /// </summary>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
+    /// <param name="transform">The per-value remediation transform.</param>
+    /// <param name="targetPolicy">The policy the transformed values must satisfy. Must not be <c>null</c>.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> has the server generate one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
+    public Task<LatticeOperationHandle> StartRemediationAsync(
+        string treeId,
+        LatticeValueTransform transform,
+        LatticeSchemaPolicy targetPolicy,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(targetPolicy);
+        return UnaryAsync(
+            _methods.StartRemediation,
+            new RemediateRequest { TreeId = treeId, Transform = transform, TargetPolicy = targetPolicy, OperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Starts a tracked eager migration of <paramref name="treeId"/> to its current
+    /// target version and returns as soon as it is accepted.
+    /// </summary>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> has the server generate one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<LatticeOperationHandle> StartMigrationAsync(
+        string treeId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.StartMigration,
+            new SchemaMigrationStartRequest { TreeId = treeId, OperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Starts a tracked advance of <paramref name="treeId"/>'s target version to
+    /// <paramref name="newTargetVersion"/>, then an eager migration to it, and returns
+    /// as soon as it is accepted.
+    /// </summary>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
+    /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> has the server generate one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<LatticeOperationHandle> StartAdvanceAndMigrateAsync(
+        string treeId, uint newTargetVersion, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.StartAdvanceAndMigrate,
+            new AdvanceVersionRequest { TreeId = treeId, NewTargetVersion = newTargetVersion, OperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Reads a tracked schema operation's status.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public async Task<LatticeOperationStatus?> GetSchemaOperationStatusAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.GetSchemaOperationStatus,
+            new SchemaOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    /// <summary>Lists one page of the caller's tracked schema operations, newest-first.</summary>
+    /// <param name="request">The page request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The page.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    public Task<LatticeOperationPage> ListSchemaOperationsAsync(
+        LatticeOperationListRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.ListSchemaOperations, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Requests cancellation of a tracked schema operation. A remediation that has
+    /// reached cutover is not cancelled and runs on to completion.
+    /// </summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status after the request, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public async Task<LatticeOperationStatus?> CancelSchemaOperationAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.CancelSchemaOperation,
+            new SchemaOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

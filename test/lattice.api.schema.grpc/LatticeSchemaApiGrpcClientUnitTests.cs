@@ -2,6 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Schema;
 using Orleans.Serialization;
 
+// The deprecated blocking verbs (LATTICE0002) are exercised on purpose until their removal.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Schema.Grpc.Tests;
 
 /// <summary>

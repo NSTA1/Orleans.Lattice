@@ -68,6 +68,7 @@ internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
         => _client.AdvanceTargetVersionAsync(treeId, newTargetVersion, cancellationToken);
 
+#pragma warning disable LATTICE0002 // The deprecated facade members forward to the deprecated client verbs until both are removed.
     /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
@@ -89,6 +90,7 @@ internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl
         LatticeSchemaPolicy targetPolicy,
         CancellationToken cancellationToken = default)
         => _client.RemediateAsync(treeId, transform, targetPolicy, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(
