@@ -555,6 +555,23 @@ public partial class CrdtAccessorIntegrationTests
     }
 
     [Test]
+    public async Task Sequence_InsertAtAsync_by_a_second_replica_inserts_at_the_requested_index()
+    {
+        // The index contract must hold whichever replica authored the existing
+        // elements: a head insert by "a" after "b" wrote the list lands at the
+        // head, and a middle insert lands at its index, not after a sibling.
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "b", "x");
+        await seq.InsertAtAsync(1, "b", "z");
+
+        await seq.InsertAtAsync(0, "a", "head");
+        await seq.InsertAtAsync(2, "a", "y");
+
+        Assert.That(await seq.ToListAsync(), Is.EqualTo(new[] { "head", "x", "y", "z" }));
+    }
+
+    [Test]
     public async Task Sequence_RemoveAtAsync_drops_visible_element()
     {
         var tree = await CreateTreeAsync();

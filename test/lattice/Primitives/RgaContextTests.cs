@@ -42,8 +42,10 @@ public class RgaContextTests
         rga.InsertAfter(a1, "r1", Bytes(2));
         rga.InsertAfter(Rga.Root, "r2", Bytes(3));
 
+        // Counters are minted as a Lamport clock (one above the highest counter
+        // of any replica), so r2's first insert is counter 3, not 1.
         Assert.That(rga.Context["r1"], Is.EqualTo(2));
-        Assert.That(rga.Context["r2"], Is.EqualTo(1));
+        Assert.That(rga.Context["r2"], Is.EqualTo(3));
     }
 
     [Test]

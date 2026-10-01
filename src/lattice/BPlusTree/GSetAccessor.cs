@@ -80,6 +80,7 @@ public readonly record struct GSetAccessor
     public Task AddAsync(byte[] element, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentNullException.ThrowIfNull(element);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(AddDelta(element), cancellationToken, maxAttempts, ttl);
     }

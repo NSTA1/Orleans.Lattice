@@ -89,6 +89,7 @@ public readonly record struct RwSetAccessor
     {
         ArgumentNullException.ThrowIfNull(element);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(set => AddDelta(set, element, replicaId), cancellationToken, maxAttempts, ttl);
     }

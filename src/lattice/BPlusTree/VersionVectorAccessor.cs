@@ -67,6 +67,7 @@ public readonly record struct VersionVectorAccessor
     public Task TickAsync(string replicaId, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(v => TickDelta(v, replicaId), cancellationToken, maxAttempts, ttl);
     }

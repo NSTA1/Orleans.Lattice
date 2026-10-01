@@ -22,10 +22,22 @@ using System.Runtime.InteropServices;
 /// reused across reads; every mutation path invalidates the cache so a
 /// subsequent read rebuilds it lazily. The cache is transient (never
 /// serialized) and is rebuilt on first read after deserialization.
-/// <see cref="NextCounter"/> reads the per-replica highest counter in
-/// O(1) from the serialized <see cref="Context"/> dot-context cache
-/// instead of rescanning every node, so a bulk build is O(N) rather
-/// than O(N^2).
+/// <see cref="NextCounter"/> reads the highest counter observed for any
+/// replica from the serialized <see cref="Context"/> dot-context cache
+/// (one entry per replica) instead of rescanning every node, so a bulk
+/// build is O(N) rather than O(N^2).
+/// </para>
+/// <para>
+/// The minted counter is a Lamport clock: one greater than the highest
+/// counter observed for <em>any</em> replica, not merely the authoring
+/// replica's own. That is what makes a local insert land where it was
+/// asked to: siblings sort by descending <c>(Counter, ReplicaId)</c>, so
+/// an insert whose counter exceeds every node it has observed sorts ahead
+/// of every existing sibling and appears immediately after its parent.
+/// A per-replica counter would let an earlier sibling authored by another
+/// replica with an equal or higher counter (or an equal counter and a
+/// greater replica id) sort first, placing a sequential insert after that
+/// sibling's whole subtree instead of at the requested position.
 /// </para>
 /// <para>
 /// Values are opaque <see cref="byte"/> arrays; the typed
@@ -57,8 +69,8 @@ public sealed class Rga : ICrdt<Rga>
     /// <summary>
     /// Dot context: per-replica highest counter ever minted or observed
     /// for that replica across every node in the sequence (live or
-    /// tombstoned). Lets <see cref="NextCounter"/> mint a fresh dot in
-    /// O(1) instead of rescanning every node on every
+    /// tombstoned). Lets <see cref="NextCounter"/> mint a fresh dot from
+    /// one entry per replica instead of rescanning every node on every
     /// <see cref="InsertAfter(OrSetDot, string, byte[])"/>, so a bulk
     /// build is O(N) rather than O(N^2).
     /// <para>
@@ -152,8 +164,11 @@ public sealed class Rga : ICrdt<Rga>
     /// minting a fresh dot
     /// <c>(<paramref name="replicaId"/>, NextCounter)</c> where
     /// <c>NextCounter</c> is one greater than the highest counter
-    /// observed for <paramref name="replicaId"/> across every node
-    /// in the sequence. Returns the new node's dot.
+    /// observed for any replica across every node in the sequence (a
+    /// Lamport clock). The new node therefore sorts ahead of every
+    /// sibling already under <paramref name="parentDot"/> and is
+    /// materialised immediately after its parent, whichever replica
+    /// authored those siblings. Returns the new node's dot.
     /// </summary>
     /// <param name="parentDot">The parent dot to link under, or <see cref="Root"/> for a top-level insert.</param>
     /// <param name="replicaId">The replica authoring the insert. Must be non-empty.</param>
@@ -167,7 +182,7 @@ public sealed class Rga : ICrdt<Rga>
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentNullException.ThrowIfNull(value);
 
-        var counter = NextCounter(replicaId);
+        var counter = NextCounter();
         var node = new RgaNode
         {
             ReplicaId = replicaId,
@@ -178,8 +193,8 @@ public sealed class Rga : ICrdt<Rga>
         };
         Nodes.Add(node);
 
-        // counter is strictly greater than any prior counter for this
-        // replica, so record it as the new per-replica maximum.
+        // counter is strictly greater than every counter observed for any
+        // replica, so it is also the new per-replica maximum for this one.
         Context[replicaId] = counter;
         // A fresh insert always adds one live node; keep the counter O(1).
         if (_liveCount is { } live) _liveCount = live + 1;
@@ -695,10 +710,21 @@ public sealed class Rga : ICrdt<Rga>
         return copy;
     }
 
-    private long NextCounter(string replicaId)
+    /// <summary>
+    /// Mints the next counter as a Lamport clock: one greater than the highest
+    /// counter observed for any replica. See the type remarks for why a
+    /// per-replica counter mis-orders sequential inserts.
+    /// </summary>
+    private long NextCounter()
     {
         EnsureContextRebuilt();
-        return (Context.TryGetValue(replicaId, out var current) ? current : 0) + 1;
+        long highest = 0;
+        foreach (var counter in Context.Values)
+        {
+            if (counter > highest) highest = counter;
+        }
+
+        return highest + 1;
     }
 
     /// <summary>

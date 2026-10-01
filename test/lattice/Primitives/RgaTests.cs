@@ -249,15 +249,18 @@ public class RgaTests
     }
 
     [Test]
-    public void NextCounter_increments_per_replica_independently()
+    public void NextCounter_is_one_above_the_highest_counter_of_any_replica()
     {
+        // A Lamport clock, not a per-replica sequence: each insert's counter
+        // exceeds every counter the sequence has observed, whichever replica
+        // authored it, so the insert sorts ahead of every existing sibling.
         var r = new Rga();
         var d1 = r.InsertAfter(Rga.Root, "r1", B("a"));
         var d2 = r.InsertAfter(Rga.Root, "r2", B("b"));
         var d3 = r.InsertAfter(Rga.Root, "r1", B("c"));
         Assert.That(d1.Counter, Is.EqualTo(1));
-        Assert.That(d2.Counter, Is.EqualTo(1));
-        Assert.That(d3.Counter, Is.EqualTo(2));
+        Assert.That(d2.Counter, Is.EqualTo(2));
+        Assert.That(d3.Counter, Is.EqualTo(3));
     }
 
     [Test]

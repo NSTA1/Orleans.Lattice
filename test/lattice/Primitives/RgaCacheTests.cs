@@ -28,13 +28,13 @@ public class RgaCacheTests
     {
         var r = new Rga();
         r.InsertAfter(Rga.Root, "r1", B("a")); // r1 -> 1
-        r.InsertAfter(Rga.Root, "r2", B("b")); // r2 -> 1
-        r.InsertAfter(Rga.Root, "r1", B("c")); // r1 -> 2
+        r.InsertAfter(Rga.Root, "r2", B("b")); // r2 -> 2 (one above every observed counter)
+        r.InsertAfter(Rga.Root, "r1", B("c")); // r1 -> 3
 
         Assert.Multiple(() =>
         {
-            Assert.That(r.Context["r1"], Is.EqualTo(2));
-            Assert.That(r.Context["r2"], Is.EqualTo(1));
+            Assert.That(r.Context["r1"], Is.EqualTo(3));
+            Assert.That(r.Context["r2"], Is.EqualTo(2));
         });
     }
 
@@ -110,9 +110,10 @@ public class RgaCacheTests
             Assert.That(r.Context["r2"], Is.EqualTo(6));
         });
 
-        // A subsequent local insert on r1 respects the folded maximum.
+        // A subsequent local insert respects every folded maximum: it mints
+        // one above the highest counter observed for any replica (r2's 6).
         var dot = r.InsertAfter(Rga.Root, "r1", B("b"));
-        Assert.That(dot.Counter, Is.EqualTo(5));
+        Assert.That(dot.Counter, Is.EqualTo(7));
     }
 
     [Test]
