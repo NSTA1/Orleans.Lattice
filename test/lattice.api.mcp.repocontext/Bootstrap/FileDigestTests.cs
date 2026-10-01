@@ -146,4 +146,55 @@ public sealed class FileDigestTests
         Assert.That(
             FileDigest.Compute(source.AsSpan(start, length)),
             Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(source.Substring(start, length)))));
-    }}
+    }
+
+    [Test]
+    public void ComputeUtf8_writes_the_ascii_bytes_of_the_modern_digest(
+        [Values("", "abc", "the quick brown fox")] string text)
+    {
+        var content = Encoding.UTF8.GetBytes(text);
+        var destination = new byte[FileDigest.Utf8DigestBytes];
+
+        var written = FileDigest.ComputeUtf8(content, destination);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.EqualTo(FileDigest.Utf8DigestBytes));
+            Assert.That(
+                Encoding.ASCII.GetString(destination, 0, written),
+                Is.EqualTo(FileDigest.Compute(content)));
+        });
+    }
+
+    [Test]
+    public void ComputeUtf8_writes_only_the_digest_and_leaves_the_rest_of_the_destination_alone()
+    {
+        var destination = new byte[FileDigest.Utf8DigestBytes + 4];
+        Array.Fill(destination, (byte)0xAB);
+
+        var written = FileDigest.ComputeUtf8("payload"u8, destination);
+
+        Assert.That(
+            destination.AsSpan(written).ToArray(),
+            Is.EqualTo(new byte[] { 0xAB, 0xAB, 0xAB, 0xAB }));
+    }
+
+    [Test]
+    public void ComputeUtf8_throws_when_the_destination_is_too_small()
+        => Assert.Throws<ArgumentOutOfRangeException>(
+            () =>
+            {
+                var destination = new byte[FileDigest.Utf8DigestBytes - 1];
+                FileDigest.ComputeUtf8("payload"u8, destination);
+            });
+
+    [Test]
+    public void Matches_is_false_for_a_stored_digest_wider_than_any_shape_produces()
+    {
+        // A stored value longer than the widest digest cannot be one, and the
+        // comparison must say so rather than overrun the recompute buffer.
+        var overlong = "sha256:" + new string('f', 128);
+
+        Assert.That(FileDigest.Matches(overlong, "payload"u8), Is.False);
+    }
+}

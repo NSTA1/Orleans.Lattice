@@ -1631,9 +1631,10 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId.GetGuidKey());
             var stagedSegmentCount = 0;
             long largestStagedFrameBytes = 0;
+            // Hoisted so the finally below can clear exactly the rows written.
+            var written = 0;
             try
             {
-                var written = 0;
                 foreach (var kv in cacheRows)
                 {
                     if (written == rowCount)
@@ -1742,7 +1743,11 @@ internal sealed partial class BPlusLeafGrain
             {
                 // Rows hold references (key strings, value arrays); clear on
                 // return so a pooled buffer cannot pin a released snapshot.
-                ArrayPool<LeafSnapshotRow>.Shared.Return(buffer, clearArray: true);
+                // Only the rows this capture wrote are cleared - clearArray:
+                // true would memset the whole rental, which Rent rounds up to a
+                // power of two above the leaf's entry count.
+                buffer.AsSpan(0, written).Clear();
+                ArrayPool<LeafSnapshotRow>.Shared.Return(buffer);
             }
 
             // Per-partition coverage. Under the default WalPartitions = 8
