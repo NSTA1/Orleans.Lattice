@@ -86,6 +86,7 @@ public readonly record struct MaxRegisterAccessor<T>
     public Task SetAsync(T value, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         var deltaBytes = BoundedRegisterAccessorHelper.EncodeDelta(_serializer, _orderKeySelector, value);
         return _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.MaxRegister, deltaBytes, ttl, cancellationToken);

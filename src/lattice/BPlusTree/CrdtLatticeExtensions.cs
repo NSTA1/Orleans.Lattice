@@ -29,11 +29,12 @@ public static class CrdtLatticeExtensions
     /// </summary>
     /// <param name="lattice">The OR-Flag-mode tree holding the flags.</param>
     /// <param name="keys">The keys to enable. An empty collection is a no-op.</param>
-    /// <param name="replicaId">The replica identity minting the enable dots.</param>
+    /// <param name="replicaId">The replica identity minting the enable dots. Must be non-empty, exactly as for <see cref="OrFlagAccessor.EnableAsync(string, CancellationToken, int)"/>.</param>
     /// <param name="cancellationToken">Cancels the read or the batched apply.</param>
     /// <exception cref="System.ArgumentNullException">
     /// <paramref name="lattice"/>, <paramref name="keys"/>, or <paramref name="replicaId"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="System.ArgumentException"><paramref name="replicaId"/> is empty.</exception>
     public static async Task EnableManyAsync(
         this ILattice lattice,
         IReadOnlyCollection<string> keys,
@@ -62,12 +63,13 @@ public static class CrdtLatticeExtensions
     /// </summary>
     /// <param name="lattice">The OR-Flag-mode tree holding the flags.</param>
     /// <param name="keys">The keys to stage enables for.</param>
-    /// <param name="replicaId">The replica identity minting the enable dots.</param>
+    /// <param name="replicaId">The replica identity minting the enable dots. Must be non-empty, exactly as for <see cref="OrFlagAccessor.StageEnableAsync(string, CancellationToken)"/>.</param>
     /// <param name="cancellationToken">Cancels the batched read.</param>
     /// <returns>One staging token per key, in <paramref name="keys"/> order.</returns>
     /// <exception cref="System.ArgumentNullException">
     /// <paramref name="lattice"/>, <paramref name="keys"/>, or <paramref name="replicaId"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="System.ArgumentException"><paramref name="replicaId"/> is empty.</exception>
     public static async Task<IReadOnlyList<LatticeStagedCrdtWrite>> StageEnableManyAsync(
         this ILattice lattice,
         IReadOnlyCollection<string> keys,
@@ -76,7 +78,11 @@ public static class CrdtLatticeExtensions
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(replicaId);
+        // Non-empty, as every other path that mints an OR-Flag dot requires: an
+        // empty id is a replica namespace every caller passing it shares, so one
+        // writer's observed-remove tombstone would cancel another writer's
+        // concurrent, unobserved enable by coverage.
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
         if (keys.Count == 0)
         {
             return Array.Empty<LatticeStagedCrdtWrite>();
@@ -112,7 +118,7 @@ public static class CrdtLatticeExtensions
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(replicaId);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
         if (keys.Count == 0)
         {
             return new List<KeyValuePair<string, byte[]>>();

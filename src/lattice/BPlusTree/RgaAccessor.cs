@@ -144,6 +144,7 @@ public readonly record struct RgaAccessor<T>
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         var serializer = _serializer;
         var encoded = serializer.Serialize(value);

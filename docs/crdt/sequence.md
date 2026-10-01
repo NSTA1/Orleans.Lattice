@@ -12,7 +12,9 @@ Each element is a node identified by a causal *dot* and linked to the *parent*
 it was inserted after. When two replicas insert after the **same** parent
 concurrently, RGA breaks the tie deterministically with the descending
 `(Counter, ReplicaId)` order, so every replica materialises the elements in the
-same sequence. A delete does not unlink the node; it **tombstones** it, so a
+same sequence. An insert you make after seeing the list lands exactly where you
+asked - index `0` is always the head - whichever replica wrote the elements
+around it. A delete does not unlink the node; it **tombstones** it, so a
 later insert positioned relative to that node still resolves correctly.
 
 `T` is serialized with a JSON serializer by default; pass your own

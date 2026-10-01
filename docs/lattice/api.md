@@ -2003,6 +2003,8 @@ call instead of two round trips per key; like the underlying batch it is not
 atomic, and a retry converges. `StageEnableManyAsync` (same parameters) stages
 the same enables as `LatticeStagedCrdtWrite` tokens for
 `LatticeAtomicWriteBuilder.SetMany`, minting every delta from one batched read.
+Both require a non-empty `replicaId`, exactly as the per-key `EnableAsync` does,
+and throw `ArgumentException` for an empty one.
 See [OR-Flag - Marking many flags at once](../crdt/orflag.md#marking-many-flags-at-once).
 
 | Accessor | Method | Description |
