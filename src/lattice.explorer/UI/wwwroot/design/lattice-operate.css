@@ -39,6 +39,11 @@
   --lt-op-row-height: var(--lt-op-row-height-comfortable);
   --lt-op-control-height: var(--lt-op-control-height-comfortable);
   --lt-op-cell-padding-x: var(--lt-op-cell-padding-x-comfortable);
+  /* A field's label is one line of one height, so every labelled field puts its
+     control box the same distance below the top of its row - the label row -
+     and anything in a control row that has no label starts that far down. */
+  --lt-op-label-line-height: 1.25rem;
+  --lt-op-label-row: calc(var(--lt-op-label-line-height) + 0.25rem);
 
   /* --- Focus ----------------------------------------------------------- */
   --lt-op-focus-ring-color: var(--lt-focus);

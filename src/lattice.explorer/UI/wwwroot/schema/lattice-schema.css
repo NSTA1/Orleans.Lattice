@@ -83,7 +83,6 @@
    ========================================================================== */
 
 .lt-schema-toolbar {
-  align-items: flex-end;
   margin-bottom: var(--lt-space-4);
 }
 

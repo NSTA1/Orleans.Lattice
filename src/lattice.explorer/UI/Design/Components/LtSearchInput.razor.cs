@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// Escape clears it.
 /// </summary>
 /// <remarks>
-/// The label is visually hidden because a search field's purpose is carried by
-/// its placement, but it is always present for assistive technology. The key
+/// The label is visible, in the label row every field primitive draws, so a search
+/// box lines up with the fields and buttons beside it (issue #4120). The key
 /// hint is only a hint: the shortcut itself is bound by whoever owns the page,
 /// and <c>aria-keyshortcuts</c> announces it.
 /// </remarks>
@@ -18,7 +18,7 @@ public partial class LtSearchInput
 {
     private readonly string _id = LtIds.Next("lt-search");
 
-    /// <summary>The accessible label, such as "Filter trees".</summary>
+    /// <summary>The visible label, such as "Filter trees", which is also the field's accessible name.</summary>
     [Parameter, EditorRequired]
     public string Label { get; set; } = string.Empty;
 

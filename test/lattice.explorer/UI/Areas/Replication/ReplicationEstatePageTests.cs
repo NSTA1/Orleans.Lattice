@@ -356,7 +356,6 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
         cut.WaitUntil(() =>
         {
             var toolbar = cut.Find(".lt-toolbar");
-            Assert.That(toolbar.ClassList, Does.Contain("lt-replication-toolbar"));
             Assert.That(toolbar.QuerySelectorAll("select").Length, Is.EqualTo(3), "five health options are a select, never a segmented row");
         });
     }

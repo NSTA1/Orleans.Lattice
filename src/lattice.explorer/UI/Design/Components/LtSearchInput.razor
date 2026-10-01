@@ -1,19 +1,26 @@
-<div class="lt-search" role="@(Landmark ? "search" : null)">
-    <label class="lt-visually-hidden" for="@_id">@Label</label>
-    <input @attributes="AdditionalAttributes"
-           id="@_id"
-           class="lt-input lt-search__input"
-           type="search"
-           value="@Value"
-           placeholder="@Placeholder"
-           disabled="@Disabled"
-           spellcheck="false"
-           autocomplete="off"
-           aria-keyshortcuts="@KeyShortcut"
-           @oninput="HandleInputAsync"
-           @onkeydown="HandleKeyDownAsync" />
-    @if (KeyShortcut is not null)
-    {
-        <kbd class="lt-kbd lt-search__hint" aria-hidden="true">@KeyShortcut</kbd>
-    }
+@*
+    A search field is a field: a visible label row over the control box, as every
+    field primitive draws one, so a search box lines up with the selects, pickers
+    and buttons beside it in a toolbar.
+*@
+<div class="lt-field lt-search" role="@(Landmark ? "search" : null)">
+    <label class="lt-field__label" for="@_id">@Label</label>
+    <div class="lt-search__control">
+        <input @attributes="AdditionalAttributes"
+               id="@_id"
+               class="lt-input lt-search__input"
+               type="search"
+               value="@Value"
+               placeholder="@Placeholder"
+               disabled="@Disabled"
+               spellcheck="false"
+               autocomplete="off"
+               aria-keyshortcuts="@KeyShortcut"
+               @oninput="HandleInputAsync"
+               @onkeydown="HandleKeyDownAsync" />
+        @if (KeyShortcut is not null)
+        {
+            <kbd class="lt-kbd lt-search__hint" aria-hidden="true">@KeyShortcut</kbd>
+        }
+    </div>
 </div>
