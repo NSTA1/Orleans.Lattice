@@ -51,6 +51,10 @@ failure_modes:
     signal: "Reserved system data tree is rejected for set."
     effect: "No policy change is applied."
     response: "Let the owning add-on manage retention."
+  - id: undefined-mode
+    signal: "A non-null mode outside TreeHistoryRetentionMode is rejected before tree resolution or authorization."
+    effect: "No policy change is applied."
+    response: "Pass null to clear the override, or pass a defined retention mode."
 rollback:
   supported: true
   mechanism: "Set the previous mode and window captured before the change; already-written rows keep their stamped shape."

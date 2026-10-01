@@ -88,6 +88,7 @@ public readonly record struct OrFlagAccessor
     public Task EnableAsync(string replicaId, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(flag => EnableDelta(flag, replicaId), cancellationToken, maxAttempts, ttl);
     }

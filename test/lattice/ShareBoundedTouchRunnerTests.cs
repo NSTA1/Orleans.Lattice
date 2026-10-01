@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests;
 
@@ -84,19 +85,21 @@ public class ShareBoundedTouchRunnerTests
             static s => s.MayLaunch);
 
     /// <summary>Waits until the script shows exactly <paramref name="expected"/> touches pending.</summary>
+    /// <remarks>
+    /// The barrier fails by name at the wait itself. Returning the short array it
+    /// happened to observe would surface a timeout as whatever the caller asserted
+    /// next - a length mismatch, or an <see cref="InvalidOperationException"/> out of
+    /// <c>Single()</c> on an empty array - neither of which names the wait that failed.
+    /// </remarks>
     private static async Task<int[]> PendingAsync(Script script, int expected)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (true)
-        {
-            var pending = script.Pending();
-            if (pending.Length == expected || DateTime.UtcNow > deadline)
-            {
-                return pending;
-            }
+        await TestPoll.UntilAsync(
+            () => script.Pending().Length == expected,
+            $"the script must settle at exactly {expected} touch(es) pending",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromMilliseconds(1));
 
-            await Task.Delay(1);
-        }
+        return script.Pending();
     }
 
     [Test]

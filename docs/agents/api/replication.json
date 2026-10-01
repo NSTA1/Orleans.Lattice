@@ -2,6 +2,7 @@
   "schema": "lattice.agents/api/v1",
   "surface": "replication",
   "packages": [
+    "Orleans.Lattice.Api.Abstractions",
     "Orleans.Lattice.Api.Replication",
     "Orleans.Lattice.Api.Replication.Grpc",
     "Orleans.Lattice.Replication",
@@ -9,9 +10,18 @@
   ],
   "sources": [
     "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
+    "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus",
+    "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApiGrpc",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+    "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcMethods.cs#LatticeReplicationStatusGrpcMethods",
+    "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcService.cs#LatticeReplicationStatusGrpcService",
+    "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor",
+    "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApi",
     "src/lattice.api.replication/LatticeReplicationControl.cs#LatticeReplicationControl",
+    "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus",
+    "src/lattice.api.replication/LatticeReplicationStatusOptions.cs#LatticeReplicationStatusOptions",
+    "src/lattice.api.replication/ReplicationPeerStatusContinuation.cs#ReplicationPeerStatusContinuation",
     "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
     "src/lattice.replication.grpc/GrpcRemoteSnapshotTransport.cs#GrpcRemoteSnapshotTransport",
     "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel",
@@ -32,21 +42,23 @@
     "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
     "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync",
     "src/lattice.replication/LatticeRemoteSnapshotService.cs#LatticeRemoteSnapshotService",
-    "src/lattice.replication/LatticeReplicationLocalVcSeeder.cs#LatticeReplicationLocalVcSeeder"
+    "src/lattice.replication/LatticeReplicationLocalVcSeeder.cs#LatticeReplicationLocalVcSeeder",
+    "src/lattice.replication/PeerStatus/IReplicationPeerStatusReader.cs#IReplicationPeerStatusReader",
+    "src/lattice.replication/PeerStatus/ReplicationPeerStatusReadPath.cs#AddReplicationPeerStatusReadPath"
   ],
   "in_process": {
-    "interface": "ILatticeReplicationControl",
-    "registration": "ISiloBuilder.AddLatticeReplicationApi after AddLatticeReplication(..., enableRuntimeConfig: true).",
-    "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#AddLatticeReplicationApi"
+    "interface": "ILatticeReplicationControl; ILatticeReplicationStatus",
+    "registration": "ISiloBuilder.AddLatticeReplicationApi after AddLatticeReplication(..., enableRuntimeConfig: true); ISiloBuilder.AddLatticeReplicationStatusApi after AddLatticeReplication(...).",
+    "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApi"
   },
   "grpc": {
-    "service": "orleans.lattice.api.replication; orleans.lattice.replication.LatticeReplication; orleans.lattice.replication.LatticeRemoteSnapshot; orleans.lattice.replication.LatticeSaga",
-    "methods_source": "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+    "service": "orleans.lattice.api.replication; orleans.lattice.api.replication.status; orleans.lattice.replication.LatticeReplication; orleans.lattice.replication.LatticeRemoteSnapshot; orleans.lattice.replication.LatticeSaga",
+    "methods_source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
     "marshalling": "API facade methods use LatticeReplicationGrpcMarshallers; peer replication methods use Orleans serializer-backed code-first marshallers and the replication batch encoder for WAL envelopes.",
     "metadata": [
       {
         "name": "authorization",
-        "purpose": "Credential token header; the default bridge strips the configured Bearer scheme and stamps a LatticeCredential.",
+        "purpose": "Credential token header; the default bridge strips the configured ****** and stamps a LatticeCredential.",
         "source": "src/lattice.api.replication.grpc/HeaderLatticeReplicationApiCredentialBridge.cs#HeaderLatticeReplicationApiCredentialBridge"
       },
       {
@@ -61,15 +73,15 @@
       },
       {
         "name": "x-lattice-replication-origin",
-        "purpose": "Local cluster id stamped on peer calls for diagnostics, peer attribution, saga authorization, origin/body consistency checks, and optional credential-to-origin binding.",
+        "purpose": "Local cluster id stamped on peer calls for diagnostics, peer attribution, saga authorization, origin/body consistency checks, and credential-to-origin binding (on by default, disabled with BindCredentialToOriginCluster false).",
         "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs#OriginClusterIdHeader"
       }
     ],
     "auth": {
       "interceptor": "LatticeReplicationGrpcAuthInterceptor and facade-specific LatticeReplicationApiGrpcAuthInterceptor",
-      "authorizer": "IReplicationSecretProvider for peer transports; ILatticeReplicationApiAuthorizer for the facade; ISagaPeerAuthorizer for saga control after shared-secret auth.",
-      "decision": "Peer replication methods require the shared-secret header when RequireAuthentication is true; missing credentials are Unauthenticated and bad credentials are PermissionDenied. Saga control additionally denies origins outside the configured peer map before state mutation.",
-      "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      "authorizer": "IReplicationSecretProvider for peer transports; ILatticeReplicationApiAuthorizer for the facade and status facade; ISagaPeerAuthorizer for saga control after shared-secret auth.",
+      "decision": "Peer replication methods require the shared-secret header when RequireAuthentication is true; missing credentials are Unauthenticated and bad credentials are PermissionDenied. With BindCredentialToOriginCluster at its default true, an accepted credential must also match the outbound secret configured for the stamped origin or the call is PermissionDenied. The facade authorizer covers the control service and peer-status service, exempts only GetAuthScheme, and maps GetPeerStatus to LatticeReplicationApiOperation.GetPeerStatus. Saga control additionally denies origins outside the configured peer map before state mutation.",
+      "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
     }
   },
   "types": {
@@ -612,6 +624,122 @@
       "fields": [],
       "source": "src/lattice.api.replication.grpc/Model/ReplicationGetConfigRequest.cs#ReplicationGetConfigRequest"
     },
+    "ReplicationLinkDirection": {
+      "kind": "enum",
+      "values": [
+        "Outbound",
+        "Inbound"
+      ],
+      "source": "src/lattice.api.abstractions/Replication/Model/ReplicationLinkDirection.cs#ReplicationLinkDirection"
+    },
+    "ReplicationLinkHealth": {
+      "kind": "enum",
+      "values": [
+        "Unknown",
+        "Healthy",
+        "Lagging",
+        "Stalled"
+      ],
+      "source": "src/lattice.api.abstractions/Replication/Model/ReplicationLinkHealth.cs#ReplicationLinkHealth"
+    },
+    "ReplicationPeerStatusEntry": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "PeerRegionId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Direction",
+          "type": "ReplicationLinkDirection",
+          "required": false
+        },
+        {
+          "name": "EntriesBehind",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "BytesBehind",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "ConsecutiveErrors",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "TimeSinceLastContact",
+          "type": "TimeSpan?",
+          "required": false
+        },
+        {
+          "name": "InFlight",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Health",
+          "type": "ReplicationLinkHealth",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Replication/Model/ReplicationPeerStatusEntry.cs#ReplicationPeerStatusEntry"
+    },
+    "ReplicationPeerStatusPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "LocalRegionId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Peers",
+          "type": "IReadOnlyList<ReplicationPeerStatusEntry>",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Replication/Model/ReplicationPeerStatusPage.cs#ReplicationPeerStatusPage"
+    },
+    "ReplicationPeerStatusQuery": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PeerRegionId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Replication/Model/ReplicationPeerStatusQuery.cs#ReplicationPeerStatusQuery"
+    },
     "ReplicationTreeConfigMessage": {
       "kind": "record",
       "fields": [
@@ -1050,6 +1178,55 @@
         "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor",
         "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
+      ]
+    },
+    {
+      "id": "get-peer-status",
+      "in_process": "ILatticeReplicationStatus.GetPeerStatusAsync",
+      "grpc_method": "/orleans.lattice.api.replication.status/GetPeerStatus",
+      "transport_scope": "both",
+      "request": "ReplicationPeerStatusQuery",
+      "response": "ReplicationPeerStatusPage",
+      "errors": [
+        {
+          "error_id": "cancelled",
+          "condition": "The request or authorization check is cancelled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "The query is null, PageSize is negative, or ContinuationToken is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The transport authorizer denies the call, active-tenant resolution is denied, or the facade access gate denies a tree that would otherwise be reported; an unauthorized tree filter returns an empty page."
+        },
+        {
+          "error_id": "internal",
+          "condition": "The peer-status service or telemetry reader fails unexpectedly."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only point-in-time telemetry report; retrying only re-runs authorization and the bounded cluster-wide telemetry read.",
+        "source": "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#GetPeerStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation reads in-memory per-peer telemetry and never mutates replication configuration, data, cursors, or link state.",
+        "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#GetPeerStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Rows are ordered by effective tree id, peer id and direction; denied rows are skipped, a tree filter is scoped to the caller tenant before the authorization check, and continuation tokens are issued only after rows the caller was shown.",
+        "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#GetPeerStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#GetPeerStatusAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApiGrpc",
+        "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcMethods.cs#LatticeReplicationStatusGrpcMethods",
+        "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcService.cs#GetPeerStatus",
+        "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApi",
+        "src/lattice.api.replication/LatticeReplicationStatus.cs#GetPeerStatusAsync"
       ]
     },
     {

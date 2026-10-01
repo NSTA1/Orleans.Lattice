@@ -92,6 +92,7 @@ public readonly record struct RwFlagAccessor
     public Task EnableAsync(string replicaId, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(flag => EnableDelta(flag, replicaId), cancellationToken, maxAttempts, ttl);
     }

@@ -90,6 +90,7 @@ public readonly record struct PnCounterAccessor
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(c => IncrementDelta(c, replicaId, amount), cancellationToken, maxAttempts, ttl);
     }

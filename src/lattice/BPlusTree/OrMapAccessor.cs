@@ -147,6 +147,7 @@ public readonly record struct OrMapAccessor<TKey, TValue>
         ArgumentNullException.ThrowIfNull(mapKey);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentNullException.ThrowIfNull(value);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         return MutateAsync(map =>
         {

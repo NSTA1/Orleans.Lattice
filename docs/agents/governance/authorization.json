@@ -2,6 +2,219 @@
   "schema": "lattice.agents/governance-authorization/v1",
   "decision_trees": [
     {
+      "id": "app-bridge-authorization",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with the app-bridge gRPC service prefix.",
+          "on_true": "operation-classified",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "operation-classified",
+          "check": "The bound unary RPC and request type classify to BridgeGet, BridgeScan, BridgeSet or BridgeDelete.",
+          "on_true": "require-option",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor.DescribeCall"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeAppsApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "transport-authorizer",
+          "on_false": "caller",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "transport-authorizer",
+          "check": "ILatticeAppsApiAuthorizer admits the server-classified bridge operation and target app slug.",
+          "on_true": "caller",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "caller",
+          "check": "The bridge facade resolves a non-anonymous subject, an active tenant, a grain factory, and a serving AppRoleGrantEvaluator.",
+          "on_true": "rate-limit",
+          "on_false": "deny-bridge",
+          "source": "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+        },
+        {
+          "id": "rate-limit",
+          "check": "The per-caller, per-tenant, per-app rate limiter admits the request.",
+          "on_true": "enabled-install",
+          "on_false": "deny-unavailable",
+          "source": "src/lattice.api.apps/AppBridgeRateLimiter.cs#AppBridgeRateLimiter.TryAcquire"
+        },
+        {
+          "id": "enabled-install",
+          "check": "The current registry snapshot has an enabled install in the caller tenant whose revision matches AppBridgeTarget.InstallRevision and whose ceiling is pinned to its version.",
+          "on_true": "bridge-consent",
+          "on_false": "deny-bridge",
+          "source": "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+        },
+        {
+          "id": "bridge-consent",
+          "check": "The bridge operation over the logical tree is covered by both the consented bridge grants and the installed manifest's requested bridge grants.",
+          "on_true": "tree-resolution",
+          "on_false": "deny-bridge",
+          "source": "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+        },
+        {
+          "id": "tree-resolution",
+          "check": "The logical tree name resolves server-side to a declared structural or adopted tree of the install.",
+          "on_true": "app-owned-grant",
+          "on_false": "deny-not-found",
+          "source": "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan.TryGetTree"
+        },
+        {
+          "id": "app-owned-grant",
+          "check": "An app-owned grant for a bound group covers the concrete operation and key or prefix.",
+          "on_true": "data-path",
+          "on_false": "deny-bridge",
+          "source": "src/lattice.api.apps/AppBridgeInstallPlan.cs#TreePlan.Allows"
+        },
+        {
+          "id": "data-path",
+          "check": "The core data path admits the call under the caller's ambient credential and active tenant.",
+          "on_true": "allow",
+          "on_false": "deny-bridge",
+          "source": "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The bridge operation executes on the app-owned tree through the core data path."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-bridge",
+          "outcome": "The bridge refuses the request with a sanitized Denied failure."
+        },
+        {
+          "id": "deny-grpc",
+          "outcome": "The gRPC call fails with PermissionDenied before the bridge facade is invoked."
+        },
+        {
+          "id": "deny-not-found",
+          "outcome": "The bridge refuses the request with a sanitized NotFound failure."
+        },
+        {
+          "id": "deny-unavailable",
+          "outcome": "The bridge refuses the request with a sanitized Unavailable failure."
+        }
+      ],
+      "fail_closed": "Disabling the transport authorizer does not bypass the bridge facade; missing collaborators, stale revisions, unconsented bridge operations, undeclared trees, lost role bindings, rate limits, and data-path denial all refuse the request.",
+      "sources": [
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcService.cs#LatticeAppBridgeGrpcService",
+        "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge",
+        "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan"
+      ]
+    },
+    {
+      "id": "app-catalog-authorization",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with the app-catalog gRPC service prefix.",
+          "on_true": "operation-classified",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "operation-classified",
+          "check": "The bound unary RPC and request type classify to a catalog operation.",
+          "on_true": "require-option",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor.DescribeCall"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeAppsApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "transport-authorizer",
+          "on_false": "capability-probe",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "transport-authorizer",
+          "check": "ILatticeAppsApiAuthorizer admits the server-classified catalog operation and target app slug when present.",
+          "on_true": "capability-probe",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "capability-probe",
+          "check": "The call is ILatticeAppCatalog.GetCapabilitiesAsync.",
+          "on_true": "probe-authorize",
+          "on_false": "tenant",
+          "source": "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog.GetCapabilitiesAsync"
+        },
+        {
+          "id": "probe-authorize",
+          "check": "AppsFacadeAccess.AuthorizeInstallAsync authorizes AppInstall over the cluster-wide scope.",
+          "on_true": "allow-probe-granted",
+          "on_false": "allow-probe-none",
+          "source": "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog.GetCapabilitiesAsync"
+        },
+        {
+          "id": "tenant",
+          "check": "AppsFacadeAccess.ResolveTenantAsync resolves an initialized active tenant.",
+          "on_true": "app-install",
+          "on_false": "deny-tenant",
+          "source": "src/lattice.api.apps/AppsFacadeAccess.cs#AppsFacadeAccess.ResolveTenantAsync"
+        },
+        {
+          "id": "app-install",
+          "check": "AppsFacadeAccess.AuthorizeInstallAsync authorizes AppInstall over the cluster-wide scope before any source or registry data is read.",
+          "on_true": "allow-catalog",
+          "on_false": "deny-app-install",
+          "source": "src/lattice.api.apps/AppsFacadeAccess.cs#AppsFacadeAccess.AuthorizeInstallAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow-catalog",
+          "outcome": "The catalog operation may list sources, list source-offered apps, describe a source version or read a source icon."
+        },
+        {
+          "id": "allow-probe-granted",
+          "outcome": "The advisory capability probe reports catalog verbs granted."
+        },
+        {
+          "id": "allow-probe-none",
+          "outcome": "The advisory capability probe reports catalog verbs denied without exposing source or registry data."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-app-install",
+          "outcome": "The call is denied before any app source or registry metadata is disclosed."
+        },
+        {
+          "id": "deny-grpc",
+          "outcome": "The gRPC call fails with PermissionDenied before the catalog facade is invoked."
+        },
+        {
+          "id": "deny-tenant",
+          "outcome": "The call fails closed because the active tenant cannot be resolved or validated."
+        }
+      ],
+      "fail_closed": "Disabling the transport authorizer does not bypass the catalog facade AppInstall gate; the advisory probe returns default-deny capability data rather than source data on denial.",
+      "sources": [
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+        "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog",
+        "src/lattice.api.apps/AppsFacadeAccess.cs#AppsFacadeAccess"
+      ]
+    },
+    {
       "id": "app-control-facade",
       "nodes": [
         {
@@ -105,6 +318,124 @@
       ]
     },
     {
+      "id": "app-role-bindings-authorization",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with the app-control gRPC service prefix.",
+          "on_true": "operation-classified",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "operation-classified",
+          "check": "The bound unary RPC and request type classify to LatticeAppsApiOperation.UpdateRoleBindings.",
+          "on_true": "require-option",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor.DescribeCall"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeAppsApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "transport-authorizer",
+          "on_false": "tenant",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "transport-authorizer",
+          "check": "ILatticeAppsApiAuthorizer admits UpdateRoleBindings for the request slug.",
+          "on_true": "tenant",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "tenant",
+          "check": "AppsFacadeAccess resolves the active tenant.",
+          "on_true": "app-install",
+          "on_false": "deny-tenant",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        },
+        {
+          "id": "app-install",
+          "check": "The facade authorizes AppInstall over the cluster-wide scope before reading the installed record.",
+          "on_true": "installed-version",
+          "on_false": "deny-app-install",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        },
+        {
+          "id": "installed-version",
+          "check": "The app is installed, not uninstalled, the request version matches the installed version, and the ceiling is pinned to that version.",
+          "on_true": "declared-roles",
+          "on_false": "deny-precondition",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        },
+        {
+          "id": "declared-roles",
+          "check": "Every replacement binding names a role declared by the installed manifest.",
+          "on_true": "registry-update",
+          "on_false": "deny-precondition",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        },
+        {
+          "id": "registry-update",
+          "check": "The registry upgrade succeeds with the installed version and just-read revision as concurrency preconditions.",
+          "on_true": "enabled",
+          "on_false": "deny-precondition",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        },
+        {
+          "id": "enabled",
+          "check": "The resulting record is enabled.",
+          "on_true": "reapply",
+          "on_false": "allow",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        },
+        {
+          "id": "reapply",
+          "check": "Reapply succeeds after the bindings are recorded.",
+          "on_true": "allow",
+          "on_false": "deny-reapply-recorded",
+          "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The response reports the recorded role bindings and lifecycle state."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-app-install",
+          "outcome": "The call is denied before app existence or bindings are disclosed."
+        },
+        {
+          "id": "deny-grpc",
+          "outcome": "The gRPC call fails with PermissionDenied before the facade is invoked."
+        },
+        {
+          "id": "deny-precondition",
+          "outcome": "The call fails without replacing bindings."
+        },
+        {
+          "id": "deny-reapply-recorded",
+          "outcome": "The bindings were recorded, and the call fails reporting that re-application of the enabled app failed."
+        },
+        {
+          "id": "deny-tenant",
+          "outcome": "The call fails closed because the active tenant cannot be resolved or validated."
+        }
+      ],
+      "fail_closed": "Disabling the transport authorizer does not bypass the facade AppInstall gate; version, revision and declared-role checks run before mutation, and reapply failure is reported after the recorded binding change.",
+      "sources": [
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor",
+        "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl",
+        "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings"
+      ]
+    },
+    {
       "id": "app-role-compilation",
       "nodes": [
         {
@@ -151,6 +482,85 @@
         "src/lattice.apps/Compiler/AppRoleCompiler.cs",
         "src/lattice.apps/Activation/AppActivationEngine.cs",
         "src/lattice.auth/LatticeAppRuleIds.cs"
+      ]
+    },
+    {
+      "id": "app-workspace-authorization",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with the app-workspace gRPC service prefix.",
+          "on_true": "operation-classified",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "operation-classified",
+          "check": "The bound unary RPC and request type classify to ListMyApps, DescribeMyApp, GetMyAppIcon or GetUiAsset.",
+          "on_true": "require-option",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor.DescribeCall"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeAppsApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "transport-authorizer",
+          "on_false": "caller",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "transport-authorizer",
+          "check": "ILatticeAppsApiAuthorizer admits the server-classified workspace operation and target app slug when present.",
+          "on_true": "caller",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "caller",
+          "check": "The workspace resolves a membership context, active tenant, serving AppRoleGrantEvaluator and access gate.",
+          "on_true": "enabled-install",
+          "on_false": "absence",
+          "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.ResolveCallerAsync"
+        },
+        {
+          "id": "enabled-install",
+          "check": "The current registry snapshot has an enabled install in the caller tenant with a ceiling pinned to its version.",
+          "on_true": "role-held",
+          "on_false": "absence",
+          "source": "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator.IsEvaluated"
+        },
+        {
+          "id": "role-held",
+          "check": "The caller holds at least one app role by binding and no access-gate deny removes it.",
+          "on_true": "allow",
+          "on_false": "absence",
+          "source": "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator.EvaluateAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "absence",
+          "outcome": "The workspace returns no list entry or null, matching the result for a missing app."
+        },
+        {
+          "id": "allow",
+          "outcome": "The workspace returns the caller's app summary, sanitized descriptor, icon or UI asset."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-grpc",
+          "outcome": "The gRPC call fails with PermissionDenied before the workspace facade is invoked."
+        }
+      ],
+      "fail_closed": "Disabling the transport authorizer does not bypass the workspace role gate; missing collaborators, denied tenant resolution, disabled installs, unpinned ceilings, absent bindings, and explicit denies all collapse to absence.",
+      "sources": [
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcService.cs#LatticeAppWorkspaceGrpcService",
+        "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace",
+        "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
       ]
     },
     {
@@ -211,7 +621,7 @@
       "nodes": [
         {
           "id": "service-match",
-          "check": "Method starts with /orleans.lattice.api.apps/.",
+          "check": "Method starts with an app-control, app-catalog, app-workspace, or app-bridge service prefix.",
           "on_true": "auth-scheme",
           "on_false": "allow-unrelated",
           "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
@@ -248,7 +658,7 @@
       "terminals": [
         {
           "id": "allow",
-          "outcome": "The gRPC request reaches the app-control service, which stamps credential and active tenant and then applies the facade AppInstall gate."
+          "outcome": "The gRPC request reaches the classified app service, which stamps credential and active tenant and then applies its facade authorization path."
         },
         {
           "id": "allow-discovery",
@@ -422,7 +832,7 @@
       "nodes": [
         {
           "id": "service-match",
-          "check": "Method starts with /orleans.lattice.api.replication/.",
+          "check": "Method starts with /orleans.lattice.api.replication/ or /orleans.lattice.api.replication.status/.",
           "on_true": "unauthenticated-exempt",
           "on_false": "allow-unrelated",
           "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
@@ -565,7 +975,7 @@
           "outcome": "The call fails with gRPC status Unauthenticated."
         }
       ],
-      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, and saga control also requires an authorized peer origin; a peer may only advance or read the high-water mark of its own stamped origin.",
+      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, credential-to-origin binding is required by default, and saga control also requires an authorized peer origin; a peer may only advance or read the high-water mark of its own stamped origin.",
       "sources": [
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs",
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs",
@@ -1049,7 +1459,7 @@
         "src/lattice.api.mcp/Discovery/ILatticeApiMcpAppToolSource.cs",
         "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
         "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs",
-        "src/lattice.api.mcp.apps/AppMcpRoleGate.cs",
+        "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync",
         "src/lattice.api.mcp.apps/AppMcpToolActivation.cs",
         "src/lattice.apps/Registry/AppRoleGate.cs",
         "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs",
@@ -1103,7 +1513,7 @@
         },
         {
           "id": "tool-minimum",
-          "check": "The permission resolver carries no operation detail, or the granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName); mutating data tools and mutating repository-context tools require Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad, while read-only tools use each group's coarse mask.",
+          "check": "The granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName); mutating data tools and mutating repository-context tools require Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad, while read-only tools use each group's coarse mask.",
           "on_true": "write-opt-in",
           "on_false": "not-advertised",
           "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.AddPermittedGroupToolsAsync"
@@ -1153,7 +1563,7 @@
           "outcome": "The caller credential and active tenant are stamped and the tool handler runs, subject to the facade access gate."
         }
       ],
-      "fail_closed": "The endpoint requires authentication by default, DenyAllMcpAuthorizer denies by default, missing HttpContext or authorizer denies, unauthenticated sessions get no tools, and data write tools are absent unless explicitly enabled, and a mutating data tool withheld by the per-tool minimum is unreachable at tools/call because the session tool collection serves both.",
+      "fail_closed": "The endpoint requires authentication by default, DenyAllMcpAuthorizer denies by default, missing HttpContext or authorizer denies, unauthenticated sessions get no tools, data write tools are absent unless explicitly enabled, and any tool withheld by the per-tool minimum is unreachable at tools/call because the session tool collection serves both.",
       "sources": [
         "src/lattice.api.mcp/LatticeApiMcpOptions.cs",
         "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs",
@@ -1406,6 +1816,110 @@
         "src/lattice.membership.entra/EntraCredentialAuthenticator.cs",
         "src/lattice.membership.entra.graph/EntraGraphIdentityDirectory.cs",
         "src/lattice.membership.oidc/OidcCredentialAuthenticator.cs"
+      ]
+    },
+    {
+      "id": "replication-peer-status-authorization",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with the replication peer-status gRPC service prefix.",
+          "on_true": "operation-classified",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "operation-classified",
+          "check": "The method classifies to LatticeReplicationApiOperation.GetPeerStatus.",
+          "on_true": "require-option",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor.DescribeCall"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeReplicationApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "transport-authorizer",
+          "on_false": "service-stamps",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "transport-authorizer",
+          "check": "ILatticeReplicationApiAuthorizer admits GetPeerStatus and the optional tree-filter target id.",
+          "on_true": "service-stamps",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
+        },
+        {
+          "id": "service-stamps",
+          "check": "The gRPC service stamps the resolved credential and asserted active tenant, then invokes ILatticeReplicationStatus.GetPeerStatusAsync.",
+          "on_true": "tenant",
+          "on_false": "deny-grpc",
+          "source": "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcService.cs#LatticeReplicationStatusGrpcService.GetPeerStatus"
+        },
+        {
+          "id": "tenant",
+          "check": "The status facade resolves an initialized active tenant.",
+          "on_true": "tree-filter",
+          "on_false": "deny-tenant",
+          "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.EnsureTenantResolvesAsync"
+        },
+        {
+          "id": "tree-filter",
+          "check": "The query names a tree filter.",
+          "on_true": "filter-authorized",
+          "on_false": "read-rows",
+          "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+        },
+        {
+          "id": "filter-authorized",
+          "check": "ReplicationAccessAuthorizer admits Replication over the effective tree filter.",
+          "on_true": "read-rows",
+          "on_false": "allow-empty",
+          "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+        },
+        {
+          "id": "read-rows",
+          "check": "Every returned row either matches the authorized filter or passes the per-row Replication authorization probe.",
+          "on_true": "allow-page",
+          "on_false": "skip-row",
+          "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.IsVisibleAsync"
+        },
+        {
+          "id": "skip-row",
+          "check": "There are more telemetry rows to scan after skipping unauthorized rows.",
+          "on_true": "read-rows",
+          "on_false": "allow-page",
+          "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow-empty",
+          "outcome": "The facade returns an empty page for an unauthorized tree filter without reading statistics."
+        },
+        {
+          "id": "allow-page",
+          "outcome": "The facade returns only authorized peer-status rows and a continuation derived from a returned row."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-grpc",
+          "outcome": "The gRPC call fails before the status facade is invoked."
+        },
+        {
+          "id": "deny-tenant",
+          "outcome": "The call fails closed because the active tenant cannot be resolved or validated."
+        }
+      ],
+      "fail_closed": "Disabling the transport authorizer does not bypass the facade's tenant and per-tree Replication checks; unauthorized tree filters return empty and unauthorized rows are skipped rather than disclosed.",
+      "sources": [
+        "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor",
+        "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcService.cs#LatticeReplicationStatusGrpcService",
+        "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus",
+        "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer"
       ]
     },
     {

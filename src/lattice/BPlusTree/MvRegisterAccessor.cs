@@ -118,6 +118,7 @@ public readonly record struct MvRegisterAccessor<T>
     public Task SetAsync(string replicaId, T value, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         EnsureInitialised();
         var serializer = _serializer;
         return MutateAsync(register => SetDelta(register, serializer, replicaId, value), cancellationToken, maxAttempts, ttl);

@@ -76,6 +76,10 @@ therefore mint each dot from a strictly increasing source instead. A dot only ha
 to be unused for its replica, never dense, so this costs nothing semantically and
 makes an enable impossible to cancel by a tombstone authored before it.
 
+Pass the same non-empty replica identity you would give `EnableAsync`; an empty
+one is rejected, because writers sharing a blank identity could cancel each
+other's enables.
+
 ```csharp verify
 // Mark a whole batch of feature flags on in one write.
 string[] keys = ["tenant:5:beta", "tenant:6:beta", "tenant:7:beta"];

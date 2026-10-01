@@ -1257,7 +1257,7 @@
         },
         {
           "error_id": "invalid-argument",
-          "condition": "Invalid tenant id or negative burst percent."
+          "condition": "Invalid tenant id, negative burst percent, or negative quota ceiling."
         },
         {
           "error_id": "permission-denied",

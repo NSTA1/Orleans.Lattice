@@ -388,6 +388,8 @@ RgaNode = (ReplicaId, Counter, ParentDot, Value, IsTombstone)
 Rga = { Nodes: { RgaNode }, Context: { replicaId -> highestCounter } }   // Context only picks the next local dot; merge ignores it
 ```
 
+A local insert mints its counter as a Lamport clock: one above the highest counter in `Context` across **every** replica, not only its own. The new node therefore sorts ahead of every sibling it has observed and is materialised immediately after its parent, so `InsertAtAsync(0, ...)` lands at the head whichever replica wrote the existing elements. A per-replica counter would let another replica's earlier sibling with an equal or higher counter sort first and push a sequential insert past that sibling's whole subtree.
+
 The materialised order is a depth-first walk from the virtual root in which **sibling children of any parent are visited in descending `(Counter, ReplicaId)` order**. That is the standard RGA tie-break: the highest counter wins, the highest replica id breaks counter ties, and every replica that has observed the same node set converges on the same resolved sequence regardless of merge arrival order. Tombstoned nodes are traversed (so their descendants still resolve) but are not emitted.
 
 The merge rule is straightforward:

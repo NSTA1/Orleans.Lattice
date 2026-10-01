@@ -3,10 +3,10 @@ id: app-lifecycle
 name: "Install, enable, disable, and uninstall an app"
 surfaces:
   in_process:
-    api: "ILatticeAppsControl.InstallAsync, EnableAsync, DisableAsync, UninstallAsync, GetConsentAsync, UpdateConsentAsync, DescribeAsync, and ListAsync"
+    api: "ILatticeAppsControl.InstallAsync, EnableAsync, DisableAsync, UninstallAsync, GetConsentAsync, UpdateConsentAsync, DescribeAsync, and ListAsync, plus ILatticeAppRoleBindings.UpdateRoleBindingsAsync"
     source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl"
   grpc:
-    api: "/orleans.lattice.api.apps/Install, /Enable, /Disable, /Uninstall, /List, /Describe, /GetConsent, /UpdateConsent, /GetCapabilities, and /GetAuthScheme"
+    api: "/orleans.lattice.api.apps/Install, /Enable, /Disable, /Uninstall, /List, /Describe, /GetConsent, /UpdateConsent, /UpdateRoleBindings, /GetCapabilities, and /GetAuthScheme"
     source: "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods.ServiceName"
   mcp_tool:
     api: "No app lifecycle MCP tool is documented; Orleans.Lattice.Api.Mcp.Apps exposes enabled app tools only."
@@ -54,21 +54,26 @@ steps:
     expects: "Replaces the whole ceiling; if the app is enabled, reconciliation re-applies it so reduced consent withdraws stale grants."
     source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.UpdateConsentAsync"
   - n: 6
+    action: "Re-bind roles to membership groups only for the version currently installed."
+    api: "ILatticeAppRoleBindings.UpdateRoleBindingsAsync / /orleans.lattice.api.apps/UpdateRoleBindings"
+    expects: "Replaces every role-to-group binding through a same-version registry upgrade pinned to the installed version and record revision, refuses roles the installed manifest does not declare or a ceiling not pinned to the installed version, and re-applies an enabled app so its compiled role rules follow the new bindings."
+    source: "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+  - n: 7
     action: "Disable the app when access should stop but data must stay in place."
     api: "ILatticeAppsControl.DisableAsync / /orleans.lattice.api.apps/Disable"
     expects: "Owned rules are withdrawn, trees and data remain, and the record reaches Disabled."
     source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.DisableAsync"
-  - n: 7
+  - n: 8
     action: "Uninstall the app when the install should be retired."
     api: "ILatticeAppsControl.UninstallAsync / /orleans.lattice.api.apps/Uninstall"
     expects: "Owned rules are withdrawn, replication the app enrolled is unenrolled, structural app trees are soft-deleted, adopted trees are skipped and their ownership claims released, and the record reaches Uninstalled."
     source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
-  - n: 8
+  - n: 9
     action: "For gRPC clients, discover the advertised auth scheme before app-control calls when sign-in metadata is needed."
     api: "/orleans.lattice.api.apps/GetAuthScheme"
     expects: "Returns only configured public auth scheme descriptors and is exempt from the transport authorizer."
     source: "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods.GetAuthScheme"
-  - n: 9
+  - n: 10
     action: "For MCP app tools, use the app's namespaced tools only after the app is enabled and the caller holds the declared role."
     api: "{slug}_{tool} via Orleans.Lattice.Api.Mcp.Apps"
     expects: "Tool advertisement and invocation are checked against the current registry state and access gate; there is no lifecycle MCP tool."
@@ -105,7 +110,7 @@ failure_modes:
     response: "Fix the app source registration, embedded resource, manifest identity, or requested version."
   - id: stale-version-race
     signal: "ConcurrencyConflict or InvalidOperationException stating the installed version changed."
-    effect: "The consent update or upgrade is refused without rolling back the newer install."
+    effect: "The consent update, role re-binding, or upgrade is refused without rolling back the newer install or the transition that changed the record revision."
     response: "Re-read the descriptor or consent report and retry against the current version."
   - id: replication-enrolment
     signal: "Enable or reconcile returns ReplicationModeChangeRejected, ReplicationPreconditionFailed, or ReplicationEnrolmentFailed."
