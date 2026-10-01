@@ -60,6 +60,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Leaf digest string feeding.** Feeding a string to the digest appended its length prefix separately from the body, and sized its staging buffer to the key's own worst case, emitting a variable `localloc` per call. It stages both into one constant-size buffer now: 20-46% faster. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Vector clock digest folding.** Folding a multi-replica clock sorted a rented key array then re-looked-up every clock, and the keys-only `Array.Sort` overload allocated a comparer delegate per call. A paired-array sort carries clocks along now: 14-34% faster, 96% less allocated. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Pooled return prefix clearing.** Five more pooled staging sites returned their rental with `clearArray: true`, memsetting the whole rounded-up bucket rather than the slots written. They clear exactly the written prefix now: 50% faster on a sparse 4096-slot rental. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`)
+
 - **Agents - Delegated sessions run targeted tests only.** The agent playbooks and the testing master now bind a sub-session to a named fixture or method filter, never a whole test project reflexively. The scope rule is a host-capacity rule, not only a wall-clock one: concurrent sessions contend superlinearly, a contended run presents as a hang, and an unscoped run can perturb a co-located rig somebody is measuring. ([#4130](https://github.com/NSTA1/Orleans.Lattice/pull/4130)) (`repository-wide`)
 
 - **Performance - Pooled buffer return clearing.** Nine pooled staging sites returned their rental with `clearArray: true`, which memsets the whole rounded-up array rather than the bytes written. They clear exactly the written prefix now: 28-32% faster on a 4 KB to 64 KB staging call. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Storage.File`)
