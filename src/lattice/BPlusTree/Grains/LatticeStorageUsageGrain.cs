@@ -68,7 +68,18 @@ internal sealed class LatticeStorageUsageGrain(
     /// </summary>
     private void PublishToMetrics(TreeStorageUsageReport report, LatticeOptions options, bool walComplete)
     {
-        metrics.Publish(report);
+        // Key every series by the logical tree this activation backs, never by
+        // its own addressed id. The cluster roll-up walks every registered tree
+        // id, and a resize registers its {treeId}/resized/{operationId} copy as
+        // a tree in its own right, so this grain is activated for the copy as
+        // well as for the logical tree - both measuring the same shards and WAL
+        // partitions. Keying by the addressed id therefore published the same
+        // bytes under two different tree labels (issue #4152); see
+        // LatticeWalUsageGrain.PublishToMetrics for the full reasoning. The
+        // resolve is a dictionary hit: GetReportAsync has already awaited
+        // ResolveAsync for this tree, which caches the metric id.
+        var metricTreeId = optionsResolver.GetMetricTreeId(report.TreeId);
+        metrics.Publish(report with { TreeId = metricTreeId });
         if (options.WalMaxRetainedBytes is { } ceiling && ceiling > 0 && walComplete)
         {
             // Compared against physical occupancy, not the logical retained
@@ -76,7 +87,7 @@ internal sealed class LatticeStorageUsageGrain(
             // the retained total omits dead bytes, so comparing it lets a WAL
             // occupy approaching twice the ceiling without ever tripping the
             // flag (issue #3107).
-            metrics.PublishOverThreshold(report.TreeId, report.WalPhysicalBytes > ceiling);
+            metrics.PublishOverThreshold(metricTreeId, report.WalPhysicalBytes > ceiling);
         }
 
         // Publish the per-tree admission aggregate so the observable admission
@@ -89,7 +100,7 @@ internal sealed class LatticeStorageUsageGrain(
         // time from a single published record.
         admissionMetrics.Publish(new AdmissionUsageSample
         {
-            TreeId = report.TreeId,
+            TreeId = metricTreeId,
             LiveKeys = report.LiveKeys,
             EstimatedBytes = report.TotalBytes,
             MaxLiveKeys = options.MaxLiveKeys,

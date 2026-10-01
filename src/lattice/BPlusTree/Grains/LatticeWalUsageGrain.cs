@@ -140,16 +140,42 @@ internal sealed class LatticeWalUsageGrain(
     /// path (<see cref="LatticeStorageUsageGrain"/>) so a sibling silo's
     /// poll cannot accidentally republish a stale leaf/snapshot figure for
     /// the same tree.
+    /// <para>
+    /// The series is keyed by the <i>logical</i> tree
+    /// (<see cref="LatticeOptionsResolver.GetMetricTreeId"/>), never by this
+    /// activation's own addressed id. The WAL poll fans out to every
+    /// <i>registered</i> tree id and a resize registers its
+    /// <c>{treeId}/resized/{operationId}</c> copy as a tree in its own right,
+    /// so this grain is activated for the copy as well as for the logical tree
+    /// it backs. Both activations resolve to - and therefore measure - the same
+    /// WAL partitions, so keying by the addressed id published the same bytes
+    /// twice under two different <c>tree</c> labels: it leaked the physical id
+    /// into the label, grew label cardinality by one value per resize
+    /// generation, and broke the poller's documented guarantee that a
+    /// cross-silo <c>sum by (tree)</c> counts each tree once (issue #4152).
+    /// Keying both by the logical id collapses them onto one series whose value
+    /// is identical from either activation, so the duplicate publish is an
+    /// idempotent overwrite rather than a second series.
+    /// </para>
+    /// <para>
+    /// The resolve is free here: <see cref="GetWalUsageAsync"/> has already
+    /// awaited <see cref="LatticeOptionsResolver.ResolveAsync"/> for this tree
+    /// on every path that reaches this method, and that call caches the metric
+    /// id, so this is a dictionary hit rather than a registry round trip. The
+    /// published <see cref="TreeWalUsageReport"/> the caller receives is left
+    /// addressed as it asked for it; only the metric series is re-keyed.
+    /// </para>
     /// </summary>
     private void PublishToMetrics(TreeWalUsageReport report, LatticeOptions options)
     {
-        metrics.PublishWal(report);
+        var metricTreeId = optionsResolver.GetMetricTreeId(report.TreeId);
+        metrics.PublishWal(report with { TreeId = metricTreeId });
         if (options.WalMaxRetainedBytes is { } ceiling && ceiling > 0 && !report.Partial)
         {
             // Physical occupancy, not the logical retained total: the ceiling
             // exists to bound disk and the retained figure omits dead bytes
             // (issue #3107).
-            metrics.PublishOverThreshold(report.TreeId, report.WalPhysicalBytes > ceiling);
+            metrics.PublishOverThreshold(metricTreeId, report.WalPhysicalBytes > ceiling);
         }
     }
 
