@@ -176,8 +176,11 @@
                     }
                 </ul>
                 break;
+            case HistoryRowRenderMode.RangeTombstone when row.EndKey is { Length: > 0 } end:
+                <p class="lt-data-note">Every key up to <span class="lt-shell-mono">@end</span> was deleted.</p>
+                break;
             case HistoryRowRenderMode.RangeTombstone:
-                <p class="lt-data-note">Every key up to <span class="lt-shell-mono">@row.EndKey</span> was deleted.</p>
+                <p class="lt-data-note">@RangeDeletedWithNoEndText</p>
                 break;
             case HistoryRowRenderMode.LiveTail:
                 <p class="lt-data-note">A live change. Its value arrives with the durable revision.</p>

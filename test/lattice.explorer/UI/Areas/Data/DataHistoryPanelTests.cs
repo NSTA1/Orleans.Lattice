@@ -314,6 +314,102 @@ public sealed class DataHistoryPanelTests : DataTestContext
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-empty h3").TextContent, Is.EqualTo("No revisions")));
     }
 
+    [Test]
+    public void A_trimmed_history_with_no_earliest_revision_says_so_in_words_not_with_a_dash()
+    {
+        // #4178: a Truncated bound with no earliest retained revision read "history is available from -."
+        SeedHistory("orders", "k", "\"a\"");
+        Client.HistoryBounds[("orders", "k")] = (EntryHistoryBound.Truncated, default);
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        var notes = cut.FindAll(".lt-data-note").Select(note => note.TextContent).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes, Does.Contain(DataHistoryPanel.TrimmedWithNoEarliestText));
+            Assert.That(notes, Has.None.Contains("available from"));
+            Assert.That(notes, Has.None.Matches(@"(^|\s)-(\.|\s*$)"), "no placeholder dash in prose");
+        });
+    }
+
+    [Test]
+    public void A_trimmed_history_with_no_retained_revision_says_so_in_words_not_with_a_dash()
+    {
+        Client.WithTree("orders");
+        Client.HistoryBounds[("orders", "gone")] = (EntryHistoryBound.Truncated, default);
+
+        var cut = RenderAt("data/orders?tab=history&key=gone");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-empty h3").TextContent, Is.EqualTo("No revisions")));
+        var notes = cut.FindAll(".lt-data-note").Select(note => note.TextContent).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes, Does.Contain(DataHistoryPanel.TrimmedWithNoEarliestText));
+            Assert.That(notes, Has.None.Matches(@"(^|\s)-(\.|\s*$)"), "no placeholder dash in prose");
+        });
+    }
+
+    [Test]
+    public void A_trimmed_history_names_the_earliest_retained_revision()
+    {
+        SeedHistory("orders", "k", "\"a\"");
+        Client.HistoryBounds[("orders", "k")] = (EntryHistoryBound.Truncated, new HybridLogicalClock { WallClockTicks = Start.UtcTicks });
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll(".lt-data-note").Select(note => note.TextContent),
+            Does.Contain("Older revisions were trimmed; history is available from 2026-09-28 14:00:00 UTC.")));
+    }
+
+    [Test]
+    public void A_range_deletion_with_no_end_key_says_so_in_words_not_with_a_blank()
+    {
+        // Audit for #4178: "Every key up to  was deleted." when the marker carries no end key.
+        Client.WithTree("orders");
+        Client.History[("orders", "k")] =
+        [
+            new EntryRevisionRecord
+            {
+                SourceKey = "k",
+                Hlc = new HybridLogicalClock { WallClockTicks = Start.UtcTicks },
+                Kind = HistoryRowKind.RangeTombstone,
+                EndKey = null,
+            },
+        ];
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        var note = cut.Find(".lt-data-timeline__rev .lt-data-note").TextContent;
+        Assert.Multiple(() =>
+        {
+            Assert.That(note, Is.EqualTo(DataHistoryPanel.RangeDeletedWithNoEndText));
+            Assert.That(note, Does.Not.Contain("up to"));
+        });
+    }
+
+    [Test]
+    public void A_range_deletion_names_its_end_key()
+    {
+        Client.WithTree("orders");
+        Client.History[("orders", "k")] =
+        [
+            new EntryRevisionRecord
+            {
+                SourceKey = "k",
+                Hlc = new HybridLogicalClock { WallClockTicks = Start.UtcTicks },
+                Kind = HistoryRowKind.RangeTombstone,
+                EndKey = "m",
+            },
+        ];
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-timeline__rev .lt-data-note").TextContent, Is.EqualTo("Every key up to m was deleted.")));
+    }
+
     private void SeedHistory(string tree, string key, params string[] values)
     {
         if (!Client.Entries.ContainsKey(tree))
