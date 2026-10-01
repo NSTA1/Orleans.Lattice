@@ -66,6 +66,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Sort comparer delegate trims.** Sorting with an `IComparer<T>` minted a fresh `Comparison<T>` delegate per call, as the runtime converts its method group rather than caching it. Thirty-six CRDT, primitive and grain sort sites pass a cached comparison now and allocate nothing. ([#4184](https://github.com/NSTA1/Orleans.Lattice/pull/4184)) (`Orleans.Lattice`)
+
 - **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
 
 - **Performance - Leaf digest string feeding.** Feeding a string to the digest appended its length prefix separately from the body, and sized its staging buffer to the key's own worst case, emitting a variable `localloc` per call. It stages both into one constant-size buffer now: 20-46% faster. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)

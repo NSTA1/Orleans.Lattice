@@ -219,7 +219,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // matches the previous stable LINQ ordering exactly.
         var entries = new MvRegisterEntry[count];
         Entries.CopyTo(entries);
-        Array.Sort(entries, EntryOrdering.Instance);
+        Array.Sort(entries, EntryOrdering.Comparison);
 
         var ordered = new byte[count][];
         for (var i = 0; i < count; i++) ordered[i] = entries[i].Value;
@@ -230,12 +230,21 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// Total ordering over <see cref="MvRegisterEntry"/> dots that
     /// replicates the former <c>OrderBy(ReplicaId, Ordinal)</c> then
     /// <c>ThenBy(Counter)</c> composite key used by <see cref="Values"/>.
-    /// A cached singleton so the multi-value sort path allocates no
-    /// per-call comparer.
+    /// A cached singleton, sorted through <see cref="Comparison"/> so the
+    /// multi-value path allocates neither a comparer nor the comparison
+    /// delegate a <c>Sort(IComparer&lt;T&gt;)</c> overload would mint on every
+    /// call (a flat 64 bytes, independent of element count).
     /// </summary>
     private sealed class EntryOrdering : IComparer<MvRegisterEntry>
     {
         public static readonly EntryOrdering Instance = new();
+
+        /// <summary>
+        /// <see cref="Instance"/>'s comparison, constructed once. Declared
+        /// below <see cref="Instance"/> because static initialisers run in
+        /// declaration order.
+        /// </summary>
+        public static readonly Comparison<MvRegisterEntry> Comparison = Instance.Compare;
 
         public int Compare(MvRegisterEntry x, MvRegisterEntry y)
         {

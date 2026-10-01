@@ -106,7 +106,7 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
         }
         if (total == 0) return Array.Empty<CrdtMemberChange>();
 
-        keys.Sort(StringComparer.Ordinal);
+        keys.Sort(OrdinalStringOrder.Comparison);
 
         var result = new List<CrdtMemberChange>(total);
         foreach (var key in keys)
@@ -154,7 +154,7 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
                 }
             }
 
-            result.Sort(start, result.Count - start, CausalOrderComparer.Instance);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CausalOrderComparer.Comparison);
         }
         return result;
     }
@@ -183,7 +183,7 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
 
         var keys = new List<string>(adds.Count);
         foreach (var key in adds.Keys) keys.Add(key);
-        keys.Sort(StringComparer.Ordinal);
+        keys.Sort(OrdinalStringOrder.Comparison);
 
         var result = new List<CrdtMemberValue>(keys.Count);
         foreach (var key in keys)
@@ -356,6 +356,14 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
     private sealed class CausalOrderComparer : IComparer<CrdtMemberChange>
     {
         public static CausalOrderComparer Instance { get; } = new();
+
+        /// <summary>
+        /// <see cref="Instance"/>'s comparison, constructed once, so a sort
+        /// does not mint a fresh comparison delegate per call. Declared below
+        /// <see cref="Instance"/> because static initialisers run in
+        /// declaration order.
+        /// </summary>
+        public static readonly Comparison<CrdtMemberChange> Comparison = Instance.Compare;
 
         public int Compare(CrdtMemberChange x, CrdtMemberChange y)
         {

@@ -139,7 +139,7 @@ public sealed class SequenceProvenanceDecoder : ICrdtProvenanceDecoder
                 WallClock = null,
             });
         }
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 

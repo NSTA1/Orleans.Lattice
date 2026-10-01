@@ -518,7 +518,7 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
             }
             if (total == 0) return;
 
-            Array.Sort(keys, 0, keyCount, KeyRefComparer<TValue>.Instance);
+            keys.AsSpan(0, keyCount).Sort(KeyRefComparer<TValue>.Comparison);
 
             // Exact, not a lower bound: every event is accounted for above, so
             // the sink never climbs a doubling chain.
@@ -608,7 +608,7 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
     private static void SortGroup(List<CrdtMemberChange> sink, int groupStart)
     {
         var count = sink.Count - groupStart;
-        if (count > 1) sink.Sort(groupStart, count, CrdtMemberChangeCausalComparer.Instance);
+        if (count > 1) CollectionsMarshal.AsSpan(sink).Slice(groupStart, count).Sort(CrdtMemberChangeCausalComparer.Comparison);
     }
 
     /// <summary>
@@ -637,6 +637,14 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         where TValue : ICrdt<TValue>, new()
     {
         public static KeyRefComparer<TValue> Instance { get; } = new();
+
+        /// <summary>
+        /// <see cref="Instance"/>'s comparison, constructed once, so the
+        /// key-group sort does not mint a fresh comparison delegate per call.
+        /// Declared below <see cref="Instance"/> because static initialisers
+        /// run in declaration order.
+        /// </summary>
+        public static readonly Comparison<KeyRef<TValue>> Comparison = Instance.Compare;
 
         public int Compare(KeyRef<TValue> x, KeyRef<TValue> y)
             => CompareElementBytes(x.Element, y.Element);
