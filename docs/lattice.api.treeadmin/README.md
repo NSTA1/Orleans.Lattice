@@ -167,6 +167,8 @@ The exact `ILatticeTreeAdmin` contract (published in `Orleans.Lattice.Api.Abstra
 
 ## Operation progress
 
+View rebuild and reconcile, tag-index reconcile, WAL moves and whole-tree orphaned-leaf passes are accept-then-poll through `ILatticeTreeAdminOperations`, the facade's adoption of the shared [long-running operation contract](../lattice.api.abstractions/operations.md): a start verb returns a `LatticeOperationHandle` at once and `GetOperationStatusAsync` reports the phase and the units completed (keys projected, trees probed and repaired, WAL entries copied, shards walked). The blocking `RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` are deprecated (`LATTICE0002`) and now wrap an operation. See [Tree-administration operations](operations.md) for the kinds, phases, units, result keys and migration.
+
 Resize, snapshot and reshard are accept-then-poll: the trigger returns once the
 coordinator accepts the intent, and the operation runs on its own,
 reminder-anchored. A caller follows it by polling the status read. Each status
@@ -210,6 +212,7 @@ Alongside the request/response records the operations use, the facade publishes 
 
 ## See also
 
+- [Tree-administration operations](operations.md) - accept-then-poll view, tag-index, WAL-move and orphaned-leaf operations, and migrating from the deprecated blocking verbs.
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the schema control facade this surface composes by delegation.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared control-surface contract package that publishes `ILatticeTreeAdmin`.
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server binding that advertises the tree-administration group.

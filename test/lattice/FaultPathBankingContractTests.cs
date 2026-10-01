@@ -74,6 +74,8 @@ public class FaultPathBankingContractTests
         ("BankCancelledWarmReplayProgressAsync", "#2541", "BPlusLeafGrain warm WAL replay"),
         ("BankFaultedSliceAsync", "#2538", "DurableVectorIndex ANN ingest slice"),
         ("BankAppliedPrefixAfterApplyFailureAsync", "#2541", "BPlusLeafGrain apply fault"),
+        ("BankProgressAsync", "#4122", "LatticeOperationRunner coordinated-operation fault and cancel paths"),
+        ("BankRelayedProgressAsync", "#4124", "Tracked grain calls: view rebuild/reconcile, tag-index sweep, WAL move"),
     };
 
     /// <summary>A banking helper declared somewhere under <c>src/</c>.</summary>

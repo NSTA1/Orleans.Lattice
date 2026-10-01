@@ -6,6 +6,10 @@ using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
+// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
+// they stay supported until the next major version.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 
 /// <summary>

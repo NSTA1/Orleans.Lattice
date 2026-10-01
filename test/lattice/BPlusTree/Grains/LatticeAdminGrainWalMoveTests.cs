@@ -161,6 +161,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         public required ScriptedWalProvider Target { get; init; }
         public required IWalShardGrain Wal { get; init; }
         public required ILatticeRegistry Registry { get; init; }
+        public required IGrainFactory Factory { get; init; }
 
         /// <summary>Quiesce answers served in call order; the last one repeats.</summary>
         public List<Func<WalMoveQuiesceResult>> QuiesceScript { get; } = new();
@@ -234,6 +235,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
             Target = target,
             Wal = wal,
             Registry = registry,
+            Factory = factory,
         };
 
         wal.QuiesceForMoveAsync(Arg.Any<long>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())

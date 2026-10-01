@@ -299,6 +299,23 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "expire by age). Reflects the persisted per-tree override, falling back to the defaults "
                 + "(MetadataOnly, no age bound) when none is set. A pure read with no side effects. Requires "
                 + "whole-tree read authority. Read-only."),
+
+            // ----- Accept-then-poll operations: status and listing (read-only) -----
+            Read(services, TreeAdminOperationToolHandlers.GetOperationStatusAsync, "lattice_treeadmin_operation_status",
+                "Read a tree-administration operation's status",
+                "Reads one tracked tree-administration operation started by a lattice_treeadmin_*_start tool: its "
+                + "state (Queued, Running, Succeeded, Failed or Cancelled), the current phase, progress as whole units "
+                + "of that phase (completedUnits of totalUnits unitName; totalUnits is null while unknown, never "
+                + "invented), the failure reason, and on success the result map. found=false covers an unknown id, an "
+                + "operation pruned after its seven-day retention, and one the caller may not see alike. An operation "
+                + "whose silo was lost reads Failed rather than Running. Poll this until the state is terminal. "
+                + "Read-only."),
+            Read(services, TreeAdminOperationToolHandlers.ListOperationsAsync, "lattice_treeadmin_operation_list",
+                "List tree-administration operations",
+                "Lists one newest-first page of the caller's tracked tree-administration operations (view rebuilds "
+                + "and reconciles, tag-index reconciles, WAL moves, orphaned-leaf audits and repairs), each with its "
+                + "state, phase and progress. Only operations over trees the caller may read are listed. Pass "
+                + "nextPageToken back to continue. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -349,6 +366,57 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
 
         if (enableLifecycle)
         {
+            // ----- Accept-then-poll maintenance operations (destructive) -----
+            tools.Add(Write(services, TreeAdminOperationToolHandlers.StartViewRebuildAsync, "lattice_treeadmin_view_rebuild_start",
+                "Start a materialised-view rebuild",
+                "Starts a tracked shadow-swap rebuild of a materialised view and returns its operation handle at "
+                + "once. The rebuild runs in the background and survives the caller disconnecting; poll "
+                + "lattice_treeadmin_operation_status for its phase (Scanning, Projecting, Swapping) and keys "
+                + "projected. Prefer this to lattice_treeadmin_view_rebuild, which blocks. Requires whole-tree admin "
+                + "authority over the view's source tree. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminOperationToolHandlers.StartViewReconcileAsync, "lattice_treeadmin_view_reconcile_start",
+                "Start a materialised-view reconcile",
+                "Starts a tracked reconcile (view anti-entropy) of a materialised view and returns its operation "
+                + "handle at once; poll lattice_treeadmin_operation_status for its phase (Digesting, Scanning, "
+                + "Projecting, Comparing, Swapping) and keys projected. The result's driftRepaired says whether the "
+                + "view was repaired. Prefer this to lattice_treeadmin_view_reconcile, which blocks. Requires "
+                + "whole-tree admin authority over the view's source tree. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminOperationToolHandlers.StartTagIndexReconcileAsync, "lattice_treeadmin_tag_index_reconcile_start",
+                "Start a tag-index reconcile sweep",
+                "Starts a tracked digest-gated reconcile sweep of a tag index and returns its operation handle at "
+                + "once; poll lattice_treeadmin_operation_status for its phase (Probing, then Repairing when a covered "
+                + "tree diverged) and trees done. Cancelling abandons the sweep and leaves the index idle. Prefer this "
+                + "to lattice_treeadmin_tag_index_reconcile, which blocks. Requires whole-tree admin authority over "
+                + "the index's backing tree. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminOperationToolHandlers.StartWalMoveAsync, "lattice_treeadmin_wal_move_start",
+                "Start a WAL partition move",
+                "Starts a tracked online move of one write-ahead-log partition to a target storage provider key and "
+                + "returns its operation handle at once; poll lattice_treeadmin_operation_status for its phase "
+                + "(Copying with entries copied of the live tail, Verifying, Flipping). Cancelling before the flip "
+                + "leaves the source live; once flipped the move is committed. The source tail is retained until "
+                + "lattice_treeadmin_wal_move_reclaim. Prefer this to lattice_treeadmin_wal_move_execute, which "
+                + "blocks. Rejected for a reserved tree id. Tree-lifecycle-gated and destructive."));
+            tools.Add(Write(services, TreeAdminOperationToolHandlers.StartOrphanedLeavesRepairAsync, "lattice_treeadmin_orphaned_leaves_repair_start",
+                "Start a whole-tree orphaned-leaf repair",
+                "Starts a tracked whole-tree orphaned-leaf repair and returns its operation handle at once: the "
+                + "operation drives the repair batch by batch to the end of the tree in the background, reporting "
+                + "physical shards walked, and records the totals (leavesWalked, orphanedLeaves, repaired, refused, "
+                + "gaps). Irreversible per repaired leaf; audit again when it finishes. Rejected for a reserved tree "
+                + "id. Tree-lifecycle-gated and destructive."));
+            tools.Add(Mutate(services, TreeAdminOperationToolHandlers.StartOrphanedLeavesAuditAsync, "lattice_treeadmin_orphaned_leaves_audit_start",
+                "Start a whole-tree orphaned-leaf audit",
+                "Starts a tracked whole-tree orphaned-leaf audit and returns its operation handle at once: the "
+                + "operation drives the audit batch by batch to the end of the tree in the background, reporting "
+                + "physical shards walked, and records the totals (leavesWalked, orphanedLeaves, repairable, "
+                + "refused, gaps) in its result. Survives the caller disconnecting. Poll "
+                + "lattice_treeadmin_operation_status. Use lattice_treeadmin_orphaned_leaves_audit to page the "
+                + "per-leaf findings. Requires whole-tree read authority. Mutates nothing but the operation record."));
+            tools.Add(Mutate(services, TreeAdminOperationToolHandlers.CancelOperationAsync, "lattice_treeadmin_operation_cancel",
+                "Cancel a tree-administration operation",
+                "Requests cancellation of a tracked tree-administration operation. The request is recorded durably "
+                + "and the work stops at its next progress report or heartbeat; the operation then reads Cancelled. "
+                + "A WAL move past its placement flip, or an operation already finished, is not undone. Requires the "
+                + "grant that starting the operation required. found=false when the operation is not visible."));
             // ----- Tree lifecycle and registry config (destructive) -----
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_repair",
                 "Repair a tree's orphaned leaves",

@@ -157,7 +157,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Tree administration facade (Orleans.Lattice.Api.TreeAdmin, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Tree administration facade (Orleans.Lattice.Api.TreeAdmin, .Grpc): blocking and accept-then-poll operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "capabilities.yaml",

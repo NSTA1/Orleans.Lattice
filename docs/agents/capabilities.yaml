@@ -3313,7 +3313,13 @@ capabilities:
         source: "docs/lattice.api.treeadmin/README.md"
       - statement: "Destructive or structural lifecycle operations require the distinct TreeLifecycle authority."
         source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "View rebuild and reconcile, tag-index reconcile, WAL moves and whole-tree orphaned-leaf passes are accept-then-poll through ILatticeTreeAdminOperations, with durable status, phase and unit progress, result maps and cancellation."
+        source: "docs/lattice.api.treeadmin/operations.md"
     non_guarantees:
+      - statement: "A tracked tree-administration operation is not resumed after accepting-silo loss; it is marked Failed and must be started again."
+        source: "docs/lattice.api.abstractions/operations.md"
+      - statement: "Cancelling a WAL move after its placement flip does not undo the move."
+        source: "docs/lattice.api.treeadmin/operations.md"
       - statement: "The facade is absent by default until AddLatticeTreeAdminApi is called."
         source: "docs/lattice.api.treeadmin/README.md"
       - statement: "The capability probe does not replace per-operation authorization."
@@ -3352,6 +3358,7 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice.api.treeadmin/README.md"
+      - "docs/lattice.api.treeadmin/operations.md"
       - "docs/lattice/wal-storage-providers.md"
   - id: tree-registry
     name: "Tree registry"

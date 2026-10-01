@@ -15,4 +15,10 @@ public sealed record TreeAdminViewRequest
 {
     /// <summary>The logical materialised-view name the operation targets.</summary>
     [Id(0)] public required string ViewName { get; init; }
+
+    /// <summary>
+    /// The idempotency id of the tracked operation an accept-then-poll start RPC
+    /// creates, or <see langword="null"/> to generate one. Ignored by the blocking RPCs.
+    /// </summary>
+    [Id(1)] public string? TrackingOperationId { get; init; }
 }

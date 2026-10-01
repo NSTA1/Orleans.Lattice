@@ -669,6 +669,36 @@ invariants:
     sources:
       - "docs/lattice.api.abstractions/operations.md"
       - "docs/lattice.api.backup/operations.md"
+  - id: treeadmin-operation-cancel-before-flip
+    name: "Tree-admin WAL-move cancel before flip"
+    description: "Cancelling a tracked WAL move before its placement flip leaves the partition on its source provider and unfenced; a tracked tree-admin operation is never resumed after accepting-silo loss."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.TreeAdmin"
+        - "Orleans.Lattice"
+      components:
+        - "ILatticeTreeAdminOperations"
+        - "LatticeOperationStatus"
+        - "LatticeOperationRunner"
+    violation_modes:
+      - "A cancelled WAL move flips the partition placement after cancellation was observed."
+      - "A cancelled or failed WAL move leaves the source partition fenced against writes."
+      - "A tree-admin operation remains Running after the accepting silo is declared dead."
+    detection_signals:
+      - type: status
+        name: "LatticeOperationStatus.State"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+      - type: status
+        name: "LatticeOperationStatus.Phase"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+    remediation:
+      - step: "Inspect the WAL placement after a Cancelled or Failed move and start a new move if it is still needed."
+        source: "docs/lattice.api.treeadmin/operations.md"
+      - step: "Treat Failed after silo loss as terminal and start a new tracked operation."
+        source: "docs/lattice.api.abstractions/operations.md"
+    sources:
+      - "docs/lattice.api.treeadmin/operations.md"
+      - "docs/lattice.api.abstractions/operations.md"
   - id: crdt-buffer-ownership
     name: "CRDT byte-buffer ownership"
     description: "Registers and sequences store caller-authored byte arrays by handoff, set primitives encode them instead of retaining them, peer-folded winners are copied, and every public egress projection is copied."

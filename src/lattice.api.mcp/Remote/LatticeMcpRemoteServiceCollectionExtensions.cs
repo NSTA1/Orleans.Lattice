@@ -170,6 +170,9 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeTreeAdmin>(sp =>
                 new GrpcLatticeTreeAdmin(LatticeTreeAdminApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+            services.TryAddSingleton<ILatticeTreeAdminOperations>(sp =>
+                new GrpcLatticeTreeAdminOperations(LatticeTreeAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
 
             // The tree-administration MCP group includes both tree-lifecycle/admin
             // tools and schema-control tools. The schema facade is wired off the

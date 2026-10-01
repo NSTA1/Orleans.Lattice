@@ -287,7 +287,9 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string targetProviderKey,
         TreeWalMoveOptions? options = null,
         CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb to its deprecated client twin.
         => _client.ExecuteWalMoveAsync(treeId, partition, targetProviderKey, options, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
@@ -321,11 +323,15 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
 
     /// <inheritdoc />
     public Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb to its deprecated client twin.
         => _client.RebuildViewAsync(viewName, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb to its deprecated client twin.
         => _client.ReconcileViewAsync(viewName, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)
@@ -341,7 +347,9 @@ public Task<TreeTagIndexStatus> GetTagIndexStatusAsync(string indexName, Cancell
 
 /// <inheritdoc />
 public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb to its deprecated client twin.
     => _client.ReconcileTagIndexAsync(indexName, cancellationToken);
+#pragma warning restore LATTICE0002
 
 /// <inheritdoc />
 public Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)

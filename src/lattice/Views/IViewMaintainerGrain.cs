@@ -74,6 +74,27 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task<bool> ReconcileAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <see cref="RebuildAsync"/> as a tracked grain call: reports its scan,
+    /// projection and swap progress to the coordinated operation
+    /// <paramref name="ticket"/> names, and stops when that operation is cancelled.
+    /// </summary>
+    /// <param name="ticket">The operation to report to. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the rebuild.</param>
+    [ResponseTimeout(Operations.LatticeMaintenanceProgress.TrackedCallResponseTimeout)]
+    Task RebuildTrackedAsync(Operations.LatticeOperationTicket ticket, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see cref="ReconcileAsync"/> as a tracked grain call: reports its digest,
+    /// scan, projection, comparison and swap progress to the coordinated operation
+    /// <paramref name="ticket"/> names, and stops when that operation is cancelled.
+    /// </summary>
+    /// <param name="ticket">The operation to report to. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the reconcile.</param>
+    /// <returns><see langword="true"/> when drift was detected and repaired.</returns>
+    [ResponseTimeout(Operations.LatticeMaintenanceProgress.TrackedCallResponseTimeout)]
+    Task<bool> ReconcileTrackedAsync(Operations.LatticeOperationTicket ticket, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Computes a deterministic, order-independent <see cref="ViewDigest"/> over
     /// the active generation's materialised (key, value) entries (excluding any
     /// reserved aggregation internal rows).
