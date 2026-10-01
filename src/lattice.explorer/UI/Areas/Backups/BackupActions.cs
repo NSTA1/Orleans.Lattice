@@ -4,22 +4,19 @@ using Orleans.Lattice.Backup;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.UI.Transport;
 
-// Still calls the deprecated blocking backup verbs (LATTICE0002); the Explorer moves to
-// ILatticeBackupOperations in the second #4122 change, which removes this suppression.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
 /// <summary>
-/// Starts the Backups area's operations (epic decision E15). Each one first checks
-/// access with the capability probe, so a caller the probe denies is told so before
-/// anything is attempted; the server still authorizes every call fail-closed.
+/// Starts the Backups area's operations (epic decision E15). A capture, restore or
+/// revert first checks access with the capability probe, so a caller the probe
+/// denies is told so before anything is attempted; the server still authorizes
+/// every call fail-closed.
 /// </summary>
 /// <remarks>
-/// A capture or restore is started on the cluster as a tracked operation (#4122):
-/// the circuit's operation checks access, starts it, and hands off to the cluster's
-/// operation id, whose status - with real progress - outlives the circuit, so
-/// closing the tab never stops the work. Revert and catalogue maintenance run in
+/// A capture, a restore, a catalogue rebuild or a catalogue scrub is started on the
+/// cluster as a tracked operation (#4122, #4125): the circuit's operation starts it
+/// and hands off to the cluster's operation id, whose status - with real progress -
+/// outlives the circuit, so closing the tab never stops the work. A revert runs in
 /// the circuit end to end.
 /// </remarks>
 internal sealed class BackupActions
@@ -198,67 +195,36 @@ internal sealed class BackupActions
             },
             reverts: restoreOperationId);
     }
-    /// <summary>Starts rebuilding the catalogue from the backup store.</summary>
+    /// <summary>
+    /// Starts rebuilding the catalogue from the backup store on the cluster (#4125),
+    /// handing off to the cluster's operation. The server authorizes it with the
+    /// restore grant over the catalogue.
+    /// </summary>
     public BackupOperation RebuildCatalogue() =>
         _operations.Start(
             BackupOperationKind.RebuildCatalogue,
             "Rebuild the catalogue from the backup store",
-            ["Scan the backup store", "Done"],
+            [StartStage],
             async (operation, cancellationToken) =>
             {
-                BackupCatalogRebuildReport report;
-                try
-                {
-                    report = await _control.RebuildCatalogFromSinkAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (NotSupportedException)
-                {
-                    _access.MarkExtensionsNotServed();
-                    throw;
-                }
-
-                operation.Report(facts:
-                [
-                    new("Manifests scanned", BackupsFormat.Count(report.ScannedCount)),
-                    new("Added to the catalogue", BackupsFormat.Count(report.RegisteredCount)),
-                    new("Reconciled in place", BackupsFormat.Count(report.ReconciledCount)),
-                ]);
-                operation.Succeed("Rebuilt the catalogue from the backup store.");
+                var handle = await _clusterOperations.StartCatalogRebuildAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
 
-    /// <summary>Starts checking the catalogue against the backup store.</summary>
+    /// <summary>
+    /// Starts checking the catalogue against the backup store on the cluster
+    /// (#4125), handing off to the cluster's operation.
+    /// </summary>
     /// <param name="pruneOrphans">Whether to remove orphan rows rather than only report them.</param>
     public BackupOperation ScrubCatalogue(bool pruneOrphans) =>
         _operations.Start(
             BackupOperationKind.ScrubCatalogue,
             pruneOrphans ? "Remove orphan rows from the catalogue" : "Check the catalogue against the backup store",
-            [pruneOrphans ? "Find and remove orphan rows" : "Find orphan rows", "Done"],
+            [StartStage],
             async (operation, cancellationToken) =>
             {
-                BackupCatalogScrubReport report;
-                try
-                {
-                    report = await _control.ScrubCatalogAgainstSinkAsync(pruneOrphans, cancellationToken).ConfigureAwait(false);
-                }
-                catch (NotSupportedException)
-                {
-                    _access.MarkExtensionsNotServed();
-                    throw;
-                }
-
-                operation.Report(
-                    facts:
-                    [
-                        new("Rows scanned", BackupsFormat.Count(report.ScannedCount)),
-                        new("Orphan rows", BackupsFormat.Count(report.OrphanCount)),
-                        new("Rows removed", BackupsFormat.Count(report.RemovedCount)),
-                    ],
-                    items: report.OrphanBackupIds);
-                operation.Succeed(report.OrphanCount == 0
-                    ? "Every catalogue row has its backup in the store."
-                    : report.Pruned
-                        ? "Removed " + BackupsFormat.Count(report.RemovedCount) + " orphan rows from the catalogue."
-                        : "Found " + BackupsFormat.Count(report.OrphanCount) + " orphan rows. They are never offered as restore points; remove them from the maintenance page.");
+                var handle = await _clusterOperations.StartCatalogScrubAsync(pruneOrphans, cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
 
     private async Task RequireAsync(BackupScopeSelector scope, Func<BackupScopeCapabilities, bool> allowed, CancellationToken cancellationToken)
