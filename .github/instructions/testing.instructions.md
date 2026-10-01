@@ -395,6 +395,20 @@ The suite has grown past the point where running everything is a reasonable inne
 
 Counter-intuitively, "just run the integration tests" is the *slowest* possible loop. Integration tests are precisely what you want to defer.
 
+### Concurrency - the scope rule is a host-capacity rule, not only a wall-clock one
+
+Every tier below is justified by **your** wall-clock, and that under-states the cost, because it reasons about one session on an otherwise idle machine. That is not how this repository is worked: delegated sessions - feature-dev and bug-hunter workers, backlog and coverage workers, the scheduled automations - run **concurrently on one host**, routinely a dozen at once.
+
+Two consequences, and the second is the one nobody anticipates.
+
+**N unfiltered runs cost more than N times one run.** Every test run starts its own test host, and the `TestCluster` fixtures that dominate the cost are memory- and core-hungry. Concurrent whole-project runs contend for the same cores, disk and RAM, so the slowdown is superlinear - and a run that loses that race trips its own `--blame-hang-timeout` and presents as a **hang**, which reads as a product defect rather than as contention. You then spend the time diagnosing the wrong thing.
+
+**The host may also be running something that is being measured.** A local repocontext container, a benchmark rig, or a reproduction container is a production-shaped workload whose telemetry somebody is reading. Test-host contention perturbs exactly the signals those rigs report: lock-failure rates and write-gate admission shares are load-sensitive and are judged against workload-calibrated thresholds, so an unscoped local run can manufacture a **false escalation in a channel that has nothing to do with your change**. A threshold calibrated at idle does not know your suite started.
+
+So a delegated session runs Tier 1 while iterating and the narrowest Tier 4 scope its change permits. It does not run a whole test project reflexively, and it never runs a solution-wide run with no project argument. An agent that **deploys** sub-sessions states this constraint in each kickoff prompt rather than assuming it is inherited.
+
+The exemption is unchanged, and it is the one case where narrowing is wrong: the repository-wide gates below are not reachable by a scoped run at all, and must go through `tools/Invoke-RepositoryWideGates.ps1`.
+
 ### Tier 1 - while editing (seconds)
 
 Run a single fixture or method, either from the Visual Studio Test Explorer or from the CLI:
