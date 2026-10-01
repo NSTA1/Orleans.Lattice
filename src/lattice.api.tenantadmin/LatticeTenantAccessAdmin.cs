@@ -138,9 +138,9 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // this is an administrative membership-reference create path and validates
         // the id against the identity directory wherever one is configured: a
         // typo'd, retired, or not-yet-provisioned id must never be recorded as a
-        // live grant that whoever later registers it would inherit. (The shipped
-        // registration of the tenant-create facade supplies no directory, so an
-        // explicit seed set at create is not validated this way.)
+        // live grant that whoever later registers it would inherit. The registered
+        // tenant-create path applies the same directory validation to explicitly
+        // seeded admin subjects before it writes the tenant.
         await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
 
         record.AddAdminSubject(subjectId, _clock.Next(), _writerId);

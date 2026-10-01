@@ -88,7 +88,7 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
             Assert.That(ToastService.Toasts.Single().Message, Is.EqualTo("The policy of orders is saved."));
             Assert.That(cut.FindAll(".lt-schema-rulebuilder"), Is.Empty);
             Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(3));
-            Assert.That(cut.Find("dl.lt-dl").TextContent, Does.Contain("On: replicated and restored values are checked too"));
+            Assert.That(cut.Find("dl.lt-dl").TextContent, Does.Contain("On: replicated CRDT and atomic-batch entries are checked too"));
         });
     }
 

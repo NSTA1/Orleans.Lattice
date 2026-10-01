@@ -34,13 +34,13 @@ siloBuilder.AddLatticeScalingSignal(options =>
 | Option | Type | Default | Guidance |
 |---|---|---|---|
 | `EndpointPath` | `string` | `/lattice/scale` | The HTTP path `MapLatticeScalingSignal` serves the signal from. `MapLatticeScalingSignal(path)` can override it per-call; keep this and the mapped path in sync. |
-| `MinReplicas` | `int` | `0` | Lower bound applied to both `ScaleValue` and `RecommendedReplicas` - neither is reported below this floor once the first sample lands. Set it to your cluster's minimum viable silo count so scale-in never suggests dropping below quorum. |
+| `MinReplicas` | `int` | `0` | Lower bound applied to both `ScaleValue` and `RecommendedReplicas` - neither is reported below this floor once the first sample lands. Set it to your cluster's minimum viable silo count so scale-in never suggests dropping below quorum. An autoscaler acting on `ScaleValue` divides this floor by its `targetValue` like any other value, so under the shipped `targetValue` of `0.5` a cluster at rest holds `ceil(MinReplicas / 0.5)` replicas - twice the floor - capped at the autoscaler's maximum. For the pool to rest at quorum instead, set the quorum as the autoscaler's own minimum (`minReplicas` / `minReplicaCount`) and keep `MinReplicas` at or below that minimum times `targetValue` (see [the custom scale rule](keda-aca.md#the-custom-scale-rule)). |
 
 ### Compute axis
 
 | Option | Type | Default | Guidance |
 |---|---|---|---|
-| `SampleInterval` | `TimeSpan` | `5s` | How often the silo recomputes the signal. The per-scrape facade reads the cached result, so this is the freshness bound, not the scrape cost. Keep it well below your autoscaler's polling interval. A non-positive value falls back to the 5-second default. |
+| `SampleInterval` | `TimeSpan` | `5s` | How often the silo recomputes the signal. The per-scrape facade reads the cached result, so this is the freshness bound, not the scrape cost. Keep it well below your autoscaler's polling interval. A non-positive value falls back to the 5-second default, and a value above the timer ceiling (about 49.7 days) is clamped to it. |
 | `EwmaHalfLife` | `TimeSpan` | `30s` | Half-life of the exponentially-weighted moving average applied to the scalar on the scale-in (release) side. Longer damps noise and makes scale-in more conservative; scale-out reacts immediately regardless. A non-positive value disables the smoothing, so a falling scalar is adopted directly once the gate allows it. |
 | `ScaleInGateWindow` | `TimeSpan` | `2m` | How long every scale-in precondition (all compute dimensions low, WAL healthy, no shard split in flight) must hold continuously before the scalar is allowed to fall. Any break resets the window. |
 | `ActivationScaleInThreshold` | `double` | `0.25` | Activation-pressure level (0..1) at or above which the activation dimension is too hot to permit scale-in. |

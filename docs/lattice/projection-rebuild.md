@@ -322,11 +322,13 @@ When the opt-out is in effect:
 - The leaf does not publish `ChildDigestSnapshot` upward, so no
   internal-node ancestor updates its `SubtreeProjectionHash` for that
   mutation. The whole upward chain is quiescent.
-- `ILattice.GetLeafProjectionDigestAsync` fast-fails with
-  `InvalidOperationException` at the public surface, before any
-  routing-table fetch or grain hop. The leaf and internal grains repeat
-  the check for defence-in-depth so a direct grain-handle caller hits
-  the same exception.
+- `ILattice.GetLeafProjectionDigestAsync` throws
+  `InvalidOperationException`. When the opt-out comes from the configured
+  options it fails fast at the public surface, before any routing-table
+  fetch or grain hop. That check does not read the registry, so an opt-out
+  set only through the tree's registry override or the latch below is
+  caught after the shard hop, by the same check in the leaf and internal
+  grains, which also stops a direct grain-handle caller.
 - Persisted state is **not** rewritten. Any `ProjectionHash` already on
   disk from a previous-enabled period remains untouched.
 
@@ -625,7 +627,8 @@ When no permit is immediately available, or the drive's part of the GC
 share is occupied, the drive is refused before replay starts. The refusal
 is a result rather than an exception (issue #3761): the drive returns an
 admission-refused verdict, and the refusal is counted on
-`orleans.lattice.saturation.refusals` with `source=replay_permit_admission`.
+`orleans.lattice.saturation.refusals` with `source=replay_permit_admission`
+and `arm=gc_share`.
 It neither advances nor retires the leaf's retention pin, and neither
 caller treats it as a fault:
 

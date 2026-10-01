@@ -1,9 +1,9 @@
 # Orleans.Lattice.Api.Telemetry.Grpc
 
 The **gRPC binding** for [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md).
-It exposes the telemetry facade to a remote head - notably the Explorer's desktop
-head, which cannot enforce tenant scoping locally and so must be served by a
-routable, server-scoped endpoint.
+It exposes the telemetry facade to a remote head - notably the Explorer, which
+reaches the cluster over this binding, cannot enforce tenant scoping locally, and
+so must be served by a routable, server-scoped endpoint.
 
 ## Reference closure
 

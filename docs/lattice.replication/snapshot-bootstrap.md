@@ -363,7 +363,13 @@ client-streaming, and duplex - so the same shared-secret credential
 receiver's accepted set, `LATTICE_REPLICATION_ACCEPTED_SECRETS`, or a
 custom `ILatticeReplicationSecretSource`) and the same
 `LatticeReplicationSecurityOptions.RequireAuthentication` switch cover
-inbound snapshot calls without additional wiring.
+inbound snapshot calls without additional wiring. With
+`LatticeReplicationSecurityOptions.BindCredentialToOriginCluster` on
+(the default), the interceptor also refuses a snapshot call that
+carries no `x-lattice-replication-origin` header, or whose presented
+secret is not the one the exporting cluster would itself send to the
+named origin - see
+[Configuration](configuration.md#transport-security---latticereplicationsecurityoptions).
 
 The client translates `RpcException(StatusCode.Cancelled)` raised while
 the caller's own cancellation token is cancelled into the canonical
@@ -453,9 +459,9 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   invariant plus the durable in-progress flag is the synchronisation
   primitive. Concurrent bootstraps of different trees route to
   different activations and run in parallel.
-- **Durable, crash-resumable state.** The grain inherits the same
-  `CoordinatorGrain<TSelf>` reminder + phase-timer pattern used
-  by the core tree-resize coordinator. Phase, source cluster id,
+- **Durable, crash-resumable state.** The grain uses the same
+  keepalive-reminder plus phase-timer coordinator pattern as
+  the core tree-resize coordinator. Phase, source cluster id,
   and a `LastAppliedHlc` cursor are persisted to the
   `LatticeOptions.StorageProviderName` storage provider. After a
   silo crash, Orleans reactivates the grain on a surviving silo
@@ -784,7 +790,7 @@ receiver holds exactly what the source holds.
 
 A saga the producer's registry recorded as `Committed` before the
 snapshot is naturally folded into the committed projection by the
-existing scan-time `SnapshotPendingForReadAsync` path - which honors
+leaf scan's pending-transaction read step - which honors
 the frozen registry scope - so the receiver observes the post-saga
 value directly without a separate prepared/terminal round trip. The
 same applies in reverse for `Aborted`: the prepared mutation is

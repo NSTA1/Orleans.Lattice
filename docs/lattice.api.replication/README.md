@@ -24,7 +24,7 @@ For the engine-side mechanics - the static anchor, the compiled snapshot, and th
 
 ## Core properties
 
-- **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeReplicationApi()` on the silo, and the facade does no background work until a method is called.
+- **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeReplicationApi()` - or, for the read-only [peer status](#peer-status), `AddLatticeReplicationStatusApi()` - on the silo, and neither facade does background work until a method is called.
 - **Fail-closed by construction.** Enable and disable authorize their target tree through the existing Lattice access gate for the dedicated `LatticeOperation.Replication` capability, before touching engine state: an anonymous or unauthorized caller is denied with `LatticeAuthorizationDeniedException` and the engine is never consulted. The config read applies the same check per tree to filter what it reports (see permission-scoped discovery below). As on the data plane, a host with no authorization add-on registered runs the core no-op access gate, which allows every call.
 - **Mode fixed at enable time.** The merge mode is chosen when a tree is first enabled and cannot be changed in place; enabling an already-enabled tree under a different mode is rejected. The sanctioned way to change a mode is to disable, then re-enable under the new mode; supplying a bootstrap source cluster on that enable re-seeds a tree that already holds data from a snapshot.
 - **Disable never purges.** Disabling never deletes data already replicated to peers. Unless the static map also declares the tree, its merge-mode resolution then returns no mode, but shipping does not pause: an already-active shipper keeps shipping the tree's new local writes, and a peer that has converged on the disable drops them at its receiver-side enrollment gate (see [runtime replication configuration](../lattice.replication/runtime-config.md#fail-closed-ambiguity)).
@@ -49,7 +49,9 @@ The facade operations (each reached over the gRPC binding as one RPC, and over M
 
 `ILatticeReplicationStatus` is a separate, read-only contract. It reports how each
 replication link is doing, and leaves `ILatticeReplicationControl` unchanged. Register
-it with `AddLatticeReplicationStatusApi()`.
+it with `AddLatticeReplicationStatusApi()`, after `AddLatticeReplication(...)`: called
+first, it throws at registration. It reads telemetry rather than the config authority,
+so it does not need `enableRuntimeConfig: true` or `AddLatticeReplicationApi()`.
 
 `GetPeerStatusAsync(ReplicationPeerStatusQuery)` returns a paged
 `ReplicationPeerStatusPage`. The page carries the local region id, then one
@@ -60,7 +62,8 @@ count, and a derived `ReplicationLinkHealth`: `Healthy`, `Lagging`, `Stalled` or
 
 - **Cluster-wide.** Peer statistics are kept per silo. The facade fans out to every
   active silo through an internal grain service. When the same link appears on more
-  than one silo, it keeps the most recent contact whole. None of this runs on the
+  than one silo, it keeps the most recent contact whole. A silo that fails to answer
+  fails the whole read rather than producing a partial page. None of this runs on the
   shipping or apply path.
 - **Effective ids, the same as the config report.** Each link names its tree by the
   effective id, which is the id `GetReplicationConfigAsync` uses for the same tree, so
@@ -74,19 +77,22 @@ count, and a derived `ReplicationLinkHealth`: `Healthy`, `Lagging`, `Stalled` or
   capability that `GetReplicationConfigAsync` requires. Trees the caller may not
   manage are left out. A tree filter the caller may not manage returns an empty page
   without reading any statistics.
-- **Configurable health.** `LatticeReplicationStatusOptions` sets the thresholds. By
-  default a link is lagging at 1,000 entries behind, 5 consecutive errors or 30
-  seconds without contact, and stalled at 10,000 entries, 50 errors or 5 minutes.
-  Inbound links can have their own no-contact thresholds, which are off by default.
+- **Configurable health.** `LatticeReplicationStatusOptions` sets the thresholds. A
+  signal trips a bound only when it is strictly above it, and the worst signal wins.
+  By default a link is lagging above 1,000 entries behind, 5 consecutive errors or 30
+  seconds without contact, and stalled above 10,000 entries, 50 errors or 5 minutes.
+  The backlog and no-contact defaults apply to outbound links; inbound links can have
+  their own no-contact thresholds, which are off by default. See
+  [Configuration](configuration.md#latticereplicationstatusoptions).
 
 The [Explorer](../lattice.explorer/README.md)'s Replication area draws its estate
 diagram from this report.
 
 ## Reference
 
-- [API reference](api.md) - the public options and model types, and the facade operations by name.
+- [API reference](api.md) - the registration entry points, the public options and model types, and the control and peer-status operations.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
-- [Architecture](architecture.md) - how the facade authorizes, delegates to the engine authority, and scopes discovery.
+- [Architecture](architecture.md) - how the control facade authorizes, delegates to the engine authority, and scopes discovery, and how the peer-status read path reads, authorizes, and pages.
 
 ## See also
 

@@ -3061,10 +3061,13 @@ internal sealed class LatticeWalGcScheduler(
     /// naming why.
     /// <para>
     /// Byte accounting is a capability of the configured
-    /// <see cref="IWalStorageProvider"/> gated behind the byte-pressure policy
-    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>), so
+    /// <see cref="IWalStorageProvider"/>, and a pass samples it only when the
+    /// byte-pressure policy (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) or
+    /// the durability hold (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>,
+    /// on by default) has a positive ceiling, so
     /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/> is
-    /// <see langword="null"/> on a host that has either turned off.
+    /// <see langword="null"/> when neither is set or the provider reports no
+    /// byte size.
     /// </para>
     /// <para>
     /// That branch used to record nothing at all, leaving the absence knowable
@@ -3074,10 +3077,12 @@ internal sealed class LatticeWalGcScheduler(
     /// wrong, retracted root-cause diagnosis on this repository (issue #2692),
     /// so the branch now states itself through
     /// <see cref="LatticeMetrics.WalGcBacklogBytesUnavailable"/>, tagged with the
-    /// reason a reader would act on: <c>policy_disabled</c> when no ceiling is
-    /// configured (set <see cref="LatticeOptions.WalMaxRetainedBytes"/>), or
-    /// <c>provider_unsupported</c> when a ceiling <i>is</i> configured and the
-    /// provider still reported no retained byte size (change provider).
+    /// reason a reader would act on: <c>policy_disabled</c> when no
+    /// byte-pressure ceiling is configured (<see cref="LatticeOptions.WalMaxRetainedBytes"/>)
+    /// - which, because the default-on hold still samples, also covers a
+    /// provider without byte accounting - or <c>provider_unsupported</c> when a
+    /// byte-pressure ceiling <i>is</i> configured and the provider still
+    /// reported no byte size (change provider).
     /// Reclaimed volume in that configuration remains observable in records
     /// through <see cref="LatticeMetrics.WalEntriesTrimmed"/> and the
     /// <see cref="LatticeMetrics.OutcomeReclaimed"/> pass outcome.

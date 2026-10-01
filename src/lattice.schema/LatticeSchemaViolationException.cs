@@ -11,10 +11,11 @@ namespace Orleans.Lattice.Schema;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Only local (user-origin) writes surface this exception. Trusted ingest
-/// (replication apply, backup restore) never throws: under strict mode a
-/// non-compliant ingested item is dead-lettered so ingest never blocks, and
-/// without strict mode it is trusted as-is.
+/// Only intercepted local (user-origin) writes surface this exception.
+/// Intercepted system-origin writes never throw: under strict mode a
+/// non-compliant item is dead-lettered so that intercepted write never blocks,
+/// and without strict mode it is trusted as-is. Paths that bypass write
+/// interception are outside this exception.
 /// </para>
 /// <para>
 /// The type is Orleans-serializable so the violation propagates intact across a

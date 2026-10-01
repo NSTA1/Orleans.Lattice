@@ -62,15 +62,11 @@
 //
 //      LatticeApiMcpTelemetry__BackendAddress = <observability.outputs.prometheusQueryEndpoint>
 //
-//    Auth residual: the add-on's LatticeApiMcpTelemetryOptions currently supports
-//    None / Bearer / Basic / MutualTls only. Azure Monitor managed Prometheus
-//    requires a rotating AAD bearer token for the region managed identity, which
-//    the add-on cannot mint itself today. Until an Azure-workload auth mode ships
-//    for the telemetry add-on, the coordinator supplies the token out-of-band
-//    (a token-injecting sidecar / short-lived bearer) OR points the add-on at a
-//    same-environment reverse proxy that stamps the MSI token. Tracked as a
-//    follow-up; the datasource + KEDA paths need no such shim because Grafana and
-//    KEDA both speak native azure-workload identity to managed Prometheus.
+//    Auth: use DynamicBearer for Azure Monitor managed Prometheus. The MCP head
+//    supplies an Azure workload-identity token provider, so the telemetry add-on
+//    mints a rotating managed-identity bearer token for the query endpoint and no
+//    static secret or sidecar token injector is needed. The datasource + KEDA
+//    paths also speak native azure-workload identity to managed Prometheus.
 //
 // -----------------------------------------------------------------------------
 // METRICS INGESTION (managed-Prometheus scrape -> remote-write)

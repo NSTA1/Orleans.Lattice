@@ -25,9 +25,9 @@ public interface ILatticeQueue<T>
 {
     /// <summary>
     /// Appends <paramref name="item"/> to the tail and returns the monotonic
-    /// id assigned to it. When the backing tree's
-    /// <see cref="LatticeOptions.QueueCapacity"/> is set and reached, the
-    /// oldest entry is evicted first (FIFO eviction).
+    /// id assigned to it. When <see cref="LatticeOptions.QueueCapacity"/>
+    /// resolved for this queue name is set and reached, the oldest entry
+    /// is evicted first (FIFO eviction).
     /// </summary>
     Task<long> EnqueueAsync(T item, CancellationToken cancellationToken = default);
 

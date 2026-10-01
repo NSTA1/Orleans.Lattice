@@ -1,17 +1,19 @@
 # Orleans.Lattice.Api.Replication.Grpc architecture
 
-This binding adapts the transport-agnostic [`ILatticeReplicationControl`](../lattice.api.replication/README.md) facade onto gRPC without a hand-written `.proto`. It adds transport and authentication concerns and nothing else: the control semantics stay in the facade and the engine.
+This binding adapts the transport-agnostic [`ILatticeReplicationControl`](../lattice.api.replication/README.md) facade, and the read-only `ILatticeReplicationStatus` peer-status facade, onto gRPC without a hand-written `.proto`. It adds transport and authentication concerns and nothing else: the control semantics stay in the facade and the engine.
 
 ## Code-first binding
 
 Each facade operation is one gRPC `Method<TRequest, TResponse>` built from C# definitions. The request and response messages are `[GenerateSerializer]` records marshalled with the Orleans binary serializer, so the same serializer closure that runs in the cluster marshals the wire messages. There is no generated stub and no schema drift between a `.proto` and the records: the records are the contract. The public `LatticeReplicationApiGrpcClient` wraps a caller-supplied `CallInvoker`; the service that dispatches to the facade is internal.
 
+The peer-status facade is a second, separately mapped service, `orleans.lattice.api.replication.status`. Its one unary RPC, `GetPeerStatus`, carries the facade's own `ReplicationPeerStatusQuery` and `ReplicationPeerStatusPage` records rather than separate wire records, and the public `LatticeReplicationStatusGrpcClient` implements `ILatticeReplicationStatus` over it, so a remote caller programs against the same contract as an in-process one.
+
 ## Two-layer, fail-closed authorization
 
 Two independent gates guard every operation RPC. The transport meta-authorizer defaults to deny; the facade access gate denies by default once an authorization add-on such as `Orleans.Lattice.Auth` supplies it, and with only the core no-op gate registered it allows every call.
 
-1. **Transport meta-authorizer.** The interceptor consults `ILatticeReplicationApiAuthorizer` for every guarded RPC before the service runs. With `RequireAuthorization` on and no authorizer registered, `DenyAllReplicationApiAuthorizer` rejects every call with `PermissionDenied`. The interceptor maps the inbound method to a `LatticeReplicationApiOperation`; an unrecognized method maps to `Unknown`, which the default-deny posture never grants, so a new or malformed method can never fall through to an allow.
-2. **Facade access gate.** The identity bridge resolves the caller's credential from the configured header and stamps the ambient Lattice credential, and the service lifts any tenant the caller asserts in `ActiveTenantHeaderName` onto the ambient active-tenant scope for the call; the facade then re-authorizes that resolved caller against its own fail-closed access gate for the `LatticeOperation.Replication` capability on the target tree. This is the same gate an in-process caller passes through, so the wire path is no weaker than the local one.
+1. **Transport meta-authorizer.** The interceptor consults `ILatticeReplicationApiAuthorizer` for every guarded RPC before the service runs. With `RequireAuthorization` on and no authorizer registered, `DenyAllReplicationApiAuthorizer` rejects every call with `PermissionDenied`. The interceptor maps the inbound method to a `LatticeReplicationApiOperation`; an unrecognized method maps to `Unknown`, which the default-deny posture never grants, so a new or malformed method can never fall through to an allow. The interceptor guards the peer-status service the same way: a `GetPeerStatus` call maps to `LatticeReplicationApiOperation.GetPeerStatus`, with the query's tree filter as its target.
+2. **Facade access gate.** The identity bridge resolves the caller's credential from the configured header and stamps the ambient Lattice credential, and the service lifts any tenant the caller asserts in `ActiveTenantHeaderName` onto the ambient active-tenant scope for the call; the facade then re-authorizes that resolved caller against its own fail-closed access gate for the `LatticeOperation.Replication` capability on the target tree. This is the same gate an in-process caller passes through, so the wire path is no weaker than the local one. The peer-status service bridges the credential and the asserted tenant the same way, and the status facade then reports only the trees the resolved caller holds that capability over.
 
 Neither gate replaces the other: the meta-authorizer decides whether a call may run at all; the access gate decides whether the resolved subject may act on the specific tree.
 
@@ -32,6 +34,8 @@ The service maps facade outcomes to stable gRPC status codes so a client sees a 
 | `ArgumentException` (for example a null / empty tree id) | `InvalidArgument` |
 | `OperationCanceledException` | `Cancelled` |
 | Any other exception | `Internal` (logged server-side; the client sees a non-leaking message) |
+
+`GetPeerStatus` maps the same way, without the two precondition outcomes: a negative page size or a malformed continuation token is an `ArgumentException`, so it surfaces as `InvalidArgument`.
 
 An already-thrown `RpcException` is rethrown unchanged so an inner status is preserved. A transport meta-authorizer denial never reaches the service: the interceptor raises it directly as `PermissionDenied` (and a cancelled authorization check as `Cancelled`).
 

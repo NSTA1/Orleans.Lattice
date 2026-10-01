@@ -145,7 +145,7 @@ Execute H4 first (cheapest, falsifies fastest), then H1, H2, H3 in order. Each i
 
 - **H4 (instrumentation only)**: add `wal.writer.append.tracker_acquire.calls` counter incremented at the top of `PartitionTracker.AcquireAsync` for every call site. Re-run R2-shape cohort. **Decisive**: counter rate during wedge tells you whether the wedge path acquires the tracker at all. If zero rate during wedge, there is a code path that bypasses the cap; find it via call-tree search from `WalCommitLogWriter.AppendAsync` and bound it.
 - **H1**: implement off-grain watchdog for `WalAppendDispatchTimeout`. New `WalDispatchWatchdog` service: dedicated `Thread`, processes a queue of `(TaskCompletionSource, DateTime deadline, string reason)` entries, faults the TCS when the deadline passes regardless of grain context. Wire writer dispatch to register/unregister; remove the existing `WaitAsync(token)` deadline wrapper. **Decisive**: `wal.append_dispatch.timeouts` counter > 0 on next wedged cohort; wedge exits within `WalAppendDispatchTimeout + 1s` instead of pinning.
-- **H2**: pre-emit `[wal-slot]` Preflight stamp before the early return in `WalShardGrain.FlushAsync`; rewire `WalFlushPreflightTimeout` to the same off-grain watchdog as H1. **Decisive**: `wal.flush.preflight_timeouts` counter > 0 on next wedged cohort.
+- **H2**: pre-emit `[wal-slot]` Preflight stamp before the early return in `WalShardGrain.FlushAsync`; rewire `WalFlushPreflightTimeout` to the same off-grain watchdog as H1. **Decisive**: `wal.flush.preflight.timeouts` counter > 0 on next wedged cohort.
 - **H3**: add `ShardForwardRetryBudget` option (default 8 attempts); track per-(source,target) shard pair; on exhaustion fault the original caller with typed `ShardForwardExhaustedException`. **Decisive**: under a reshard-rejection storm cohort, the exception surfaces at the caller instead of the system pinning. (May not be necessary if H1+H2 alone clear the wedge; defer if R2 phenotype matches H1/H2 signal.)
 
 ### Phase 3 - the at-saturation matrix on the single VM
@@ -158,7 +158,7 @@ shape is:
 - 0 wedges that pin (every wedge that occurs exits via a typed
   bound firing within the configured deadline).
 - `wal.append_dispatch.timeouts` and/or
-  `wal.flush.preflight_timeouts` rate is **non-zero at saturation**
+  `wal.flush.preflight.timeouts` rate is **non-zero at saturation**
   - the bounds are now load-bearing instead of dormant.
 - Producer-side: every overloaded request surfaces as
   `TimeoutException` from the API surface within `~30s`, never as
@@ -187,7 +187,7 @@ cohorts:
 1. Either no wedge reproduces (the existing bounds were sufficient
    and the prior wedges were ACI artefacts), OR every wedge that
    reproduces exits via a typed bound firing recorded in the
-   `wal.append_dispatch.timeouts` / `wal.flush.preflight_timeouts` /
+   `wal.append_dispatch.timeouts` / `wal.flush.preflight.timeouts` /
    `ShardForwardExhaustedException` counters within the configured
    deadline.
 2. `inFlight` is never observed pinned for > `WalAppendDispatchTimeout + WalFlushPreflightTimeout + 5s` in any cohort sample.
@@ -214,7 +214,7 @@ Phase 1 R2 verdict per section 3 decision gate: **<=1/5 wedges across the verifi
 
 ### 24.1 Code change shipped during closeout
 
-- `TcpIngestService.FlushAsync` (benchmark/azure-throughput/Silo/Program.cs) now emits a named log line on `TimeoutException`:
+- `TcpIngestService.FlushAsync` (benchmark/azure-throughput/Silo/Program.cs) now emits a named log line on `TimeoutException` (the flush path, this line included, has since moved into the shared ingest engine, `Engine/BenchIngestEngine.cs`):
   > `[silo] grain-rpc-deadline: SetManyAsync of N did not return within ResponseTimeout (BENCH_RESPONSE_TIMEOUT_SEC=Ns). Offered rate exceeds sustained Tables drain rate at this rung; raise BENCH_RESPONSE_TIMEOUT_SEC, drop tickHz/vehicles, or tune WAL fan-out.`
 - `IngestSettings` record carries `ResponseTimeoutSec` so the log line can stamp the configured value.
 - Cohort runner (`benchmark/vm/run-cohort.ps1`; the runner is `scripts/run-cohort.ps1` in this folder) parses FINAL and surfaces `failed=N` in the summary block so a degraded cohort can't pass for HEALTHY.
@@ -642,7 +642,7 @@ Confirms cap=16 banner in force (`walPartitions=8 walMaxPending=16`); silo produ
 
 **Tertiary (reliability hand-off):** the §27.1 / §30.6 item 2/3 drain-wedge phenotype, previously rare, **reproduces every time** under storage saturation. 3/4 ladder cohorts wedged with no FINAL. Two distinct shapes - `inFlight=N` parked (chain stuck), or `inFlight=0` with no progress (chain drained but stop-acknowledgement never emitted). `stall-watchdog`, `[wal-slot]`, `[wal-append]` instruments stayed at zero for all of them. This is reliability work, not optimisation; the right hand-off is a GitHub issue under `lattice` label so `feature-dev` can sequence it.
 
-**Quaternary (harness):** the §30.6 item 4 runner-bug is now empirically demonstrated three times in one sweep. Fixed in this PR (commit 2): runner verdict now requires FINAL emitted AND `failed=0` AND drain-tail length < 10 samples AND clean diagnostics before declaring HEALTHY; ladder reads the §27.1 steady-state mean directly so wedged cohorts no longer parse as `throughput=0 e/s`.
+**Quaternary (harness):** the §30.6 item 4 runner-bug is now empirically demonstrated three times in one sweep. Fixed in this PR (commit 2): runner verdict now requires FINAL emitted AND `failed=0` AND drain-tail length < 10 samples AND clean diagnostics before declaring HEALTHY; ladder reads the §27.1 steady-state mean directly so wedged cohorts no longer parse as `throughput=0 e/s`. (Since found: `ladder.ps1` looks for that mean in the output it captures from `run-cohort.ps1`, which prints its summary with `Write-Host`, so the capture never holds it and every rung still parses as `0`; see the `ladder.ps1` notes in this folder's `README.md`.)
 
 **Quintenary (harness):** ladder.ps1 had a string-interpolation parse error (`$vehicles:$tickHz` -> PowerShell scope-variable misread). Fixed in this PR (commit 1).
 

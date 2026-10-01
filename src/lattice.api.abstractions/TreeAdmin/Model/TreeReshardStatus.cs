@@ -8,11 +8,12 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// reports <see cref="InProgress"/> <see langword="false"/> with the current
 /// map's shard counts. A pure projection with no side effects.
 /// <para>
-/// Reshard is online and self-completing (it grows the tree to the requested
-/// physical shard count via reminder-anchored splits and then clears itself),
-/// so this status surfaces the observable idle/in-flight signal, the map
-/// fan-out, and the target and starting counts that fan-out is measured
-/// against, rather than the coordinator's internal phase machine.
+/// Reshard is online and self-completing (it grows or shrinks the tree to the
+/// requested physical shard count via reminder-anchored splits or consolidation
+/// folds and then clears itself), so this status surfaces the observable
+/// idle/in-flight signal, the map fan-out, and the target and starting counts
+/// that fan-out is measured against, rather than the coordinator's internal
+/// phase machine.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -58,7 +59,7 @@ public sealed record TreeReshardStatus
     [Id(5)] public int? RequestedShardCount { get; init; }
 
     /// <summary>
-    /// The physical shard count the running reshard grows the tree to, read from
+    /// The physical shard count the running reshard moves the tree toward, read from
     /// the reshard coordinator's persisted intent - reported on every status read,
     /// unlike <see cref="RequestedShardCount"/>, which only echoes a trigger's
     /// argument. <see langword="null"/> when nothing is in flight, or when the
@@ -71,8 +72,9 @@ public sealed record TreeReshardStatus
     /// or <see langword="null"/> when nothing is in flight or it was not recorded
     /// (a reshard started by an earlier build). The reshard's progress is
     /// <see cref="CurrentPhysicalShardCount"/> minus this, out of
-    /// <see cref="TargetShardCount"/> minus this: each split adds one physical
-    /// shard to the map once it has durably committed.
+    /// <see cref="TargetShardCount"/> minus this. Grows report positive deltas as
+    /// each committed split adds one physical shard; shrinks report negative
+    /// deltas as each committed fold removes one physical shard.
     /// </summary>
     [Id(7)] public int? StartPhysicalShardCount { get; init; }
 }

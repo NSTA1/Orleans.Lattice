@@ -91,6 +91,7 @@ internal static class TypeAliases
     internal const string SnapshotBaselineCaptureResult = "ol.sbc";
     internal const string ShardRootState = "ol.srs";
     internal const string DirtyLeavesSnapshot = "ol.dls";
+    internal const string LeafCompactionResult = "ol.lcr";
     internal const string PendingBulkGraft = "ol.pbg";
     internal const string GraftEntry = "ol.ge";
     internal const string PendingChildLink = "ol.pcl";
@@ -276,6 +277,10 @@ internal static class TypeAliases
     // Single-round-trip reclaim decision inputs for one leaf (empty-leaf chain reclaim)
     internal const string LeafReclaimProbe = "ol.lrb";
     internal const string LeafRetired = "ol.lrt";
+
+    // Why a predecessor accepted or refused to unlink its successor, so the
+    // three distinct declinations stop sharing one misleading log line (#2160).
+    internal const string LeafUnlinkOutcome = "ol.luo";
 
     // Operator-invoked repair of a tree that already holds an orphaned leaf -
     // one spliced into the sibling chain but unreachable by descent (issue 3269).

@@ -40,7 +40,7 @@ Whether an external sink is genuinely shared is a deployment fact, not a locally
 | `Warn` (default) | Probe, log a loud warning, and annotate every affected backup's health report - but let the silo start. |
 | `FailFast` | A `NotShared` verdict throws at start, so the silo refuses to come up rather than capture un-restorable backups. |
 
-`Warn` is the shipped default so a transient peer outage can never brick a deployment that is actually configured correctly; a positively refuted sink is still surfaced immediately in the log, and in the Health column of the Explorer Backups area's Existing backups list as soon as each affected backup is next verified. Turn on `FailFast` in an environment where a misconfigured sink should stop the rollout. Only a **positively refuted** sink fails a start - `Unverified` never does, in either mode.
+`Warn` is the shipped default so a transient peer outage can never brick a deployment that is actually configured correctly; a positively refuted sink is still surfaced immediately in the log, and in the Health column of the backup catalogue in the Explorer's Backups area as soon as each affected backup is next verified. Turn on `FailFast` in an environment where a misconfigured sink should stop the rollout. Only a **positively refuted** sink fails a start - `Unverified` never does, in either mode.
 
 The guard costs nothing when it cannot apply. A deployment with no replicated tree, no peers, or no replication package performs **no** sink or network I/O at all and reports `NotApplicable`.
 
@@ -94,7 +94,7 @@ Per-scope configuration for scheduled backup triggering and backup-chain retenti
 
 ### Retention rule semantics
 
-A backup is retained if it satisfies `RetentionKeepLast` **or** `RetentionMaxAge`; only a backup that fails every enabled rule is eligible for pruning. Regardless of either bound, the base chain of a retained increment is always preserved, so a restore chain is never left with a missing ancestor.
+A backup is retained if it satisfies `RetentionKeepLast` **or** `RetentionMaxAge`; only a backup that fails every enabled rule is eligible for pruning. With `RetentionEnabled` set but neither bound configured, nothing is pruned. Regardless of either bound, the base chain of a retained increment is always preserved, so a restore chain is never left with a missing ancestor.
 
 ## Sink selection
 

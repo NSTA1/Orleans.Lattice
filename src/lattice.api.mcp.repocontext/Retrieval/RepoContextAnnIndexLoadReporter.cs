@@ -102,13 +102,13 @@ internal enum RepoContextAnnIndexLoadOutcome
 /// <see cref="RepoContextAnnIndexLoadOutcome.Resumed"/> is observable at all.
 /// </para>
 /// <para>
-/// <b>It is a two-sided discriminator, and that is deliberate.</b> Counting only
-/// resumptions would make a zero ambiguous between "nothing ever faulted, so
+/// <b>It is a closed-outcome discriminator, and that is deliberate.</b> Counting
+/// only resumptions would make a zero ambiguous between "nothing ever faulted, so
 /// nothing needed resuming" - the healthy case - and "everything faulted and
-/// none of it resumed" - the defect restored. Counting
-/// <see cref="RepoContextAnnIndexLoadOutcome.Faulted"/> alongside it makes the
-/// pair conclusive: faults with no resumptions is the defect, and no faults at all
-/// is health.
+/// none of it resumed" - the defect restored. Counting every terminal outcome -
+/// fresh, resumed, faulted, deferred, refused, and discarded - makes the series
+/// conclusive: faults with no resumptions is the defect, healthy yields are split
+/// by cause, and unverifiable durable state is visible as a discard.
 /// </para>
 /// <para>
 /// <b>All arms are pre-minted.</b> Every series is created with a zero-valued add
@@ -135,7 +135,8 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
 {
     /// <summary>
     /// The counter of durable approximate-index load attempts, partitioned by
-    /// whether the attempt started fresh, resumed banked progress, or faulted.
+    /// whether the attempt started fresh, resumed banked progress, faulted, deferred,
+    /// was refused admission, or discarded unverifiable durable state.
     /// </summary>
     internal const string LoadInstrumentName = "repocontext.ann.index.load";
 
@@ -159,6 +160,8 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     /// queue, which yielded and banked whatever progress it had made.
     /// </summary>
     internal const string OutcomeRefusedTag = "refused";
+
+    /// <summary>The tag value for an open that discarded unverifiable durable state.</summary>
     internal const string OutcomeDiscardedTag = "discarded";
 
     // Declared above the instrument it constructs, and the instrument is built from

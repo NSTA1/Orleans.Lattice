@@ -260,11 +260,11 @@ See [Transport Security](transport-security.md).
 | `ILatticeReplicationSecretSource` | interface | Supplies shared secrets for peer authentication. | `GetOutboundSecretAsync`, `GetAcceptedSecretsAsync` |
 | `ConfigurationBindingSecretSource` | sealed class | Secret source backed by configuration. | Constructor taking the bound `IConfiguration` section; `GetOutboundSecretAsync`, `GetAcceptedSecretsAsync` |
 | `LatticeReplicationAcceptedSecrets` | sealed class | Accepted shared-secret set. | `Secrets`, `Version`, `Empty` |
-| `LatticeReplicationSecurityOptions` | sealed class | Shared-secret authentication options. | `RequireAuthentication`, `SecretRefreshInterval`, `ScanConfigurationForSecrets` |
+| `LatticeReplicationSecurityOptions` | sealed class | Shared-secret authentication options. | `RequireAuthentication`, `BindCredentialToOriginCluster`, `SecretRefreshInterval`, `ScanConfigurationForSecrets` |
 | `LatticeReplicationEnvironmentVariables` | static class | Environment-variable names for replication secrets. | `Prefix`, `Secret`, `AcceptedSecrets`, `PeerSecretPrefix`, `AllowSourceTreeSecrets` |
 | `LatticeReplicationSharedSecret` | static class | Shared-secret generation and validation helpers. | `MinimumLength`, `Generate`, `IsWellFormed`, `FixedTimeEquals` |
 
-The gRPC binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication is configured through the security extension methods above.
+The gRPC binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication is configured through the security extension methods above; origin binding (`BindCredentialToOriginCluster`) is on by default - see [Configuration](configuration.md#transport-security---latticereplicationsecurityoptions).
 
 ## Cross-cluster saga participation
 

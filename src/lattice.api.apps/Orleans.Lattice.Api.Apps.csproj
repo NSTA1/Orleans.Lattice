@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Apps</PackageId>
     <Version>9.6.0</Version>
-    <Description>Transport-agnostic app lifecycle and consent control facade for Orleans.Lattice. Implements ILatticeAppsControl by composing the app registry, the app source seam and the activation pipeline behind one fail-closed, slug-dispatched surface that authorizes every verb with AppInstall, applies the caller's active tenant at entry and never discloses composed physical tree ids. Adds no transport behaviour of its own.</Description>
+    <Description>Transport-agnostic app lifecycle, consent, catalogue, workspace, role-binding, and bridge facades for Orleans.Lattice. Composes the app registry, source seam and activation pipeline behind fail-closed surfaces that authorize with AppInstall or the caller's app-owned role grants, apply the caller's active tenant at entry, and never disclose composed physical tree ids. Adds no transport behaviour of its own.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

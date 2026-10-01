@@ -22,7 +22,7 @@ namespace Orleans.Lattice;
 [Immutable]
 public readonly record struct WalRecord
 {
-    /// <summary>The logical tree id the mutation was committed to.</summary>
+    /// <summary>The WAL tree id the mutation was committed under.</summary>
     [Id(0)] public string TreeId { get; init; }
 
     /// <summary>The kind of mutation.</summary>

@@ -20,10 +20,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// is registered.
 /// </para>
 /// <para>
-/// The system-origin bypass (replication apply, saga legs, maintenance) is
-/// honoured inside <see cref="LatticeWriteInterceptorEnforcement"/>: a real
-/// interceptor is skipped on a system-origin turn unless it opts in through
-/// <see cref="ILatticeWriteInterceptor.InterceptsSystemOrigin"/>.
+/// The system-origin bypass is honoured inside
+/// <see cref="LatticeWriteInterceptorEnforcement"/> for writes that reach this
+/// choke point: a real interceptor is skipped on a system-origin turn unless it
+/// opts in through <see cref="ILatticeWriteInterceptor.InterceptsSystemOrigin"/>.
+/// Internal paths that write below this choke point do not consult the seam.
 /// </para>
 /// </remarks>
 internal sealed partial class LatticeGrain

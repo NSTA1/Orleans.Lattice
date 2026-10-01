@@ -111,7 +111,10 @@ as warming up, never as an error or as a fallback to a lesser search.
 ## How to verify the numbers yourself
 
 The recall harness is committed and runs in the ordinary unit lane on every build,
-so the published figures cannot drift away from the code. The scale figures
+so the published floors cannot drift away from the code: it asserts the floors,
+that recall never falls as probes are added, that probing every partition is
+exact, and that a measurement repeats exactly. The measured figures beside the
+floors are what it reports, not values it pins. The scale figures
 (build time, query latency, bytes per vector, up to 1,000,000 vectors) live in a
 benchmark fixture that is gated behind an environment variable so it never slows a
 normal test run.

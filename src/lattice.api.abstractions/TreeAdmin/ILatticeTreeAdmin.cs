@@ -518,12 +518,12 @@ public interface ILatticeTreeAdmin
     /// silo restarts. A shrink finishes only once the retired shards' storage has been
     /// released. Returns once the coordinator has accepted the intent; poll completion
     /// with <see cref="GetReshardStatusAsync"/>. The target must be at least 2 and at
-    /// most the virtual shard space (4096); an empty tree is re-pinned directly.
+    /// most the smaller of the tree's virtual shard space and 4096; an empty tree is re-pinned directly.
     /// Idempotent: a request for the count the tree is already at, or a
     /// matching in-flight target, is a no-op. Reserved system tree ids are rejected.
     /// </summary>
     /// <param name="treeId">The tree to reshard. Must not be <c>null</c>, empty, or reserved.</param>
-    /// <param name="targetShardCount">The desired number of distinct physical shards. Must be at least 2 and at most the virtual shard space.</param>
+    /// <param name="targetShardCount">The desired number of distinct physical shards. Must be at least 2 and at most the smaller of the tree's virtual shard space and 4096.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's reshard status after the trigger, echoing the requested target.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
@@ -649,6 +649,7 @@ public interface ILatticeTreeAdmin
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The source tree's snapshot status after the trigger, echoing the requested destination and mode.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="destinationTreeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is not a defined <see cref="TreeSnapshotMode"/> value.</exception>
     /// <exception cref="InvalidOperationException">A snapshot with different parameters is already in progress, or the destination tree already exists.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability.</exception>
     Task<TreeSnapshotStatus> SnapshotTreeAsync(
@@ -1145,6 +1146,7 @@ public interface ILatticeTreeAdmin
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's effective history retention policy after the change.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty, or <paramref name="window"/> is not strictly positive.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is not a defined <see cref="TreeHistoryRetentionMode"/> value.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the tree.</exception>
     Task<TreeHistoryRetention> SetHistoryRetentionAsync(
         string treeId,

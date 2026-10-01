@@ -9,7 +9,8 @@ The Orleans.Lattice Explorer UI: a Razor class library for everything
   Replication, Backups, Telemetry and Cluster - compiled in, each deciding its
   own visibility from its facade's capability probe and failing closed.
 - The order-diagram design system in its Operate register: the documentation
-  site's own `tokens.css` and fonts (linked at build time, never copied), the
+  site's own `tokens.css` and fonts (byte-identical copies, which a test fails
+  the build on the moment they drift from the site's), the
   Explorer-only density, focus and lifecycle and health state tokens, and the
   primitives every area is drawn with.
 - The credential-aware transport adapters, and the app frame host and bridge
@@ -62,4 +63,5 @@ them. A query value keeps the RFC 3986 unreserved characters, upper case
 included, and percent-encodes the rest. An unknown address lands on the
 not-found page, which names the nearest address that does exist.
 
-This package is in progress and has not shipped a release.
+This rewrite of the package is in progress and has not shipped a release; the
+package's earlier releases carried the previous Explorer UI.

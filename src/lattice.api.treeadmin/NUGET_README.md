@@ -23,7 +23,7 @@ presents one complete surface.
 - **The whole-tree operation set.** Read-only diagnostics and storage accounting;
   explicit tree creation, existence, alias, and per-tree configuration; soft-delete,
   recover, and purge; chunked bulk load; restore into a tree or as a backup set, and
-  revert; online reshard, resize (with undo), and point-in-time snapshot; WAL
+  revert; online reshard (grow or shrink), resize (with undo), and snapshot; WAL
   placement inspection, audit, and partition moves; orphaned-leaf audit, survey, and
   repair; materialised-view and tag-index administration; and shard compaction and
   durable-history retention - each delegated to the subsystem that owns it and

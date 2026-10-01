@@ -46,7 +46,7 @@ public partial class TombstoneCompactionGrainTests
         {
             var leafMock = Substitute.For<IBPlusLeafGrain>();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
-            leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
+            leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             // The fast path indexes into the snapshot list; sibling
             // navigation must never be called on the dirty-set path.
             leafMock.GetNextSiblingAsync()

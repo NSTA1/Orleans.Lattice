@@ -117,7 +117,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromMinutes(1));
 
-        Assert.That(removed, Is.GreaterThanOrEqualTo(1), "an expired CRDT entry must be reaped by tombstone compaction");
+        Assert.That(removed.EntriesRemoved, Is.GreaterThanOrEqualTo(1), "an expired CRDT entry must be reaped by tombstone compaction");
         Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.False);
     }
 

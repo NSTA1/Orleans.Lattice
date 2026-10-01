@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Cluster-wide singleton admission gate that caps the aggregate number of
-/// autonomic shard splits in flight concurrently across <em>all</em> trees.
+/// in-flight shard migrations concurrently across <em>all</em> trees.
 /// <para>
 /// Only consulted for <em>admission</em> when
 /// <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/> is set to a
@@ -12,17 +12,17 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// <para>
 /// The gate is driven by per-tree heartbeats rather than long-lived permits:
-/// each enabled monitor reports its authoritative in-flight split count (derived
-/// from shard <c>IsSplitting</c> status) every sampling pass and receives a grant
+/// each enabled monitor reports its authoritative in-flight migration count
+/// (derived from shard <c>IsSplitting</c> status) every sampling pass and receives a grant
 /// of new slots against the remaining cluster headroom. A footprint carries a
 /// time-to-live, so a silo that crashes and stops reporting has its share
 /// reclaimed on expiry rather than wedging splitting cluster-wide.
 /// </para>
 /// <para>
 /// Independently of admission, the gate is also the cluster's <em>readable</em>
-/// split-activity source: monitors publish their footprint through
+/// migration-activity source: monitors publish their footprint through
 /// <see cref="ReportInFlightAsync"/> even when no ceiling is configured (only
-/// while they actually have splits in flight, so an idle tree calls nothing),
+/// while they actually have migrations in flight, so an idle tree calls nothing),
 /// and <see cref="GetActivityAsync"/> reduces those footprints into the snapshot
 /// surfaced by <see cref="ILatticeAdmin.GetSplitActivityAsync"/>. Those
 /// observation-only footprints are tracked separately and never consume
@@ -35,7 +35,7 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface IClusterSplitConcurrencyGrain : IGrainWithIntegerKey
 {
     /// <summary>
-    /// Reports the calling tree's current in-flight autonomic split count and
+    /// Reports the calling tree's current in-flight migration count and
     /// requests up to <paramref name="desiredNew"/> additional slots under the
     /// cluster-wide ceiling. Stale per-tree footprints are reconciled out first;
     /// the caller's footprint is then refreshed and the number of newly admitted
@@ -43,7 +43,7 @@ internal interface IClusterSplitConcurrencyGrain : IGrainWithIntegerKey
     /// number of new splits this pass.
     /// </summary>
     /// <param name="treeId">The calling tree's id.</param>
-    /// <param name="currentInFlight">The tree's authoritative in-flight split count this pass (from shard <c>IsSplitting</c>).</param>
+    /// <param name="currentInFlight">The tree's authoritative in-flight migration count this pass (from shard <c>IsSplitting</c>).</param>
     /// <param name="desiredNew">How many additional splits the tree wants to start this pass.</param>
     /// <param name="clusterCap">The current cluster-wide ceiling (the caller's resolved option value).</param>
     /// <param name="ttl">How long the caller's reported footprint remains valid before it may be reclaimed by expiry.</param>
@@ -51,32 +51,32 @@ internal interface IClusterSplitConcurrencyGrain : IGrainWithIntegerKey
     Task<int> AcquireSlotsAsync(string treeId, int currentInFlight, int desiredNew, int clusterCap, TimeSpan ttl);
 
     /// <summary>
-    /// Reports the calling tree's current in-flight autonomic split count
+    /// Reports the calling tree's current in-flight migration count
     /// <em>without</em> requesting any new slots. This is the path taken when the
     /// cluster-wide ceiling is not configured: the tree still publishes its
     /// footprint so the gate stays an authoritative, readable cluster-wide
-    /// split-activity source (<see cref="GetActivityAsync"/>), but no admission
+    /// migration-activity source (<see cref="GetActivityAsync"/>), but no admission
     /// decision is made and nothing is granted.
     /// <para>
-    /// Callers report edge-triggered - when they have splits in flight, and once
+    /// Callers report edge-triggered - when they have migrations in flight, and once
     /// more to clear a previously reported footprint - so an idle cluster costs
     /// no calls at all.
     /// </para>
     /// </summary>
     /// <param name="treeId">The calling tree's id.</param>
-    /// <param name="inFlight">The tree's authoritative in-flight split count this pass (from shard <c>IsSplitting</c>). Zero clears the tree's footprint.</param>
+    /// <param name="inFlight">The tree's authoritative in-flight migration count this pass (from shard <c>IsSplitting</c>). Zero clears the tree's footprint.</param>
     /// <param name="ttl">How long the reported footprint remains valid before it may be reclaimed by expiry.</param>
     /// <returns>A task that completes when the footprint has been recorded.</returns>
     Task ReportInFlightAsync(string treeId, int inFlight, TimeSpan ttl);
 
     /// <summary>
     /// Returns the current cluster-wide sum of live (non-expired) reported
-    /// in-flight splits across every tree. Intended for observation and tests.
+    /// in-flight migrations across every tree. Intended for observation and tests.
     /// </summary>
     Task<int> GetClusterInFlightAsync();
 
     /// <summary>
-    /// Returns the cluster-wide split-activity snapshot: the summed live
+    /// Returns the cluster-wide migration-activity snapshot: the summed live
     /// in-flight count plus how many trees contributed to it. This is the
     /// readable seam behind <see cref="ILatticeAdmin.GetSplitActivityAsync"/>.
     /// </summary>
