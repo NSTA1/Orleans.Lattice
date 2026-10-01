@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Concurrency;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -96,11 +97,8 @@ public class WalShardGrainReadInterleaveTests
             // Without [AlwaysInterleave] on ReadAsync it would queue behind
             // the read's turn and only complete once the gate is released.
             var appendTask = grain.AppendAsync(MakeEntry(tree, "foreground"), CancellationToken.None);
-            var winner = await Task.WhenAny(appendTask, Task.Delay(TimeSpan.FromSeconds(10)));
-
-            Assert.That(winner, Is.SameAs(appendTask),
-                "A foreground append must interleave with a read that is parked inside the WAL grain turn.");
-            var appendedOffset = await appendTask;
+            var appendedOffset = await InterleaveProbe.AnswersWhileHeldAsync(appendTask, GatingWalStorageProvider.ReadGate!.Task,
+                "A foreground append issued while a read is parked inside the WAL grain turn");
             Assert.That(appendedOffset, Is.EqualTo(3L),
                 "The interleaved append must take the next dense offset.");
         }
