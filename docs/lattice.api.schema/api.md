@@ -46,7 +46,7 @@ The control facade exposes these methods. Each method corresponds to one RPC in 
 | `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
-Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. The policy type and its enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
+Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. Once authorized, `SetPolicyAsync` compiles the policy before storing it and refuses one it cannot compile - a rule incomplete for its kind, a regex the non-backtracking engine rejects, or a `MaxByteLength` encoding rule with a negative limit - with an `ArgumentException`, storing nothing. The policy type and its enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
 
 Dead-letter operations inspect diverted, schema-rejected writes. `ListDeadLettersAsync` streams entries with bounded memory and `CountDeadLettersAsync` returns the current count. Both require Read authority.
 

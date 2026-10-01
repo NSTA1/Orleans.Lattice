@@ -17,7 +17,7 @@ revision timeline:
 |-------|---------|-----------|
 | Core read path | `ILattice.ScanEntryHistoryAsync` | In-cluster code that wants a key's timeline directly. |
 | State API | `GetEntryHistoryAsync` (and its gRPC client) | Out-of-cluster read-only tools and dashboards. |
-| Explorer | the **History** timeline behind an entry's **History** button on the **Data** tab, with live-follow | Interactive, point-and-click inspection of a key's timeline. |
+| Explorer | the **History** tab of a tree's workspace in the **Data** area, with live-follow | Interactive, point-and-click inspection of a key's timeline. |
 
 ## Where a timeline comes from
 
@@ -177,23 +177,26 @@ page newest-first.
 ## The Explorer History timeline
 
 [Orleans.Lattice.Explorer](../../src/lattice.explorer) renders the timeline
-interactively. The timeline is not a tab of its own: select a tree, open its
-**Data** tab, select a key, and press the **History** button in that entry's
-detail panel, which opens the timeline inline in the same panel (the button reads
-**Hide history** while it is open). The Explorer pages the key's revisions through
-the State API: each row shows the revision's kind, time, and origin cluster, with
-LWW value diffs between adjacent revisions and decoded member changes for CRDT
-revisions. The timeline is retention-aware - it labels whether a row's value bytes
-were retained and shows when a timeline is truncated rather than durably bounded -
-and a **Newest first** toggle (on by default) sets the row order.
+interactively on the **History** tab of a tree's workspace in its **Data** area.
+Open a key from the **Keys** tab and follow its **History of this key** link, or
+name a key on the History tab itself. The Explorer pages the key's revisions
+through the State API, newest first by default (a **Newest first** switch sets the
+order), with **Load older revisions** for the rest: each row shows the revision's
+time, kind, and origin cluster, with a line diff between retained LWW values and
+the decoded member changes of a CRDT revision. The timeline is retention-aware -
+it marks a revision that kept only its value's size and hash as metadata only, and
+says when older revisions were trimmed or when the tree keeps no durable history
+and only the write-ahead-log window is shown - and an **As of (UTC)** field shows
+the key as it stood at a point in time, marking the revision then in effect.
 
-**Live-follow** needs no toggle: once the first page of the stored timeline has
-loaded, the Explorer subscribes to the tree's live change feed and appends each new
-revision as it arrives - at the top under the default newest-first order - so an
-operator watching a key sees writes land without reloading. A live row starts as a
-metadata-only marker and is upgraded in place, by a debounced refetch of the first
-page, once the durable history view has recorded the revision (the refetch is
-skipped after older pages have been loaded).
+**Live-follow** is on by default, behind a **Follow new revisions** switch: once
+the first page of the stored timeline has loaded, the Explorer subscribes to the
+tree's live change feed and adds each new revision of the key as it arrives - at
+the top under the default newest-first order - so an operator watching a key sees
+writes land without reloading. A live row only marks the change; the revision's
+value appears once the timeline is next loaded from the stored revisions. Nothing
+is followed while an as-of time is set. With a key prefix and no key, the History
+tab follows every new change under the prefix instead.
 
 ## Try it in the sample
 
@@ -212,20 +215,15 @@ non-trivial, durable history to show out of the box:
 Both timelines are seeded for part `HPT-BLD-S1-2028-00002`. To reproduce:
 
 1. Start the cluster: `./samples/MultiSiteManufacturing/run.ps1`.
-2. Launch the explorer. On Windows, `./samples/MultiSiteManufacturing/run-explorer.ps1 -Client windows`
-   opens the desktop explorer against the `us` cluster. The script's default web explorer
-   launch currently fails with "Web explorer project not found", because the script still
-   points at the web head's old project path (see the sample's
-   [known issue](../../samples/MultiSiteManufacturing/README.md#exploring-the-cluster-with-orleanslatticeexplorer)).
-   To use the web explorer, run the standalone web head
-   `src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj` (see
-   [Running and hosting the Explorer](../lattice.explorer/running-the-explorer.md)) with
-   `LATTICE_EXPLORER_ENDPOINT` set to `http://localhost:5001` and
-   `LATTICE_EXPLORER_INSECURE_DEV` set to `true` (see the Explorer's
-   [environment variables](../lattice.explorer/configuration.md#environment-variables)),
-   and open `http://localhost:5080`.
-3. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`), select key
-   `HPT-BLD-S1-2028-00002` on the **Data** tab, and press its **History** button.
+2. Launch the explorer: `./samples/MultiSiteManufacturing/run-explorer.ps1` starts the
+   web explorer against the `us` cluster (`-Cluster eu` for the other one), seeding its
+   endpoint through the Explorer's
+   [environment variables](../lattice.explorer/configuration.md#environment-variables).
+   Open the printed `http://localhost:5290` once it has started (see
+   [Running and hosting the Explorer](../lattice.explorer/running-the-explorer.md)).
+3. In the explorer's **Data** area, open tree `mfg-part-operator` (or `mfg-part-labels`),
+   open key `HPT-BLD-S1-2028-00002` from its **Keys** tab, and follow
+   **History of this key**.
 4. Live-follow starts on its own once the timeline has loaded: add or remove a label
    from the part-detail page in the sample UI and watch the new revision appear at
    the top of the timeline.

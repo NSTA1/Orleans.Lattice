@@ -18,8 +18,9 @@ namespace Orleans.Lattice.Tenancy;
 /// the grain's own set is touched only between awaits, so interleaving is safe.
 /// </para>
 /// <para>
-/// A fresh activation holds every advance open for one lease (the ledger's grace)
-/// in case a previous activation granted leases that are still live. It ends that
+/// A fresh activation holds every advance open for one lease plus the ledger's
+/// clock-rate margin (one tenth of the lease) in case a previous activation
+/// granted leases that are still live. It ends that
 /// grace early once every silo cluster membership does not report dead has leased
 /// from this activation: each such silo has then observed the new incarnation (so
 /// treats its snapshot as out of date) and is in the lease table every advance

@@ -54,7 +54,7 @@
     {
         <h2 class="lt-data-section-title">History of <span class="lt-shell-mono">@DataKeysPanel.Clip(Workspace.Key)</span></h2>
         <form class="lt-toolbar" @onsubmit="ApplyAt" @onsubmit:preventDefault>
-            <LtTextInput Label="As of (UTC)" Mono="true" Hint="@AtHint" Value="@_atInput" ValueChanged="value => _atInput = value" Error="@_atError" />
+            <LtDateTimeInput @ref="_atField" Label="As of" Value="@_atValue" ValueChanged="SetAt" EmptyText="Latest" AllowFuture="false" Hint="@AtHint" Error="@_atError" />
             <LtButton Type="LtButtonType.Submit">Show as of</LtButton>
             @if (_at is not null)
             {

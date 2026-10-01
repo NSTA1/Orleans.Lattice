@@ -55,7 +55,9 @@ public sealed class ShellDesignConsistencyTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(frame, Does.Contain("border: 1px solid var(--lt-op-control-border);"));
+            Assert.That(frame, Does.Contain("--lt-frame-border: 1px;").And.Contain("border: var(--lt-frame-border) solid var(--lt-op-control-border);"));
+            Assert.That(frame, Does.Contain("min-height: var(--lt-op-control-height);"), "the frame is one control height, like every other control box (#4120)");
+            Assert.That(input, Does.Contain("margin-block: calc(-1 * var(--lt-frame-border));"), "the input reaches over the frame's border, so it stays a full target inside a one-control-height frame");
             Assert.That(frame, Does.Contain("background: var(--lt-surface-sunken);"));
             Assert.That(input, Does.Contain("border: 0;"), "the input draws no second box inside the frame");
             Assert.That(chip, Does.Not.Contain("border-radius"), "a chip is set off by a hairline, not boxed as a second control");

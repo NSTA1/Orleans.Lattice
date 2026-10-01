@@ -43,4 +43,40 @@ internal readonly record struct LeafReclaimProbe
     /// would land rows on a leaf that is no longer in the chain.
     /// </summary>
     [Id(5)] public bool HasBlockingState { get; init; }
+
+    /// <summary>
+    /// The sibling this leaf is currently dividing INTO, or <see langword="null"/>
+    /// when no division of this leaf is in flight. See issue #2160.
+    /// <para>
+    /// Every other field here describes the leaf the probe was taken of. This
+    /// one is the exception, and it has to be: it is read off the PREDECESSOR
+    /// to decide the fate of its SUCCESSOR. A freshly seeded split sibling is
+    /// indistinguishable from a reclaimable empty leaf by any evidence it
+    /// carries itself - it is a brand new grain with a declared range, zero
+    /// rows, <c>SplitState.Unsplit</c> and no seal, so its own
+    /// <see cref="HasBlockingState"/> is legitimately false. The only
+    /// participant that knows it is about to receive rows is the leaf dividing
+    /// into it.
+    /// </para>
+    /// <para>
+    /// <b>Reading it off the same probe as <see cref="NextSibling"/> is what
+    /// makes the check race-free, and that is not an accident of convenience.</b>
+    /// <c>SplitAsync</c> persists <c>SplitInFlight</c>, <c>SplitKey</c>,
+    /// <c>SplitSiblingId</c> and <c>NextSibling</c> in ONE block before a
+    /// single <c>PersistAsync()</c>, and <c>CompleteSplitAsync</c> clears the
+    /// marker only at its very end, after the last row has moved. A reclaim
+    /// walk reaches the new sibling only by following <see cref="NextSibling"/>,
+    /// so any probe that can send the walk onto it necessarily observed the
+    /// marker in the same read. There is no interval in which one is visible
+    /// and the other is not.
+    /// </para>
+    /// <para>
+    /// It is <c>SplitSiblingId</c> gated on an in-flight division, never the
+    /// raw field. <c>SplitSiblingId</c> is not cleared when a division
+    /// completes, so publishing it ungated would make every leaf that has ever
+    /// split refuse to fold its successor for the rest of its life - disabling
+    /// reclaim on exactly the busy trees it exists to tidy.
+    /// </para>
+    /// </summary>
+    [Id(6)] public GrainId? SplitTargetSiblingId { get; init; }
 }

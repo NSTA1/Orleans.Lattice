@@ -31,7 +31,8 @@ namespace Orleans.Lattice.Api.Mcp.Apps;
 /// the source resolves the caller's tenant and subject, then offers each tool of the
 /// tenant's installs whose declared role the caller holds by binding - it is a member of a
 /// group the install binds to the role, and the shared access gate does not refuse it with
-/// an explicit deny (see <see cref="AppMcpRoleGate"/>). Only prebuilt tool instances are
+/// an explicit deny (see <see cref="AppRoleGate.IsHeldAsync"/>). Advertisement and invocation
+/// both consult that one gate, so the two cannot drift apart. Only prebuilt tool instances are
 /// selected; nothing is re-materialised per session.
 /// </para>
 /// <para>
@@ -149,7 +150,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
                     }
                     else
                     {
-                        allowed = await AppMcpRoleGate.IsHeldAsync(app.Roles[role], _gate!, subject, cancellationToken).ConfigureAwait(false);
+                        allowed = await app.Roles[role].IsHeldAsync(_gate!, subject, cancellationToken).ConfigureAwait(false);
                         if (role < 32)
                         {
                             evaluated |= 1u << role;
@@ -219,7 +220,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
 
             var subject = await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
                 .ConfigureAwait(false);
-            return await AppMcpRoleGate.IsHeldAsync(app.Roles[current.RoleIndex], _gate!, subject, cancellationToken).ConfigureAwait(false);
+            return await app.Roles[current.RoleIndex].IsHeldAsync(_gate!, subject, cancellationToken).ConfigureAwait(false);
         }
         catch (LatticeTenantAccessDeniedException)
         {

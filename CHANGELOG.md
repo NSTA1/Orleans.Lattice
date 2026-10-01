@@ -12,6 +12,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
+- **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)
+
 - **Explorer - Reshard can shrink a tree.** The Reshard page folds shards together as well as splitting them, from 2 up to the tree's virtual slot count, and a shrink's review states its throughput trade-off. The Shards tab and the compaction and digest tools follow the live shard map. ([#4076](https://github.com/NSTA1/Orleans.Lattice/issues/4076)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A rewritten console with Lattice Apps built in.** Native areas replace plugins, every page has one address, and it adapts from phone to desktop and targets WCAG 2.2 AA. Apps are browsed, reviewed and run in place, their UI in a sandboxed frame whose data access the cluster enforces. ([#1716](https://github.com/NSTA1/Orleans.Lattice/issues/1716), [#1845](https://github.com/NSTA1/Orleans.Lattice/issues/1845), [#3807](https://github.com/NSTA1/Orleans.Lattice/issues/3807)) (`Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.AppKit`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.Entra.Web`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Replication`, `Orleans.Lattice.Api.Replication.Grpc`)
@@ -21,6 +25,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Apps - Re-bind an installed app's roles.** An operator can move each role to a different membership group without reinstalling. The version- and revision-pinned change replaces an enabled app's rules at once, so a removed group keeps no grant. ([#3884](https://github.com/NSTA1/Orleans.Lattice/issues/3884)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Type-ahead pickers.** Every field that names an existing tree, region, user or group, tenant or key now suggests matching values as you type. A pick-existing field refuses an unknown value, a suggest field flags an existing one, and a source that cannot list falls back to free text. ([#3949](https://github.com/NSTA1/Orleans.Lattice/issues/3949)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Date, time and duration pickers.** History's As of is a calendar and time picker in UTC that shows the zone, your local time and quick picks; backup intervals and the retention window take a whole number per unit instead of free text. ([#4148](https://github.com/NSTA1/Orleans.Lattice/issues/4148)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Admin - Operation progress.** Resize, snapshot and reshard statuses now report the step they have reached and their progress in shards or units, and the Explorer draws it as a progress bar, follows an accepted undo or purge until it finishes, and shows when a deleted tree stops being recoverable. ([#3958](https://github.com/NSTA1/Orleans.Lattice/issues/3958)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
 
@@ -35,6 +41,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Core - Ownership-bounded aliasing.** An optional `ITreeOwnershipGuard` can refuse an alias that would cross tree ownership, for every alias change including resize, restore and remediation; a refusal throws `LatticeTreeOwnershipDeniedException`. ([#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
+
+- **Gates - Deferred durable progress stays banked on the fault path.** A gate fails when a banking helper stops being reachable from a `catch`, or when one swallows the fault it banked under. Orleans does not run `OnDeactivateAsync` when `OnActivateAsync` throws, so progress coalesced behind a write window and flushed only on graceful teardown is discarded, re-done, and discarded again. Four separate investigations found and fixed that shape independently. ([#2545](https://github.com/NSTA1/Orleans.Lattice/issues/2545)) (`repository-wide`)
 
 - **Retrieval - Latency and readiness.** Retrieval latency is measured end to end and by stage, readiness and its 503 are attributable on the wire, a suppressed exact fallback is its own retrieval path, and both ladder guards report their operating state. ([#2253](https://github.com/NSTA1/Orleans.Lattice/issues/2253), [#2624](https://github.com/NSTA1/Orleans.Lattice/issues/2624), [#2720](https://github.com/NSTA1/Orleans.Lattice/issues/2720), [#2936](https://github.com/NSTA1/Orleans.Lattice/issues/2936), [#2962](https://github.com/NSTA1/Orleans.Lattice/issues/2962)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -57,6 +65,22 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Online reshard shrinks.** `ReshardAsync` accepts a count below a populated tree's current one and folds adjacent shards together online, completing only once the retired shards' storage is released; the `shrink_unsupported` rejection reason is gone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Changed
+
+- **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Leaf digest string feeding.** Feeding a string to the digest appended its length prefix separately from the body, and sized its staging buffer to the key's own worst case, emitting a variable `localloc` per call. It stages both into one constant-size buffer now: 20-46% faster. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Vector clock digest folding.** Folding a multi-replica clock sorted a rented key array then re-looked-up every clock, and the keys-only `Array.Sort` overload allocated a comparer delegate per call. A paired-array sort carries clocks along now: 14-34% faster, 96% less allocated. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Pooled return prefix clearing.** Five more pooled staging sites returned their rental with `clearArray: true`, memsetting the whole rounded-up bucket rather than the slots written. They clear exactly the written prefix now: 50% faster on a sparse 4096-slot rental. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`)
+
+- **Agents - Delegated sessions run targeted tests only.** The agent playbooks and the testing master now bind a sub-session to a named fixture or method filter, never a whole test project reflexively. The scope rule is a host-capacity rule, not only a wall-clock one: concurrent sessions contend superlinearly, a contended run presents as a hang, and an unscoped run can perturb a co-located rig somebody is measuring. ([#4130](https://github.com/NSTA1/Orleans.Lattice/pull/4130)) (`repository-wide`)
+
+- **Performance - Pooled buffer return clearing.** Nine pooled staging sites returned their rental with `clearArray: true`, which memsets the whole rounded-up array rather than the bytes written. They clear exactly the written prefix now: 28-32% faster on a 4 KB to 64 KB staging call. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Storage.File`)
+
+- **Performance - Repository-context operation ids.** Chunk operation ids staged every part through a StringBuilder and a fresh array before hashing. They stage UTF-8 into one stack or pooled buffer and hash it once now: 26-38% faster and 99% less allocated. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Performance - Repository-context digest handling.** The per-file freshness check rebuilt a whole digest string only to compare it, and formatting one built two strings plus a copy. Both format into stack buffers now: comparison is allocation-free and 28-30% faster. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Performance - Repository-context hash staging.** Three SHA-256 paths staged their input through throwaway arrays, one also re-materialising each declaration as a string. They hash spans in place now: 46-99% less allocated and 14-58% faster across source ids, reuse tokens and symbol digests. ([#4107](https://github.com/NSTA1/Orleans.Lattice/pull/4107)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -98,13 +122,29 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Shard - Folds release the retired donor's storage.** A committed shard consolidation, healing's included, clears the donor's leaves and internal nodes, freeing their WAL pins; the donor stays a routing tombstone, and no fold takes a shard an in-flight split still drains into. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059), [#4104](https://github.com/NSTA1/Orleans.Lattice/issues/4104)) (`Orleans.Lattice`)
 
+### Deprecated
+
+- **Backup - Blocking capture and restore verbs.** `CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
 ### Fixed
 
+- **Auth - Grants a host seeds at startup are honoured as soon as they are written.** Since the alias-swap fix above, a silo whose policy had never been written warmed its access gate over an empty snapshot at once, and the rebuild after the first seeded rules could take seconds while the policy tree's shards were being created. Requests in that window were denied as "no matching rule". The first rule written over an empty snapshot now makes the gate wait for a rebuild that saw it. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice.Auth`)
+
+- **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. On a host with an access gate, a resize swap driven by its own phase timer runs as system origin. It is no longer refused as an anonymous alias change on every tick. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
+
 - **Schema - Remediation status answers while a run is in progress.** Reading a tree's remediation or migration status no longer waits for a running remediate or migrate to finish, so the Explorer's Schema operation page shows the live phase and count instead of timing out. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
+
+- **Core - A range read no longer comes up short during a leaf division.** A donor mid-split hid rows it still held, so a scan, count or stats call returned successfully while missing keys a point or batched read still answered. The gap lasted until that leaf's next write, so it could outlive the division indefinitely on a range that had gone quiet. ([#3918](https://github.com/NSTA1/Orleans.Lattice/issues/3918)) (`Orleans.Lattice`)
+
+- **Batch writes can be bounded by a whole-call budget, not just a fan-out one.** `SetManyEnvelopeBudget` bounds `SetManyAsync` end to end, so stages that each stay inside the deadline cannot sum past it unseen. The refusal names the per-stage breakdown, and unlike the fan-out budget it also covers single-shard batches. Opt-in; unbounded by default. ([#2685](https://github.com/NSTA1/Orleans.Lattice/issues/2685)) (`Orleans.Lattice`)
+
+- **Core - Tombstone compaction no longer times out on a tombstone-heavy leaf.** A leaf's reap yields on a work budget and resumes, reaping strictly less each pass until it drains, and a partial pass keeps the leaf queued instead of dropping it. ([#4135](https://github.com/NSTA1/Orleans.Lattice/issues/4135)) (`Orleans.Lattice`)
 
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tenant residency reads as served, and a change is previewed.** Each region says whether it serves the tenant; no residency means every region. A change is previewed per region, and one leaving the tenant served nowhere turns Apply off, passing only on an explicit, confirmed path. ([#4078](https://github.com/NSTA1/Orleans.Lattice/issues/4078)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Region lifecycle is accurate and followed live.** A region being added or removed shows its step of three and who takes the next, and the page follows a drain to Removed without a refresh. A tenant whose regions have all left its residency reads as served nowhere. ([#4114](https://github.com/NSTA1/Orleans.Lattice/issues/4114)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A late app-page load no longer pulls you back.** The bare `/apps/{slug}` shows the overview in place, and a sign-in or token renewal still running when the circuit ends no longer ends it. ([#4093](https://github.com/NSTA1/Orleans.Lattice/issues/4093)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
@@ -119,6 +159,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - Leaving a page no longer marks the next one not found.** A page now accepts only an address its own routes answer, so the page being left can no longer misread the next page's address as not found. The default tenant's Tenancy root is now the tenant directory. ([#3948](https://github.com/NSTA1/Orleans.Lattice/issues/3948)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Every call asserts the page's tenant.** Each cluster call carries the active tenant, a switch rebuilds the page and forgets what was read, a signed-in caller whose tenant is not established sees no tenant-scoped page, and an operator can reach the reserved default tenant. ([#3896](https://github.com/NSTA1/Orleans.Lattice/issues/3896)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Toolbar controls line up.** Every toolbar lines its fields, pickers, search boxes and buttons up on one control row at every width, density and theme. A search box shows its label, every field is one height, and a placeholder is in the interface face. ([#4120](https://github.com/NSTA1/Orleans.Lattice/issues/4120)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Apps - An app role is held by binding.** A member of a bound group holds the role; the caller's other rights never add one, and the access gate is asked only to take it away, so a deny on a bound member withholds the role in the workspace and the app's MCP tools and is enforced on the bridge. ([#3902](https://github.com/NSTA1/Orleans.Lattice/issues/3902)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Mcp.Apps`)
 
@@ -256,6 +298,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Core - Tree admin acted on undefined modes.** An unknown `TreeSnapshotMode` ran an Offline snapshot that quiesced the source, and an unknown `TreeHistoryRetentionMode` cleared the retention override. Both are now rejected with `ArgumentOutOfRangeException` before any side effect. ([#4075](https://github.com/NSTA1/Orleans.Lattice/issues/4075)) (`Orleans.Lattice.Api.TreeAdmin`)
 
 ### Security
+
+- **Apps - An install consented to a manifest nobody reviewed.** The commit re-read the manifest, so a source could add a bridge operation after review. A description now reports `ManifestDigest`; an install sending it as `ExpectedManifestDigest` is refused if it changed. The Explorer sends it. ([#4021](https://github.com/NSTA1/Orleans.Lattice/issues/4021)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.UI`)
+
+- **Replication - Peer statistics recorded trees the receiver dropped.** A run for a tree not enrolled here counted as inbound contact, so a peer could plant tree ids in `ReplicationPeerStats` and the peer-status report. Only admitted runs are recorded now, and inbound rows are capped per silo. ([#4021](https://github.com/NSTA1/Orleans.Lattice/issues/4021)) (`Orleans.Lattice.Replication`)
 
 - **Explorer - Hardened credential, frame and script policy.** A sign-in is sent only to the endpoint it was minted for (`IExplorerAuthSession.GetAuthenticationFor`); the CSP drops `'unsafe-inline'` scripts; only the frame endpoint lifts `X-Frame-Options`; a frame gets only consented bridge grants. ([#4020](https://github.com/NSTA1/Orleans.Lattice/issues/4020)) (`Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
 

@@ -447,7 +447,7 @@ builder.Host.UseOrleans(silo =>
             // Demonstrate the periodic backup-health monitor with a tight cadence:
             // every backup is auto-enrolled and verified against the durable sink
             // every 5 minutes (the product default is every 6 hours), so the
-            // Explorer Existing Backups health column reflects sink faults quickly.
+            // Explorer Backups area's backup catalogue Health column reflects sink faults quickly.
             silo.ConfigureLatticeBackupHealth(o => o.DefaultInterval = TimeSpan.FromMinutes(5));
         }
     }

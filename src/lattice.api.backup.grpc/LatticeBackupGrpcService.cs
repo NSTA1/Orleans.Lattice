@@ -2,6 +2,7 @@ using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 
 namespace Orleans.Lattice.Api.Backup.Grpc;
@@ -95,6 +96,30 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Configures a backup's per-backup health monitor. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupHealthConfigureResponse> ConfigureBackupHealth(BackupHealthConfigureRequestMessage request, ServerCallContext context);
 
+    /// <summary>Starts a tracked full capture. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartBackup(BackupCaptureRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts a tracked incremental capture. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts a tracked backup-set capture. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts a tracked restore. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartRestore(RestoreRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts a tracked cold restore. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartColdRestore(RestoreRequestMessage request, ServerCallContext context);
+
+    /// <summary>Reads a tracked backup operation's status. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupOperationStatusResponse> GetBackupOperationStatus(BackupOperationRequestMessage request, ServerCallContext context);
+
+    /// <summary>Lists a page of tracked backup operations. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationPage> ListBackupOperations(LatticeOperationListRequest request, ServerCallContext context);
+
+    /// <summary>Requests cancellation of a tracked backup operation. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupOperationStatusResponse> CancelBackupOperation(BackupOperationRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -133,6 +158,14 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.CheckBackupHealth, (UnaryServerMethod<BackupHealthCheckRequestMessage, BackupHealthReportResponse>?)null);
             binder.AddMethod(methods.GetBackupHealth, (UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>?)null);
             binder.AddMethod(methods.ConfigureBackupHealth, (UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>?)null);
+            binder.AddMethod(methods.StartBackup, (UnaryServerMethod<BackupCaptureRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartIncrementalBackup, (UnaryServerMethod<BackupIncrementalCaptureRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartBackupSet, (UnaryServerMethod<BackupSetCaptureRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartRestore, (UnaryServerMethod<RestoreRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartColdRestore, (UnaryServerMethod<RestoreRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.GetBackupOperationStatus, (UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>?)null);
+            binder.AddMethod(methods.ListBackupOperations, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
+            binder.AddMethod(methods.CancelBackupOperation, (UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>?)null);
             return;
         }
 
@@ -155,6 +188,14 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.CheckBackupHealth, new UnaryServerMethod<BackupHealthCheckRequestMessage, BackupHealthReportResponse>(serviceImpl.CheckBackupHealth));
         binder.AddMethod(methods.GetBackupHealth, new UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>(serviceImpl.GetBackupHealth));
         binder.AddMethod(methods.ConfigureBackupHealth, new UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>(serviceImpl.ConfigureBackupHealth));
+        binder.AddMethod(methods.StartBackup, new UnaryServerMethod<BackupCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackup));
+        binder.AddMethod(methods.StartIncrementalBackup, new UnaryServerMethod<BackupIncrementalCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartIncrementalBackup));
+        binder.AddMethod(methods.StartBackupSet, new UnaryServerMethod<BackupSetCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackupSet));
+        binder.AddMethod(methods.StartRestore, new UnaryServerMethod<RestoreRequestMessage, LatticeOperationHandle>(serviceImpl.StartRestore));
+        binder.AddMethod(methods.StartColdRestore, new UnaryServerMethod<RestoreRequestMessage, LatticeOperationHandle>(serviceImpl.StartColdRestore));
+        binder.AddMethod(methods.GetBackupOperationStatus, new UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>(serviceImpl.GetBackupOperationStatus));
+        binder.AddMethod(methods.ListBackupOperations, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListBackupOperations));
+        binder.AddMethod(methods.CancelBackupOperation, new UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>(serviceImpl.CancelBackupOperation));
     }
 }
 
@@ -170,6 +211,7 @@ internal abstract class LatticeBackupGrpcServiceBase
 internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 {
     private readonly ILatticeBackupControl _control;
+    private readonly ILatticeBackupOperations? _operations;
     private readonly ILatticeBackupApiCredentialBridge _credentialBridge;
     private readonly ILatticeBackupApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeBackupApiGrpcOptions> _options;
@@ -190,7 +232,8 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         ILatticeBackupApiCredentialBridge credentialBridge,
         ILatticeBackupApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeBackupApiGrpcOptions> options,
-        ILogger<LatticeBackupGrpcService> logger)
+        ILogger<LatticeBackupGrpcService> logger,
+        ILatticeBackupOperations? operations = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -200,6 +243,11 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
+        // A host that registered only the control facade keeps working: the default
+        // facade implements both interfaces, and a custom one that does not leaves
+        // the accept-then-poll RPCs answering Unimplemented rather than failing the
+        // whole service at construction.
+        _operations = operations ?? control as ILatticeBackupOperations;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;
@@ -236,6 +284,11 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         return credential is null ? null : LatticeCredentialContext.With(credential);
     }
 
+    // The deprecated blocking RPCs (LATTICE0002) are served by the deprecated
+    // blocking verbs they have always called; the RPCs stay for wire compatibility
+    // until the next major version, and new clients use the Start* RPCs below.
+#pragma warning disable LATTICE0002
+
     /// <inheritdoc />
     public override Task<BackupCaptureResponse> CreateBackup(BackupCaptureRequestMessage request, ServerCallContext context)
         => InvokeAsync(request, context, static async (control, req, ct) =>
@@ -269,6 +322,8 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                 .ConfigureAwait(false);
             return ToSetCaptureResponse(result);
         });
+
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context)
@@ -400,13 +455,73 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     public override Task<RestoreResponse> RestoreBackup(RestoreRequestMessage request, ServerCallContext context)
         => InvokeAsync(request, context, static async (control, req, ct) =>
         {
+#pragma warning disable LATTICE0002 // The deprecated RPC is served by the deprecated verb; see CreateBackup.
             var result = await control
-                .RestoreBackupAsync(
-                    new LatticeRestoreRequest(req.BackupId, req.TargetTreeId, req.Scope, req.Mode, req.OperationId, req.ApplyBatchSize),
-                    ct)
+                .RestoreBackupAsync(ToRestoreRequest(req), ct)
                 .ConfigureAwait(false);
+#pragma warning restore LATTICE0002
             return ToRestoreResponse(result);
         });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartBackup(BackupCaptureRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartBackupAsync(
+                new LatticeBackupCaptureRequest(req.Name, req.Scope, req.PageSize), req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartIncrementalBackupAsync(
+                new LatticeBackupIncrementalCaptureRequest(req.Name, req.Scope, req.BaseBackupId, req.PageSize),
+                req.TrackingOperationId,
+                ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartBackupSetAsync(
+                new LatticeBackupSetCaptureRequest(req.Name, req.Scopes, req.CrossTreeConsistent, req.PageSize),
+                req.TrackingOperationId,
+                ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartRestore(RestoreRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartRestoreAsync(ToRestoreRequest(req), req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartColdRestore(RestoreRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartColdRestoreAsync(ToRestoreRequest(req), req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<BackupOperationStatusResponse> GetBackupOperationStatus(BackupOperationRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static async (operations, req, ct) =>
+            new BackupOperationStatusResponse
+            {
+                Status = await operations.GetOperationStatusAsync(req.OperationId, ct).ConfigureAwait(false),
+            });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationPage> ListBackupOperations(LatticeOperationListRequest request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) => operations.ListOperationsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<BackupOperationStatusResponse> CancelBackupOperation(BackupOperationRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static async (operations, req, ct) =>
+            new BackupOperationStatusResponse
+            {
+                Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
+            });
+
+    private ILatticeBackupOperations Operations => _operations
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented,
+            "This host registers no ILatticeBackupOperations, so the accept-then-poll backup operation RPCs are unavailable."));
+
+    private static LatticeRestoreRequest ToRestoreRequest(RestoreRequestMessage req) =>
+        new(req.BackupId, req.TargetTreeId, req.Scope, req.Mode, req.OperationId, req.ApplyBatchSize);
 
     /// <inheritdoc />
     public override Task<RevertRestoreResponse> RevertRestore(RestoreResponse request, ServerCallContext context)
@@ -537,10 +652,17 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             return new BackupHealthConfigureResponse();
         });
 
-    private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
+    private Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
         Func<ILatticeBackupControl, TRequest, CancellationToken, Task<TResponse>> handler)
+        => InvokeAsync(_control, request, context, handler);
+
+    private async Task<TResponse> InvokeAsync<TFacade, TRequest, TResponse>(
+        TFacade facade,
+        TRequest request,
+        ServerCallContext context,
+        Func<TFacade, TRequest, CancellationToken, Task<TResponse>> handler)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
@@ -550,7 +672,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
         try
         {
-            return await handler(_control, request, context.CancellationToken).ConfigureAwait(false);
+            return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
         }
         catch (RpcException)
         {

@@ -23,13 +23,20 @@ singleton that transport bindings such as `Orleans.Lattice.Api.Apps.Grpc` map,
 and as the `ILatticeAppRoleBindings` singleton that replaces an installed app's
 role-to-group bindings for its installed version. An enabled app is re-applied
 afterwards, so a removed binding keeps no grant; a disabled app stays disabled.
+It also registers the `ILatticeAppCatalog` (what each app source offers, gated
+like the control verbs) and `ILatticeAppWorkspace` (the apps a caller holds a
+role in, and their UI assets) facades. `AddLatticeAppBridgeApi()` adds
+`ILatticeAppBridge`, the cluster-side enforcement point for an app UI's data
+access, rate limited per caller, tenant and app through `LatticeAppBridgeOptions`.
 
 Behaviour:
 
-- Every verb except `GetCapabilitiesAsync` authorizes
+- Every control and catalogue verb except `GetCapabilitiesAsync` authorizes
   `LatticeOperation.AppInstall` over the cluster-wide scope through the shared
   access gate before it reads registry or source metadata. The capability probe
-  is advisory and grants nothing.
+  is advisory and grants nothing. The workspace and the bridge instead answer
+  only for an app whose role the caller holds through the install's role
+  bindings.
 - Operations run in the caller's active tenant (the default tenant when tenancy
   is off). Caller-supplied tree references in a ceiling are validated and
   tenant-composed at entry, then stored in their tenant-local form.

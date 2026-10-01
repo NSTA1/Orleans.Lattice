@@ -300,6 +300,11 @@
           "name": "SourceKey",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "ManifestDigest",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppDescriptor.cs#AppDescriptor"
@@ -397,6 +402,11 @@
         },
         {
           "name": "SourceKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ExpectedManifestDigest",
           "type": "string?",
           "required": false
         }

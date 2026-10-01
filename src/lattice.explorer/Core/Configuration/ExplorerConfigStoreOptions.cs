@@ -2,9 +2,8 @@ namespace Orleans.Lattice.Explorer.Core.Configuration;
 
 /// <summary>
 /// Options for the local JSON config store. The <see cref="FilePath"/> is the
-/// full path to the JSON document; each head supplies a per-user app-data
-/// location (the MAUI app-data directory on Windows, the local application-data
-/// folder on the web server).
+/// full path to the JSON document. By default it lives in the per-user local
+/// application-data folder; a host can supply a different path.
 /// </summary>
 public sealed class ExplorerConfigStoreOptions
 {

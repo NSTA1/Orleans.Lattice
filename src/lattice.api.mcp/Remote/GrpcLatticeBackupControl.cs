@@ -31,6 +31,11 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
         _client = client;
     }
 
+    // The deprecated blocking verbs (LATTICE0002) forward to the client's deprecated
+    // blocking calls; this adapter only implements the shipped interface. New callers
+    // use GrpcLatticeBackupOperations.
+#pragma warning disable LATTICE0002
+
     /// <inheritdoc />
     public Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)
         => _client.CreateBackupAsync(request, cancellationToken);
@@ -42,6 +47,7 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
     /// <inheritdoc />
     public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)
         => _client.CreateBackupSetAsync(request, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public async Task ScheduleBackupAsync(LatticeBackupScheduleRequest request, CancellationToken cancellationToken = default)
@@ -72,7 +78,9 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
 
     /// <inheritdoc />
     public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
         => _client.RestoreBackupAsync(request, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)

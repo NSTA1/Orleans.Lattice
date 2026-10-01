@@ -31,4 +31,11 @@ public sealed record RestoreRequestMessage
 
     /// <summary>The maximum number of entries applied to a single shard per round-trip.</summary>
     [Id(5)] public int ApplyBatchSize { get; init; } = LatticeRestoreRequest.DefaultApplyBatchSize;
+
+    /// <summary>
+    /// The idempotency id of the tracked operation an accept-then-poll start RPC
+    /// creates, or <see langword="null"/> to generate one. Ignored by the deprecated
+    /// blocking RPC.
+    /// </summary>
+    [Id(6)] public string? TrackingOperationId { get; init; }
 }

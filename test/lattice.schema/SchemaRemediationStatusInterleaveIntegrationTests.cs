@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Orleans.Hosting;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Schema.Tests;
@@ -13,21 +14,19 @@ namespace Orleans.Lattice.Schema.Tests;
 /// queued behind it, so the Explorer's Schema operation page timed out instead of
 /// showing progress.
 /// <para>
-/// The run is pinned deterministically: an incoming-call filter holds the build
+/// The run is pinned deterministically: an outgoing-call filter holds the build
 /// phase's first write into the destination tree on a
-/// <see cref="TaskCompletionSource"/>, so the coordinator sits inside
-/// <c>BuildDestinationAsync</c> for as long as the test chooses. The prompt-answer
-/// bound only turns the pre-fix hang into a failure; a passing read never waits on
-/// it.
+/// <see cref="TaskCompletionSource"/> before it is sent, so no response timeout
+/// ends the turn and the coordinator sits inside
+/// <c>BuildDestinationAsync</c> for as long as the test chooses, and releases it
+/// only after the status read has answered, so <see cref="InterleaveProbe"/>
+/// decides the claim without timing it (issue #4142).
 /// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 public sealed class SchemaRemediationStatusInterleaveIntegrationTests
 {
-    /// <summary>How long a status read admitted while the run is held may take to answer.</summary>
-    private static readonly TimeSpan PromptAnswer = TimeSpan.FromSeconds(5);
-
     private TestCluster _cluster = null!;
 
     [OneTimeSetUp]
@@ -48,7 +47,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
     }
 
     [Test]
-    public async Task A_status_read_issued_while_a_remediation_build_is_held_answers_promptly_with_the_build_phase()
+    public async Task A_status_read_issued_while_a_remediation_build_is_held_answers_while_held_with_the_build_phase()
     {
         var treeId = $"status-interleave-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
@@ -64,9 +63,10 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
         try
         {
             start = remediation.StartAsync(LatticeValueTransform.Passthrough(), policy);
-            await hold.Entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await hold.Entered.Task.WaitAsync(InterleaveProbe.HangBound);
 
-            during = await AnswerPromptlyAsync(remediation.GetStatusAsync());
+            during = await InterleaveProbe.AnswersWhileHeldAsync(remediation.GetStatusAsync(), hold.Release.Task,
+                "the status read");
 
             Assert.That(start.IsCompleted, Is.False,
                 "precondition: the remediation run was still held when the status read answered");
@@ -91,26 +91,12 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
         });
     }
 
-    private static async Task<LatticeSchemaRemediationReport> AnswerPromptlyAsync(Task<LatticeSchemaRemediationReport> call)
-    {
-        try
-        {
-            return await call.WaitAsync(PromptAnswer);
-        }
-        catch (TimeoutException)
-        {
-            Assert.Fail($"the status read did not answer within {PromptAnswer.TotalSeconds:0} s while the remediation "
-                + "run held the coordinator's turn; it queued behind the run it is meant to report on.");
-            throw;
-        }
-    }
-
     /// <summary>
     /// Holds the first <see cref="ILattice.SetAsync"/> into an armed tree's
     /// remediation destination (<c>{treeId}/remediated/{operationId}</c>) until the
     /// test releases it, keeping the coordinator inside its build phase.
     /// </summary>
-    private sealed class BuildWriteGate : IIncomingGrainCallFilter
+    private sealed class BuildWriteGate : IOutgoingGrainCallFilter
     {
         private const string DestinationInfix = "/remediated/";
 
@@ -123,7 +109,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
             foreach (var hold in Holds.Values) hold.Release.TrySetResult();
         }
 
-        public async Task Invoke(IIncomingGrainCallContext context)
+        public async Task Invoke(IOutgoingGrainCallContext context)
         {
             if (context.InterfaceMethod?.DeclaringType == typeof(ILattice)
                 && context.MethodName == nameof(ILattice.SetAsync)
@@ -153,7 +139,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.AddLatticeSchemaEnforcement();
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddIncomingGrainCallFilter<BuildWriteGate>();
+            siloBuilder.AddOutgoingGrainCallFilter<BuildWriteGate>();
         }
     }
 }

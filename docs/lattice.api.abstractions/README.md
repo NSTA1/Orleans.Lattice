@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Abstractions
 
-The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration, and installable-app control), their request / response models, and the typed exceptions those interfaces document, and nothing else.
+The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration, and installable apps), their request / response models, and the typed exceptions those interfaces document, and nothing else.
 
 ## What is it?
 
@@ -8,9 +8,13 @@ The Orleans.Lattice API surface is built in layers. Each **facade** package (`Or
 
 `Orleans.Lattice.Api.Abstractions` is the seam between the facades and their consumers. It carries only the contract:
 
-- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` (tenant administration); `ILatticeAppsControl` (installable-app control); and `ILatticeRegionCatalog` (region discovery).
+- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` and `ILatticeBackupOperations` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` and `ILatticeReplicationStatus` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` (tenant administration); `ILatticeAppsControl`, `ILatticeAppRoleBindings`, `ILatticeAppCatalog`, `ILatticeAppWorkspace`, and `ILatticeAppBridge` (installable apps: control, role re-binding, catalogue, workspace, and the app UI bridge); and `ILatticeRegionCatalog` (region discovery).
 - **Their request / response models** - the results, pages, records, and requests those interfaces exchange, each with its stable Orleans serialization alias.
 - **Their typed exceptions** - the faults the interfaces document, for example `LatticeStateCursorExpiredException` (state), `TelemetryBackendException`, `TelemetryQueryBoundsException` and `TelemetryQueryNotFoundException` (telemetry), `TenantNotFoundException` and its tenant-administration siblings, and `TreeNotEmptyException` and `BulkLoadOrderException` (tree administration).
+
+### Long-running operations contract
+
+The `Orleans.Lattice.Api.Operations` namespace carries the shared accept-then-poll contract for facade work that can outlast a caller request. `ILatticeOperations` exposes `GetOperationStatusAsync`, `ListOperationsAsync`, and `CancelOperationAsync`; `LatticeOperationHandle`, `LatticeOperationStatus`, `LatticeOperationScope`, `LatticeOperationListRequest`, and `LatticeOperationPage` are the common DTOs. Backup is the first facade to implement it through `ILatticeBackupOperations`; see [Long-running operations](operations.md) and [Backup operations](../lattice.api.backup/operations.md).
 
 ### Region contract
 

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Orleans.Lattice.BPlusTree;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Auth;
@@ -128,6 +129,15 @@ internal sealed class LatticeAuthorizationPolicyStore(
         // it bypasses the enforcement gate it feeds (see the type remarks).
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // A never-written policy tree is unregistered and holds no rules. Reading
+            // it would register it, and the gate's cold warm-up can run inside the
+            // tree registry's non-interleaved SetAliasAsync turn, where that
+            // registration queues behind the turn awaiting it (issue 4128).
+            if (!await grainFactory.GetLatticeRegistry().ExistsAsync(AuthConstants.PolicyTree).ConfigureAwait(false))
+            {
+                yield break;
+            }
+
             await foreach (var entry in Policy
                 .ScanEntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
                 .ConfigureAwait(false))

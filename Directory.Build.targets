@@ -9,8 +9,9 @@
     Scope: packable library projects only. A project is in scope when it sets a
     PackageId and has not opted out via IsPackable=false. Test, sample, and
     benchmark projects set IsPackable=false and are therefore untouched;
-    projects without a PackageId (e.g. the Explorer sub-projects) are excluded
-    as well. This lives in Directory.Build.targets (imported after each project
+    projects without a PackageId are excluded as well. Explorer projects that
+    now set PackageId are included unless they explicitly set IsPackable=false.
+    This lives in Directory.Build.targets (imported after each project
     body) so PackageId and IsPackable are already assigned when the condition is
     evaluated.
 

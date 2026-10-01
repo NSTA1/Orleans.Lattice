@@ -72,6 +72,8 @@ Before the concerns above run, the applier gates every inbound entry against thi
 
 The merge mode is always re-resolved locally through the receiver's per-tree resolver (`ILatticeReplicationContext.ResolveMergeMode`, falling back to the raw `LatticeReplicationOptions.ReplicatedTrees` map); the wire `Mode` field is only ever compared against that resolution, never adopted. An applier with neither an injected replication context nor a `ReplicatedTrees` map has no enrollment signal, so the gate fails closed: every inbound entry is dropped as `rejected-not-replicated` (not dead-lettered) and a one-time warning is logged. Production registers the replication context, so the gate is always evaluable there.
 
+A run the gate rejects - either way, or for want of an enrollment source - is also never recorded as inbound contact in `ReplicationPeerStats`, on any receive path, so a peer cannot plant a tree id of its choosing in the peer statistics or the peer-status report. The inbound half of that state is additionally capped, because the origin id of an admitted run is still the peer's own claim; see [observability](observability.md#bidirectional-peerlast_contact_seconds-and-the-liveness-probe).
+
 Two further receiver-side gates run after an entry clears enrollment, before any high-water-mark read:
 
 - **Tenant isolation (dead-lettered).** When tenancy is on, the owning tenant is derived from the tree id alone - never from a wire field - and an entry whose tenant does not exist here, is not resident in the region serving this receiver, or has been suspended or disabled is refused. It is dead-lettered with the `foreign_tenant`, `tenant_offline`, or `tenant_suspended` reason, records the matching `rejected-foreign-tenant` / `rejected-tenant-offline` / `rejected-tenant-suspended` apply-duration outcome, and leaves the high-water-mark unchanged. The rejection is not a deferral, so the receive path still acknowledges the batch and the sender advances past the entry rather than re-shipping it; once the tenant exists, becomes resident, or is reinstated, the parked entry can be replayed from the [dead-letter queue](dead-letter-queue.md). With tenancy off the gate is inactive and costs nothing.
@@ -157,7 +159,7 @@ For a 256-entry single-origin `LwwRegister` batch this collapses roughly 4 x 256
 
 ### Preserved per-entry semantics
 
-Every classification the per-entry path produces survives the batch path:
+Every classification the per-entry path produces survives the batch path, except the tombstone-reap no-op (the last bullet):
 
 - **Range-delete entries** bypass the pinned-floor gate and apply unconditionally (a range apply is naturally idempotent at the leaf layer).
 - **Local-origin runs** classify every entry as `Dedup` with `HighWaterMark = HybridLogicalClock.Zero` and emit no grain calls.
@@ -165,10 +167,11 @@ Every classification the per-entry path produces survives the batch path:
 - **Causal-park** is exercised per-entry; only the local-vector-clock fetch is lazy.
 - **Per-entry instrumentation** (`ApplyDuration`, `ApplyLag`, `ApplyFifoViolations`) is recorded inside the per-entry loop so observability is preserved verbatim.
 - **Single-entry batches** defer to `ApplyAsync` so behaviour is bit-identical with the legacy receiver for the trivial case.
+- **Tombstone-reap envelopes** are not acknowledged as `dedup` on the batch path: it has no no-op branch for them, so a multi-entry batch carrying one faults on that entry, because the point-apply step has no rule for it. The dead-letter-tracking decorator then falls back to per-entry apply, which does acknowledge the envelope as a no-op. The sender never ships these envelopes, so only an older shipper or a hand-built caller can deliver one.
 
 ### Failure model
 
-Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The gRPC receiver endpoint wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. The dead-letter-tracking applier decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
+Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The gRPC receiver endpoint wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. The dead-letter-tracking applier decorator falls back to per-entry routing when any entry in the batch already has retry history, or when the batch call throws part-way, so its DLQ accounting is exact. On that per-entry fallback (and for a single-entry batch) the decorator itself records the inbound per-peer contact, which the batch path otherwise records once per run; entries from runs the failed batch attempt already recorded can therefore record contact a second time for the same push (see [Observability](observability.md#bidirectional-peerlast_contact_seconds-and-the-liveness-probe)).
 
 ### Parallel apply across independent runs
 

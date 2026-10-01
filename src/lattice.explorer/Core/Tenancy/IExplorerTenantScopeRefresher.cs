@@ -17,8 +17,8 @@ namespace Orleans.Lattice.Explorer.Core.Tenancy;
 /// <remarks>
 /// The contract lives here, beside the switcher that raises it, and the host
 /// supplies the implementation. That is what keeps the tenancy core free of any
-/// knowledge of the plugin model: the switcher knows only that <em>something</em>
-/// wants to hear about a scope change.
+/// knowledge of the UI surface that reacts to scope changes: the switcher knows
+/// only that <em>something</em> wants to hear about a scope change.
 /// <para>
 /// Implementations are expected to be fault-isolated and fail-closed - a refresh
 /// that cannot complete must narrow rather than widen - because the mutation

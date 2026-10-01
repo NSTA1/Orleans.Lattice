@@ -451,7 +451,7 @@ $Layer2Rows = @(
 		# conservative *sustained* point-write rate at a sub-saturation
 		# offered load, not the saturation ceiling (the account ceiling and
 		# the multi-account fan-out remedy are discussed in
-		# docs/lattice/throughput.md).
+		# benchmark/azure-throughput/throughput.md).
 		# 200 veh x 5 Hz = 1,000 keys/s offered.
 		Rung = '200:5:45';
 	},
@@ -500,7 +500,7 @@ $Layer2Rows = @(
 		# keeps the per-transaction latency in the fast path so no flush
 		# times out, every cohort finishes with zero failures, and the
 		# reported number is a conservative *sustained* rate (not the
-		# saturation ceiling - see docs/lattice/throughput.md).
+		# saturation ceiling - see benchmark/azure-throughput/throughput.md).
 		# 1200 veh x 5 Hz = 6,000 keys/s offered.
 		Rung = '1200:5:45';
 	},
@@ -529,7 +529,7 @@ $Layer2Rows = @(
 		# matching the proven cross-tree-atomic-64 @ 100 shape) and the in-
 		# flight sub-sagas quiesce to zero before stop. All cohorts then
 		# report HEALTHY at a conservative *sustained* saga-commit rate (not
-		# the ceiling - see docs/lattice/throughput.md).
+		# the ceiling - see benchmark/azure-throughput/throughput.md).
 		# 100 veh x 5 Hz = 500 keys/s offered.
 		Rung = '100:5:45';
 	},
@@ -592,7 +592,7 @@ $Layer2Rows = @(
 		# slots unsaturated (inFlight median ~3, max <8) so no flush times out,
 		# the in-flight sub-sagas quiesce to zero before stop, and all cohorts
 		# report HEALTHY at a conservative *sustained* rate (not the ceiling -
-		# see docs/lattice/throughput.md): N=3 at 150 veh -> 3/3 HEALTHY,
+		# see benchmark/azure-throughput/throughput.md): N=3 at 150 veh -> 3/3 HEALTHY,
 		# inFlight med 2-3, failed=0. 150 veh x 5 Hz = 750 keys/s offered.
 		Rung = '150:5:45';
 	}

@@ -114,6 +114,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "grain fixture; two replay-slice partials read option defaults out of src, not instruments",
             ["DuplicateXmlSummaryHygieneTests"] =
                 "asserts no member in src carries two consecutive XML summary elements, not instrument declarations",
+            ["FaultPathBankingContractTests"] =
+                "asserts every banking helper in src is wired to a fault path and lets the fault out (issue #2545), not instrument declarations",
             ["FrameworkNamespaceShadowingHygieneTests"] =
                 "asserts no namespace in src or test shadows an Orleans framework namespace, not instrument declarations",
             ["LatticeOptionsResolverPropagationGuardTests"] =

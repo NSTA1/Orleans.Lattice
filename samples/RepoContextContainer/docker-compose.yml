@@ -786,9 +786,10 @@ services:
       # precise list of gestures this does and does not survive.
       #
       # Presence of the connection string is what enables backup. Unset it
-      # and the container runs with NO backup and says so at WARNING on
-      # startup rather than being silently indistinguishable from a backed-up
-      # one. This is the fixed, public Azurite development account, which is
+      # and /health/backup reports DISABLED while the backup state gauge
+      # publishes state 0, rather than the deployment being silently
+      # indistinguishable from a backed-up one. This is the fixed, public
+      # Azurite development account, which is
       # published in Microsoft's own documentation and is not a secret.
       LATTICE_BACKUP_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-sink:10000/devstoreaccount1;"
       # Cadence. An initial FULL capture runs at startup - manifest

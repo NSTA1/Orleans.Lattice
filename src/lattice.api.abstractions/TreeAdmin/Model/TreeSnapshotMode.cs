@@ -18,9 +18,10 @@ public enum TreeSnapshotMode
 
     /// <summary>
     /// The source tree stays available for reads and writes throughout. Every
-    /// mutation the source accepts before the snapshot completes is shadow-forwarded
-    /// to the destination, and a background per-shard drain copies existing entries;
-    /// last-writer-wins convergence guarantees no data loss with no distributed lock.
+    /// last-writer-wins mutation the source accepts before the snapshot completes is
+    /// shadow-forwarded to the destination, and a background per-shard drain copies
+    /// existing entries. Typed CRDT deltas and bulk appends are not shadow-forwarded;
+    /// use offline mode when those mutation paths must be captured without a gap.
     /// </summary>
     Online = 1,
 }

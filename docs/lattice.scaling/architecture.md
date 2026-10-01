@@ -43,8 +43,10 @@ three normalised dimensions, each `0.0` (idle) to `1.0` (saturated):
   `SiloRuntimeStatistics.ActivationCount` (read via the management grain),
   normalised against `ActivationWorkingSetTarget`; the worst silo sets the
   cluster value.
-- **Resource** - the worst-case of CPU and available-memory headroom across the
-  silo pool, from Orleans `EnvironmentStatistics` (cgroup-aware).
+- **Resource** - the worse of CPU utilisation and memory utilisation (used
+  bytes against the cgroup-aware maximum available), from Orleans
+  `EnvironmentStatistics`; the worst silo sets the cluster value. A silo that
+  reports no memory ceiling contributes CPU only.
 - **WAL dispatch** - how close the WAL append-dispatch pipeline is to its
   admission ceiling, derived from the answering silo's own WAL saturation signal
   (the worst state across every tree that silo has observed).

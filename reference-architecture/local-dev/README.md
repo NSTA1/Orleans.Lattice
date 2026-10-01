@@ -127,7 +127,7 @@ seeded at startup by `LocalDevIdentitySeeder`. That seeder does two things:
 
 1. writes the groups and memberships into the durable membership directory (the
    `sys-membership-*` trees), so they are introspectable through the ordinary read /
-   scan surface and the **Explorer Access tab**; and
+   scan surface and the Explorer's **Access** area; and
 2. authors each group's authorization grant into the policy store
    (`sys-auth-policy`), so under deny-by-default the identities have genuinely
    different power.
@@ -180,7 +180,7 @@ and, once tenancy is enabled, the tenant you act as - per call:
   the **username** (the password is ignored) to browse as that identity - start
   with `platform-admin`.   Sign out and sign back in as another id to see that
   identity's view: a `data-reader` sees only readable trees, an `auditor` sees no
-  tree data at all, and the Access tab reflects the seeded groups and grants.
+  tree data at all, and the Access area reflects the seeded groups and grants.
 
   Sign-in here is deliberately manual rather than seeded. The web Explorer
   withholds the `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD`
@@ -264,11 +264,12 @@ and the telemetry gRPC binding rides the same silo endpoint the console already
 uses for State, so the console needs no second address.
 
 1. Open region A's Explorer (http://localhost:9080) and sign in as `platform-admin`
-   (any password). A **Telemetry** area tab is present; open it and the panels
-   render series scraped from `silo-a`.
+   (any password). The directory spine shows a **Telemetry** area; open it and
+   its charts render series scraped from `silo-a`.
 2. Sign out and back in as `data-reader` or `region-operator`, or browse signed
-   out. None of them is entitled to telemetry, so the catalogue comes back empty
-   and **no Telemetry tab is rendered at all**. The facade makes "no backend here"
+   out. None of them is entitled to telemetry, so the catalogue comes back empty:
+   the **Telemetry** area still appears, but it renders no charts, only a "No
+   metrics to show" notice. The facade makes "no backend here"
    and "nothing offered to you" deliberately indistinguishable, so a caller cannot
    probe its own entitlement.
 3. The area is region-local: region B's Explorer (http://localhost:9081) shows
@@ -277,7 +278,7 @@ uses for State, so the console needs no second address.
 
 > **`auditor` reaches telemetry without holding any data grant.**
 > `auditor` holds the scopeless `Telemetry` capability and nothing else: its MCP
-> telemetry tools work **and** it gets the Telemetry area in the Explorer, while
+> telemetry tools work **and** the Explorer's Telemetry area renders charts for it, while
 > every tree read is still denied. The seeded grant is authored cluster-wide over
 > the all-trees sentinel (`LatticeScope.ClusterWide()`, whose own documentation
 > names `LatticeOperation.Telemetry` as its intended use), and both the telemetry
@@ -293,7 +294,7 @@ uses for State, so the console needs no second address.
 
 Unset `Telemetry__BackendAddress` on a silo and that region's telemetry surface
 disappears entirely: the binding answers `Unimplemented`, the Explorer's gate reads
-the surface as absent, and no Telemetry tab is rendered for anyone.
+the surface as absent, and the Explorer hides the Telemetry area for everyone.
 
 ## Demo 4 - tenant isolation (opt-in multi-tenancy)
 

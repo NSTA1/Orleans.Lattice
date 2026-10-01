@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
 /// Server-side gRPC interceptor that enforces the
-/// <c>Orleans.Lattice.Replication</c> shared-secret authenticator on
-/// every inbound unary call. Reads the
+/// <c>Orleans.Lattice.Replication</c> shared-secret authenticator on every
+/// inbound unary, server-streaming, client-streaming, and duplex-streaming call
+/// targeting this package's replication services. Reads the
 /// <see cref="LatticeReplicationGrpcMetadataNames.SecretHeader"/>
 /// metadata entry, validates it against
 /// <see cref="IReplicationSecretProvider.IsAcceptedAsync"/>, and rejects

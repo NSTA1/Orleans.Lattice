@@ -918,9 +918,10 @@ function New-RigWalRecordBytes {
 
 .DESCRIPTION
 	The core parser. It is deliberately STREAMING and never materialises a
-	segment: it reads each record's 9-byte frame header into one reused
+	segment: it reads each record's 5-byte type/length prefix into one reused
 	buffer, reads the 8 body bytes it actually needs (a Data record's offset,
-	or a Trim record's through-offset), and SEEKS past the rest. The census
+	or a Trim record's through-offset), and SEEKS past the rest of the body plus
+	the trailing CRC. The census
 	counts records and bytes, so the payload itself is never wanted - reading
 	it would cost 728 MB of I/O and a large-object allocation per segment on a
 	real deployment, for nothing.
@@ -955,9 +956,9 @@ function Get-RigWalStreamCensus {
 	$lastTrim = $null
 	$malformed = $false
 
-	# One buffer for the whole walk. Nine bytes covers the frame header
-	# ([type:1][bodyLen:4][...]) and eight covers either body prefix we read,
-	# so nothing else is ever allocated per record.
+	# One buffer for the whole walk. Five bytes covers the type/length prefix,
+	# and eight covers either body prefix we read, so nothing else is ever
+	# allocated per record.
 	$header = [byte[]]::new(9)
 
 	while ($position + 9 -le $length) {

@@ -6,12 +6,12 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Typed value-surface accessor for a <see cref="Orleans.Lattice.PnCounter"/>
 /// stored under a single key in an <see cref="ILattice"/>. Mutating
-/// methods read-modify-write under optimistic concurrency, retrying on
-/// CAS failure up to a configurable budget.
+/// methods read the counter once to mint a per-replica delta, then apply
+/// that delta through the tree's CRDT merge path.
 /// </summary>
 public readonly record struct PnCounterAccessor
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;
@@ -182,7 +182,7 @@ public readonly record struct PnCounterAccessor
         };
     }
 
-    /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
+    /// <summary>Applies <paramref name="other"/> as a PN-counter delta.</summary>
     public Task MergeAsync(PnCounter other, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentNullException.ThrowIfNull(other);

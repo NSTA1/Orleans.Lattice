@@ -49,7 +49,10 @@ internal static partial class LatticeAppsGrpcMarshallers
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+                    // Clear only the copied prefix, not the whole rounded-up
+                    // rental: see the unbounded marshaller for the arithmetic.
+                    buffer.AsSpan(0, length).Clear();
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
             });
     }

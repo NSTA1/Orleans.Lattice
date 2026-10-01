@@ -11,7 +11,7 @@ It provides:
 - **Outbound live push.** The canonical sender sends one unary RPC per `ReplicationBatchEnvelope` over a cached HTTP/2 channel per peer cluster.
 - **Inbound apply.** The receiver endpoint decodes the envelope and drives `IReplicationApplier`, returning a `ReplicationAck` with the applied high-water mark and flow-control hints.
 - **Shared endpoint shape.** The same peer map is used for live push, remote snapshot bootstrap, anti-entropy probes, and the cross-cluster saga control channel exposed by the replication package.
-- **Security defaults.** HTTPS endpoints are required by default, with shared-secret authentication documented in [Transport Security](../lattice.replication/transport-security.md).
+- **Security defaults.** HTTPS endpoints are required by default, with shared-secret authentication documented in [Transport Security](../lattice.replication/transport-security.md); the receiver also binds each authenticated call's secret to the origin cluster it stamps, through [`BindCredentialToOriginCluster`](../lattice.replication/configuration.md#transport-security---latticereplicationsecurityoptions) (on by default).
 
 The package has no external broker and no `.proto` file to maintain.
 

@@ -271,6 +271,10 @@ Backup*/
 !/src/lattice.explorer/UI/Areas/Backups/
 !/src/lattice.explorer/UI/wwwroot/backups/
 !/test/lattice.explorer/UI/Areas/Backups/
+# Real Backup/ source and test folders across the packages (for example the API
+# contract's Backup/ interfaces, #4122) are not upgrade-backup folders either.
+!/src/**/Backup/
+!/test/**/Backup/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/

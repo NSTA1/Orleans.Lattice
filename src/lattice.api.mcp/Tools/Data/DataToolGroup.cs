@@ -194,8 +194,8 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Writes a base64-encoded value at a key on a tree. Fails closed: a caller who may "
                     + "not write the key is denied and nothing is persisted. Caller errors - a value "
-                    + "that is not valid base64, or a null tree id or key - surface as an "
-                    + "invalid-argument error, not a server fault. Destructive.",
+                    + "that is not valid base64, or a null tree id or key - surface as clean "
+                    + "tool errors rather than raw deserialization faults. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

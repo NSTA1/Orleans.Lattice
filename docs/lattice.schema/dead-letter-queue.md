@@ -2,9 +2,16 @@
 
 The dead-letter queue (DLQ) is where a tree's schema machinery parks an item it
 rejected *without failing the operation that produced it*. Its purpose is
-fail-open ingest: a schema violation arriving over replication or restore, or a
-value that cannot be upcast, must never stall the stream or crash the silo - it is
-diverted here for an operator to inspect and act on out of band.
+fail-open ingest: a schema violation arriving as system-origin ingest, or an
+ingested value that cannot be upcast, must never stall the stream or crash the
+silo - it is diverted here for an operator to inspect and act on out of band. Only
+ingest that reaches a tree's write operations can land here, which in practice is
+a replicated typed-CRDT entry or an entry of a replicated atomic batch; a plain
+(non-atomic) last-writer-wins replication apply and a backup restore write below
+the strict check and never produce an entry (see
+[strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). A dead-lettered
+entry of a replicated atomic batch is left out of that batch, and the receiver
+commits the batch's other entries.
 
 ## What lands in the DLQ
 
@@ -16,19 +23,19 @@ of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |
 |---|---|
-| `Replication` | A replicated apply from a peer cluster failed strict validation. |
-| `Restore` | A backup restore or bulk-load item failed strict validation. |
+| `Replication` | A system-origin ingested item other than a bulk-load item - in practice a replicated typed-CRDT delta or full-state row, or an entry of a replicated atomic batch - failed strict validation. |
+| `Restore` | A bulk-load item (`BulkLoadAsync` or `BulkAppendChunkAsync`) arriving as system-origin ingest failed enforcement's strict validation. No shipped ingest path issues one - a backup restore writes below the strict check - so in practice this source does not occur. |
 | `LocalRejected` | Reserved for a rejected local write retained for inspection. Not produced by the current release, which fails local writes closed (see below). |
 
 The `Restore` source is assigned only by enforcement. An item the versioning stage
 dead-letters (a version that is newer than the target or cannot be upcast) is
 always recorded with the `Replication` source, even when it arrived through a
-restore.
+bulk load.
 
 A direct local write that violates a policy fails closed: it is *rejected* to the
 caller with `LatticeSchemaViolationException` and nothing is made durable. The
-rejected value is **not** mirrored to the DLQ. Only system-origin ingest
-(replication apply and restore) lands entries here, so in the current release
+rejected value is **not** mirrored to the DLQ. Only system-origin ingest that
+reaches a tree's write operations lands entries here, so in the current release
 every entry carries the `Replication` or `Restore` source. `LocalRejected` is a
 reserved source for a future opt-in that would also retain the rejected local
 value; no code path produces it today.
@@ -65,8 +72,10 @@ carries the offending `Key`, a bounded `ValuePreview` (with `PreviewTruncated` a
 the full `ValueByteLength`), the `Reason`, the `Source` (a `DeadLetterSourceKind`),
 and `TimestampUtc`.
 
-The DLQ store is an **optional** dependency: if the schema package is not
-installed, the count is zero and the page is empty rather than an error. The
+The DLQ store (`ILatticeSchemaDeadLetterStore`, registered by either schema
+add-on) is an **optional** dependency: if the schema package is not installed,
+the count is zero and the page is empty rather than an error, as they also are
+for a caller that may not read the tree. The
 bundled Explorer app renders this page as a per-tree DLQ panel, and the gRPC State
 API binding projects the same records over the wire.
 

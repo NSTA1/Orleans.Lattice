@@ -314,8 +314,9 @@ jobs:
       # the convention - a keyword that will not fire because of where the
       # pull request is aimed. It does NOT and cannot check the other half,
       # that the integration pull request into the default branch carries every
-      # `Closes #N` its members gave up. Nothing here observes that, and it
-      # stays advice (see .github/copilot-instructions.md). This is stated
+      # `Closes #N` its members gave up. Nothing in this step observes that; the
+      # separate `Guard - bucket closing list` step below checks it on the
+      # integration pull request itself (see .github/copilot-instructions.md). This is stated
       # explicitly because a gate that half-covers a convention while appearing
       # to cover it is worse than no gate: it converts "unchecked" into
       # "checked and clean" without changing what is actually known.
@@ -1629,9 +1630,11 @@ jobs:
 
       # Isolated reference-architecture lane. Runs only when a non-markdown file
       # under reference-architecture/** changed (refArch), independently of the
-      # core library matrix above. The kit is not in Orleans.Lattice.slnx and
-      # references the core library by published PackageReference, so building it
-      # is self-contained and does not compile or test any src/ package. Build
+      # core library matrix above. The kit is not in Orleans.Lattice.slnx. Its
+      # deployable hosts (reference-architecture/hosts/) reference the library by
+      # published PackageReference; the local-dev harness hosts
+      # (reference-architecture/local-dev/hosts/) ProjectReference src/, so building
+      # them compiles those packages but runs none of their tests. Build
       # every kit csproj (the silo / MCP / Explorer / hosting-common projects and
       # the hosting test project) so a host-side or bicep-adjacent change is
       # compile-checked, then run the kit's own test project(s), deterministic

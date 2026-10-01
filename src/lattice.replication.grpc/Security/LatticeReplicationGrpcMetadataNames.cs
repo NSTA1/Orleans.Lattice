@@ -23,9 +23,10 @@ internal static class LatticeReplicationGrpcMetadataNames
     /// <summary>
     /// Header that carries the sender's local cluster id. Sent on outbound
     /// live-push, digest-probe, snapshot, and saga-control calls for peer
-    /// attribution. Receiver-side gates consume it according to each RPC's
-    /// origin rules; the shared-secret interceptor does not use it to select a
-    /// secret and validates against the configured accepted secret set.
+    /// attribution. Receiver-side gates refuse origin-taking calls when it is
+    /// absent or disagrees with the body-declared origin. With credential-to-origin
+    /// binding enabled, the shared-secret interceptor also requires the presented
+    /// secret to match the one configured for the stamped origin.
     /// </summary>
     public const string OriginClusterIdHeader = "x-lattice-replication-origin";
 }

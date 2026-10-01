@@ -2776,12 +2776,23 @@ internal sealed partial class ShardRootGrain(
         // Register the tree in the registry before creating the root node.
         // This ensures the tree is discoverable before any data is written.
         // System trees (e.g. the registry itself) skip self-registration.
+        //
+        // Probe the interleaved ExistsAsync before the non-interleaved
+        // RegisterAsync (issue 4128). A registry mutator that holds the
+        // singleton's turn while it awaits an in-process seam (SetAliasAsync
+        // awaiting the ownership guard or the access gate) can read a tree
+        // whose shard has never been seeded; that read lands here, and an
+        // unconditional RegisterAsync queues behind the very turn waiting on
+        // it until the seed deadline expires. RegisterAsync is a no-op for a
+        // registered tree, so skipping it then is equivalent, and only a
+        // genuinely unregistered tree still takes the mutating path.
         var prevIsRegistered = state.State.IsRegistered;
         if (!state.State.IsRegistered &&
             !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             var registry = grainFactory.GetLatticeRegistry();
-            await registry.RegisterAsync(TreeId);
+            if (!await registry.ExistsAsync(TreeId))
+                await registry.RegisterAsync(TreeId);
             state.State.IsRegistered = true;
         }
 

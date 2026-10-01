@@ -174,9 +174,13 @@ requested tag resolved to at least one rule axe evaluated. `target-size` and
 `label-content-name-mismatch`, the only rules behind `wcag22aa` and `wcag21a`, are withheld
 from a tag-scoped run and are force-enabled by id.
 
-The test world serves no metrics backend and no tenancy add-on, so Telemetry and Tenancy are
-hidden from its administrator; what their addresses render - the not-found page - is swept,
-reflowed and deep-linked like every other page.
+The test world the sweep runs against serves no metrics backend and no tenancy add-on, so
+Telemetry and Tenancy are hidden from its administrator; what their addresses render - the
+not-found page - is swept, reflowed and deep-linked like every other page. A second test world
+serves tenancy for the tenancy journeys, and there `TenantSwitcherAccessibilityTests` and
+`MultiComboBoxAccessibilityTests` sweep an open tenant switcher and the Tenancy directory with
+its New tenant dialog open, in all eight appearances. The rest of the Tenancy area's pages, and
+every Telemetry page, are not swept.
 
 Automated scanning finds a minority of real barriers and is blind to most of the criteria
 above, which is why criteria 1 to 6, 9 and 10 are asserted by name rather than left to the

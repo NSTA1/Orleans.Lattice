@@ -1359,7 +1359,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task AbortSplitAsync();
 
     /// <summary>
-    /// Returns <c>true</c> if this shard is currently participating in an adaptive split as source.
+    /// Returns <c>true</c> if this shard is currently donating slots through an adaptive split or consolidation fold.
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because the implementation is a
     /// pure synchronous read of the single <c>state.State.SplitInProgress</c>

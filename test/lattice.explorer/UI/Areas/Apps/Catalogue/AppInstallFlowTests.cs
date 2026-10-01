@@ -208,6 +208,25 @@ public sealed class AppInstallFlowTests
         });
     }
 
+    [TestCase("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")]
+    [TestCase(null)]
+    public async Task Install_pins_the_manifest_digest_of_the_reviewed_description(string? digest)
+    {
+        var app = AppsTestData.TaskBoard() with { ManifestDigest = digest };
+        _catalog.Descriptions[("in-image", app.Slug, app.Version)] = app;
+        var flow = Flow(AppsTestData.InImage);
+        await flow.LoadAsync();
+        flow.Begin();
+        flow.Bind("viewer", "readers");
+        flow.Bind("editor", "writers");
+        flow.ConfirmBindings();
+
+        await flow.CommitAsync();
+
+        Assert.That(_control.Installs.Single().ExpectedManifestDigest, Is.EqualTo(digest),
+            "the install is pinned to what the operator reviewed, and a server that reports no digest is sent none");
+    }
+
     [Test]
     public async Task Withholding_a_bridge_grant_records_that_consent_after_install()
     {

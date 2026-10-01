@@ -3,6 +3,10 @@ using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.Backup;
 
+// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
+// they prove the start-then-wait wrappers still behave exactly as before.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Backup.Tests;
 
 /// <summary>

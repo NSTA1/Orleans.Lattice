@@ -64,6 +64,10 @@
 .lt-table__sort:focus-visible,
 .lt-mono-cell__copy:focus-visible,
 .lt-combobox__remove:focus-visible,
+.lt-datetime__toggle:focus-visible,
+.lt-datetime__nav:focus-visible,
+.lt-datetime__pick:focus-visible,
+.lt-datetime__day:focus-visible,
 .lt-table-list__open:focus-visible,
 .lt-dialog:focus-visible {
   outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
@@ -165,10 +169,13 @@
   min-width: 0;
 }
 
+/* The label row: one line at one height, so the control box below it sits
+   --lt-op-label-row below the field's top in every field primitive. */
 .lt-field__label {
   color: var(--lt-ink);
   font-size: var(--lt-text-sm);
   font-weight: var(--lt-weight-label);
+  line-height: var(--lt-op-label-line-height);
 }
 
 .lt-field__hint {
@@ -210,9 +217,14 @@
   font-size: var(--lt-text-md);
 }
 
+/* A placeholder is a hint, never a value, so it is always prose in the UI face -
+   even in a field whose value is an id drawn in mono. */
 .lt-input::placeholder {
   color: var(--lt-ink-3);
   opacity: 1;
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+  font-variant-ligatures: normal;
 }
 
 .lt-input--mono {
@@ -236,7 +248,13 @@
   background: var(--lt-surface);
 }
 
+/* A search field is a field like any other - a visible label row over its
+   control box - whose control box also holds an optional key hint. */
 .lt-search {
+  min-width: 0;
+}
+
+.lt-search__control {
   position: relative;
   display: flex;
   align-items: center;
@@ -318,9 +336,20 @@
   cursor: pointer;
 }
 
-.lt-check__hint,
-.lt-switch__hint {
+.lt-check__hint {
   grid-column: 2;
+}
+
+/* A switch and its hint are one item; the hint sits under the switch's label. */
+.lt-switch-field {
+  display: inline-grid;
+  justify-items: start;
+  gap: var(--lt-space-1);
+  min-width: 0;
+}
+
+.lt-switch__hint {
+  padding-inline-start: calc(2.125rem + var(--lt-space-2));
 }
 
 .lt-switch {
@@ -435,14 +464,18 @@
 
 /* A multi-value field is one control: the chosen values and the input share a
    single sunken frame, the values set off by hairlines, the input taking the
-   rest of the row. The frame, not the borderless input, shows an error. */
+   rest of the row. The frame, not the borderless input, shows an error. The
+   frame is one control height, like every other field's control box: the input
+   inside it is a full control height too and reaches over the frame's border,
+   so it stays a whole touch target without making the frame taller. */
 .lt-combobox__control--tokens {
+  --lt-frame-border: 1px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   box-sizing: border-box;
-  min-height: calc(var(--lt-op-control-height) + 2px);
-  border: 1px solid var(--lt-op-control-border);
+  min-height: var(--lt-op-control-height);
+  border: var(--lt-frame-border) solid var(--lt-op-control-border);
   border-radius: var(--lt-radius-md);
   background: var(--lt-surface-sunken);
 }
@@ -452,12 +485,13 @@
 }
 
 .lt-combobox__control--tokens > .lt-combobox__chevron {
-  top: calc(var(--lt-op-control-height) / 2 + 1px);
+  top: calc(var(--lt-op-control-height) / 2 - var(--lt-frame-border));
 }
 
 .lt-combobox__control--tokens > .lt-input {
   flex: 1 1 8rem;
   width: auto;
+  margin-block: calc(-1 * var(--lt-frame-border));
   padding-inline-end: 0.65rem;
   border: 0;
   background: transparent;
@@ -468,8 +502,15 @@
 }
 
 .lt-combobox__control--invalid {
+  --lt-frame-border: 1.5px;
   border-color: var(--lt-danger);
-  border-width: 1.5px;
+  border-width: var(--lt-frame-border);
+}
+
+/* Chosen values, like the input, reach over the frame's border so the frame
+   keeps one control height while they are full touch targets. */
+.lt-combobox__control--tokens > .lt-combobox__chips {
+  margin-block: calc(-1 * var(--lt-frame-border));
 }
 
 .lt-combobox__list {
@@ -616,6 +657,286 @@
   stroke: currentColor;
   stroke-width: 1.5;
   stroke-linecap: round;
+}
+
+/*
+ * The date and time field: one control box holding the typed ISO entry, the zone
+ * it is in and the button that opens the picker - a frame like the multi-value
+ * field's, the input and the button reaching over its border so the frame stays
+ * one control height. The zone is always written, so a UTC time never reads as a
+ * local one. The picker floats below the field on a hairline rule (no shadow),
+ * and on a phone it opens in the flow of the page.
+ */
+.lt-datetime {
+  position: relative;
+}
+
+.lt-datetime__control,
+.lt-duration__control {
+  --lt-frame-border: 1px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-width: 0;
+  height: var(--lt-op-control-height);
+  border: var(--lt-frame-border) solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-datetime__control--invalid,
+.lt-duration__control--invalid {
+  --lt-frame-border: 1.5px;
+  border-color: var(--lt-danger);
+}
+
+.lt-datetime__control > .lt-input,
+.lt-duration__control > .lt-input {
+  height: var(--lt-op-control-height);
+  margin-block: calc(-1 * var(--lt-frame-border));
+  border: 0;
+  background: transparent;
+}
+
+.lt-datetime__control > .lt-input:focus-visible,
+.lt-duration__control > .lt-input:focus-visible {
+  outline-offset: calc(-1 * var(--lt-op-focus-ring-width));
+}
+
+.lt-datetime__input {
+  flex: 1 1 13rem;
+  width: auto;
+  min-width: 0;
+}
+
+.lt-datetime__zone {
+  flex: none;
+  padding-inline: 0 var(--lt-space-2);
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-datetime__toggle,
+.lt-datetime__nav {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  box-sizing: border-box;
+  width: var(--lt-op-control-height);
+  height: var(--lt-op-control-height);
+  padding: 0;
+  border: 0;
+  border-radius: var(--lt-radius-md);
+  background: none;
+  color: var(--lt-ink);
+  cursor: pointer;
+}
+
+.lt-datetime__toggle {
+  margin-block: calc(-1 * var(--lt-frame-border));
+  border-inline-start: 1px solid var(--lt-rule-strong);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.lt-datetime__toggle:hover,
+.lt-datetime__nav:hover {
+  background: var(--lt-marker-soft);
+}
+
+.lt-datetime__toggle:focus-visible {
+  outline-offset: calc(-1 * var(--lt-op-focus-ring-width));
+}
+
+.lt-datetime__toggle:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+.lt-datetime__glyph {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lt-datetime__local {
+  overflow-wrap: anywhere;
+}
+
+.lt-datetime__picker {
+  position: absolute;
+  inset-block-start: calc(100% + var(--lt-space-1));
+  inset-inline-start: 0;
+  z-index: 950;
+  display: grid;
+  gap: var(--lt-space-3);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100vw - 2 * var(--lt-space-4));
+  padding: var(--lt-space-3);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+  color: var(--lt-ink);
+}
+
+.lt-datetime__picker--inline {
+  position: static;
+  width: auto;
+  max-width: none;
+}
+
+.lt-datetime__picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-1);
+}
+
+.lt-datetime__pick {
+  box-sizing: border-box;
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-3);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+  cursor: pointer;
+}
+
+.lt-datetime__pick:hover {
+  background: var(--lt-marker-soft);
+}
+
+.lt-datetime__pick:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+.lt-datetime__month-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lt-space-2);
+}
+
+.lt-datetime__month {
+  margin: 0;
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-datetime__grid {
+  border-collapse: collapse;
+  margin-inline: auto;
+}
+
+.lt-datetime__weekday {
+  padding: 0 0 var(--lt-space-1);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-label);
+  text-align: center;
+}
+
+.lt-datetime__cell {
+  padding: 0;
+}
+
+.lt-datetime__day {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: var(--lt-op-control-height);
+  height: var(--lt-op-control-height);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--lt-radius-md);
+  background: none;
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.lt-datetime__day:hover {
+  background: var(--lt-op-row-hover);
+}
+
+.lt-datetime__day--outside {
+  color: var(--lt-ink-2);
+}
+
+/* Today is ringed; the chosen day takes the marker, with an ink ring and a
+   heavier weight, so it never rests on colour alone. */
+.lt-datetime__day[aria-current="date"] {
+  border-color: var(--lt-rule-strong);
+}
+
+.lt-datetime__cell[aria-selected="true"] > .lt-datetime__day {
+  border-color: var(--lt-ink);
+  background: var(--lt-marker);
+  color: var(--lt-marker-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-datetime__day[aria-disabled="true"] {
+  color: var(--lt-ink-3);
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
+.lt-datetime__time {
+  display: grid;
+  gap: var(--lt-space-1);
+}
+
+.lt-datetime__time-label {
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+  line-height: var(--lt-op-label-line-height);
+}
+
+.lt-datetime__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--lt-space-2);
+}
+
+/* The duration field: a whole-number box per unit, each followed by its unit,
+   inside one frame of one control height. */
+.lt-duration {
+  min-width: 0;
+}
+
+.lt-duration__control {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.lt-duration__input {
+  flex: 0 1 4.5rem;
+  width: 4.5rem;
+  min-width: 2.75rem;
+  padding-inline: 0.65rem 0.35rem;
+  text-align: end;
+}
+
+.lt-duration__unit {
+  flex: none;
+  padding-inline-end: var(--lt-space-3);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
 }
 
 /* ==========================================================================
@@ -1673,6 +1994,17 @@ a.lt-chain__text:hover {
 
   .lt-combobox__list {
     border-color: CanvasText;
+  }
+
+  .lt-datetime__picker,
+  .lt-datetime__control,
+  .lt-duration__control {
+    border-color: CanvasText;
+  }
+
+  .lt-datetime__cell[aria-selected="true"] > .lt-datetime__day {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 
   .lt-progress__track {

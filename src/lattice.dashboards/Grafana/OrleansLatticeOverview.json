@@ -1018,7 +1018,7 @@
     },
     {
       "id": 24,
-      "title": "Cluster total retained bytes",
+      "title": "Cluster total stored bytes",
       "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster. A tree contributes nothing here until it has had a deep storage-usage publish, because the total omits two of its three terms otherwise; check 'Storage usage measurement depth by tree' to tell an unmeasured tree from an empty one (issue #2693).",
       "type": "stat",
       "datasource": {
@@ -1057,7 +1057,7 @@
     {
       "id": 25,
       "title": "Trees over advisory threshold",
-      "description": "Trees whose retained WAL bytes currently breach the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins. The over_threshold gauge is published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree; this panel deliberately ignores the $silo selector and evaluates across all silos in the selected cluster, otherwise a breaching tree would be hidden whenever its aggregator is placed on an unselected silo.",
+      "description": "Trees whose WAL occupancy (physical bytes on the provider, dead bytes included) currently breaches the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins. The over_threshold gauge is published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree; this panel deliberately ignores the $silo selector and evaluates across all silos in the selected cluster, otherwise a breaching tree would be hidden whenever its aggregator is placed on an unselected silo.",
       "type": "table",
       "datasource": {
         "type": "prometheus",
@@ -1416,7 +1416,7 @@
     {
       "id": 49,
       "title": "Admission - estimated bytes by tree",
-      "description": "Current estimated retained bytes per tree (orleans_lattice_admission_estimated_bytes observable gauge), the figure admission control compares against LatticeOptions.MaxEstimatedBytes. Aliases the storage total-bytes figure (WAL rows plus snapshot blobs plus leaf/shard-root state). Published by the same single per-tree aggregator as the live-keys panel, so it lands on one silo per tree; this panel ignores the $silo selector and evaluates across all silos in the selected cluster. Step 1 of the adoption workflow for the byte dimension: watch this to learn a tree's steady-state footprint before setting a ceiling.",
+      "description": "Current estimated bytes per tree (orleans_lattice_admission_estimated_bytes observable gauge), the figure admission control compares against LatticeOptions.MaxEstimatedBytes. Aliases the storage total-bytes figure of the last full storage report (physical WAL bytes plus snapshot blobs plus leaf/shard-root state); WAL-only polls between full reports do not change it. Published by the same single per-tree aggregator as the live-keys panel, so it lands on one silo per tree; this panel ignores the $silo selector and evaluates across all silos in the selected cluster. Step 1 of the adoption workflow for the byte dimension: watch this to learn a tree's steady-state footprint before setting a ceiling.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 152 },

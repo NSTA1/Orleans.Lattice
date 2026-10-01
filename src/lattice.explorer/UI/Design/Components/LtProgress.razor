@@ -1,12 +1,12 @@
 <div class="lt-progress" data-lt-progress="@ModeKey">
     <div class="lt-progress__head">
         <span class="lt-progress__phase">@(Phase ?? Label)</span>
-        @if (PercentText is { } percent)
+        @if (FigureText is { } figure)
         {
-            <span class="lt-progress__figure">@percent</span>
+            <span class="lt-progress__figure">@figure</span>
         }
     </div>
-    <div class="lt-progress__track" role="progressbar" aria-label="@Label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@Percent" aria-valuetext="@ValueText">
+    <div class="lt-progress__track" role="progressbar" aria-label="@Label" aria-valuemin="0" aria-valuemax="@AriaMaximum" aria-valuenow="@AriaNow" aria-valuetext="@ValueText">
         @if (IsDeterminate)
         {
             <span class="lt-progress__fill" style="@FillStyle"></span>
@@ -20,5 +20,8 @@
     {
         <p class="lt-progress__detail">@Detail</p>
     }
-    <span class="lt-visually-hidden" aria-live="polite">@_announcement</span>
+    @if (AnnouncePhase)
+    {
+        <span class="lt-visually-hidden" aria-live="polite">@_announcement</span>
+    }
 </div>

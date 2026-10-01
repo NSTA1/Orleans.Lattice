@@ -31,12 +31,12 @@ steps:
   - n: 1
     action: "Inspect the app manifest before trust."
     api: "ILatticeAppsControl.DescribeAsync / /orleans.lattice.api.apps/Describe"
-    expects: "Returns requested trees with any per-tree OwnershipConflict, roles, operations, subscriptions, MCP tools, provenance, and NotInstalled state, or null for an unknown app or version."
+    expects: "Returns requested trees with any per-tree OwnershipConflict, roles, operations, subscriptions, MCP tools, provenance, the ManifestDigest of the described manifest, and NotInstalled state, or null for an unknown app or version."
     source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DescribeAsync"
   - n: 2
-    action: "Install the exact source version with role-to-group bindings and the version-pinned ceiling."
+    action: "Install the exact source version with role-to-group bindings and the version-pinned ceiling, pinned to the reviewed ManifestDigest as ExpectedManifestDigest."
     api: "ILatticeAppsControl.InstallAsync / /orleans.lattice.api.apps/Install"
-    expects: "Claims every manifest tree in the ownership ledger and returns Installed for a new install; a live install at another version is upgraded in place and an enabled app is re-applied. A visible ownership conflict refuses the install with nothing written."
+    expects: "Claims every manifest tree in the ownership ledger and returns Installed for a new install; a live install at another version is upgraded in place and an enabled app is re-applied. A visible ownership conflict refuses the install with nothing written, and so does a manifest whose digest no longer equals ExpectedManifestDigest."
     source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.InstallAsync"
   - n: 3
     action: "Enable the installed app."

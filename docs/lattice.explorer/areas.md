@@ -58,9 +58,11 @@ at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
 boundary notes and a live tail. A revision that kept only the value's size and
 hash is marked "metadata only", and the timeline explains what that means once,
-rather than under each such revision. The **As of (UTC)** field starts empty,
-with a hint giving its form (`yyyy-MM-ddTHH:mm:ssZ`, empty for the latest).
-`?at=` marks the revision that was in effect at the chosen UTC instant, and
+rather than under each such revision. The **As of** field is a
+[date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
+It starts empty, which means the latest, and refuses a time in the future;
+pick a day and a time, use a quick pick (now, an hour, a day or a week ago), or
+type an instant as `yyyy-MM-ddTHH:mm:ssZ`, then choose **Show as of**. `?at=` marks the revision that was in effect at the chosen UTC instant, and
 disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
@@ -161,11 +163,14 @@ tenant gets `tenancy.change-residency` ("Change residency") and
 A tenant's Regions page splits **Allowed regions (set by a platform operator)**
 from **Residency (where the tenant's data is kept)**, and says what each region's
 lifecycle status means for the tenant and whether it is served there: with no
-residency set every region serves the tenant, a Provisioning region waits for a
-platform operator of the hosting deployment to promote it, and once a tenant has
-any residency it is served only in Online regions. A change is previewed region
-by region before it is applied. One that would leave the tenant served nowhere
-turns **Apply residency** off, and goes through only by a quiet **Apply anyway
+residency set every region serves the tenant, an added region waits for a
+platform operator of the hosting deployment to promote it, a removed region's own
+silos complete its drain on their own, and once a tenant has any residency it is
+served only in Online regions. A region part-way along its add or remove path
+shows the step it has reached ("Step 1 of 3", never a percentage), and the page
+follows it live, announcing each stage change, until every region is steady. A
+change is previewed region by region before it is applied. One that would stop
+serving the tenant, leaving it served nowhere, turns **Apply residency** off, and goes through only by a quiet **Apply anyway
 and stop serving {tenant}...** button whose confirmation keeps serving by
 default; creating a tenant with an initial residency is confirmed too. The directory's **Resident in** column, and the **Resident in** and
 **Allowed** lines of a tenant's overview, link to its Regions page, and Home
@@ -374,8 +379,14 @@ If diagnostics or admin authority allow it, the page checks the tree
 configuration and sends not-found when the tree does not exist. Its tabs show:
 summary statistics and operation status; configuration and history retention;
 shard map, diagnostics and hotness; storage and WAL placement; and lifecycle.
+The open tab is carried in `?tab=`: `configuration`, `shards`, `storage` or
+`lifecycle`, and no key for the default `summary` tab.
 Denied probes become an all-deny answer, so controls stay hidden even though
 the cluster still authorises every real operation when attempted.
+
+The retention **Window** is a
+[duration field](theming-and-density.md#dates-times-and-durations) in days,
+hours, minutes and seconds; leave it empty for no age bound.
 
 Configuration and history-retention saves are forward-only configuration
 changes, so they do not ask for destructive confirmation. Lifecycle operations

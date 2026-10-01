@@ -6,8 +6,8 @@ namespace Orleans.Lattice.Schema;
 /// The schema-versioning <see cref="ILatticeWriteInterceptor"/>. Consulted at the
 /// <c>LatticeGrain</c> write choke point after authorization and before WAL append,
 /// it stamps the per-value schema-version envelope onto values written to an
-/// opted-in tree, and (in strict mode) dead-letters an ingested item whose version
-/// cannot be upcast to the tree's target.
+/// opted-in tree, and (for intercepted system-origin writes in strict mode)
+/// dead-letters an item whose version cannot be upcast to the tree's target.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,16 +24,17 @@ namespace Orleans.Lattice.Schema;
 /// double-stamped.
 /// </para>
 /// <para>
-/// <b>Ingest trust model.</b> System-origin ingest (replication apply / restore) is
-/// trusted by default and bypasses this interceptor, so an ingested item is stored
-/// with whatever tag it carries. Strict mode (<see cref="InterceptsSystemOrigin"/>)
-/// re-validates ingest: an enveloped item whose version is newer than the target,
-/// or whose version cannot be upcast to the target, is dead-lettered rather than
-/// applied, so ingest never blocks.
+/// <b>Ingest trust model.</b> System-origin writes that reach the write choke point
+/// are trusted by default and bypass this interceptor, so a value keeps whatever
+/// tag it carries. Strict mode (<see cref="InterceptsSystemOrigin"/>) re-validates
+/// those intercepted writes: an enveloped item whose version is newer than the
+/// target, or whose version cannot be upcast to the target, is dead-lettered
+/// rather than applied, so that intercepted write never blocks. Direct replication
+/// merge apply, backup restore, and tree-merge paths bypass write interception.
 /// </para>
 /// <para>
 /// <b>CRDT deltas.</b> A <see cref="LatticeOperation.CrdtApply"/> delta is made
-/// self-describing and lifted to the tree's target at this ingest / apply boundary:
+/// self-describing and lifted to the tree's target at this write-interceptor boundary:
 /// a fresh local delta is stamped at the target; a strict-ingest delta at an older
 /// version is upcast through the registry's CRDT-aware upcaster and re-enveloped at
 /// target, while one that cannot be upcast (or is newer than target) is dead-lettered.
@@ -101,7 +102,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         }
 
         // A CRDT delta is made self-describing and lifted to the tree's target at
-        // this ingest / apply boundary (see OnCrdtDeltaAsync). This dispatch must
+        // this write-interceptor boundary (see OnCrdtDeltaAsync). This dispatch must
         // precede the whole-value enveloped-check below: a CRDT delta and an LWW
         // value are both length-prefixed envelopes, but only the CRDT path folds at
         // its stored version, so it needs the CRDT-aware upcaster, not the LWW one.
@@ -168,7 +169,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         // is upcast through the registry's CRDT-aware upcaster - which transforms the
         // element payloads while preserving dots / HLC / tombstones - and re-enveloped
         // at target. A newer-than-target or un-upcastable delta is dead-lettered
-        // rather than applied, so ingest never blocks.
+        // rather than applied, so the intercepted write never blocks.
         if (schemaId == version.SchemaId
             && storedVersion < version.TargetVersion
             && _registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))

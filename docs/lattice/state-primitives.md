@@ -136,7 +136,7 @@ GCounter = { replicaId -> long }
 Value = sum(GCounter.Values)
 ```
 
-`Increment(replicaId, amount)` accepts only non-negative amounts and advances that replica's component. Merge is **pointwise-max** per replica, so re-delivering an older component cannot move the counter backwards and concurrent increments from different replicas accumulate without double-counting.
+`Increment(replicaId, amount)` accepts only non-negative amounts and advances that replica's component. An advance that would take the component past `long.MaxValue` throws `OverflowException` and leaves it unchanged - a wrapped component would be smaller than the one it replaced, and the merge below would silently discard it - so the typed accessor writes nothing. Merge is **pointwise-max** per replica, so re-delivering an older component cannot move the counter backwards and concurrent increments from different replicas accumulate without double-counting.
 
 **Example use case:** page views, bytes ingested, or any event tally that can only increase. Use `GCounter` when decrement is impossible and you want the smallest counter state. Use `PnCounter` when the value must also move down.
 
@@ -219,7 +219,7 @@ Because a `Disable()` only tombstones the dots the local replica has actually ob
 
 ## Dot-history compaction (bounded state under re-assertion)
 
-The four dot-based primitives above - `OrSet`, `OrFlag`, `RwSet`, and `RwFlag` - represent a slot's causal history as a list of `OrSetDot`. Left alone, that list grows on every **re-assertion**: enabling an already-enabled flag, or re-adding an element already present, mints a fresh dot and appends it, and a merge is a union that never removes anything. A slot re-asserted N times would carry N dots forever, so every read, merge, and serialisation of that one row would cost O(N) - unbounded in any workload that re-asserts on a schedule, presence marking being the obvious one.
+The four dot-based primitives - `OrSet`, `OrFlag`, `RwSet`, and `RwFlag` - represent a slot's causal history as a list of `OrSetDot`. Left alone, that list grows on every **re-assertion**: enabling an already-enabled flag, or re-adding an element already present, mints a fresh dot and appends it, and a merge is a union that never removes anything. A slot re-asserted N times would carry N dots forever, so every read, merge, and serialisation of that one row would cost O(N) - unbounded in any workload that re-asserts on a schedule, presence marking being the obvious one.
 
 The shared `OrSetDotCompaction` helper bounds it. Each slot keeps **at most one dot per replica per side**, so state is O(replicas), not O(assertions):
 
@@ -296,7 +296,7 @@ PnCounter = {
 Value = sum(Increments.Values) - sum(Decrements.Values)
 ```
 
-`Increment(replicaId, amount)` and `Decrement(replicaId, amount)` simply add a non-negative `amount` to the local replica's row in the appropriate dictionary. Merge is **pointwise-max** on each per-replica row across both `Increments` and `Decrements`:
+`Increment(replicaId, amount)` and `Decrement(replicaId, amount)` simply add a non-negative `amount` to the local replica's row in the appropriate dictionary. As for the G-Counter, an advance that would take a row past `long.MaxValue` throws `OverflowException` and leaves the row unchanged, so the typed accessor writes nothing. Merge is **pointwise-max** on each per-replica row across both `Increments` and `Decrements`:
 
 ```
 Merge({r1->10}, {r1->8, r2->5}) = {r1->10, r2->5}

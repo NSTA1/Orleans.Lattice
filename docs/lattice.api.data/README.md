@@ -19,7 +19,7 @@ Every `treeId` this facade accepts is a **tenant-local name**, resolved through 
 
 - With the tenancy add-on **absent** (the default), the core no-op resolver resolves the reserved `default` tenant synchronously and returns the bare name unchanged - the same string reference, no allocation and no `await` - so behaviour is byte-for-byte identical to dialling the name directly.
 - With the tenancy add-on **registered** but no active tenant asserted, the request resolves the default tenant too, so the bare name is again returned unchanged and existing tenant-unaware clients keep addressing their bare tree ids.
-- Under an asserted, non-default active tenant, an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, while an already-qualified, well-formed `t/` id or a `_lattice_` system-tree name passes through unchanged and is never double-composed (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate, which may admit it under a cross-tenant grant).
+- Under an asserted, non-default active tenant, an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, while an already-qualified, well-formed `t/` id or a `_lattice_` system-tree name passes through unchanged and is never double-composed (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate, which may admit it under a cross-tenant grant) - though a point write or delete, a bulk upsert, a single-tree atomic batch, or a typed CRDT write that names a tenant namespace the active tenant does not own is refused outright by the data plane with `LatticeReservedTreeNamespaceException` (gRPC `InvalidArgument`), so a cross-tenant grant can open such a tree to this facade's reads but not to those writes.
 - The verb fails closed with a `LatticeTenantAccessDeniedException` when the asserted tenant fails validation against the caller's own membership (an anonymous caller can never act as a tenant), or when, under an asserted tenant and outside a system-origin scope, it names a `sys-` tree or a malformed `t/` id that belongs to no tenant.
 
 See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation model this resolution establishes.
@@ -85,6 +85,8 @@ The typed CRDT facade exposes these exact public methods. Mutating verbs go over
 | OR-Map | `Task MapSetAsync(string treeId, string key, string field, string replicaId, byte[] value, CancellationToken cancellationToken = default)` |
 | OR-Map | `Task MapRemoveAsync(string treeId, string key, string field, CancellationToken cancellationToken = default)` |
 | OR-Map | `Task<IReadOnlyDictionary<string, IReadOnlyList<byte[]>>> MapGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+
+A counter `amount` must be non-negative: `CounterIncrementAsync`, `CounterDecrementAsync` and `GCounterIncrementAsync` refuse a negative one with `ArgumentOutOfRangeException`, and throw `OverflowException` when the advance would take this replica's component past `long.MaxValue`. Both are raised before anything is written. Over gRPC the first surfaces as `InvalidArgument`; the binding has no arm for the second, so it surfaces as `Internal` (see the binding's [status mapping](../lattice.api.data.grpc/README.md#status-mapping)).
 
 ### Explicitly deferred
 

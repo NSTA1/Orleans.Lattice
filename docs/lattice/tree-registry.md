@@ -4,7 +4,7 @@ Lattice maintains an internal **tree registry** - a Lattice tree (`_lattice_tree
 
 ## How It Works
 
-The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, an optional per-tree durable-history retention policy, and bookkeeping - the pinned WAL partition count and WAL placement, the highest physical shard index adaptive splits have allocated, the projection-digest permanent-disable latch, and two provenance markers: on a physical copy created to back a logical tree, the logical tree it backs (see [Provenance](#provenance-derivedfrom)), and on a restore's shadow tree, the tree it was restored for.
+The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, an optional per-tree durable-history retention policy, and bookkeeping - the pinned WAL partition count and WAL placement, the split allocation high-water mark (the highest physical shard index a split has allocated, which a fold also raises past the donor it retires), the projection-digest permanent-disable latch, and two provenance markers: on a physical copy created to back a logical tree, the logical tree it backs (see [Provenance](#provenance-derivedfrom)), and on a restore's shadow tree, the tree it was restored for.
 
 ### Automatic registration
 
@@ -12,6 +12,8 @@ Trees are automatically registered on first use - not only on the first write. T
 
 1. The tree is discoverable before any data exists.
 2. The registry write must succeed before the data write proceeds - registration is **not** best-effort.
+
+A shard root first checks whether the tree is already registered, using the registry's interleaved existence read, and calls the registration mutator only when it is not. Registering an already-registered tree changes nothing, so the check alters no outcome. It exists because a registry mutator can hold the registry's turn while it waits on an in-process seam: an alias change waits on the tree ownership guard and the access gate, and those can read a tree whose shard has never been seeded. If that read registered the tree, the registration would queue behind the alias change waiting on it, and the alias change would deadlock until its timeout. For the same reason, the reserved trees a gate or guard reads are checked for existence before they are read, so a tree nobody has written is treated as empty and is not registered. These reserved trees are the tree ownership ledger (`sys-app-trees`), the authorization policy tree and the membership edges tree. See [#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128).
 
 ### System trees
 
@@ -39,7 +41,7 @@ Structural sizing and runtime settings resolve differently:
 - **Structural sizing** (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) comes only from the registry entry. A new tree's entry is seeded with the hardcoded defaults - `MaxLeafKeys = 128`, `MaxInternalChildren = 128`, `ShardCount = 64` - for any pin its registration does not supply; an existing entry is never rewritten, so a pin it lacks resolves to the default. `IOptionsMonitor` plays no part (`LatticeOptions` does not expose these properties), and the pins change only through `ResizeAsync` and `ReshardAsync` (see [Tree Sizing](tree-sizing.md)).
 - **Runtime settings** resolve in priority order:
   1. **Registry override** - a per-tree override on the registry entry, for the settings that have one (for example the WAL partition pin, publish-events, projection-digest maintenance, `MaxCacheValueBytes`, and `WalMaxRetainedBytes`).
-  2. **`IOptionsMonitor` named options** - per-tree overrides registered via `ConfigureLattice("tree-name", ...)` at silo startup.
+  2. **`IOptionsMonitor` named options** - per-tree overrides registered via `ConfigureLattice("tree-name", ...)` at silo startup. An override is matched to the tree id it names exactly, so on an aliased tree the shards and leaves of the physical copy resolve their options under the copy's id, not the logical tree's (see [Per-tree overrides](configuration.md#per-tree-overrides)).
   3. **`IOptionsMonitor` global defaults** - defaults registered via `ConfigureLattice(...)`.
 
 Registry overrides only apply to the properties that are set (non-null). All other properties fall back to the `IOptionsMonitor` chain.
@@ -77,8 +79,8 @@ bool exists = await tree.TreeExistsAsync();
 | `UndoResizeAsync` | After the swap: alias removed, original entry restored, and the old tree recovered if the resize had already soft-deleted it. Either side of the swap, the new tree is discarded (its WAL retention released at once, removed from registry on purge) |
 | `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides); the source's alias is resolved and the physical tree it points at is the one copied, every shard the source's shard map routes to included; the destination carries that shard map and split allocation mark (see [Snapshots](snapshots.md#requirements)) |
 | Adaptive shard split | Shard map rewritten under a fresh `Version`; the next physical shard index to allocate advanced |
-| Shard consolidation (automatic over-split healing) | Shard map rewritten under a fresh `Version`, reassigning the donor's slots to the survivor |
-| `ReshardAsync` | Shard map grown by the splits it drives; `ShardCount` pin updated when it completes (or at once on an empty tree) |
+| Shard consolidation (automatic over-split healing, or a shrinking `ReshardAsync`) | Shard map rewritten under a fresh `Version`, reassigning the donor's slots to the survivor; the split allocation high-water mark raised past the donor, so its index is never allocated again |
+| `ReshardAsync` | Shard map grown by the splits a grow drives, or shrunk by the folds a shrink drives; `ShardCount` pin updated when it completes (or at once on an observably empty tree, whose map is rebuilt as an identity map over the same virtual slot count) |
 | [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) | Tree registered with the supplied sizing pins (honoured only on first creation) |
 | Shadow-cutover restore (`ILatticeTreeAdmin.RestoreTreeAsync`) | Shadow tree registered with `DerivedFrom` set to the target tree; alias pointed at the restored shadow tree; a revert points it back |
 | Schema remediation cut-over | Remediated copy registered with `DerivedFrom` set to the remediated tree; alias pointed at it |
@@ -145,7 +147,7 @@ Alias-changing operations and logical deletion never overlap. Resize (and its un
 
 ### Identity seen by observers and metrics
 
-Routing through an alias does not change the tree identity reported to observers. [Mutation observers](api.md#mutation-observers) receive the logical tree id in `LatticeMutation.TreeId` for every write routed through the logical tree, across resize, restore and remediation; a write that reaches a physical copy by another path - such as a write an online resize mirrors into the new copy while it fills it - is reported under that copy's own id. The per-tree `tree` dimension on [metrics](metrics.md#tag-conventions) stays the logical id too. The WAL itself records the physical tree it belongs to.
+Routing through an alias does not change the tree identity reported to observers. [Mutation observers](api.md#mutation-observers) receive the logical tree id in `LatticeMutation.TreeId` for every write routed through the logical tree, across resize, restore and remediation; a write that reaches a physical copy by another path - such as a write an online resize mirrors into the new copy while it fills it - is reported under that copy's own id. Most per-tree series on [metrics](metrics.md#tag-conventions) keep the logical id in their `tree` dimension too, but not all: the WAL garbage collector's and the WAL storage providers' series, several leaf gauges, some saturation refusals, and the storage-usage and admission gauges can carry the physical copy's id - see [the `tree` dimension across aliasing](metrics.md#the-tree-dimension-across-aliasing). The WAL itself records the physical tree it belongs to.
 
 ## Shard Map
 
@@ -165,6 +167,6 @@ For operators, the [tree-administration facade](../lattice.api.treeadmin/README.
 
 ### Monotonic `ShardMap.Version`
 
-Every shard-map write - a set or a slot reassignment - increments `ShardMap.Version` by one, so the first such write stamps `Version = 1`. The default identity map materialised in memory for never-persisted trees has `Version = 0`, and so does the map an installed app's tree registration persists for a declared `virtualShardCount`, until its first set or reassignment. A resize's alias swap drops the persisted map along with the rest of the retired copy's layout, so the resized tree starts again from the identity map at `Version = 0` and the first map it persists is `Version = 1`; an undo restores the original entry, map and version included.
+Every shard-map write - a set or a slot reassignment - increments `ShardMap.Version` by one, so the first such write stamps `Version = 1`. The default identity map materialised in memory for never-persisted trees has `Version = 0`, and so does the map an installed app's tree registration persists for a declared `virtualShardCount`, until its first set or reassignment. A resize's alias swap carries the resized copy's map onto the tree's entry, stamped one above the higher of the tree's current version and the copy's, so every cached router sees the change (a tree that never persisted a map has none to carry and keeps routing by the identity map at `Version = 0`); an undo restores the original entry, map and version included.
 
 `LatticeGrain` uses this version as a stability hint for scans (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`): a scan records the version when it starts and re-reads it before returning. If the version moved, the scan retries up to `LatticeOptions.MaxScanRetries` times. Because the registry grain is non-reentrant, the version increment is atomic with the shard-map write, so concurrent splits cannot produce torn maps or out-of-order version stamps. See [Shard Splitting](shard-splitting.md#scan-semantics-during-a-split) for the algorithm and [Consistency](consistency.md) for the resulting per-operation guarantees.

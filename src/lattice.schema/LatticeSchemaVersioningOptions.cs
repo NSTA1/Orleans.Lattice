@@ -11,13 +11,17 @@ namespace Orleans.Lattice.Schema;
 public sealed class LatticeSchemaVersioningOptions
 {
     /// <summary>
-    /// Globally enables strict-mode ingest. When <c>false</c> (the default), the
-    /// versioning interceptor never inspects system-origin (replication apply /
-    /// restore) writes, so trusted ingest pays zero overhead and items are stored
-    /// with whatever version tag they carry. When <c>true</c>, system-origin writes
-    /// are inspected and an ingested item whose version cannot be upcast to the
-    /// tree's target is dead-lettered for any tree whose config also sets
-    /// <see cref="LatticeSchemaVersionConfig.StrictIngest"/>.
+    /// Globally enables strict-mode ingest for system-origin writes that reach the
+    /// versioning interceptor. When <c>false</c> (the default), the interceptor
+    /// skips those system-origin writes, so they pay zero overhead and values keep
+    /// whatever version tag they carry. When <c>true</c>, intercepted
+    /// system-origin writes are inspected and an item whose version cannot be
+    /// upcast to the tree's target is dead-lettered for any tree whose config also
+    /// sets <see cref="LatticeSchemaVersionConfig.StrictIngest"/>. Replicated
+    /// typed-CRDT deltas and replicated atomic-batch entries reach the interceptor;
+    /// a plain last-writer-wins replication apply, a backup restore and a tree
+    /// merge bypass write interception and are not made schema-version checked by
+    /// this switch.
     /// </summary>
     public bool StrictIngest { get; set; }
 

@@ -19,6 +19,13 @@ internal sealed class TenancyDirectoryRow(TenantDescriptor tenant)
     /// <summary>The resident regions, or <see langword="null"/> until read.</summary>
     public IReadOnlyList<string>? Regions { get; set; }
 
+    /// <summary>
+    /// What the <b>Resident in</b> column reads when <see cref="Regions"/> is
+    /// empty: no residency set (served in every region), or a residency with no
+    /// region left in it (served in none).
+    /// </summary>
+    public string NoRegionText { get; set; } = TenancyFormat.NoResidency;
+
     /// <summary>The one-phrase quota use, or <see langword="null"/> until read.</summary>
     public string? Quota { get; set; }
 

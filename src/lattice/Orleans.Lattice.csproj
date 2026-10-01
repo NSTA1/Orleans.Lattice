@@ -65,6 +65,9 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TreeAdmin" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Abstractions" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TreeAdmin.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin.Tests" />

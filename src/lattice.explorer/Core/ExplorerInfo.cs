@@ -1,8 +1,8 @@
 namespace Orleans.Lattice.Explorer.Core;
 
 /// <summary>
-/// Static metadata about the Orleans.Lattice.Explorer application, shared by
-/// every head (Windows desktop and web) through the common UI layer.
+/// Static metadata about the Orleans.Lattice.Explorer application, shared by the
+/// web head and embeddable hosts through the common UI layer.
 /// </summary>
 public static class ExplorerInfo
 {

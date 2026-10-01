@@ -54,7 +54,9 @@ public sealed class LatticeSinkOptions
     public double HotRegionShare { get; set; } = 0.7;
 
     /// <summary>When true, drop oldest queued samples when the channel is full instead of blocking
-    /// the producer. Drops are surfaced via <c>vehicle_fleet_simulator.sink.dropped</c>.</summary>
+    /// the producer. Drop-oldest replacements are not counted by
+    /// <c>vehicle_fleet_simulator.sink.dropped</c>; that counter only records a
+    /// failed enqueue observed by the publisher.</summary>
     public bool DropOnFull { get; set; } = true;
 
     /// <summary>Optional shutdown drain timeout. Pending samples that don't drain within this

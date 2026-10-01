@@ -86,6 +86,8 @@ The remaining records keep the synthesized record equality, which delegates to `
 
 Consumers that need content equality for those records must compare collection contents explicitly.
 
+`OrSetDot` and `OrMapDeltaTombstone<TKey>` carry no collections, so their equality is by content either way: `OrSetDot` overrides `Equals` with an equivalent member-wise comparison, and `OrMapDeltaTombstone<TKey>` keeps the synthesized one.
+
 ## Origin and HLC propagation
 
 `LwwRegisterDelta` carries `OriginClusterId` directly because a last-writer-wins value is attributed to its authoring cluster for cycle-break and dedupe; on an exact HLC tie the origin id is the last-ranked tie-break, after the replica-invariant tombstone, expiry, and value-byte fields. The other deltas encode origin implicitly through their per-replica indexed dots, components, or entries. Receivers do not need a separate origin field for those records - the per-replica row identifies the producer.

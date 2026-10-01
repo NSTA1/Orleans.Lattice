@@ -91,6 +91,7 @@ internal static class TypeAliases
     internal const string SnapshotBaselineCaptureResult = "ol.sbc";
     internal const string ShardRootState = "ol.srs";
     internal const string DirtyLeavesSnapshot = "ol.dls";
+    internal const string LeafCompactionResult = "ol.lcr";
     internal const string PendingBulkGraft = "ol.pbg";
     internal const string GraftEntry = "ol.ge";
     internal const string PendingChildLink = "ol.pcl";
@@ -276,6 +277,10 @@ internal static class TypeAliases
     // Single-round-trip reclaim decision inputs for one leaf (empty-leaf chain reclaim)
     internal const string LeafReclaimProbe = "ol.lrb";
     internal const string LeafRetired = "ol.lrt";
+
+    // Why a predecessor accepted or refused to unlink its successor, so the
+    // three distinct declinations stop sharing one misleading log line (#2160).
+    internal const string LeafUnlinkOutcome = "ol.luo";
 
     // Operator-invoked repair of a tree that already holds an orphaned leaf -
     // one spliced into the sibling chain but unreachable by descent (issue 3269).
@@ -713,4 +718,38 @@ internal static class TypeAliases
     /// incremental flush ceiling has advanced past. See issue #2165.
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
+
+    /// <summary>Alias for the coordinated-operation grain interface.</summary>
+    internal const string ILatticeOperationGrain = "ol.opg";
+
+    /// <summary>Alias for the coordinated-operation record.</summary>
+    internal const string LatticeOperationRecord = "ol.opr";
+
+    /// <summary>Alias for a coordinated-operation progress report.</summary>
+    internal const string LatticeOperationProgressReport = "ol.opp";
+
+    /// <summary>Alias for a coordinated-operation completion.</summary>
+    internal const string LatticeOperationCompletion = "ol.opc";
+
+    /// <summary>Alias for a coordinated-operation begin request.</summary>
+    internal const string LatticeOperationBeginRequest = "ol.opb";
+
+    /// <summary>Alias for a coordinated-operation begin result.</summary>
+    internal const string LatticeOperationBeginResult = "ol.opn";
+
+    /// <summary>Alias for the coordinated-operation grain state.</summary>
+    internal const string LatticeOperationGrainState = "ol.ops";
+
+    /// <summary>Alias for the coordinated-operation index grain interface.</summary>
+    internal const string ILatticeOperationIndexGrain = "ol.oig";
+
+    /// <summary>Alias for the coordinated-operation index state.</summary>
+    internal const string LatticeOperationIndexState = "ol.ois";
+
+    /// <summary>Alias for one coordinated-operation index entry.</summary>
+    internal const string LatticeOperationIndexEntry = "ol.oie";
+
+    /// <summary>Alias for one page of the coordinated-operation index.</summary>
+    internal const string LatticeOperationIndexPage = "ol.oip";
 }
+

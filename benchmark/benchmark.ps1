@@ -349,6 +349,8 @@ $ScalarAliases = [ordered]@{
     'replication_ship_p99_ms'                     = 'orleans_lattice_replication_ship_duration_milliseconds_p99'
     'replication_apply_lag_p95_ms'                = 'orleans_lattice_replication_apply_lag_milliseconds_p95'
     'replication_apply_lag_p99_ms'                = 'orleans_lattice_replication_apply_lag_milliseconds_p99'
+    # Legacy history imports may already expose this scalar. Current source
+    # declares the shipped counter below; it does not declare an appended one.
     'replication_wal_entries_appended_per_second' = 'orleans_lattice_replication_wal_entries_appended_per_second'
     'replication_wal_entries_shipped_per_second'  = 'orleans_lattice_replication_wal_entries_shipped_per_second'
 
