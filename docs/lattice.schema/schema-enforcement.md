@@ -200,7 +200,9 @@ flight throws `InvalidOperationException`.
 
 `RemediateAsync` drives the remediation to a terminal state before it returns its
 `LatticeSchemaRemediationReport`; poll a running or last-known remediation with
-`ILatticeSchemaRemediationAdmin.GetRemediationStatusAsync`. The report carries the
+`ILatticeSchemaRemediationAdmin.GetRemediationStatusAsync`. The status read never
+waits behind a running remediation or migration: it answers at once with the last
+phase and count the run has durably recorded, never one it is still persisting. The report carries the
 `Phase` (`Idle`, `DryRun`, `Build`, `Cutover`, `Completed`, or `Aborted`, with
 `Succeeded` and `DidAbort` as shorthands), `InProgress`, `ScannedCount`,
 `DestinationTreeId`, and `OperationId`, and - on an abort - the first
