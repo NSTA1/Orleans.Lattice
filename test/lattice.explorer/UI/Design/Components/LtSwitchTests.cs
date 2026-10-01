@@ -31,6 +31,21 @@ public sealed class LtSwitchTests : ShellDesignTestContext
     }
 
     [Test]
+    public void The_switch_and_its_hint_are_one_item_so_the_hint_travels_under_it()
+    {
+        // #4120: in a toolbar the hint was a separate flex item beside the switch.
+        var cut = Render<LtSwitch>(p => p.Add(x => x.Label, "Live updates").Add(x => x.Hint, "Live scans only."));
+
+        var root = cut.Nodes.OfType<AngleSharp.Dom.IElement>().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(root.ClassList, Does.Contain("lt-switch-field"));
+            Assert.That(root.Children.Select(child => child.LocalName), Is.EqualTo(new[] { "button", "p" }));
+            Assert.That(root.QuerySelector("p")!.ClassList, Does.Contain("lt-switch__hint"));
+        });
+    }
+
+    [Test]
     public void Its_accessible_name_is_its_label_alone()
     {
         var cut = Render<LtSwitch>(p => p.Add(x => x.Label, "Publish events"));

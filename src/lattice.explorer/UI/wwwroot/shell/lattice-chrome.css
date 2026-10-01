@@ -609,24 +609,73 @@
    6. Toolbar - an area's filters, selectors and search
    ========================================================================== */
 
-.lt-toolbar {
+/*
+ * The control-row rule (issue #4120). A toolbar - or any lt-control-row, such
+ * as a small form inside one - lines its controls up on their control boxes,
+ * never on their label rows:
+ *
+ *   - every field primitive draws a label row of one height
+ *     (--lt-op-label-row) over a control box of one height
+ *     (--lt-op-control-height);
+ *   - items start at the top of their row, so a field's hint, note or error
+ *     grows the field downwards and never moves a control;
+ *   - in a row that holds a labelled field, anything that has no label row -
+ *     a button, a segmented group, a switch, a checkbox, a status line - starts
+ *     one label row down, on the control row;
+ *   - a status line is centred on the control row.
+ *
+ * Stacked below 768px each item is on its own line, so there is no row to line
+ * up and no label-row offset; every item is as tall as its content.
+ */
+.lt-toolbar,
+.lt-control-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--lt-space-3);
+}
+
+.lt-toolbar {
   margin: var(--lt-space-4) 0 var(--lt-space-3);
 }
 
-.lt-shell--compact .lt-toolbar {
+.lt-control-row {
+  gap: var(--lt-space-2);
+}
+
+:is(.lt-toolbar, .lt-control-row):has(.lt-field__label) > :not(.lt-field, :has(.lt-field__label)) {
+  margin-block-start: var(--lt-op-label-row);
+}
+
+:is(.lt-toolbar, .lt-control-row) > [role="status"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+}
+
+:is(.lt-toolbar, .lt-control-row) .lt-check {
+  grid-template-rows: minmax(var(--lt-op-control-height), auto);
+}
+
+.lt-shell--compact :is(.lt-toolbar, .lt-control-row) {
   flex-direction: column;
   align-items: stretch;
 }
 
 /* Stacked, the row's main axis is vertical, so an item's flex basis would be a
    height: a search field meant to take the spare width of a row would stand
-   18rem tall instead. Each stacked item is as tall as its content. */
-.lt-shell--compact .lt-toolbar > * {
+   18rem tall instead. Each stacked item is as tall as its content, and none
+   carries a label-row offset. */
+.lt-shell--compact :is(.lt-toolbar, .lt-control-row) > * {
   flex: 0 0 auto;
+}
+
+.lt-shell--compact :is(.lt-toolbar, .lt-control-row) > :not(.lt-field, :has(.lt-field__label)) {
+  margin-block-start: 0;
+}
+
+.lt-shell--compact :is(.lt-toolbar, .lt-control-row) > [role="status"] {
+  min-height: 0;
 }
 
 /* ==========================================================================
