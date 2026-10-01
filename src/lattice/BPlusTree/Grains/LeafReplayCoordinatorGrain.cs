@@ -233,7 +233,11 @@ internal sealed class LeafReplayCoordinatorGrain(
         }
         finally
         {
-            ArrayPool<CommitLogSliceEntry>.Shared.Return(buffer, clearArray: true);
+            // Only the written prefix holds references. The grow path above
+            // still clears wholesale, because there the write filled the
+            // entire array and the prefix is the array.
+            buffer.AsSpan(0, count).Clear();
+            ArrayPool<CommitLogSliceEntry>.Shared.Return(buffer);
         }
     }
 
