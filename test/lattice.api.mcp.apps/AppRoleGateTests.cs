@@ -117,14 +117,12 @@ public sealed class AppRoleGateTests
             Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, null!, []));
             Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, Notes, null!));
             Assert.Throws<ArgumentNullException>(() => AppRoleGate.IsMember(null!, "g"));
-            Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(null!, new GrantingAccessGate(), Member("alice"), CancellationToken.None));
-            Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(new AppRoleGate(LatticeOperation.Read, Notes, ["g"]), null!, Member("alice"), CancellationToken.None));
             Assert.ThrowsAsync<ArgumentNullException>(async () => await new AppRoleGate(LatticeOperation.Read, Notes, ["g"]).IsHeldAsync(null!, Member("alice"), CancellationToken.None));
         });
     }
 
     [Test]
-    public async Task The_tool_gate_delegates_to_the_shared_role_gate()
+    public async Task The_gate_holds_a_bound_role_and_withholds_an_unbound_one()
     {
         var gate = new GrantingAccessGate { AllowByDefault = true };
         var held = new AppRoleGate(LatticeOperation.Read, Notes, ["g-readers"]);
@@ -133,8 +131,8 @@ public sealed class AppRoleGateTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(await AppMcpRoleGate.IsHeldAsync(held, gate, alice, CancellationToken.None), Is.True);
-            Assert.That(await AppMcpRoleGate.IsHeldAsync(notHeld, gate, alice, CancellationToken.None), Is.False);
+            Assert.That(await held.IsHeldAsync(gate, alice, CancellationToken.None), Is.True);
+            Assert.That(await notHeld.IsHeldAsync(gate, alice, CancellationToken.None), Is.False);
         });
     }
 
