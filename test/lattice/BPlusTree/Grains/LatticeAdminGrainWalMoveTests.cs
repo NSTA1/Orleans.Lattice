@@ -190,7 +190,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         var factory = Substitute.For<IGrainFactory>();
 
         var lattice = Substitute.For<ILattice>();
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(
                 new RoutingInfo(TreeId, ShardMap.CreateDefault(1, 1))));
         factory.GetGrain<ILattice>(TreeId).Returns(lattice);

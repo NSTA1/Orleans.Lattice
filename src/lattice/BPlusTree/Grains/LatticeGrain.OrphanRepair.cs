@@ -84,7 +84,10 @@ internal sealed partial class LatticeGrain
             dryRun ? LatticeOperation.Read : LatticeOperation.Admin,
             cancellationToken);
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced: an audit walks every shard and routes no key, so a map or alias
+        // this activation cached before a reshard or resize would leave new
+        // shards unaudited and audit retired ones instead (issue #4180).
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Sorted rather than taken in map order. The cursor names a shard by

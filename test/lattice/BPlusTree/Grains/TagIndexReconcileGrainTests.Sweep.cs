@@ -453,7 +453,7 @@ public partial class TagIndexReconcileGrainTests
             configureSubjectTrees: f =>
             {
                 var tree = Substitute.For<ILattice>();
-                tree.GetRoutingAsync(Arg.Any<CancellationToken>())
+                tree.GetRoutingAsync(true, Arg.Any<CancellationToken>())
                     .Throws(new InvalidOperationException("tree unresolvable"));
                 f.GetGrain<ILattice>("tree-a", Arg.Any<string?>()).Returns(tree);
             });
@@ -483,7 +483,7 @@ public partial class TagIndexReconcileGrainTests
             configureSubjectTrees: f =>
             {
                 var tree = Substitute.For<ILattice>();
-                tree.GetRoutingAsync(Arg.Any<CancellationToken>())
+                tree.GetRoutingAsync(true, Arg.Any<CancellationToken>())
                     .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1)));
                 tree.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
                     .ThrowsAsync(new TimeoutException("digest unavailable"));
@@ -549,7 +549,7 @@ public partial class TagIndexReconcileGrainTests
     private static void StubSubjectTree(IGrainFactory factory, string treeId, byte[] digestHash)
     {
         var tree = Substitute.For<ILattice>();
-        tree.GetRoutingAsync(Arg.Any<CancellationToken>())
+        tree.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1)));
         tree.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new LeafProjectionDigest { Hash = digestHash, Version = 1 }));
