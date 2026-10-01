@@ -90,6 +90,7 @@ public sealed class LatticeBackupApiGrpcBindingUnitTests
         var service = new LatticeBackupGrpcService(
             methods,
             Substitute.For<ILatticeBackupControl>(),
+            Substitute.For<ILatticeBackupOperations>(),
             Substitute.For<ILatticeBackupApiCredentialBridge>(),
             Substitute.For<ILatticeBackupApiAuthSchemeSource>(),
             Options.Create(new LatticeBackupApiGrpcOptions()),
@@ -98,7 +99,7 @@ public sealed class LatticeBackupApiGrpcBindingUnitTests
 
         LatticeBackupGrpcServiceBase.BindService(binder, service);
 
-        Assert.That(binder.AddedMethods, Is.EqualTo(19));
+        Assert.That(binder.AddedMethods, Is.EqualTo(27));
     }
 
     [Test]

@@ -32,7 +32,8 @@ public sealed class LatticeBackupGrpcServiceUnitTests
 
     private LatticeBackupGrpcService CreateService(
         ILatticeBackupControl control,
-        ILatticeBackupApiCredentialBridge? bridge = null)
+        ILatticeBackupApiCredentialBridge? bridge = null,
+        ILatticeBackupOperations? operations = null)
     {
         var methods = LatticeBackupGrpcMethods.FromServiceProvider(_services);
         bridge ??= Substitute.For<ILatticeBackupApiCredentialBridge>();
@@ -40,6 +41,7 @@ public sealed class LatticeBackupGrpcServiceUnitTests
         return new LatticeBackupGrpcService(
             methods,
             control,
+            operations ?? Substitute.For<ILatticeBackupOperations>(),
             bridge,
             schemeSource,
             Options.Create(new LatticeBackupApiGrpcOptions()),
