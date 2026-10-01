@@ -129,8 +129,9 @@ public class LeafReclaimSplitRaceIntegrationTests
             await Leaf(staleNext).GetNextSiblingAsync(),
             staleNextRange.HighKeyExclusive);
 
-        Assert.That(unlinked, Is.False,
-            "the predecessor no longer points at the leaf the reclaim planned to fold, so the fold must be refused");
+        Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.DeclinedPredecessorMoved),
+            "the predecessor no longer points at the leaf the reclaim planned to fold, so the fold must be refused - "
+            + "and it must say SO, rather than reporting the same cause as the two unrelated declinations beside it");
     }
 
     /// <summary>
