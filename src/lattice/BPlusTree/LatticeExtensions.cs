@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Views;
 using Orleans.Runtime;
 using Orleans.Streams;
 
@@ -670,6 +671,10 @@ public static class LatticeExtensions
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
         var reassertCredential = LatticeCredentialContext.Current;
 
+        // The same holds for the view-read capability an ILatticeView handle
+        // opens around its read (see ScanEntriesAsyncCore).
+        var reassertViewRead = ViewReadContext.IsAuthorised;
+
         string? lastKey = null;
         var attempt = 0;
 
@@ -694,6 +699,7 @@ public static class LatticeExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            using var viewReadScope = reassertViewRead ? ViewReadContext.BeginScope() : null;
             // raw-enumeration-ok: this is the wrapper that makes the raw
             // primitive safe; it reopens the enumeration itself.
             var enumerator = (predicate is null
@@ -1030,6 +1036,14 @@ public static class LatticeExtensions
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
         var reassertCredential = LatticeCredentialContext.Current;
 
+        // The view-read capability (ViewReadContext) lives on the same
+        // RequestContext and is lost the same way. An ILatticeView handle opens
+        // it inside its own async iterator, and an async iterator resumes every
+        // MoveNextAsync after a yield on its consumer's execution context, so a
+        // reopen after the first row would otherwise reach a view tree without it
+        // and be refused by LatticeGrain's protected-view read guard (issue 4186).
+        var reassertViewRead = ViewReadContext.IsAuthorised;
+
         string? lastKey = null;
         var attempt = 0;
 
@@ -1052,6 +1066,7 @@ public static class LatticeExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            using var viewReadScope = reassertViewRead ? ViewReadContext.BeginScope() : null;
             // raw-enumeration-ok: this is the wrapper that makes the raw
             // primitive safe; it reopens the enumeration itself.
             var enumerator = (predicate is null
