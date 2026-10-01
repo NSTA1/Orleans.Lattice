@@ -129,6 +129,35 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
         });
     }
 
+    [Test]
+    public void A_tree_no_reshard_has_mapped_shows_its_live_shard_count_not_zero()
+    {
+        // Issue #4146: the reshard status reports zero shards for a tree on the
+        // default map, so the page read "The tree has 0 now" and reviewed a grow
+        // "from 0 physical shards". The live map supplies the figures.
+        Admin.GetReshardStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeReshardStatus { TreeId = TreeId });
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
+        {
+            TreeId = TreeId, PhysicalTreeId = TreeId, PhysicalShardCount = 64, VirtualShardCount = 4096,
+            PhysicalShardIndices = [.. Enumerable.Range(0, 64)], SlotCounts = [.. Enumerable.Repeat(64, 64)],
+        });
+        var cut = RenderAt(Address);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form"), Has.Count.EqualTo(1)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Definition(cut, "Physical shards"), Is.EqualTo("64"));
+            Assert.That(Definition(cut, "Virtual slots"), Is.EqualTo("4,096"));
+            Assert.That(cut.Find(".lt-field__hint").TextContent, Does.Contain("The tree has 64 now"));
+        });
+
+        Stage(cut, "72");
+        Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Grow a/crm/orders from 64 physical shards to 72 physical shards."));
+    }
+
+    private static string Definition(IRenderedComponent<ClusterPage> cut, string term) =>
+        cut.FindAll("dt").Single(dt => dt.TextContent.Trim() == term).NextElementSibling!.TextContent.Trim();
+
     private static void Stage(IRenderedComponent<ClusterPage> cut, string target)
     {
         cut.Find("form input").Input(target);
