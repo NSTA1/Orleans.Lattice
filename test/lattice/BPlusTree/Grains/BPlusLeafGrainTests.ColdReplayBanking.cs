@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
@@ -223,9 +224,19 @@ public partial class BPlusLeafGrainTests
     /// before partition 1 is touched, and returns whatever blob the leaf banked
     /// (<see langword="null"/> when it banked nothing).
     /// </summary>
+    /// <param name="applySliceBeforeCancelling">
+    /// When <see langword="true"/> (the default) the replay absorbs one slice
+    /// and is cancelled on the next read, so it travels a measurable distance.
+    /// When <see langword="false"/> the very first read cancels, which is the
+    /// "cut before its first slice boundary" shape - a cancellation that
+    /// entered replay and applied nothing. The two differ only in distance
+    /// travelled, which is what makes them a pair for issue #2411.
+    /// </param>
     private static async Task<LeafSnapshotBlob?> RunCancelledColdReplayAndLoadBankedBlobAsync(
         long[]? persistedCheckpoints = null,
-        LeafSnapshotStorageGrain? snapshotStore = null)
+        LeafSnapshotStorageGrain? snapshotStore = null,
+        ILoggerFactory? loggerFactory = null,
+        bool applySliceBeforeCancelling = true)
     {
         const int partitions = 2;
 
@@ -254,7 +265,7 @@ public partial class BPlusLeafGrainTests
         partition0.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
-                if (Interlocked.Increment(ref reads) == 1)
+                if (applySliceBeforeCancelling && Interlocked.Increment(ref reads) == 1)
                 {
                     return Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(slice);
                 }
@@ -278,7 +289,8 @@ public partial class BPlusLeafGrainTests
             partitions,
             partition0,
             partition1,
-            persistedCheckpoints ?? new[] { ColdBankReachedCheckpoint, ColdBankUnreachedCheckpoint });
+            persistedCheckpoints ?? new[] { ColdBankReachedCheckpoint, ColdBankUnreachedCheckpoint },
+            loggerFactory);
 
         Assert.ThrowsAsync<OperationCanceledException>(
             async () => await LeafActivationHarness.ActivateAsync(leaf, cts.Token),
@@ -300,7 +312,8 @@ public partial class BPlusLeafGrainTests
         int walPartitions,
         ILeafReplayCoordinatorGrain partition0,
         ILeafReplayCoordinatorGrain partition1,
-        long[] persistedCheckpoints)
+        long[] persistedCheckpoints,
+        ILoggerFactory? loggerFactory = null)
     {
         var reporter = Substitute.For<ILeafCursorReporter>();
         reporter.FlushDurableMaterialiserFrontierAsync(
@@ -316,6 +329,11 @@ public partial class BPlusLeafGrainTests
 
         var sc = new ServiceCollection();
         sc.AddSingleton(reporter);
+        if (loggerFactory is not null)
+        {
+            sc.AddSingleton(loggerFactory);
+        }
+
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();

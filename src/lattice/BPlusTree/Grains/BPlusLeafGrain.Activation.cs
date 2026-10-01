@@ -100,6 +100,24 @@ internal sealed partial class BPlusLeafGrain
     /// reader can tell "banked nothing because it did no work" from "banked
     /// nothing because it did not pass its existing checkpoint" - which on a
     /// cold replay is the arithmetically forced case, not a fault.
+    /// <para>
+    /// Also reported by <see cref="ReportReplayProgressAtActivationFailure"/>
+    /// on the activation-FAILURE path (issue #2411), which is the only path a
+    /// cancelled replay takes. Orleans does not run <c>OnDeactivateAsync</c>
+    /// when <c>OnActivateAsync</c> throws, so the deactivation line above is
+    /// structurally blind to every cancelled replay - and a cancelled replay
+    /// is the population whose distance travelled decides whether resuming one
+    /// from a banked prefix is worth building at all.
+    /// </para>
+    /// <para>
+    /// <b>Incremented at the apply site, one entry at a time</b>, which is
+    /// load-bearing rather than stylistic. It was previously added once per
+    /// partition after that partition's slice loop, so a cancellation landing
+    /// INSIDE a partition - the shape the field sees - threw past the
+    /// accumulation and discarded everything that partition had applied,
+    /// leaving this field at zero for a replay that had done a great deal of
+    /// work. Keep the increment beside the apply.
+    /// </para>
     /// </summary>
     private long _replayEntriesAppliedThisActivation;
 
@@ -3266,6 +3284,44 @@ internal sealed partial class BPlusLeafGrain
                     reason,
                     LatticeTenantLabel.ForTree(failedTreeId));
 
+                // Distance travelled (issue #2411). The counter above is an
+                // EVENT COUNT and carries no magnitude, and until this line
+                // existed the failure path reported no progress at all - so how
+                // far a cancelled cold replay actually got was observable
+                // nowhere.
+                //
+                // _replayEntriesAppliedThisActivation is already accumulated
+                // across every partition this activation replayed, and is
+                // already emitted - but only by
+                // RecordDeactivationCheckpointDelta, which runs from
+                // OnDeactivateAsync. Orleans does not run OnDeactivateAsync
+                // when OnActivateAsync throws, and a cancelled replay leaves
+                // activation by throwing, so the one quantity #2411 needs was
+                // maintained correctly and emitted exclusively on the one path
+                // that never runs when it matters. This site is the exact
+                // complement, as the failure counter above is for the
+                // deactivation histogram.
+                //
+                // Wrapped, for the same reason the escalation below is: an
+                // observation must never replace the fault it observes. A
+                // throwing logging sink here would otherwise escape this catch
+                // in place of the OperationCanceledException and rewrite a
+                // cancelled activation as a faulted one upstream.
+                try
+                {
+                    ReportReplayProgressAtActivationFailure(
+                        failedTreeId,
+                        this.GetGrainId(),
+                        cold: replayCheckpointOverride == -1L,
+                        phase: _replayAdmissionPhase,
+                        reason: reason.Value as string);
+                }
+                catch
+                {
+                    // Intentionally swallowed. Losing the measurement is a
+                    // bounded loss; losing the exception is not.
+                }
+
                 // Loop detection and escalation (issue #2280, direction 4).
                 //
                 // The counter above is an AGGREGATE. It cannot distinguish one
@@ -5786,6 +5842,103 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Reports how far THIS activation's WAL replay got before the activation
+    /// failed - the distance travelled that issue #2411's bounding design is
+    /// blocked on.
+    /// <para>
+    /// <b>Why it has to be here.</b> The same figure is already reported by
+    /// <c>RecordDeactivationCheckpointDelta</c>, which runs from
+    /// <c>OnDeactivateAsync</c>. Orleans does not run that hook when
+    /// <c>OnActivateAsync</c> throws - measured with a positive control on
+    /// Orleans 10.2.2 - and a cancelled replay leaves activation by throwing,
+    /// so that emission is structurally blind to every activation that failed.
+    /// This site is its exact complement, in the same way
+    /// <see cref="LatticeMetrics.LeafActivationFailures"/> is the complement of
+    /// <see cref="LatticeMetrics.LeafDeactivationCheckpointDelta"/>.
+    /// </para>
+    /// <para>
+    /// <b>A log line rather than a new instrument, deliberately.</b> Per-leaf
+    /// detail cannot be a metric tag here - the live-leaf population is
+    /// unbounded, which is why the deactivation-side figure is on a log line
+    /// too - and the host where this measurement has to be taken exposes no
+    /// metrics endpoint at all (issue #2148), which is precisely why the loop
+    /// this sits beside ran for the entire life of a container unnoticed. The
+    /// field evidence on this issue family (issue #2278) was read off log
+    /// lines for the same reason.
+    /// </para>
+    /// <para>
+    /// <b>Not throttled, also deliberately.</b> The sibling loop warning is,
+    /// because a diagnostic has a flood to prevent and only needs to fire once
+    /// to be acted on. This line is a sample in a DISTRIBUTION, and throttling
+    /// a distribution biases it by dropping exactly the bursts that carry the
+    /// signal. It is bounded by the activation-failure rate, which is the
+    /// population <see cref="LatticeMetrics.LeafActivationFailures"/> already
+    /// counts one-for-one.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the failed leaf belongs to.</param>
+    /// <param name="leafId">The leaf whose activation failed.</param>
+    /// <param name="cold">
+    /// Whether this activation replayed the whole readable window. A warm
+    /// activation resumed above a snapshot or cache anchor, so its distance
+    /// answers a different question and must not be pooled with a cold one.
+    /// </param>
+    /// <param name="phase">
+    /// The replay-admission phase the failure landed in, which decides whether
+    /// a zero distance means "replay was cut before its first slice boundary"
+    /// or "replay was never entered at all".
+    /// </param>
+    /// <param name="reason">The failure arm recorded on the activation-failure counter.</param>
+    private void ReportReplayProgressAtActivationFailure(
+        string treeId, GrainId leafId, bool cold, ReplayAdmissionPhase phase, string? reason)
+    {
+        var logger = ResolveLogger();
+        if (logger is null || !logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        // HoldsPermit is the only phase from which replay is actually running,
+        // so it is the only one whose entry count measures replay distance. In
+        // every other phase the count is zero BY CONSTRUCTION, and pooling
+        // those zeros with a genuine zero-distance replay would drag the
+        // measured distance toward zero for a reason that has nothing to do
+        // with replay.
+        var entry = phase == ReplayAdmissionPhase.HoldsPermit
+            ? "entered replay and held a permit"
+            : "never entered replay";
+
+        logger.LogInformation(
+            "REPLAY PROGRESS AT CANCELLATION: leaf '{LeafId}' of tree '{TreeId}' left a {Temperature} "
+            + "activation by throwing; it {Entry} and had applied {EntriesApplied} entries through the "
+            + "projection seam. Failure arm '{Reason}', admission phase '{Phase}'. "
+            + "THIS LINE IS A MEASUREMENT, NOT AN ALERT - nothing here changes replay behaviour, and a "
+            + "single occurrence is an ordinary cancellation rather than a fault. It exists because the "
+            + "bounding design for a replay that cannot finish inside the activation limit (issue #2411) "
+            + "is UNDECIDABLE without it: resuming a cancelled replay from a banked prefix pays if and "
+            + "only if a cancelled replay gets substantially through its range, and if it dies in the "
+            + "first few percent every time it banks nearly nothing and buys a checkpoint mechanism for "
+            + "no return. Those two worlds want opposite designs and the activation-failure counter "
+            + "cannot separate them, because it counts the EVENT and carries no magnitude. "
+            + "READ IT AS A DISTRIBUTION OVER MANY OCCURRENCES, not one sample, and FILTER TO THE COLD "
+            + "ARM THAT ENTERED REPLAY: a warm activation resumed above a snapshot or cache anchor so "
+            + "its distance answers a different question, and an activation cancelled while queued for "
+            + "a permit or resolving tree options reports zero BY CONSTRUCTION rather than by having got "
+            + "nowhere. A cold zero that DID enter replay is the real and distinct shape of a replay cut "
+            + "before its first slice boundary. This site exists at all because the same figure is "
+            + "otherwise emitted only on graceful deactivation, and Orleans does not run "
+            + "OnDeactivateAsync when OnActivateAsync throws - so for every activation that failed, the "
+            + "one quantity the design question turns on was maintained correctly and reported nowhere.",
+            leafId,
+            treeId,
+            cold ? "cold" : "warm",
+            entry,
+            _replayEntriesAppliedThisActivation,
+            reason ?? "unknown",
+            phase);
+    }
+
+    /// <summary>
     /// Silo-scoped record of the persisted checkpoint each leaf partition was
     /// last seen replaying from, used to tell a slow replay from a STALLED one
     /// (issue #2149, fault shape of issue #2165).
@@ -6888,6 +7041,34 @@ internal sealed partial class BPlusLeafGrain
                     // exactly those terms.
                     appliedEntries++;
 
+                    // Accumulated into the per-activation total HERE, as each
+                    // entry is applied, rather than once per partition at the
+                    // foot of this method (issue #2411).
+                    //
+                    // The bulk accumulation that used to do this sat AFTER the
+                    // slice loop and carried a comment claiming the figure
+                    // survived a cancellation. It did not, and could not: a
+                    // cancelled replay throws out of the loop, so that
+                    // statement was unreachable and every entry this partition
+                    // had applied was discarded. The figure was therefore
+                    // structurally ZERO on exactly the path that produces the
+                    // cancellations issue #2411 needs to measure, and non-zero
+                    // only for the rarer shape of a cancellation landing in a
+                    // LATER partition than the one that did the work.
+                    //
+                    // That is worse than no measurement, because a zero is a
+                    // readable value: it reports "this replay got nowhere" for
+                    // a replay that got a long way, and the design question
+                    // #2411 is blocked on turns on precisely that quantity -
+                    // resuming a cancelled replay pays if and only if it gets
+                    // substantially through its range. An always-zero reading
+                    // argues against resumability from evidence that was never
+                    // measured.
+                    //
+                    // One field increment per applied entry, inside a scan that
+                    // already applies that entry to the projection.
+                    _replayEntriesAppliedThisActivation++;
+
                     // OVER-BUDGET VERDICT (issue #2149). Emitted at the moment
                     // the exact per-leaf count first crosses the budget, and
                     // mid-scan rather than after the replay, so a teardown
@@ -7306,13 +7487,11 @@ internal sealed partial class BPlusLeafGrain
         if (!overBudgetWarned && maxLeafReplayEntries > 0 && appliedEntries <= maxLeafReplayEntries)
             RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
 
-        // Accumulate this partition's exact post-filter work into the
-        // per-activation total reported on the deactivation log line (#2280).
-        // Accumulated even when the replay is later cancelled, because the
-        // whole point is to distinguish "banked nothing having done nothing"
-        // from "banked nothing having applied a great many entries below the
-        // existing checkpoint mark".
-        _replayEntriesAppliedThisActivation += appliedEntries;
+        // The per-activation applied-entry total is accumulated at the apply
+        // site inside the slice loop above, NOT here. It used to be added once
+        // per partition at this point, which discarded the whole of a
+        // partition's work whenever the replay was cancelled inside it - see
+        // the comment at that site (issue #2411).
 
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }
