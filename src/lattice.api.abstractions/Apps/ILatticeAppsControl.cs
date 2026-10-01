@@ -19,7 +19,9 @@ public interface ILatticeAppsControl
 {
     /// <summary>
     /// Installs the specified source version with group-only role bindings and an
-    /// explicit version-pinned ceiling. Installation does not enable the app.
+    /// explicit version-pinned ceiling. Installation does not enable the app. A request
+    /// carrying <see cref="AppInstallRequest.ExpectedManifestDigest"/> is refused, without
+    /// mutation, unless the manifest resolved at commit still has the reviewed digest.
     /// </summary>
     /// <param name="request">The non-null installation request, validated before mutation.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

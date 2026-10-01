@@ -79,7 +79,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         if (state.State.AliasReservationId is null)
         {
             state.State.AliasReservationId = $"remediation:{Guid.NewGuid():N}";
-            try { await state.WriteStateAsync(); }
+            try { await WriteAndPublishStateAsync(); }
             catch { state.State.AliasReservationId = null; throw; }
         }
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
@@ -92,7 +92,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         using var origin = LatticeAccessGateContext.EnterSystemOrigin();
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).EndAliasChangeAsync(id);
         state.State.AliasReservationId = null;
-        try { await state.WriteStateAsync(); }
+        try { await WriteAndPublishStateAsync(); }
         catch { state.State.AliasReservationId = id; throw; }
     }
 
@@ -217,7 +217,46 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> GetStatusAsync() => Task.FromResult(GetStatus());
+    /// <remarks>
+    /// Interleaved (<see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> on the
+    /// interface), so it may run while a start turn is suspended at any await. It
+    /// therefore answers from <see cref="PublishedStatus"/>, never from the live
+    /// state a running phase is mutating.
+    /// </remarks>
+    public Task<LatticeSchemaRemediationReport> GetStatusAsync() => Task.FromResult(PublishedStatus);
+
+    // What the interleaved GetStatusAsync answers from (issue #4123). Every phase
+    // transition mutates the in-memory state first, then awaits WriteStateAsync,
+    // and reverts the mutation if that write fails - so a read of the live state
+    // could land inside that window and report a transition that is not yet
+    // durable, or that is then rolled back. This immutable report is captured
+    // from the state being written and replaced in a single assignment only once
+    // the write has succeeded; it is also captured at activation, after the
+    // persisted state has been read. All of it runs on the activation scheduler,
+    // so a reader sees one whole published report, never a mix of two. Phase
+    // turns, and the report a start call returns, keep reading the live state.
+    private LatticeSchemaRemediationReport? _publishedStatus;
+
+    private LatticeSchemaRemediationReport PublishedStatus => _publishedStatus ??= GetStatus();
+
+    /// <inheritdoc />
+    Task IGrainBase.OnActivateAsync(CancellationToken token)
+    {
+        _publishedStatus = GetStatus();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Persists <see cref="SchemaRemediationState"/> and, only once the write has
+    /// succeeded, publishes the status it describes to the interleaved
+    /// <see cref="GetStatusAsync"/>.
+    /// </summary>
+    private async Task WriteAndPublishStateAsync()
+    {
+        var written = GetStatus();
+        await state.WriteStateAsync();
+        _publishedStatus = written;
+    }
 
     private LatticeSchemaRemediationReport GetStatus()
     {
@@ -318,7 +357,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         state.State.MigrationTargetVersion = migrationTargetVersion;
         try
         {
-            await state.WriteStateAsync();
+            await WriteAndPublishStateAsync();
         }
         catch
         {
@@ -564,7 +603,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         state.State.ScannedCount = scannedCount;
         try
         {
-            await state.WriteStateAsync();
+            await WriteAndPublishStateAsync();
         }
         catch
         {
@@ -595,7 +634,7 @@ internal sealed class LatticeSchemaRemediationGrain(
 
         try
         {
-            await state.WriteStateAsync();
+            await WriteAndPublishStateAsync();
         }
         catch
         {
@@ -621,7 +660,7 @@ internal sealed class LatticeSchemaRemediationGrain(
             scannedCount, offendingKey, reason, offendingValuePreview, state.State.OperationId!);
         try
         {
-            await state.WriteStateAsync();
+            await WriteAndPublishStateAsync();
         }
         catch
         {

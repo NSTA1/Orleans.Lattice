@@ -77,7 +77,12 @@ These override or extend the base for Orleans.Lattice only.
    attribution trailers it names (`Co-authored-by`, `Copilot-Session`). See
    `{conventionsDoc}` for the allowed branch types and the epic-branch convention.
 
-5. **Test scope.** Run the smallest scope that validates the change. Exclude
-   `Chaos` and `AzureStorageEmulator` categories locally; CI runs the full
-   sweep. The testing master file is
+5. **Test scope, and it is binding rather than advisory.** Run the smallest
+   scope that validates the change - a named fixture or method filter - never a
+   whole test project reflexively and never a solution-wide run with no project
+   argument. Exclude `Chaos` and `AzureStorageEmulator` categories locally; CI
+   runs the full sweep. You share this host with a dozen concurrent sessions and
+   often with a container whose telemetry somebody is reading, so an unfiltered
+   run costs far more than your own wall-clock: see "Concurrency" under Running
+   Tests in the testing master file,
    [`.github/instructions/testing.instructions.md`](../instructions/testing.instructions.md).

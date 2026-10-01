@@ -132,18 +132,6 @@
   margin-top: var(--lt-space-2);
 }
 
-.lt-cluster-inline-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--lt-space-2);
-}
-
-.lt-shell--compact .lt-cluster-inline-form {
-  flex-direction: column;
-  align-items: stretch;
-}
-
 .lt-cluster-textarea {
   display: grid;
   gap: var(--lt-space-1);

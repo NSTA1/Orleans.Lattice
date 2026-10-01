@@ -13,10 +13,11 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// <remarks>
 /// The track is an ARIA <c>progressbar</c>: a determinate bar reports
 /// <c>aria-valuenow</c> as a percentage between <c>aria-valuemin</c> 0 and
-/// <c>aria-valuemax</c> 100, and every bar describes itself in
+/// <c>aria-valuemax</c> 100 (a <see cref="Stepped"/> bar reports the step it has
+/// reached out of its step count instead), and every bar describes itself in
 /// <c>aria-valuetext</c>. A change of <see cref="Phase"/> is announced once
-/// through a polite live region; a moving percentage is not, so a reader is not
-/// interrupted on every poll.
+/// through a polite live region unless <see cref="AnnouncePhase"/> is off; a
+/// moving percentage is not, so a reader is not interrupted on every poll.
 /// </remarks>
 public partial class LtProgress
 {
@@ -53,6 +54,24 @@ public partial class LtProgress
     [Parameter]
     public string? Detail { get; set; }
 
+    /// <summary>
+    /// Whether the units are the named steps of a path rather than a measured
+    /// quantity. A stepped bar reads "Step 2 of 3" where a percentage would go,
+    /// and its progressbar ranges over the steps rather than 0 to 100, so it never
+    /// claims a measured fraction that the operation does not report.
+    /// </summary>
+    [Parameter]
+    public bool Stepped { get; set; }
+
+    /// <summary>
+    /// Whether the bar announces a change of <see cref="Phase"/> itself. A host
+    /// that announces the change in its own words, such as a table of bars that
+    /// also announces a row reaching a state with no bar, turns this off so a
+    /// reader hears it once.
+    /// </summary>
+    [Parameter]
+    public bool AnnouncePhase { get; set; } = true;
+
     /// <summary>Whether the bar is determinate: its total is known.</summary>
     public bool IsDeterminate => Maximum is > 0;
 
@@ -64,7 +83,20 @@ public partial class LtProgress
         ? (int)(Math.Clamp(Value, 0, maximum) * 100 / maximum)
         : null;
 
+    /// <summary>The step a stepped bar has reached, such as "Step 2 of 3", or <see langword="null"/> when the bar is not stepped.</summary>
+    public string? StepText => Stepped && Maximum is > 0 and var maximum
+        ? "Step " + Math.Clamp(Value, 0, maximum).ToString(CultureInfo.InvariantCulture) + " of " + maximum.ToString(CultureInfo.InvariantCulture)
+        : null;
+
     private string ModeKey => IsDeterminate ? "determinate" : "indeterminate";
+
+    private string? FigureText => StepText ?? PercentText;
+
+    private string AriaMaximum => StepText is not null ? Maximum!.Value.ToString(CultureInfo.InvariantCulture) : "100";
+
+    private string? AriaNow => StepText is not null
+        ? Math.Clamp(Value, 0, Maximum!.Value).ToString(CultureInfo.InvariantCulture)
+        : Percent?.ToString(CultureInfo.InvariantCulture);
 
     private bool Segmented => Maximum is > 1 and <= MaximumSegments;
 
@@ -84,7 +116,7 @@ public partial class LtProgress
     {
         get
         {
-            var text = PercentText;
+            var text = FigureText;
             text = Append(text, Phase);
             text = Append(text, Detail);
             return text ?? "In progress";
@@ -107,7 +139,7 @@ public partial class LtProgress
         // over its own heading.
         if (!string.Equals(Phase, _lastPhase, StringComparison.Ordinal))
         {
-            _announcement = _initialised ? Phase : null;
+            _announcement = _initialised && AnnouncePhase ? Phase : null;
             _lastPhase = Phase;
         }
 

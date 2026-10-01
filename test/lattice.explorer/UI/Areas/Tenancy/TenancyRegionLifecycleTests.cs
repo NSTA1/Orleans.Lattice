@@ -13,14 +13,139 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 public sealed class TenancyRegionLifecycleTests
 {
     [Test]
-    [TestCase(TenantRegionLifecycleStatus.Provisioning, "Waiting for a platform operator to promote it; this tenant is not served here until it is Online.")]
-    [TestCase(TenantRegionLifecycleStatus.Backfilling, "The tenant's existing data is being copied in; it is not served here until it is Online.")]
+    [TestCase(TenantRegionLifecycleStatus.Provisioning, "Not served here until it is Online. Nothing in Lattice advances an added region: a platform operator of the hosting deployment promotes it once the tenant's data is in place.")]
+    [TestCase(TenantRegionLifecycleStatus.Backfilling, "Not served here until it is Online. Lattice copies no data into an added region; the hosting deployment fills it in, and a platform operator promotes it.")]
     [TestCase(TenantRegionLifecycleStatus.Online, "Serves this tenant.")]
-    [TestCase(TenantRegionLifecycleStatus.Draining, "Being removed: the tenant's data here is draining and the region no longer serves it.")]
+    [TestCase(TenantRegionLifecycleStatus.Draining, "No longer serves this tenant. The region's own silos complete the drain as soon as they see the change; a region that stays Draining has silos that are not running or have not seen it yet.")]
     [TestCase(TenantRegionLifecycleStatus.Offline, "Drained; no longer serves this tenant.")]
-    [TestCase(TenantRegionLifecycleStatus.Removed, "Removed from the tenant's residency.")]
+    [TestCase(TenantRegionLifecycleStatus.Removed, "Left the tenant's residency; does not serve this tenant.")]
     public void Every_lifecycle_status_has_a_meaning(TenantRegionLifecycleStatus status, string meaning) =>
         Assert.That(TenancyFormat.RegionStatusMeaning(status), Is.EqualTo(meaning));
+
+    [Test]
+    public void No_stage_claims_that_lattice_copies_or_drains_data()
+    {
+        foreach (var status in Enum.GetValues<TenantRegionLifecycleStatus>())
+        {
+            var meaning = TenancyFormat.RegionStatusMeaning(status);
+            Assert.That(meaning, Does.Not.Contain("being copied in").And.Not.Contain("data here is draining"), status.ToString());
+        }
+    }
+
+    [Test]
+    [TestCase(TenantRegionLifecycleStatus.Provisioning, 1, "Adding: Provisioning", "Next: Backfilling, when a platform operator of the hosting deployment promotes it.")]
+    [TestCase(TenantRegionLifecycleStatus.Backfilling, 2, "Adding: Backfilling", "Next: Online, when a platform operator of the hosting deployment promotes it.")]
+    [TestCase(TenantRegionLifecycleStatus.Draining, 1, "Removing: Draining", "Next: Offline, taken automatically by the region's own silos.")]
+    [TestCase(TenantRegionLifecycleStatus.Offline, 2, "Removing: Offline", "Next: Removed, taken automatically by the region's own silos.")]
+    public void A_transitional_stage_is_a_step_of_three_on_its_path_with_what_comes_next(TenantRegionLifecycleStatus status, int step, string phase, string next)
+    {
+        var reached = TenancyRegionStep.For(status);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reached, Is.Not.Null);
+            Assert.That((reached!.Step, reached.Phase, reached.Next), Is.EqualTo((step, phase, next)));
+            Assert.That(TenancyRegionStep.Steps, Is.EqualTo(3));
+            Assert.That(TenancyRegionStep.IsTransitional(status), Is.True);
+            Assert.That(reached.Short, Is.EqualTo($"{(reached.IsRemoving ? "removing" : "adding")}, step {step} of 3"));
+        });
+    }
+
+    [Test]
+    [TestCase(TenantRegionLifecycleStatus.None)]
+    [TestCase(TenantRegionLifecycleStatus.Online)]
+    [TestCase(TenantRegionLifecycleStatus.Removed)]
+    public void A_steady_stage_has_no_step(TenantRegionLifecycleStatus status) =>
+        Assert.That((TenancyRegionStep.For(status), TenancyRegionStep.IsTransitional(status)), Is.EqualTo(((TenancyRegionStep?)null, false)));
+
+    [Test]
+    public void A_step_bar_is_named_after_its_region() =>
+        Assert.That(TenancyRegionStep.Label("us-east"), Is.EqualTo("Residency change in us-east"));
+
+    [Test]
+    [TestCase(TenantRegionLifecycleStatus.Offline)]
+    [TestCase(TenantRegionLifecycleStatus.Removed)]
+    public void A_tenant_whose_regions_have_all_left_its_residency_has_residency_and_is_served_nowhere(TenantRegionLifecycleStatus status)
+    {
+        // TenantRecord.HasResidencyConfiguration counts any non-None status, and
+        // TenantResidencyResolver then serves the tenant only where it is exactly
+        // Online: such a tenant is served in no region, never in every region.
+        IReadOnlyList<TenantRegionStatusDescriptor> regions = [Region("eu-west", status), Region("us-east", TenantRegionLifecycleStatus.None)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyFormat.HasResidency(regions), Is.True);
+            Assert.That(TenancyFormat.IsServedNowhere(regions), Is.True);
+            Assert.That(TenancyFormat.IsServedIn(TenantRegionLifecycleStatus.None, TenancyFormat.HasResidency(regions)), Is.False);
+            Assert.That(TenancyFormat.ResidencyText(regions), Is.EqualTo(TenancyFormat.NoResidentRegion));
+            Assert.That(TenancyFormat.ServedNowhereReason(regions), Does.StartWith("it has residency set and every region has left it."));
+        });
+    }
+
+    [Test]
+    public void A_tenant_waiting_on_a_promotion_is_served_nowhere_until_an_operator_promotes_one() =>
+        Assert.That(
+            TenancyFormat.ServedNowhereReason([Region("eu-west", TenantRegionLifecycleStatus.Provisioning)]),
+            Is.EqualTo("it has residency set and none of its regions is Online yet. It is served again once a platform operator of the hosting deployment promotes one to Online."));
+
+    [Test]
+    public void A_plan_for_a_tenant_already_served_nowhere_does_not_stop_serving_it()
+    {
+        var plan = new TenancyResidencyPlan();
+        plan.Reset([Region("eu-west", TenantRegionLifecycleStatus.Provisioning), Region("us-east", TenantRegionLifecycleStatus.None)]);
+
+        plan.Toggle("us-east");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.LeavesNoOnlineRegion, Is.True);
+            Assert.That(plan.StopsServing, Is.False, "nothing serves the tenant now, so nothing stops");
+        });
+    }
+
+    [Test]
+    public void A_plan_stops_serving_a_tenant_served_now_whether_everywhere_or_in_an_online_region()
+    {
+        var unset = new TenancyResidencyPlan();
+        unset.Reset([Region("eu-west", TenantRegionLifecycleStatus.None)]);
+        unset.Toggle("eu-west");
+
+        var online = new TenancyResidencyPlan();
+        online.Reset([Region("eu-west", TenantRegionLifecycleStatus.Online), Region("us-east", TenantRegionLifecycleStatus.None)]);
+        online.Toggle("us-east");
+        online.Toggle("eu-west");
+
+        Assert.That((unset.StopsServing, online.StopsServing), Is.EqualTo((true, true)));
+    }
+
+    [Test]
+    public void A_newer_reading_keeps_an_edit_in_progress_and_an_unchanged_plan_follows_it()
+    {
+        var plan = new TenancyResidencyPlan();
+        plan.Reset([Region("eu-west", TenantRegionLifecycleStatus.Online), Region("us-east", TenantRegionLifecycleStatus.Draining)]);
+        plan.Update([Region("eu-west", TenantRegionLifecycleStatus.Online), Region("us-east", TenantRegionLifecycleStatus.Offline)]);
+        Assert.That((plan.IsChanged, plan.Rows[1].Status), Is.EqualTo((false, TenantRegionLifecycleStatus.Offline)));
+
+        plan.Toggle("us-east");
+        plan.Update([Region("eu-west", TenantRegionLifecycleStatus.Online), Region("us-east", TenantRegionLifecycleStatus.Removed)]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.IsChanged, Is.True, "the edit survives the newer reading");
+            Assert.That(plan.Added, Is.EqualTo(new[] { "us-east" }));
+            Assert.That(plan.Rows[1].Status, Is.EqualTo(TenantRegionLifecycleStatus.Removed));
+        });
+        Assert.That(() => plan.Update(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    [TestCase(0, 2)]
+    [TestCase(1, 4)]
+    [TestCase(3, 16)]
+    [TestCase(4, 30)]
+    [TestCase(100, 30)]
+    public void A_quiet_follow_doubles_its_wait_up_to_a_bound(int quietReads, int seconds) =>
+        Assert.That(TenancyRegionFollower.Delay(quietReads), Is.EqualTo(TimeSpan.FromSeconds(seconds)));
 
     [Test]
     public void A_region_outside_a_set_residency_says_it_does_not_serve_the_tenant()

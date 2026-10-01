@@ -161,11 +161,14 @@ tenant gets `tenancy.change-residency` ("Change residency") and
 A tenant's Regions page splits **Allowed regions (set by a platform operator)**
 from **Residency (where the tenant's data is kept)**, and says what each region's
 lifecycle status means for the tenant and whether it is served there: with no
-residency set every region serves the tenant, a Provisioning region waits for a
-platform operator of the hosting deployment to promote it, and once a tenant has
-any residency it is served only in Online regions. A change is previewed region
-by region before it is applied. One that would leave the tenant served nowhere
-turns **Apply residency** off, and goes through only by a quiet **Apply anyway
+residency set every region serves the tenant, an added region waits for a
+platform operator of the hosting deployment to promote it, a removed region's own
+silos complete its drain on their own, and once a tenant has any residency it is
+served only in Online regions. A region part-way along its add or remove path
+shows the step it has reached ("Step 1 of 3", never a percentage), and the page
+follows it live, announcing each stage change, until every region is steady. A
+change is previewed region by region before it is applied. One that would stop
+serving the tenant, leaving it served nowhere, turns **Apply residency** off, and goes through only by a quiet **Apply anyway
 and stop serving {tenant}...** button whose confirmation keeps serving by
 default; creating a tenant with an initial residency is confirmed too. The directory's **Resident in** column, and the **Resident in** and
 **Allowed** lines of a tenant's overview, link to its Regions page, and Home

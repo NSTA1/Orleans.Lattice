@@ -39,15 +39,36 @@ fast.
 
 | Verb | Behaviour |
 |---|---|
-| `InstallAsync(AppInstallRequest)` | Installs an exact source version with role-to-group bindings and an explicit ceiling; every binding must name a role the manifest declares. Installation does not enable the app. Installing a different version over a live install upgrades it in place, keeping its lifecycle state, and re-applies an enabled app. Installing the version already installed is refused; change consent with `UpdateConsentAsync` instead. |
+| `InstallAsync(AppInstallRequest)` | Installs an exact source version with role-to-group bindings and an explicit ceiling; every binding must name a role the manifest declares. Installation does not enable the app. Installing a different version over a live install upgrades it in place, keeping its lifecycle state, and re-applies an enabled app. Installing the version already installed is refused; change consent with `UpdateConsentAsync` instead. A request that carries `ExpectedManifestDigest` is refused, with nothing recorded, unless the manifest resolved at commit still has that digest (see [Pinning the reviewed manifest](#pinning-the-reviewed-manifest)). |
 | `EnableAsync(slug)` | Runs the activation pipeline: validates the manifest, checks it against the ceiling, re-verifies the app's tree ownership, enrols its declared replication, provisions trees and grants roles. An excess fails activation until re-consented. |
 | `DisableAsync(slug)` | Withdraws the app's grants; trees and data stay. |
 | `UninstallAsync(slug)` | Withdraws the app's grants, unenrols the replication it enrolled and soft-deletes its structural trees; adopted trees are untouched, and their ownership claims are released. It never purges data itself, but each soft-deleted tree is purged by the core once its soft-delete window elapses, unless the app is installed and enabled again first. |
 | `ListAsync()` | Summaries of the installs in the caller's tenant, including uninstalled records. |
-| `DescribeAsync(slug, version?)` | The manifest's requested capabilities (trees, roles with operations and scopes, subscriptions, MCP tools, replication and schema declarations) plus the install's state, provenance, bindings and ceiling. Works before installation, without loading app code; returns `null` for an unknown app or version. |
+| `DescribeAsync(slug, version?)` | The manifest's requested capabilities (trees, roles with operations and scopes, subscriptions, MCP tools, replication and schema declarations) plus the install's state, provenance, bindings and ceiling. Works before installation, without loading app code; returns `null` for an unknown app or version. Its `ManifestDigest` identifies the described manifest for an install to pin. |
 | `GetConsentAsync(slug)` | The ceiling pinned to the installed version, or `null` when the app is not installed. |
 | `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. If that re-application fails, the failure is thrown with a note that the consent itself was recorded; a failure the consent or manifest causes, such as a ceiling excess, also withdraws the app's grants. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
+
+### Pinning the reviewed manifest
+
+`InstallAsync` resolves the manifest again when it commits, and a fresh install
+consents to the bridge grants that manifest requests. To make sure the install
+consents to what the operator actually reviewed, every `AppDescriptor` - from
+`DescribeAsync` and from the catalogue's `DescribeFromSourceAsync` - carries a
+`ManifestDigest`: the SHA-256, as lower-case hex, of the described manifest and the
+provenance its source vouched for. Pass it back as
+`AppInstallRequest.ExpectedManifestDigest`. The install or upgrade is then refused
+with an `InvalidOperationException`, before anything is recorded, when the manifest
+resolved at commit has a different digest - for example because a dynamic source
+added a bridge operation, a role or a tree in between. A malformed digest is an
+`ArgumentException`.
+
+A request without a digest is not pinned, which is how a client written before the
+pin behaves. That is safe with the sources that ship today, which serve fixed
+manifests, but a client that reviews before it installs should always send the
+digest. The [Explorer](../lattice.explorer/README.md) does. The digest is computed
+by the server for the server, so an install whose review and commit straddle a
+server upgrade can be refused; review it again.
 
 ### Re-binding roles
 

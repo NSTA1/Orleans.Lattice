@@ -88,9 +88,10 @@ public partial class ReshardIntegrationTests
         // Keep writing - overwrites and new keys - until the shrink has fully
         // finished, so the writes overlap every fold's drain, freeze, swap,
         // finalise and retirement rather than landing before the first tick.
-        // The drive waits for the writer to finish a further full round after
-        // every pass, so the overlap is guaranteed rather than left to how the
-        // writer's thread happens to be scheduled.
+        // The drive waits for the writer to finish a full round before the
+        // first pass and a further full round after every pass, so the overlap
+        // is guaranteed rather than left to how the writer's thread happens to
+        // be scheduled - including for a shrink that converges in one pass.
         using var stop = new CancellationTokenSource();
         var completedRounds = 0;
         var writer = Task.Run(async () =>
@@ -123,13 +124,15 @@ public partial class ReshardIntegrationTests
             }
         }
 
-        await DriveShrinkToCompletionAsync(treeId, AwaitAnotherWriterRoundAsync);
+        await AwaitAnotherWriterRoundAsync();
+        var passes = await DriveShrinkToCompletionAsync(treeId, AwaitAnotherWriterRoundAsync);
         await tree.SetAsync("after-drive", [1]);
         stop.Cancel();
         var live = await writer;
         var rounds = Volatile.Read(ref completedRounds);
 
-        Assert.That(rounds, Is.GreaterThan(1), "precondition: the writer must have overlapped several fold ticks");
+        Assert.That(passes, Is.GreaterThanOrEqualTo(1), "precondition: the shrink must have needed at least one pass");
+        Assert.That(rounds, Is.GreaterThan(passes), "precondition: the writer must have completed a round before the first pass and after every pass");
         foreach (var (key, value) in live) expected[key] = value;
         expected["after-drive"] = [1];
         await AssertAllPresentAsync(tree, expected, "after a shrink with overlapping writes");
@@ -227,13 +230,14 @@ public partial class ReshardIntegrationTests
     /// Drives the reshard coordinator and every consolidation it starts to
     /// completion synchronously, for the same reason
     /// <see cref="DriveReshardToCompletionAsync"/> drives split coordinators.
+    /// Returns the number of passes it ran before the coordinator went idle.
     /// </summary>
-    private async Task DriveShrinkToCompletionAsync(string treeId, Func<Task>? afterEachPass = null)
+    private async Task<int> DriveShrinkToCompletionAsync(string treeId, Func<Task>? afterEachPass = null)
     {
         var reshard = _cluster.GrainFactory.GetGrain<ITreeReshardGrain>(treeId);
         for (int i = 0; i < 200; i++)
         {
-            if (await reshard.IsIdleAsync()) return;
+            if (await reshard.IsIdleAsync()) return i;
             await reshard.RunReshardPassAsync();
             for (int idx = 0; idx < FourShardClusterFixture.TestShardCount; idx++)
             {
@@ -247,6 +251,7 @@ public partial class ReshardIntegrationTests
         }
 
         Assert.Fail("Shrink did not converge.");
+        return -1;
     }
 
     private async Task<List<GrainId>> CollectLeafChainAsync(string treeId, int shardIndex)

@@ -31,6 +31,7 @@ internal static class AppsFailureMessages
         ("(Ambiguous)", "It is offered by more than one source. Install it from the source you choose."),
         ("offered by more than one app source", "It is offered by more than one source. Install it from the source you choose."),
         ("already installed at that version", "That version is already installed. Update its consent instead, or uninstall it first."),
+        ("no longer matches the manifest that was reviewed", "Its source changed it after you reviewed it, so nothing was changed. Review it again."),
     ];
 
     /// <summary>The sentence for a failed call.</summary>

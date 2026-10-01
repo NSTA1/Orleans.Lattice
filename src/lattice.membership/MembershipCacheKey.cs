@@ -144,9 +144,9 @@ internal readonly record struct MembershipCacheKey
         var canonical = maxBytes <= StackCanonicalBytes
             ? stackalloc byte[StackCanonicalBytes]
             : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        var written = 0;
         try
         {
-            var written = 0;
             foreach (var pair in pairs)
             {
                 written += WriteLengthPrefix(canonical[written..], pair.Key.Length);
@@ -165,7 +165,13 @@ internal readonly record struct MembershipCacheKey
             {
                 // Caller-supplied metadata values may be sensitive, so the buffer
                 // is cleared rather than handed back to the pool still populated.
-                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+                // Only the prefix this call wrote is cleared: clearArray: true
+                // memsets the whole rounded-up rental, and maxBytes is a sum of
+                // GetMaxByteCount (3n+3 per part) that Rent then rounds up to a
+                // power of two, so the over-clear is several times the bytes
+                // actually written and dominates the hash itself on long inputs.
+                rented.AsSpan(0, written).Clear();
+                ArrayPool<byte>.Shared.Return(rented);
             }
         }
     }

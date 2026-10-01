@@ -31,6 +31,14 @@ Density changes row and control heights without changing the address or the data
 
 When comfortable is selected the density attribute is removed, so the default CSS tokens apply.
 
+## Fields and toolbars
+
+Every field - a text box, a name box, a picker, a multi-value picker, a select or a search box - is a visible label row over a control box. The label row is one line, and the control box is one control height (44px comfortable, 28px compact) with the same border, fill and padding in Paper and Board, so fields of every kind line up beside each other. A search box's label is visible like any other and is its accessible name.
+
+A toolbar lines its controls up on their control boxes. In a toolbar that holds a labelled field, a button, a segmented choice, a switch, a checkbox or a count starts one label row down, on the control row; a field's hint or error grows the field downwards without moving a control. Below 768px a toolbar stacks one item per line. A placeholder is always prose in the interface face, even in a field whose value is an id in the monospace face.
+
+DESIGN.md (Fields and toolbars) holds the rule and names the tests that enforce it.
+
 ## First paint and document attributes
 
 A classic blocking script in the document head reads the small appearance record `orleans.lattice.explorer.appearance.v2` from local storage. It accepts only shipped names, resolves System against the operating system, and sets these attributes before the first paint:

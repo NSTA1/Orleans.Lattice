@@ -84,10 +84,6 @@
    2. Toolbar, status line, notes and actions
    ========================================================================== */
 
-.lt-replication-toolbar {
-  align-items: flex-end;
-}
-
 .lt-replication-status {
   display: flex;
   flex-wrap: wrap;

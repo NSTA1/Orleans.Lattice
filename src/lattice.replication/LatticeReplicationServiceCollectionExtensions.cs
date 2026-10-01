@@ -147,7 +147,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
                 sp.GetRequiredService<IGrainFactory>(),
                 sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
                 sp.GetRequiredService<ILogger<DeadLetterTrackingReplicationApplier>>(),
-                sp.GetService<ReplicationPeerStats>()));
+                sp.GetService<ReplicationPeerStats>(),
+                sp.GetService<ILatticeReplicationContext>()));
         builder.Services.TryAddSingleton<ILatticeReplicationDeadLetters>(sp =>
             new LatticeReplicationDeadLetters(
                 sp.GetRequiredService<IGrainFactory>(),

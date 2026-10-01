@@ -160,7 +160,6 @@
 }
 
 .lt-tenancy-add {
-  align-items: flex-end;
   margin: 0 0 var(--lt-space-3);
 }
 
@@ -187,6 +186,20 @@
   margin: var(--lt-space-1) 0 0;
   color: var(--lt-ink-2);
   font-size: var(--lt-text-sm);
+}
+
+/* A region part-way along its add or remove path: the step it has reached, on a short bar. */
+.lt-tenancy-step {
+  max-width: 20rem;
+  margin: var(--lt-space-2) 0 0;
+}
+
+.lt-tenancy-following {
+  margin: var(--lt-space-2) 0 0;
+}
+
+.lt-tenancy-still-unserved {
+  margin: var(--lt-space-2) 0 0;
 }
 
 .lt-tenancy-warning {

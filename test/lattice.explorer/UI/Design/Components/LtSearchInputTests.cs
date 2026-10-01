@@ -13,8 +13,10 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
 public sealed class LtSearchInputTests : ShellDesignTestContext
 {
     [Test]
-    public void The_label_is_present_for_assistive_technology_and_bound_to_the_input()
+    public void The_label_is_visible_in_the_label_row_and_bound_to_the_input()
     {
+        // #4120: a hidden label left the search box without the label row every other
+        // field draws, so it sat higher than the fields beside it in a toolbar.
         var cut = Render<LtSearchInput>(p => p.Add(x => x.Label, "Filter trees"));
         var label = cut.Find("label");
         var input = cut.Find("input");
@@ -22,7 +24,7 @@ public sealed class LtSearchInputTests : ShellDesignTestContext
         Assert.Multiple(() =>
         {
             Assert.That(label.TextContent, Is.EqualTo("Filter trees"));
-            Assert.That(label.ClassList, Does.Contain("lt-visually-hidden"));
+            Assert.That(label.ClassList, Does.Contain("lt-field__label").And.Not.Contain("lt-visually-hidden"));
             Assert.That(label.GetAttribute("for"), Is.EqualTo(input.Id));
             Assert.That(input.GetAttribute("type"), Is.EqualTo("search"));
         });

@@ -4,7 +4,7 @@
 <p class="lt-shell-page-lede">Audit which storage provider backs each write-ahead-log partition of a tree, then plan a move, execute it, and reclaim the source it leaves behind.</p>
 
 <div class="lt-toolbar">
-    <form class="lt-cluster-inline-form" @onsubmit="Audit" aria-label="Choose a tree">
+    <form class="lt-control-row" @onsubmit="Audit" aria-label="Choose a tree">
         <LtComboBox @ref="_treeBox" Label="Tree" @bind-Value="_tree" Error="@_treeError" Source="@Suggestions.ClusterTrees" Noun="tree" />
         <LtButton Type="LtButtonType.Submit">Audit</LtButton>
     </form>

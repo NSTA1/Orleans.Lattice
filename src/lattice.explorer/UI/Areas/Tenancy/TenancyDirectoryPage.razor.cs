@@ -152,6 +152,7 @@ public partial class TenancyDirectoryPage
             {
                 var status = await selfService.GetTenantAsync(row.TenantId).ConfigureAwait(true);
                 row.Regions = TenancyFormat.ResidentRegions(status.Regions);
+                row.NoRegionText = TenancyFormat.HasResidency(status.Regions) ? TenancyFormat.NoResidentRegion : TenancyFormat.NoResidency;
             }
 
             if (Catalog.Quota is { } quota)
@@ -184,7 +185,7 @@ public partial class TenancyDirectoryPage
     };
 
     private static string RegionsLabel(TenancyDirectoryRow row, IReadOnlyList<string> regions) => regions.Count == 0
-        ? $"{TenancyFormat.NoResidency}; open the regions of tenant {row.TenantId}"
+        ? $"{row.NoRegionText}; open the regions of tenant {row.TenantId}"
         : $"Resident in {TenancyFormat.RegionList(regions)}; open the regions of tenant {row.TenantId}";
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();

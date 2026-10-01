@@ -217,4 +217,160 @@ public sealed class WalMaterialiserPinRoutingTests
             WalMaterialiserPinRouting.TreeNameFromKey("tree~s1~s2"),
             Is.EqualTo("tree~s1"),
             "the suffix is appended, so an earlier occurrence belongs to the tree name");
+
+    // ----------------------------------------------------------------------
+    // Degenerate and boundary inputs. Every arm below is one the WAL GC can
+    // reach from stored state rather than from a call site under this file's
+    // control: a key read back from storage can be absent or malformed, and a
+    // consumer id is an arbitrary string. They were all cold.
+    // ----------------------------------------------------------------------
+
+    [TestCase(1)]
+    [TestCase(0)]
+    [TestCase(-3)]
+    public void AuthoritativeKeyIndex_is_zero_when_there_is_only_one_key(int shardCount)
+        => Assert.That(
+            WalMaterialiserPinRouting.AuthoritativeKeyIndex("consumer-a", shardCount),
+            Is.Zero,
+            "an unsharded tree enumerates only the legacy key, so index 0 is the only valid answer");
+
+    [Test]
+    public void AuthoritativeKeyIndex_agrees_with_EnumerateReadKeys_when_unsharded()
+    {
+        // The same coupling the sharded case already pins, asserted on the arm
+        // that returns the constant: the index must address the key a write
+        // would actually land on, or the WAL GC classifies a live pin as a
+        // stranded duplicate.
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(Tree, 1);
+        var index = WalMaterialiserPinRouting.AuthoritativeKeyIndex("consumer-a", 1);
+
+        Assert.That(keys[index], Is.EqualTo(WalMaterialiserPinRouting.ShardKey(Tree, "consumer-a", 1)));
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    public void TreeNameFromKey_is_empty_for_an_absent_key(string? key)
+        => Assert.That(
+            WalMaterialiserPinRouting.TreeNameFromKey(key),
+            Is.Empty,
+            "a null or empty row key must degrade to the empty tree name rather than throw inside a GC sweep");
+
+    [TestCase(null)]
+    [TestCase("")]
+    public void ShardIndexFromKey_is_zero_for_an_absent_key(string? key)
+        => Assert.That(
+            WalMaterialiserPinRouting.ShardIndexFromKey(key),
+            Is.Zero,
+            "per-shard attribution must fall back to shard 0 rather than throw on a malformed key");
+
+    [TestCase("tree-1~s3", 3)]
+    [TestCase("tree-1#s3", 3)]
+    [TestCase("tree-1~s0", 0)]
+    [TestCase("tree-1~s12", 12)]
+    [TestCase("tree-1", 0)]
+    [TestCase("tree~sname", 0)]
+    public void ShardIndexFromKey_parses_either_separator(string key, int expected)
+        => Assert.That(WalMaterialiserPinRouting.ShardIndexFromKey(key), Is.EqualTo(expected));
+
+    [TestCase("tree-1~s")]
+    [TestCase("tree-1#s")]
+    public void A_key_whose_shard_suffix_is_empty_is_not_a_sharded_key(string key)
+    {
+        // The separator is present but nothing follows it. An empty span is not
+        // "all digits", so the whole string is the tree name and the ordinal is
+        // zero - the alternative would silently attribute the pin to shard 0 of
+        // a truncated tree.
+        Assert.That(WalMaterialiserPinRouting.TreeNameFromKey(key), Is.EqualTo(key));
+        Assert.That(WalMaterialiserPinRouting.ShardIndexFromKey(key), Is.Zero);
+    }
+
+    [Test]
+    public void A_key_whose_shard_suffix_is_only_partly_numeric_is_not_a_sharded_key()
+    {
+        Assert.That(WalMaterialiserPinRouting.TreeNameFromKey("tree-1~s1a"), Is.EqualTo("tree-1~s1a"));
+        Assert.That(WalMaterialiserPinRouting.TreeNameFromKey("tree-1~sa1"), Is.EqualTo("tree-1~sa1"));
+    }
+
+    // ----------------------------------------------------------------------
+    // StableHash transcode paths. The hash picks one of three bodies by the
+    // string's UTF-8 size, and only the short stack path had ever run. The
+    // other two produce the routing for any consumer id past ~84 characters,
+    // which is the normal shape here ("_lattice_materialiser_<tree>_<leaf>"),
+    // so a divergence between them would silently re-route live pins.
+    // ----------------------------------------------------------------------
+
+    [Test]
+    public void StableHash_of_the_empty_string_is_the_FNV_offset_basis()
+        => Assert.That(
+            WalMaterialiserPinRouting.StableHash(string.Empty),
+            Is.EqualTo(2166136261u),
+            "an empty value must fold nothing and return the basis unchanged");
+
+    [Test]
+    public void StableHash_is_identical_across_all_three_transcode_paths()
+    {
+        // GetMaxByteCount(n) is 3n + 3, so an ASCII string of 85 characters is
+        // the first that cannot use the tight stack buffer while its true byte
+        // count still fits the 256-byte budget; past 256 characters it must
+        // rent. Folding the same bytes through three different buffers has to
+        // give the same hash, because the shard a consumer routes to is that
+        // hash modulo the shard count.
+        foreach (var length in new[] { 1, 84, 85, 100, 256, 257, 1024 })
+        {
+            var value = new string('a', length);
+            var expected = ReferenceFnv1a(value);
+
+            Assert.That(
+                WalMaterialiserPinRouting.StableHash(value),
+                Is.EqualTo(expected),
+                $"the transcode path chosen for a {length}-character value must not change the hash");
+        }
+    }
+
+    [Test]
+    public void StableHash_is_stable_for_a_long_multibyte_consumer_id()
+    {
+        // A multibyte string reaches the rented path at a quarter of the
+        // character count an ASCII one does, so it exercises the same body with
+        // a byte count that is not the character count.
+        var value = string.Concat(Enumerable.Repeat("\u00e9\u00e8\u00ea", 120));
+
+        Assert.That(value.Length, Is.EqualTo(360));
+        Assert.That(
+            WalMaterialiserPinRouting.StableHash(value),
+            Is.EqualTo(ReferenceFnv1a(value)));
+    }
+
+    [Test]
+    public void A_long_consumer_id_still_routes_into_range_and_stably()
+    {
+        const int shards = 8;
+        var consumer = "_lattice_materialiser_" + new string('t', 300) + "_leaf-7";
+
+        var first = WalMaterialiserPinRouting.ShardKey(Tree, consumer, shards);
+        var second = WalMaterialiserPinRouting.ShardKey(Tree, consumer, shards);
+
+        Assert.That(first, Is.EqualTo(second));
+        Assert.That(
+            WalMaterialiserPinRouting.EnumerateReadKeys(Tree, shards),
+            Does.Contain(first));
+    }
+
+    /// <summary>
+    /// An independent FNV-1a 32-bit fold over the value's UTF-8 bytes, written
+    /// without any of the buffer selection the subject performs, so the three
+    /// paths are compared against the definition rather than against each
+    /// other.
+    /// </summary>
+    private static uint ReferenceFnv1a(string value)
+    {
+        var hash = 2166136261u;
+        foreach (var b in System.Text.Encoding.UTF8.GetBytes(value))
+        {
+            hash ^= b;
+            hash *= 16777619u;
+        }
+
+        return hash;
+    }
 }
