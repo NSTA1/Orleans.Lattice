@@ -165,10 +165,13 @@
   min-width: 0;
 }
 
+/* The label row: one line at one height, so the control box below it sits
+   --lt-op-label-row below the field's top in every field primitive. */
 .lt-field__label {
   color: var(--lt-ink);
   font-size: var(--lt-text-sm);
   font-weight: var(--lt-weight-label);
+  line-height: var(--lt-op-label-line-height);
 }
 
 .lt-field__hint {
@@ -210,9 +213,14 @@
   font-size: var(--lt-text-md);
 }
 
+/* A placeholder is a hint, never a value, so it is always prose in the UI face -
+   even in a field whose value is an id drawn in mono. */
 .lt-input::placeholder {
   color: var(--lt-ink-3);
   opacity: 1;
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+  font-variant-ligatures: normal;
 }
 
 .lt-input--mono {
@@ -236,7 +244,13 @@
   background: var(--lt-surface);
 }
 
+/* A search field is a field like any other - a visible label row over its
+   control box - whose control box also holds an optional key hint. */
 .lt-search {
+  min-width: 0;
+}
+
+.lt-search__control {
   position: relative;
   display: flex;
   align-items: center;
@@ -318,9 +332,20 @@
   cursor: pointer;
 }
 
-.lt-check__hint,
-.lt-switch__hint {
+.lt-check__hint {
   grid-column: 2;
+}
+
+/* A switch and its hint are one item; the hint sits under the switch's label. */
+.lt-switch-field {
+  display: inline-grid;
+  justify-items: start;
+  gap: var(--lt-space-1);
+  min-width: 0;
+}
+
+.lt-switch__hint {
+  padding-inline-start: calc(2.125rem + var(--lt-space-2));
 }
 
 .lt-switch {
@@ -435,14 +460,18 @@
 
 /* A multi-value field is one control: the chosen values and the input share a
    single sunken frame, the values set off by hairlines, the input taking the
-   rest of the row. The frame, not the borderless input, shows an error. */
+   rest of the row. The frame, not the borderless input, shows an error. The
+   frame is one control height, like every other field's control box: the input
+   inside it is a full control height too and reaches over the frame's border,
+   so it stays a whole touch target without making the frame taller. */
 .lt-combobox__control--tokens {
+  --lt-frame-border: 1px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   box-sizing: border-box;
-  min-height: calc(var(--lt-op-control-height) + 2px);
-  border: 1px solid var(--lt-op-control-border);
+  min-height: var(--lt-op-control-height);
+  border: var(--lt-frame-border) solid var(--lt-op-control-border);
   border-radius: var(--lt-radius-md);
   background: var(--lt-surface-sunken);
 }
@@ -452,12 +481,13 @@
 }
 
 .lt-combobox__control--tokens > .lt-combobox__chevron {
-  top: calc(var(--lt-op-control-height) / 2 + 1px);
+  top: calc(var(--lt-op-control-height) / 2 - var(--lt-frame-border));
 }
 
 .lt-combobox__control--tokens > .lt-input {
   flex: 1 1 8rem;
   width: auto;
+  margin-block: calc(-1 * var(--lt-frame-border));
   padding-inline-end: 0.65rem;
   border: 0;
   background: transparent;
@@ -468,8 +498,15 @@
 }
 
 .lt-combobox__control--invalid {
+  --lt-frame-border: 1.5px;
   border-color: var(--lt-danger);
-  border-width: 1.5px;
+  border-width: var(--lt-frame-border);
+}
+
+/* Chosen values, like the input, reach over the frame's border so the frame
+   keeps one control height while they are full touch targets. */
+.lt-combobox__control--tokens > .lt-combobox__chips {
+  margin-block: calc(-1 * var(--lt-frame-border));
 }
 
 .lt-combobox__list {

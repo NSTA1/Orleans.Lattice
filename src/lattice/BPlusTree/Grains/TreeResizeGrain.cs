@@ -985,8 +985,17 @@ internal sealed class TreeResizeGrain(
         };
         await registry.UpdateAsync(TreeId, entry);
 
-        // Set alias to redirect to the new physical tree.
-        await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
+        // Set alias to redirect to the new physical tree. System origin, as
+        // backup's shadow cutover does: the swap is library maintenance already
+        // authorized when the resize was accepted, and the phase timer that
+        // usually drives it carries no request context, so the registry's access
+        // gate would otherwise judge it as an anonymous user-origin alias change
+        // and refuse it on every tick (issue 4128). The ownership guard still
+        // runs: it binds system origin too.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
+        }
 
         var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Reject;

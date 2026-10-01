@@ -108,6 +108,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. On a host with an access gate, a resize swap driven by its own phase timer runs as system origin. It is no longer refused as an anonymous alias change on every tick. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
+
 - **Schema - Remediation status answers while a run is in progress.** Reading a tree's remediation or migration status no longer waits for a running remediate or migrate to finish, so the Explorer's Schema operation page shows the live phase and count instead of timing out. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
 
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
@@ -129,6 +131,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - Leaving a page no longer marks the next one not found.** A page now accepts only an address its own routes answer, so the page being left can no longer misread the next page's address as not found. The default tenant's Tenancy root is now the tenant directory. ([#3948](https://github.com/NSTA1/Orleans.Lattice/issues/3948)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Every call asserts the page's tenant.** Each cluster call carries the active tenant, a switch rebuilds the page and forgets what was read, a signed-in caller whose tenant is not established sees no tenant-scoped page, and an operator can reach the reserved default tenant. ([#3896](https://github.com/NSTA1/Orleans.Lattice/issues/3896)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Toolbar controls line up.** Every toolbar lines its fields, pickers, search boxes and buttons up on one control row at every width, density and theme. A search box shows its label, every field is one height, and a placeholder is in the interface face. ([#4120](https://github.com/NSTA1/Orleans.Lattice/issues/4120)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Apps - An app role is held by binding.** A member of a bound group holds the role; the caller's other rights never add one, and the access gate is asked only to take it away, so a deny on a bound member withholds the role in the workspace and the app's MCP tools and is enforced on the bridge. ([#3902](https://github.com/NSTA1/Orleans.Lattice/issues/3902)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Mcp.Apps`)
 
