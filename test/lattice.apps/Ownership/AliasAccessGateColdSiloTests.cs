@@ -2,7 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Apps.Tests;
@@ -89,6 +91,29 @@ public sealed class AliasAccessGateColdSiloTests
 
         Assert.That(rules, Is.Empty);
         Assert.That(await registry.ExistsAsync(PolicyTree), Is.False);
+    }
+
+    [Test]
+    public async Task A_resize_driven_by_its_own_phase_timer_swaps_on_an_auth_host()
+    {
+        // The coordinator's phase timer carries no request context, so a swap it drives
+        // reaches SetAliasAsync without a system-origin scope. The swap is library-internal
+        // maintenance already authorized when the resize was accepted, so the access gate
+        // must not judge it as an anonymous user-origin alias change.
+        var treeId = $"timer-resized-{Guid.NewGuid():N}";
+        var grains = Silo.GetRequiredService<IGrainFactory>();
+        using (LatticeSystemOrigin.Enter())
+        {
+            await grains.GetGrain<ILattice>(treeId).SetAsync("k", [1]);
+            await grains.GetGrain<ITreeResizeGrain>(treeId).ResizeAsync(64, 64);
+        }
+
+        var registry = _cluster.Client.GetLatticeRegistry();
+        await TestPoll.UntilAsync(
+            async () => (await registry.ResolveAsync(treeId)).StartsWith(treeId + "/resized/", StringComparison.Ordinal),
+            "the timer-driven resize to swap its alias",
+            TimeSpan.FromSeconds(60),
+            TimeSpan.FromMilliseconds(250));
     }
 
     private IServiceProvider Silo => _cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;

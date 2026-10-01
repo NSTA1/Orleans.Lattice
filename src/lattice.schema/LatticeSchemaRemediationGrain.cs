@@ -515,8 +515,15 @@ internal sealed class LatticeSchemaRemediationGrain(
             policyProvider!.Invalidate(TreeId);
         }
 
-        // Repoint the logical tree to the remediated destination.
-        await registry.SetAliasAsync(TreeId, destinationPhysical);
+        // Repoint the logical tree to the remediated destination. System origin,
+        // as the resize swap and backup's shadow cutover do: the remediation was
+        // authorized when it was accepted, and a timer-driven phase carries no
+        // request context for the registry's access gate to judge (issue 4128).
+        // The ownership guard still runs.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await registry.SetAliasAsync(TreeId, destinationPhysical);
+        }
 
         // Arm every source shard to redirect logical-alias-routed traffic onto the
         // destination. Without this, a stale stateless-worker routing activation
