@@ -937,11 +937,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
-    /// Removes tombstones whose wall-clock age exceeds <paramref name="gracePeriod"/>.
-    /// Returns the number of tombstones removed. Tracks a <c>LastCompactionVersion</c>
-    /// to skip redundant scans when no writes have occurred since the last compaction.
+    /// Removes tombstones whose wall-clock age exceeds <paramref name="gracePeriod"/>,
+    /// along with live entries whose TTL expired that long ago. Tracks a
+    /// <c>LastCompactionVersion</c> to skip redundant scans when no writes have
+    /// occurred since the last compaction.
+    /// <para>
+    /// <b>The call is bounded and may return with work outstanding.</b> It
+    /// spends a wall-clock budget and yields when that budget is spent, so one
+    /// call returns comfortably inside the Orleans request timeout however many
+    /// tombstones the leaf holds - the overrun issue 4135 reports. The caller
+    /// must therefore read
+    /// <see cref="Orleans.Lattice.BPlusTree.LeafCompactionResult.Completed"/>
+    /// and keep the leaf nominated for a later pass when it is
+    /// <see langword="false"/>; treating every successful return as a drained
+    /// leaf would drop it from the shard-root dirty set with condemned entries
+    /// still in place.
+    /// </para>
+    /// <para>
+    /// Truncation loses no work. Each reaped entry is committed to the WAL
+    /// before it leaves the cache, so a later pass re-scans but finds strictly
+    /// less, and the leaf drains across however many passes it takes.
+    /// </para>
     /// </summary>
-    Task<int> CompactTombstonesAsync(TimeSpan gracePeriod);
+    Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod);
 
     /// <summary>
     /// Returns all live (non-tombstoned) key-value pairs in this leaf.

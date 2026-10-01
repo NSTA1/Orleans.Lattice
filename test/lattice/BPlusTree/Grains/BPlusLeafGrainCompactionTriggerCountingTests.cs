@@ -171,7 +171,7 @@ public sealed class BPlusLeafGrainCompactionTriggerCountingTests
             // calls it - the precise defect this epic exists to fix, and the one
             // ReflectionSeamAuditTests guards (issue #2735).
             var reaped = await grain.CompactTombstonesAsync(ReapNothing);
-            Assert.That(reaped, Is.Zero, "the grace period must hold every tombstone back");
+            Assert.That(reaped.EntriesRemoved, Is.Zero, "the grace period must hold every tombstone back");
         }
 
         var expectedRatio = (double)ExpectedTombstones / RowCount;

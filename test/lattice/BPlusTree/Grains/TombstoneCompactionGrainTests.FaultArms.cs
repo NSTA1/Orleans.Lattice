@@ -151,7 +151,7 @@ public partial class TombstoneCompactionGrainTests
         {
             var leaf = Substitute.For<IBPlusLeafGrain>();
             grainFactory.GetGrain<IBPlusLeafGrain>(id).Returns(leaf);
-            leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
+            leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             leaf.GetTreeIdAsync().Returns(Task.FromResult<string?>(TreeId));
         }
 
@@ -370,7 +370,7 @@ public partial class TombstoneCompactionGrainTests
         var shardRoot = SetupShardRoot(h.GrainFactory, 0, leafId);
         h.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId)
             .CompactTombstonesAsync(Arg.Any<TimeSpan>())
-            .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
+            .Returns<LeafCompactionResult>(_ => throw new InvalidOperationException("leaf unavailable"));
         shardRoot.RetainDirtyLeafAsync(Arg.Any<GrainId>(), Arg.Any<HybridLogicalClock>())
             .Returns(_ => Task.FromException(
                 new InvalidOperationException("shard root unavailable")));
@@ -391,7 +391,7 @@ public partial class TombstoneCompactionGrainTests
         SetupShardRoot(harness.GrainFactory, shardIndex, leafId);
         var leaf = harness.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>())
-            .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
+            .Returns<LeafCompactionResult>(_ => throw new InvalidOperationException("leaf unavailable"));
         return leaf;
     }
 
@@ -547,7 +547,7 @@ public partial class TombstoneCompactionGrainTests
         var shardRoot = SetupShardRoot(h.GrainFactory, 0, leafId);
         var leaf = h.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>())
-            .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
+            .Returns<LeafCompactionResult>(_ => throw new InvalidOperationException("leaf unavailable"));
 
         var skipped = CaptureSkippedLeafTags();
 
@@ -575,7 +575,7 @@ public partial class TombstoneCompactionGrainTests
         var shardRoot = SetupShardRoot(h.GrainFactory, 0, leafId);
         var leaf = h.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>())
-            .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
+            .Returns<LeafCompactionResult>(_ => throw new InvalidOperationException("leaf unavailable"));
 
         using var skipped = CaptureSkippedLeafTags();
 

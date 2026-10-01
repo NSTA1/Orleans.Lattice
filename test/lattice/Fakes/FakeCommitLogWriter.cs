@@ -45,16 +45,28 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
     /// </summary>
     public Exception? ThrowOnAppend { get; set; }
 
+    /// <summary>
+    /// When positive, every <see cref="AppendAsync"/> call waits this long
+    /// before recording the record, so a test can give a per-entry WAL append a
+    /// realistic cost. The bounded tombstone-compaction turn spends a
+    /// wall-clock budget between appends (issue 4135), and a fake that returns
+    /// a completed task instantly can never make that budget fire - it would
+    /// prove the truncation branch only in the degenerate already-expired case.
+    /// </summary>
+    public TimeSpan DelayPerAppend { get; set; } = TimeSpan.Zero;
+
     /// <inheritdoc />
-    public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
+    public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
         if (ThrowOnAppend is { } ex)
         {
             ThrowOnAppend = null;
             throw ex;
         }
+        if (DelayPerAppend > TimeSpan.Zero)
+            await Task.Delay(DelayPerAppend, cancellationToken);
         Appended.Add(entry);
-        return Task.FromResult((long)(Appended.Count - 1));
+        return Appended.Count - 1;
     }
 
     /// <summary>
