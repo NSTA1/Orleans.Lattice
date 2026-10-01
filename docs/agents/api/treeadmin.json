@@ -5872,6 +5872,13 @@
       "retryable": false,
       "meaning": "The registered ITreeOwnershipGuard refused an alias assignment; the status message carries the guard's caller-safe reason.",
       "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "unimplemented",
+      "grpc_status": "Unimplemented",
+      "retryable": false,
+      "meaning": "Server registered the tree-admin facade but not ILatticeTreeAdminOperations.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#LatticeTreeAdminGrpcService"
     }
   ]
 }

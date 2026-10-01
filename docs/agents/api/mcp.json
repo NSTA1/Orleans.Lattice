@@ -7541,17 +7541,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Repeating a cancel is a no-op.",
+        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
         "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "A cancel request is recorded once.",
+        "basis": "Reads do not mutate; a cancel request is recorded once.",
         "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
       },
       "concurrency": {
-        "rule": "Needs the grant that starting the operation needed.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Cancelling needs the grant that starting the operation needed; the work stops at its next progress report, and a WAL move past its flip is not undone.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#CancelOperationAsync",
@@ -7606,17 +7606,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Read-only; safe to repeat.",
-        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Reads do not mutate operation state.",
-        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+        "basis": "Reads do not mutate; a cancel request is recorded once.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
       },
       "concurrency": {
-        "rule": "Lists newest-first only the operations the caller may see.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Lists newest-first only the treeadmin. operations visible to the caller.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#ListOperationsAsync",
@@ -7665,17 +7665,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Read-only; safe to repeat.",
+        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
         "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Reads do not mutate operation state.",
+        "basis": "Reads do not mutate; a cancel request is recorded once.",
         "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
       },
       "concurrency": {
-        "rule": "Scoped fail-closed to visible treeadmin. operations; not found returns found=false.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Reads are scoped fail-closed to treeadmin. kinds, the caller tenant and trees the caller may read; an invisible operation reads as null.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#GetOperationStatusAsync",
@@ -7805,17 +7805,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry with the same operationId; a duplicate start returns the existing handle with created=false.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartOrphanedLeavesAuditAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "The optional operationId is the tracked operation idempotency key.",
+        "basis": "The optional operationId (TrackingOperationId on the wire) is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
       },
       "concurrency": {
-        "rule": "Starts the work in the background on the accepting silo and returns at once; poll lattice_treeadmin_operation_status.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Authorized as whole-tree Read; the operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#StartOrphanedLeavesAuditAsync",
@@ -7935,17 +7935,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry with the same operationId; a duplicate start returns the existing handle with created=false.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartOrphanedLeavesRepairAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "The optional operationId is the tracked operation idempotency key.",
+        "basis": "The optional operationId (TrackingOperationId on the wire) is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
       },
       "concurrency": {
-        "rule": "Starts the work in the background on the accepting silo and returns at once; poll lattice_treeadmin_operation_status.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Authorized as whole-tree TreeLifecycle; the operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#StartOrphanedLeavesRepairAsync",
@@ -9454,17 +9454,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry with the same operationId; a duplicate start returns the existing handle with created=false.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartTagIndexReconcileAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "The optional operationId is the tracked operation idempotency key.",
+        "basis": "The optional operationId (TrackingOperationId on the wire) is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
       },
       "concurrency": {
-        "rule": "Starts the work in the background on the accepting silo and returns at once; poll lattice_treeadmin_operation_status.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Authorized as whole-tree Admin over the tag-{indexName} tree; the operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#StartTagIndexReconcileAsync",
@@ -11281,17 +11281,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry with the same operationId; a duplicate start returns the existing handle with created=false.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartViewRebuildAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "The optional operationId is the tracked operation idempotency key.",
+        "basis": "The optional operationId (TrackingOperationId on the wire) is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
       },
       "concurrency": {
-        "rule": "Starts the work in the background on the accepting silo and returns at once; poll lattice_treeadmin_operation_status.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Authorized as whole-tree Admin over the view source tree; the operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#StartViewRebuildAsync",
@@ -11410,17 +11410,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry with the same operationId; a duplicate start returns the existing handle with created=false.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartViewReconcileAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "The optional operationId is the tracked operation idempotency key.",
+        "basis": "The optional operationId (TrackingOperationId on the wire) is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
       },
       "concurrency": {
-        "rule": "Starts the work in the background on the accepting silo and returns at once; poll lattice_treeadmin_operation_status.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Authorized as whole-tree Admin over the view source tree; the operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#StartViewReconcileAsync",
@@ -11800,17 +11800,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry with the same operationId; a duplicate start returns the existing handle with created=false.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "The optional operationId is the tracked operation idempotency key.",
+        "basis": "The optional operationId (TrackingOperationId on the wire) is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
       },
       "concurrency": {
-        "rule": "Starts the work in the background on the accepting silo and returns at once; poll lattice_treeadmin_operation_status. Cancelling before the placement flip leaves the source live.",
-        "source": "docs/lattice.api.treeadmin/operations.md"
+        "rule": "Authorized as whole-tree TreeLifecycle; the operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationToolHandlers.cs#StartWalMoveAsync",

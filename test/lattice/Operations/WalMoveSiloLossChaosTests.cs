@@ -119,6 +119,9 @@ public sealed class WalMoveSiloLossChaosTests
         Assert.Multiple(async () =>
         {
             Assert.That(record!.FailureReason, Does.Contain("not supported"), "The loss is named, not a generic failure.");
+            Assert.That(record.Phase, Is.EqualTo(LatticeMaintenanceProgress.Copying), "The failed record keeps the phase it reached.");
+            Assert.That(record.CompletedUnits, Is.EqualTo(4), "The first copied page was banked before the loss.");
+            Assert.That(record.TotalUnits, Is.EqualTo(20));
             Assert.That(await tree.GetAsync("after"), Is.EqualTo(new byte[] { 42 }));
             for (var i = 0; i < 20; i++)
             {
