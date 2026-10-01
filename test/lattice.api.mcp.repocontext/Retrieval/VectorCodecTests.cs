@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
 /// <summary>
@@ -87,4 +90,31 @@ public sealed class VectorCodecTests
     [Test]
     public void SourceId_rejects_a_null_key()
         => Assert.Throws<ArgumentNullException>(() => VectorCodec.SourceId(null!));
-}
+
+    [Test]
+    public void SourceId_is_the_first_sixteen_hex_characters_of_the_sha256_of_the_utf8_key(
+        [Values("", "repo/lattice/file/src/A.cs", "caf\u00e9/\u4e2d\u6587")] string key)
+    {
+        var expected = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key))[..8]);
+
+        Assert.That(VectorCodec.SourceId(key), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SourceId_matches_the_sha256_prefix_across_the_rent_boundary()
+    {
+        for (var length = 0; length <= 600; length++)
+        {
+            var key = new string('k', length);
+            var expected = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key))[..8]);
+
+            Assert.That(
+                VectorCodec.SourceId(key),
+                Is.EqualTo(expected),
+                $"A key of {length} characters must derive the same source identifier.");
+        }
+    }
+
+    [Test]
+    public void SourceId_rejects_null()
+        => Assert.That(() => VectorCodec.SourceId(null!), Throws.ArgumentNullException);}

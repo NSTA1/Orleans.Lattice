@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -97,10 +99,36 @@ internal static class VectorCodec
     internal static string SourceId(string sourceKey)
     {
         ArgumentNullException.ThrowIfNull(sourceKey);
-        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
-        SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sourceKey), hash);
-        return Convert.ToHexStringLower(hash[..8]);
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
+        byte[]? rented = null;
+        var key = maxBytes <= StackKeyBytes
+            ? stackalloc byte[StackKeyBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        var written = 0;
+        try
+        {
+            written = Encoding.UTF8.GetBytes(sourceKey, key);
+            Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(key[..written], hash);
+            return Convert.ToHexStringLower(hash[..8]);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                rented.AsSpan(0, written).Clear();
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
+
+    /// <summary>
+    /// The UTF-8 scratch budget <see cref="SourceId(string)"/> takes on the stack
+    /// before renting. A canonical record key is a bounded repository-relative path,
+    /// so the probe loops that derive a source identifier per source stay inside it
+    /// and rent nothing.
+    /// </summary>
+    private const int StackKeyBytes = 512;
 
     /// <summary>
     /// The number of UTF-8 bytes a <see cref="SourceId(string)"/> occupies (16

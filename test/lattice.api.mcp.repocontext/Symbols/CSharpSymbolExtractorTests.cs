@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Symbols;
 
 /// <summary>
@@ -249,4 +251,58 @@ public sealed class CSharpSymbolExtractorTests
         Assert.That(references, Is.Empty,
             "the type refers only to itself, its own type parameter, a predefined type, and var - none are edges");
     }
-}
+
+    [Test]
+    public void Body_digest_is_the_digest_of_the_declaration_text_as_it_appears_in_the_source()
+    {
+        const string declaration = "public void Run() { }";
+        var source = "namespace Acme;\n\npublic class Gadget\n{\n    " + declaration + "\n}\n";
+
+        var symbols = ByName(_extractor.Extract("src/Gadget.cs", source));
+
+        Assert.That(
+            symbols.Single(s => s.Key.StartsWith("Acme.Gadget.Run", StringComparison.Ordinal)).Value.BodyDigest,
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(declaration))));
+    }
+
+    [Test]
+    public void Body_digest_of_an_enclosing_type_covers_its_whole_declaration()
+    {
+        const string declaration = "public class Gadget\n{\n    public void Run() { }\n}";
+        var source = "namespace Acme;\n\n" + declaration + "\n";
+
+        var symbols = ByName(_extractor.Extract("src/Gadget.cs", source));
+
+        Assert.That(
+            symbols["Acme.Gadget"].BodyDigest,
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(declaration))));
+    }
+
+    [Test]
+    public void Body_digest_is_utf8_correct_when_the_declaration_carries_multibyte_text()
+    {
+        const string declaration = "public string Name { get; } = \"caf\u00e9 \u4e2d\u6587\";";
+        var source = "namespace Acme;\n\npublic class Gadget\n{\n    " + declaration + "\n}\n";
+
+        var symbols = ByName(_extractor.Extract("src/Gadget.cs", source));
+
+        Assert.That(
+            symbols["Acme.Gadget.Name"].BodyDigest,
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(declaration))));
+    }
+
+    [Test]
+    public void Body_digest_is_correct_for_a_declaration_above_the_stack_transcode_budget()
+    {
+        var statements = string.Join(
+            "\n        ",
+            Enumerable.Range(0, 64).Select(i => $"var local{i} = {i};"));
+        var declaration = "public void Run()\n    {\n        " + statements + "\n    }";
+        var source = "namespace Acme;\n\npublic class Gadget\n{\n    " + declaration + "\n}\n";
+
+        var symbols = ByName(_extractor.Extract("src/Gadget.cs", source));
+
+        Assert.That(
+            symbols.Single(s => s.Key.StartsWith("Acme.Gadget.Run", StringComparison.Ordinal)).Value.BodyDigest,
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(declaration))));
+    }}
