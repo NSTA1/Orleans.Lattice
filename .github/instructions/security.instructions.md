@@ -119,6 +119,12 @@ gate will tell you if you forget.
 - The local merge-mode is **always re-resolved locally**; the wire header's mode is
   never trusted. The mode is a per-batch header field, so classify once per run, not
   per entry.
+- Inbound per-peer contact (`ReplicationPeerStats`, the inbound gauges and the
+  peer-status report) is recorded only for a run the gate **admitted**, through the
+  same rule (`ReplicationInboundAdmission`) the gate uses, on every receive path
+  including the dead-letter decorator's single-entry and per-entry branches (#4021).
+  The inbound rows are capped, because an admitted run's origin id is still the
+  peer's own claim; a new pair beyond the cap is not recorded.
 
 ### Identity-directory validation (`src/lattice.membership`, `src/lattice.api.auth`)
 - Administrative membership-reference create paths (`UpsertGroupAsync`,

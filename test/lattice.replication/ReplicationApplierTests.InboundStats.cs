@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Replication.Tests;
 public partial class ReplicationApplierTests
 {
     private static (ReplicationApplier Applier, IReplicationApplyGrain Apply, ReplicationPeerStats Stats)
-        CreateApplierWithStats()
+        CreateApplierWithStats(ILatticeReplicationContext? context = null)
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
@@ -28,8 +28,49 @@ public partial class ReplicationApplierTests
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         var stats = new ReplicationPeerStats();
-        var applier = new ReplicationApplier(factory, Monitor(), crdtShapes: null, logger: null, peerStats: stats, replicationContext: new AnyTreeLwwContext());
+        var applier = new ReplicationApplier(factory, Monitor(), crdtShapes: null, logger: null, peerStats: stats, replicationContext: context ?? new AnyTreeLwwContext());
         return (applier, apply, stats);
+    }
+
+    private static ILatticeReplicationContext NothingEnrolled()
+    {
+        var context = Substitute.For<ILatticeReplicationContext>();
+        context.ResolveMergeMode(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
+        return context;
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_does_not_record_inbound_for_a_run_on_a_tree_not_enrolled_here()
+    {
+        // Regression for #4021: the dropped run used to be counted as a successful contact, so a
+        // peer could plant any tree id it chose in the peer statistics and the peer-status report.
+        var (applier, _, stats) = CreateApplierWithStats(NothingEnrolled());
+
+        var result = await applier.ApplyBatchAsync(new[] { SetEntry("a", Hlc(10)), SetEntry("b", Hlc(11)) });
+
+        Assert.That(result.Applied, Is.False);
+        Assert.That(stats.Snapshot(), Is.Empty);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_single_entry_does_not_record_inbound_for_a_tree_not_enrolled_here()
+    {
+        var (applier, _, stats) = CreateApplierWithStats(NothingEnrolled());
+
+        await applier.ApplyBatchAsync(new[] { SetEntry("a", Hlc(10)) });
+
+        Assert.That(stats.Snapshot(), Is.Empty);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_does_not_record_inbound_for_a_run_whose_wire_mode_the_gate_rejects()
+    {
+        var context = new AnyTreeLwwContext(new Dictionary<string, LatticeMergeMode> { [Tree] = LatticeMergeMode.OrSet });
+        var (applier, _, stats) = CreateApplierWithStats(context);
+
+        await applier.ApplyBatchAsync(new[] { SetEntry("a", Hlc(10)), SetEntry("b", Hlc(11)) });
+
+        Assert.That(stats.Snapshot(), Is.Empty);
     }
 
     [Test]
