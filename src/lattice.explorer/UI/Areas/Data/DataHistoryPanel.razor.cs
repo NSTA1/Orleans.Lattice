@@ -35,7 +35,8 @@ public partial class DataHistoryPanel : IDisposable
     private HybridLogicalClock _earliest;
     private string? _continuation;
     private DateTimeOffset? _at;
-    private string? _atInput;
+    private DateTimeOffset? _atValue;
+    private LtDateTimeInput? _atField;
     private string? _atError;
     private string? _keyInput;
     private bool _newestFirst = true;
@@ -65,8 +66,8 @@ public partial class DataHistoryPanel : IDisposable
         _ => null,
     };
 
-    /// <summary>The As-of field's hint: the form it takes, rather than a sample time that reads as a value.</summary>
-    internal const string AtHint = "As yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
+    /// <summary>The As-of field's hint: how to choose a time, and what an empty field means.</summary>
+    internal const string AtHint = "Pick a time, or type one as yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
 
     /// <summary>What a metadata-only revision holds, said once for the timeline.</summary>
     internal const string MetadataOnlyText = "Revisions marked \"metadata only\" kept only the value's size and hash, so there is no value to show for them.";
@@ -112,7 +113,6 @@ public partial class DataHistoryPanel : IDisposable
 
         StopFollow();
         _keyInput = null;
-        _atInput = atText;
         _atError = null;
         _at = null;
         if (atText is not null)
@@ -127,6 +127,7 @@ public partial class DataHistoryPanel : IDisposable
             }
         }
 
+        _atValue = _at;
         _prefixChanges.Clear();
         if (workspace.Key is not null)
         {
@@ -295,22 +296,28 @@ public partial class DataHistoryPanel : IDisposable
         Build();
     }
 
-    private void ApplyAt()
+    private void SetAt(DateTimeOffset? value)
+    {
+        _atValue = value;
+        _atError = null;
+    }
+
+    private async Task ApplyAt()
     {
         if (Workspace is not { } workspace)
         {
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_atInput))
+        _atError = null;
+        if (_atField is not null && !await _atField.ConfirmAsync())
         {
-            ClearAt();
             return;
         }
 
-        if (!DataFormat.TryParseInstant(_atInput, out var at))
+        if (_atValue is not { } at)
         {
-            _atError = "Write a time such as 2026-09-28T14:00:00Z.";
+            ClearAt();
             return;
         }
 

@@ -22,6 +22,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Type-ahead pickers.** Every field that names an existing tree, region, user or group, tenant or key now suggests matching values as you type. A pick-existing field refuses an unknown value, a suggest field flags an existing one, and a source that cannot list falls back to free text. ([#3949](https://github.com/NSTA1/Orleans.Lattice/issues/3949)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Explorer - Date, time and duration pickers.** History's As of is a calendar and time picker in UTC that shows the zone, your local time and quick picks; backup intervals and the retention window take a whole number per unit instead of free text. ([#4148](https://github.com/NSTA1/Orleans.Lattice/issues/4148)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Admin - Operation progress.** Resize, snapshot and reshard statuses now report the step they have reached and their progress in shards or units, and the Explorer draws it as a progress bar, follows an accepted undo or purge until it finishes, and shows when a deleted tree stops being recoverable. ([#3958](https://github.com/NSTA1/Orleans.Lattice/issues/3958)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tenant switcher.** A platform operator who can reach two or more tenants gets a tenant switcher in the top bar, with a Switch tenant palette command. It lists the reachable tenants, including default, and makes the same operator-gated switch as a t/ address. ([#3962](https://github.com/NSTA1/Orleans.Lattice/issues/3962)) (`Orleans.Lattice.Explorer.UI`)

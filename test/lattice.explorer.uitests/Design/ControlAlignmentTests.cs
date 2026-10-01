@@ -3,8 +3,9 @@ namespace Orleans.Lattice.Explorer.UiTests.Design;
 /// <summary>
 /// Issue #4120: every toolbar lines its controls up on their control boxes, and every
 /// field primitive and button is one control height, measured in Chromium on the
-/// representative toolbars of every area - the Backups catalogue, the Data directory and
-/// a tree's keys and history, Access rules and groups, Cluster trees, WAL and orphans,
+/// representative toolbars of every area - the Backups catalogue and a tree's schedules
+/// (with its duration field), the Data directory and a tree's keys and history (with the
+/// As-of date and time field, #4148), Access rules and groups, Cluster trees, WAL and orphans,
 /// the Apps catalogue, Schema, Replication and Tenancy - at desktop and phone widths, in
 /// Paper and in Board, and in both densities. <see cref="ControlAlignment"/> says what
 /// each measurement catches.

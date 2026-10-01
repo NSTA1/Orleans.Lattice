@@ -34,6 +34,8 @@ internal static class ControlAlignment
         "/data",
         $"/data/{ExplorerWorld.DemoTree}",
         $"/data/{ExplorerWorld.DemoTree}?tab=history",
+        $"/data/{ExplorerWorld.DemoTree}?tab=history&key={HistoryKey}",
+        $"/backups/schedules?tree={ExplorerWorld.DemoTree}",
         "/access",
         "/access/groups",
         "/cluster/trees",
@@ -43,6 +45,9 @@ internal static class ControlAlignment
         "/schema",
         "/replication",
     ];
+
+    /// <summary>A key of the demo tree, whose History tab holds the As-of date and time field (#4148).</summary>
+    public const string HistoryKey = "machine-000";
 
     /// <summary>The pages of the tenancy world whose toolbars are measured.</summary>
     public static IReadOnlyList<string> TenancyPages { get; } =
@@ -194,6 +199,10 @@ internal static class ControlAlignment
             await Shell.GotoAsync(page, world.Head, path);
             await Expect(Shell.Heading(page)).ToBeVisibleAsync();
             await Expect(Shell.Content(page).Locator(".lt-toolbar").First).ToBeVisibleAsync();
+
+            // A form that loads after its toolbar - the History tab's As-of row, a tree's
+            // schedule with its duration field - is measured once it has loaded.
+            await Expect(Shell.Content(page).Locator(".lt-skeleton")).ToHaveCountAsync(0);
             await Shell.WaitForMotionToSettleAsync(page);
 
             var result = await page.EvaluateAsync<Measurement>(Measure, placeholders);
