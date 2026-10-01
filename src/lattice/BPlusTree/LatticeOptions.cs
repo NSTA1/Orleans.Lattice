@@ -4439,6 +4439,78 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultSetManyFanOutBudget = Timeout.InfiniteTimeSpan;
 
     /// <summary>
+    /// Wall-clock budget for the <b>whole</b> batched write, measured from the
+    /// first statement of <c>SetManyAsync</c> and covering every stage it runs:
+    /// <c>gate</c>, <c>route</c>, <c>bucket</c> and <c>fanout</c>.
+    /// <para>
+    /// <b>What it bounds that <see cref="SetManyFanOutBudget"/> cannot.</b> A
+    /// per-stage budget can only ever observe one stage, so it is blind to a
+    /// breach that no single stage causes. Issue #2685 measured exactly that: a
+    /// <c>gate</c> of 4,108.96 ms and a <c>fanout</c> of 26,709.17 ms summing to
+    /// 30,818 ms against a 30,000 ms Orleans response timeout, with neither
+    /// stage breaching alone. A fan-out budget sized for the fan-out - 30
+    /// seconds is the figure #3348 supports - never fires at 26.7 s, so the
+    /// caller is handed an anonymous <see cref="TimeoutException"/> naming
+    /// nothing. This budget is armed against the running total, which is the
+    /// only quantity that moves when stages sum.
+    /// </para>
+    /// <para>
+    /// <b>It composes with <see cref="SetManyFanOutBudget"/> rather than
+    /// replacing it.</b> The fan-out waits for the narrower of the two, so a
+    /// deployment that sets both keeps its per-fan-out ceiling and additionally
+    /// stops the fan-out being granted a fresh full window by a call that has
+    /// already spent most of the caller's patience upstream. Setting only this
+    /// one is the simpler configuration and is what the sizing rule below
+    /// assumes.
+    /// </para>
+    /// <para>
+    /// <b>The default is unbounded, and the bound is opt-in</b>, matching
+    /// <see cref="SetManyFanOutBudget"/>. <see cref="DefaultSetManyEnvelopeBudget"/>
+    /// is <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, which is
+    /// exactly the historical behaviour, so upgrading an existing deployment
+    /// changes nothing and no conforming caller can regress.
+    /// </para>
+    /// <para>
+    /// <b>Sizing rule.</b> Set it <em>below</em> the response timeout that
+    /// governs the call - the silo's <c>SiloMessagingOptions.ResponseTimeout</c>
+    /// for a silo-to-silo write, or the client's
+    /// <c>ClientMessagingOptions.ResponseTimeout</c> for an external one - with
+    /// enough margin that the refusal is built and marshalled back while the
+    /// caller is still listening. Above that deadline it is dead configuration:
+    /// the caller's own RPC deadline expires first and it sees a generic Orleans
+    /// timeout instead of the attributed refusal, which is the very outcome this
+    /// exists to replace. Against the 30-second Orleans default, 25 seconds
+    /// leaves a 5-second margin, mirroring
+    /// <see cref="DefaultMaxScanPageStallHeadroom"/>.
+    /// </para>
+    /// <para>
+    /// <b>This refusal rolls nothing back</b>, on exactly the terms
+    /// <see cref="SetManyFanOutBudget"/> documents. A batch write is not atomic
+    /// across shards; branches that already committed stay committed and
+    /// branches still in flight are left running rather than cancelled, so the
+    /// durable outcome is the one an unbounded wait would have produced. The
+    /// budget changes when the caller learns and what it is told, not what is
+    /// written. Callers needing all-or-nothing semantics use the atomic write
+    /// surface, which is unaffected.
+    /// </para>
+    /// <para>
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> is the default
+    /// and means the envelope is unbounded. The registered options validator
+    /// rejects zero and any other negative value: zero would refuse every batch
+    /// write immediately, which is never a useful configuration and is far more
+    /// likely to be a mistake.
+    /// </para>
+    /// </summary>
+    public TimeSpan SetManyEnvelopeBudget { get; set; } = DefaultSetManyEnvelopeBudget;
+
+    /// <summary>
+    /// Default value for <see cref="SetManyEnvelopeBudget"/>
+    /// (<see cref="System.Threading.Timeout.InfiniteTimeSpan"/> - the batched
+    /// write envelope is unbounded unless a finite budget is configured).
+    /// </summary>
+    public static readonly TimeSpan DefaultSetManyEnvelopeBudget = Timeout.InfiniteTimeSpan;
+
+    /// <summary>
     /// Per-append pacing delay the WAL writer applies on the local admission
     /// path while the per-tree saturation signal reports
     /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>. This is what

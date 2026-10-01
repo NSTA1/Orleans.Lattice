@@ -420,6 +420,8 @@ internal sealed class FileWalShard : IDisposable
         var offsets = ArrayPool<long>.Shared.Rent(take);
         var records = ArrayPool<WalRecord>.Shared.Rent(take);
         var transferred = false;
+        // Hoisted so the finally below can clear exactly the records filled.
+        var count = 0;
         Span<byte> prefix = stackalloc byte[RoutingPrefixBytes];
         PooledPayloadSequence? chunks = null;
         try
@@ -427,7 +429,7 @@ internal sealed class FileWalShard : IDisposable
             while (true)
             {
                 var entry = default(IndexEntry);
-                var count = 0;
+                count = 0;
                 try
                 {
                     for (var i = 0; i < take; i++)
@@ -492,7 +494,12 @@ internal sealed class FileWalShard : IDisposable
             if (!transferred)
             {
                 ArrayPool<long>.Shared.Return(offsets);
-                ArrayPool<WalRecord>.Shared.Return(records, clearArray: true);
+                // Records hold key strings and value arrays, so the filled
+                // prefix is cleared. Only that prefix: clearArray: true memsets
+                // the whole rounded-up rental, and a narrowed read can leave
+                // most of a large rental untouched.
+                records.AsSpan(0, count).Clear();
+                ArrayPool<WalRecord>.Shared.Return(records);
             }
         }
     }

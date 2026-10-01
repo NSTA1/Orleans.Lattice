@@ -62,6 +62,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Agents - Delegated sessions run targeted tests only.** The agent playbooks and the testing master now bind a sub-session to a named fixture or method filter, never a whole test project reflexively. The scope rule is a host-capacity rule, not only a wall-clock one: concurrent sessions contend superlinearly, a contended run presents as a hang, and an unscoped run can perturb a co-located rig somebody is measuring. ([#4130](https://github.com/NSTA1/Orleans.Lattice/pull/4130)) (`repository-wide`)
 
+- **Performance - Pooled buffer return clearing.** Nine pooled staging sites returned their rental with `clearArray: true`, which memsets the whole rounded-up array rather than the bytes written. They clear exactly the written prefix now: 28-32% faster on a 4 KB to 64 KB staging call. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Storage.File`)
+
+- **Performance - Repository-context operation ids.** Chunk operation ids staged every part through a StringBuilder and a fresh array before hashing. They stage UTF-8 into one stack or pooled buffer and hash it once now: 26-38% faster and 99% less allocated. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Performance - Repository-context digest handling.** The per-file freshness check rebuilt a whole digest string only to compare it, and formatting one built two strings plus a copy. Both format into stack buffers now: comparison is allocation-free and 28-30% faster. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Performance - Repository-context hash staging.** Three SHA-256 paths staged their input through throwaway arrays, one also re-materialising each declaration as a string. They hash spans in place now: 46-99% less allocated and 14-58% faster across source ids, reuse tokens and symbol digests. ([#4107](https://github.com/NSTA1/Orleans.Lattice/pull/4107)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Performance - Identity digest allocations.** Three SHA-256 identity paths staged input or digest bytes through throwaway arrays. They hash from stack or pooled buffers now: 72-88% less allocated on the credential metadata digest, 69-91% on the Explorer cookie digest, 16-27% on backup artifacts. ([#4094](https://github.com/NSTA1/Orleans.Lattice/pull/4094)) (`Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Backup`)
@@ -103,6 +109,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Folds release the retired donor's storage.** A committed shard consolidation, healing's included, clears the donor's leaves and internal nodes, freeing their WAL pins; the donor stays a routing tombstone, and no fold takes a shard an in-flight split still drains into. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059), [#4104](https://github.com/NSTA1/Orleans.Lattice/issues/4104)) (`Orleans.Lattice`)
 
 ### Fixed
+
+- **Core - A range read no longer comes up short during a leaf division.** A donor mid-split hid rows it still held, so a scan, count or stats call returned successfully while missing keys a point or batched read still answered. The gap lasted until that leaf's next write, so it could outlive the division indefinitely on a range that had gone quiet. ([#3918](https://github.com/NSTA1/Orleans.Lattice/issues/3918)) (`Orleans.Lattice`)
+
+- **Batch writes can be bounded by a whole-call budget, not just a fan-out one.** `SetManyEnvelopeBudget` bounds `SetManyAsync` end to end, so stages that each stay inside the deadline cannot sum past it unseen. The refusal names the per-stage breakdown, and unlike the fan-out budget it also covers single-shard batches. Opt-in; unbounded by default. ([#2685](https://github.com/NSTA1/Orleans.Lattice/issues/2685)) (`Orleans.Lattice`)
 
 - **Core - Tombstone compaction no longer times out on a tombstone-heavy leaf.** A leaf's reap yields on a work budget and resumes, reaping strictly less each pass until it drains, and a partial pass keeps the leaf queued instead of dropping it. ([#4135](https://github.com/NSTA1/Orleans.Lattice/issues/4135)) (`Orleans.Lattice`)
 

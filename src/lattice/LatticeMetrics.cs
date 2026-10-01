@@ -9979,6 +9979,7 @@ public static class LatticeMetrics
             LatticeSaturationSource.SnapshotCursorOpen => "snapshot_cursor_open",
             LatticeSaturationSource.ReplayPermitAdmission => "replay_permit_admission",
             LatticeSaturationSource.SetManyFanOut => "set_many_fan_out",
+            LatticeSaturationSource.SetManyEnvelope => "set_many_envelope",
             LatticeSaturationSource.TxRegistryCapacity => "tx_registry_capacity",
             _ => throw new ArgumentOutOfRangeException(
                 nameof(source),
