@@ -36,15 +36,17 @@ SHA-256 digests), and - for an increment - its `BaseBackupId`. Nothing the catal
 holds is unique to the catalog; every row can be re-derived from the sink.
 
 Four capabilities follow from that model, each exposed through the
-`Orleans.Lattice.Api.Backup` control facade (`ILatticeBackupControl`); every
-operation below authorizes fail-closed except the advisory
-`IsHealthMonitoringAvailableAsync` flag:
+`Orleans.Lattice.Api.Backup` control facade. Long restores use the
+accept-then-poll `ILatticeBackupOperations` start verbs; catalog maintenance and
+health operations remain on `ILatticeBackupControl`. Every operation below
+authorizes fail-closed except the advisory `IsHealthMonitoringAvailableAsync`
+flag:
 
 | Capability | Operation | What it does |
 |---|---|---|
 | Rebuild catalog | `RebuildCatalogFromSinkAsync` | Re-derives the catalog by enumerating every manifest in the sink and re-registering it. |
 | Scrub catalog | `ScrubCatalogAgainstSinkAsync` | Flags (and optionally prunes) catalog rows whose sink payload is gone. |
-| Cold restore | `ColdRestoreAsync` | Restores a backup into a fresh cluster from the sink alone, with no surviving catalog. |
+| Cold restore | `StartColdRestoreAsync`, then poll `GetOperationStatusAsync` | Restores a backup into a fresh cluster from the sink alone, with no surviving catalog. |
 | Health monitoring | `IsHealthMonitoringAvailableAsync`, `CheckBackupHealthAsync`, `GetBackupHealthAsync`, `ConfigureBackupHealthAsync` | Periodically re-verifies that each backup's sink payload is present and intact. |
 
 ### Rebuild the catalog from the sink
@@ -75,7 +77,7 @@ incremental base or restore point only to fail later.
 
 ### Cold restore into a fresh cluster
 
-`ColdRestoreAsync` is the acid test that a backup is genuinely useful after cluster
+`StartColdRestoreAsync` on the backup operations facade is the operator-facing acid test that a backup is genuinely useful after cluster
 loss. It restores a backup into a **brand-new, independent cluster** whose only
 shared state with the original is the sink:
 
@@ -121,8 +123,9 @@ same durable sink:
    same durable sink configured (for example the
    [Azure Blob sink](../lattice.backup.azureblob/README.md) pointed at the
    surviving storage account). The reserved `sys-` trees start empty.
-2. **Cold-restore each tree** you need with `ColdRestoreAsync`, targeting the tree
-   id you want and the backup id (or the tip of an incremental chain). Each call
+2. **Cold-restore each tree** you need with `StartColdRestoreAsync`, targeting the tree
+   id you want and the backup id (or the tip of an incremental chain), then poll
+   `GetOperationStatusAsync` until the operation is terminal. Each accepted operation
    bootstraps the `sys-` trees on first use and re-projects the catalog as it goes.
 3. **Verify the catalog** by listing backups through the control facade; every
    cold restore re-projects every manifest the sink holds, so after the first one

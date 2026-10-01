@@ -1,0 +1,126 @@
+@*
+    A point in time: a label row over one control box that holds the typed ISO 8601
+    entry, the zone it is in (always UTC, always shown) and the button that opens the
+    picker. The picker is a month grid, a time and quick picks, opened below the box
+    or, on a phone, in the flow of the page.
+*@
+<div @ref="_root" class="lt-field lt-datetime">
+    <label class="lt-field__label" for="@_id">@Label</label>
+    <div class="@ControlClass">
+        <input @ref="_input"
+               id="@_id"
+               class="lt-input lt-input--mono lt-datetime__input"
+               type="text"
+               value="@_text"
+               placeholder="@EmptyText"
+               disabled="@Disabled"
+               spellcheck="false"
+               autocomplete="off"
+               autocapitalize="off"
+               inputmode="text"
+               aria-invalid="@(EffectiveError is null ? null : "true")"
+               aria-describedby="@DescribedBy"
+               @oninput="OnTextInputAsync"
+               @onchange="OnTextChangeAsync" />
+        <span id="@ZoneId" class="lt-datetime__zone">UTC</span>
+        <button @ref="_toggle"
+                type="button"
+                class="lt-datetime__toggle"
+                aria-label="@("Choose " + Label + " from a calendar")"
+                aria-expanded="@(_open ? "true" : "false")"
+                aria-controls="@(_open ? PickerId : null)"
+                disabled="@Disabled"
+                @onclick="Toggle">
+            <svg class="lt-datetime__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" />
+                <path d="M1.5 6.5 H14.5 M5 1 V4 M11 1 V4" />
+            </svg>
+        </button>
+    </div>
+    @if (LocalText is { } local)
+    {
+        <p id="@LocalId" class="lt-field__hint lt-datetime__local">@local</p>
+    }
+    @if (Hint is not null)
+    {
+        <p id="@HintId" class="lt-field__hint">@Hint</p>
+    }
+    @if (EffectiveError is not null)
+    {
+        <p id="@ErrorId" class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @EffectiveError</p>
+    }
+    @if (_open)
+    {
+        <div id="@PickerId" class="@PickerClass" role="group" aria-label="@("Choose " + Label)"
+             @onkeydown="OnPickerKeyDown" @onkeydown:stopPropagation="true">
+            @if (QuickPicks)
+            {
+                <div class="lt-datetime__picks" role="group" aria-label="Quick picks">
+                    @foreach (var pick in Picks)
+                    {
+                        var ago = pick.Ago;
+                        <button type="button" class="lt-datetime__pick" disabled="@(!InRange(Now - ago))" @onclick="() => QuickPickAsync(ago)">@pick.Text</button>
+                    }
+                </div>
+            }
+            <div class="lt-datetime__month-row">
+                <button type="button" class="lt-datetime__nav" aria-label="Previous month" @onclick="() => ShowMonth(-1)">
+                    <svg class="lt-datetime__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3 L5 8 L10 13" /></svg>
+                </button>
+                <p id="@MonthId" class="lt-datetime__month" aria-live="polite">@MonthText</p>
+                <button type="button" class="lt-datetime__nav" aria-label="Next month" @onclick="() => ShowMonth(1)">
+                    <svg class="lt-datetime__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3 L11 8 L6 13" /></svg>
+                </button>
+            </div>
+            <table class="lt-datetime__grid" role="grid" aria-labelledby="@MonthId">
+                <thead>
+                    <tr>
+                        @foreach (var weekday in Weekdays)
+                        {
+                            <th scope="col" abbr="@weekday.Long" class="lt-datetime__weekday">@weekday.Short</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var week in Weeks())
+                    {
+                        <tr>
+                            @foreach (var day in week)
+                            {
+                                var current = day;
+                                var selected = SelectedDay == current;
+                                <td role="gridcell" aria-selected="@(selected ? "true" : "false")" class="lt-datetime__cell">
+                                    @if (current == _active)
+                                    {
+                                        <button @ref="_activeDay" type="button" class="@DayClass(current)" tabindex="0"
+                                                aria-label="@DayName(current)" aria-current="@(current == Today ? "date" : null)"
+                                                aria-disabled="@(DayInRange(current) ? null : "true")"
+                                                @onclick="() => PickDayAsync(current)" @onkeydown="OnDayKeyDown">@DayNumber(current)</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="@DayClass(current)" tabindex="-1"
+                                                aria-label="@DayName(current)" aria-current="@(current == Today ? "date" : null)"
+                                                aria-disabled="@(DayInRange(current) ? null : "true")"
+                                                @onclick="() => PickDayAsync(current)" @onkeydown="OnDayKeyDown">@DayNumber(current)</button>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="lt-datetime__time">
+                <label class="lt-datetime__time-label" for="@TimeId">Time (UTC)</label>
+                <input id="@TimeId" class="lt-input lt-input--mono" type="time" step="1" value="@TimeValue" @onchange="OnTimeChangeAsync" />
+            </div>
+            <div class="lt-datetime__actions">
+                @if (EmptyText is not null)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="ClearAsync">@("Clear (" + EmptyText + ")")</LtButton>
+                }
+                <LtButton OnClick="Close">Done</LtButton>
+            </div>
+        </div>
+    }
+</div>

@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Wal;
 using Orleans.Serialization;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Backup;
 
@@ -123,6 +124,14 @@ internal sealed class LatticeBackupCaptureService(
             BackupKind.Incremental, LatticeBackupMetrics.PhaseRead, ex))
         {
             throw;
+        }
+
+        // The forward WAL drain has no up-front total, so the capture phase reports
+        // no units rather than a fabricated one (#4122).
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(BackupOperationPhases.Capturing).ConfigureAwait(false);
         }
 
         // The increment inherits the base backup's scope so the chain restores as a
@@ -291,6 +300,11 @@ internal sealed class LatticeBackupCaptureService(
                 compressionDictionary: null,
                 capturingClusterId: baseCapturingClusterId);
 
+            if (progress is not null)
+            {
+                await progress.ReportAsync(BackupOperationPhases.Cataloguing).ConfigureAwait(false);
+            }
+
             await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
             await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
 
@@ -339,13 +353,7 @@ internal sealed class LatticeBackupCaptureService(
         // would. This keeps the common case free of the fence machinery.
         if (!request.CrossTreeConsistent || scopes.Count == 1)
         {
-            var plainMembers = new List<LatticeBackupCaptureResult>(scopes.Count);
-            foreach (var scope in scopes)
-            {
-                plainMembers.Add(
-                    await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
-                        .ConfigureAwait(false));
-            }
+            var plainMembers = await CaptureMembersAsync(request, cancellationToken).ConfigureAwait(false);
 
             var plainManifest = BuildSetManifest(request.Name, plainMembers, crossTreeConsistent: false, fence: null);
             var stampedPlainMembers = await StampSetMembershipAsync(plainManifest, plainMembers, cancellationToken)
@@ -400,13 +408,7 @@ internal sealed class LatticeBackupCaptureService(
 
             // Step 2: select the fence and capture every tree as of it.
             var fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
-            var members = new List<LatticeBackupCaptureResult>(scopes.Count);
-            foreach (var scope in scopes)
-            {
-                members.Add(
-                    await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
-                        .ConfigureAwait(false));
-            }
+            var members = await CaptureMembersAsync(request, cancellationToken).ConfigureAwait(false);
 
             // Step 3: re-observe. The window is stable iff no cross-tree saga
             // registered on any set tree during the capture (epoch unchanged) and
@@ -663,6 +665,16 @@ internal sealed class LatticeBackupCaptureService(
                     + $"({nameof(LatticeOptions.MaxSnapshotReplayEntries)}). Narrow the scope or raise the budget.");
             }
 
+            // Tracked-operation progress (#4122): null outside a tracked operation, so
+            // an untracked capture pays one null check. A set capture suppresses it
+            // around its members so a member cannot overwrite the set-level phase.
+            var progress = LatticeOperationProgress.Current;
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Capturing, 0, inScopeCount, BackupOperationUnits.Entries).ConfigureAwait(false);
+            }
+
             // Capture the per-partition WAL head frontier BEFORE opening the snapshot
             // cursor so a later incremental resumes its forward WAL read from exactly
             // this cut. Any entry that lands between this read and the snapshot freeze
@@ -691,9 +703,15 @@ internal sealed class LatticeBackupCaptureService(
                 // collector is complete once it returns.
                 phase = LatticeBackupMetrics.PhaseExport;
                 var collector = new RawEntryCollector(serializer, ResolveTreeMergeMode(treeId));
+                var stream = collector.StreamAsync(cursor, pageSize, cancellationToken);
+                if (progress is not null)
+                {
+                    stream = ReportCapturedAsync(stream, collector, progress, inScopeCount, cancellationToken);
+                }
+
                 await sink.WriteArtifactAsync(
                     artifactId,
-                    collector.StreamAsync(cursor, pageSize, cancellationToken),
+                    stream,
                     cancellationToken).ConfigureAwait(false);
 
                 // The manifest id is the content address of the streamed payload, so a
@@ -741,6 +759,11 @@ internal sealed class LatticeBackupCaptureService(
                     compressionDictionary: null,
                     capturingClusterId: _capturingClusterId);
 
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(BackupOperationPhases.Cataloguing).ConfigureAwait(false);
+                }
+
                 phase = LatticeBackupMetrics.PhaseSinkWrite;
                 await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
                 phase = LatticeBackupMetrics.PhaseManifestCommit;
@@ -772,6 +795,67 @@ internal sealed class LatticeBackupCaptureService(
             // catch never runs and the original exception propagates unchanged.
             throw;
         }
+    }
+
+    /// <summary>
+    /// Passes a capture's serialized pages through unchanged, reporting the entries
+    /// streamed so far after each page reaches the sink.
+    /// </summary>
+    private static async IAsyncEnumerable<ReadOnlyMemory<byte>> ReportCapturedAsync(
+        IAsyncEnumerable<ReadOnlyMemory<byte>> pages,
+        RawEntryCollector collector,
+        ILatticeOperationProgress progress,
+        long inScopeCount,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var page in pages.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            yield return page;
+            await progress.ReportAsync(
+                BackupOperationPhases.Capturing,
+                collector.KeyDescriptors.Count,
+                inScopeCount,
+                BackupOperationUnits.Entries).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Captures every member of a set in scope order, reporting one unit per
+    /// member. Member captures run with the ambient progress suppressed, so a
+    /// member's own entry counts never overwrite the set-level phase.
+    /// </summary>
+    private async Task<List<LatticeBackupCaptureResult>> CaptureMembersAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken)
+    {
+        var scopes = request.Scopes;
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(
+                BackupOperationPhases.CapturingMembers, 0, scopes.Count, BackupOperationUnits.Members).ConfigureAwait(false);
+        }
+
+        var members = new List<LatticeBackupCaptureResult>(scopes.Count);
+        using (LatticeOperationProgress.Enter(null))
+        {
+            foreach (var scope in scopes)
+            {
+                members.Add(
+                    await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                        .ConfigureAwait(false));
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(
+                        BackupOperationPhases.CapturingMembers,
+                        members.Count,
+                        scopes.Count,
+                        BackupOperationUnits.Members).ConfigureAwait(false);
+                }
+            }
+        }
+
+        return members;
     }
 
     /// <summary>

@@ -67,6 +67,8 @@ Grain identity is embedded in the string key with `/` as separator:
 | `SnapshotBaselineStorageGrain` | `{treeId}/{shardIndex}/{baselineToken:N}` via `SnapshotLeafGrain.BuildBaselineKey` | - |
 | `ViewRegistryGrain` | Singleton (`_lattice_view_registry`) | `"_lattice_view_registry"` |
 | `ViewCrossTreeCoordinatorGrain` | `{crossTreeOperationId}` | - |
+| `LatticeOperationGrain` | `{tenant}\|{operationId}` via `LatticeOperationKey.For` (tenant percent-encoded, id restricted to ASCII letters, digits, `-`, `_` and `.`) | `"default\|nightly-1"` |
+| `LatticeOperationIndexGrain` | `idx\|{tenant}` via `LatticeOperationKey.ForIndex` | `"idx\|default"` |
 
 Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 

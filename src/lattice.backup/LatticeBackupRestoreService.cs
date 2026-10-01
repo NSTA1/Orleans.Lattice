@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Backup;
 
@@ -115,9 +116,24 @@ internal sealed class LatticeBackupRestoreService(
                 .ConfigureAwait(false);
 
             phase = LatticeBackupMetrics.PhaseVerify;
+            var progress = LatticeOperationProgress.Current;
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Validating, 0, chain.Count, BackupOperationUnits.Manifests).ConfigureAwait(false);
+            }
+
+            var validated = 0;
             foreach (var manifest in chain)
             {
                 await ValidateManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+                validated++;
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(
+                        BackupOperationPhases.Validating, validated, chain.Count, BackupOperationUnits.Manifests)
+                        .ConfigureAwait(false);
+                }
             }
 
             var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
@@ -997,9 +1013,29 @@ internal sealed class LatticeBackupRestoreService(
         // large physical index, so no input regresses.
         var perShard = new ShardSlots<List<LwwEntry>>(routing.Map.GetPhysicalShardIndices());
         long total = 0;
+
+        // Tracked-operation progress (#4122). Every streamed record counts as one
+        // applied unit, dead-lettered or not, so the count matches the chain total.
+        var progress = LatticeOperationProgress.Current;
+        long? streamTotal = null;
+        long streamed = 0;
+        if (progress is not null)
+        {
+            streamTotal = CountChainEntries(chain, rangeStart, rangeEnd);
+            await progress.ReportAsync(
+                BackupOperationPhases.Applying, 0, streamTotal, BackupOperationUnits.Entries).ConfigureAwait(false);
+        }
+
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
         {
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Applying, ++streamed, streamTotal, BackupOperationUnits.Entries)
+                    .ConfigureAwait(false);
+            }
+
             // Per-record tenant admission: a record addressed outside the active
             // tenant's namespace or beyond its quota is dead-lettered (skipped),
             // never written. Null on the tenancy-off path (a single branch).
@@ -1029,7 +1065,11 @@ internal sealed class LatticeBackupRestoreService(
         // per shard to preserve an ordering that never existed between shards.
         var pending = DrainShardBuckets(perShard);
         cancellationToken.ThrowIfCancellationRequested();
-        if (pending.Count == 1)
+        if (progress is not null)
+        {
+            await ReplayWithProgressAsync(routing, operationId, pending, progress).ConfigureAwait(false);
+        }
+        else if (pending.Count == 1)
         {
             // Single-shard trees are the dominant shape and have nothing to
             // overlap: keep the direct await rather than building a task array.
@@ -1045,6 +1085,56 @@ internal sealed class LatticeBackupRestoreService(
         }
 
         return total;
+    }
+
+    /// <summary>
+    /// The tracked-operation form of the bulk-load drain: the same bounded fan-out,
+    /// reporting one <see cref="BackupOperationPhases.Replaying"/> unit per shard
+    /// as each completes.
+    /// </summary>
+    private async Task ReplayWithProgressAsync(
+        RoutingInfo routing,
+        string operationId,
+        List<(int ShardIndex, List<LwwEntry> Bucket)> pending,
+        ILatticeOperationProgress progress)
+    {
+        await progress.ReportAsync(
+            BackupOperationPhases.Replaying, 0, pending.Count, BackupOperationUnits.Shards).ConfigureAwait(false);
+        var replayed = 0;
+        await BoundedFanOut.ForEachAsync(
+            pending,
+            BoundedFanOut.DefaultWidth,
+            async bucket =>
+            {
+                await BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket).ConfigureAwait(false);
+                await progress.ReportAsync(
+                    BackupOperationPhases.Replaying,
+                    Interlocked.Increment(ref replayed),
+                    pending.Count,
+                    BackupOperationUnits.Shards).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Counts the entries a chain stream yields for a range: one per in-range key
+    /// descriptor of every manifest, which is exactly what
+    /// <see cref="StreamChainEntriesAsync"/> enumerates.
+    /// </summary>
+    private static long CountChainEntries(IReadOnlyList<BackupManifest> chain, string? rangeStart, string? rangeEnd)
+    {
+        long count = 0;
+        foreach (var manifest in chain)
+        {
+            foreach (var descriptor in manifest.KeyDescriptors)
+            {
+                if (InRange(descriptor.Key, rangeStart, rangeEnd))
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -1097,9 +1187,27 @@ internal sealed class LatticeBackupRestoreService(
         var batchCapacity = Math.Clamp(applyBatchSize, 0, MergeBatchPresizeLimit);
         long total = 0;
 
+        // Tracked-operation progress (#4122), as on the bulk-load path.
+        var progress = LatticeOperationProgress.Current;
+        long? streamTotal = null;
+        long streamed = 0;
+        if (progress is not null)
+        {
+            streamTotal = CountChainEntries(chain, rangeStart, rangeEnd);
+            await progress.ReportAsync(
+                BackupOperationPhases.Applying, 0, streamTotal, BackupOperationUnits.Entries).ConfigureAwait(false);
+        }
+
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
         {
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Applying, ++streamed, streamTotal, BackupOperationUnits.Entries)
+                    .ConfigureAwait(false);
+            }
+
             // Per-record tenant admission: a record addressed outside the active
             // tenant's namespace or beyond its quota is dead-lettered (skipped),
             // never merged. Null on the tenancy-off path (a single branch).

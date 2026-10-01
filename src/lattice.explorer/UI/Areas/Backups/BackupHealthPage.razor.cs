@@ -34,9 +34,8 @@ public partial class BackupHealthPage : IDisposable
     private bool _checking;
     private string? _checkError;
     private bool _monitor = true;
-    private string? _hours = "24";
-    private string? _minutes = "0";
-    private string? _intervalError;
+    private TimeSpan? _interval = TimeSpan.FromHours(24);
+    private LtDurationInput? _intervalField;
     private string? _configureMessage;
     private string? _configureError;
 
@@ -237,12 +236,15 @@ public partial class BackupHealthPage : IDisposable
             return;
         }
 
-        _intervalError = null;
         _configureMessage = null;
         _configureError = null;
-        if (!BackupsFormat.TryParseInterval(_hours, _minutes, out var interval))
+        if (_intervalField is not null && !await _intervalField.ConfirmAsync())
         {
-            _intervalError = "Give a whole number of hours and minutes, more than zero in total.";
+            return;
+        }
+
+        if (_interval is not { } interval)
+        {
             return;
         }
 

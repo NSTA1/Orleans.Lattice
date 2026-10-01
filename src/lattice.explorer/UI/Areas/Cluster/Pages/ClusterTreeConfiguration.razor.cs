@@ -32,6 +32,9 @@ public partial class ClusterTreeConfiguration : IDisposable
         new(nameof(TreeHistoryRetentionMode.Hybrid), "Hybrid"),
     ];
 
+    /// <summary>The retention window's units: an age bound reads in days down to the second the engine stores.</summary>
+    private const LtDurationUnits WindowUnits = LtDurationUnits.Days | LtDurationUnits.Hours | LtDurationUnits.Minutes | LtDurationUnits.Seconds;
+
     private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<TreeConfigurationReport> _config = ClusterLoad<TreeConfigurationReport>.Loading;
     private ClusterLoad<TreeHistoryRetention> _retention = ClusterLoad<TreeHistoryRetention>.Loading;
@@ -40,8 +43,8 @@ public partial class ClusterTreeConfiguration : IDisposable
     private string? _walCeiling;
     private string? _walCeilingError;
     private string? _mode;
-    private string? _window;
-    private string? _windowError;
+    private TimeSpan? _window;
+    private LtDurationInput? _windowField;
     private bool _saving;
 
     /// <summary>The logical tree id.</summary>
@@ -96,7 +99,7 @@ public partial class ClusterTreeConfiguration : IDisposable
         if (retention.Value is { } value)
         {
             _mode = value.Mode.ToString();
-            _window = value.Window > TimeSpan.Zero ? ((long)value.Window.TotalSeconds).ToString(CultureInfo.InvariantCulture) : null;
+            _window = value.Window > TimeSpan.Zero ? value.Window : null;
         }
     }
 
@@ -157,18 +160,12 @@ public partial class ClusterTreeConfiguration : IDisposable
 
     private async Task SaveRetentionAsync()
     {
-        _windowError = null;
-        TimeSpan? window = null;
-        if (!string.IsNullOrWhiteSpace(_window))
+        if (_windowField is not null && !await _windowField.ConfirmAsync())
         {
-            if (!long.TryParse(_window.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) || seconds <= 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
-            {
-                _windowError = "Enter a whole number of seconds greater than zero.";
-                return;
-            }
-
-            window = TimeSpan.FromSeconds(seconds);
+            return;
         }
+
+        var window = _window;
 
         TreeHistoryRetentionMode? mode = Enum.TryParse<TreeHistoryRetentionMode>(_mode, out var parsedMode) ? parsedMode : null;
 

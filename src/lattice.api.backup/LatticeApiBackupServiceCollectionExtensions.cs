@@ -14,8 +14,8 @@ public static class LatticeApiBackupServiceCollectionExtensions
     /// <summary>
     /// Adds the transport-agnostic backup / restore control facade to the silo:
     /// binds <see cref="LatticeApiBackupOptions"/>, registers the
-    /// <see cref="ILatticeBackupControl"/> singleton every transport binding
-    /// (gRPC and MCP) adapts over, and registers an idempotency marker.
+    /// <see cref="ILatticeBackupControl"/> and <see cref="ILatticeBackupOperations"/>
+    /// singleton every transport binding (gRPC and MCP) adapts over, and registers an idempotency marker.
     /// It adds no transport behaviour of its own.
     /// <para>
     /// Must be called <i>after</i>
@@ -64,7 +64,11 @@ public static class LatticeApiBackupServiceCollectionExtensions
 
         // The transport-agnostic control facade. Registered as a silo singleton
         // that every transport binding (gRPC and MCP) adapts over.
-        builder.Services.TryAddSingleton<ILatticeBackupControl, LatticeBackupControl>();
+        // The accept-then-poll operations facade (#4122) is the same singleton, so
+        // a blocking verb and a start share one authorization path and one engine.
+        builder.Services.TryAddSingleton<LatticeBackupControl>();
+        builder.Services.TryAddSingleton<ILatticeBackupControl>(sp => sp.GetRequiredService<LatticeBackupControl>());
+        builder.Services.TryAddSingleton<ILatticeBackupOperations>(sp => sp.GetRequiredService<LatticeBackupControl>());
 
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any

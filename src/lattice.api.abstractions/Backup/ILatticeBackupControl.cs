@@ -17,6 +17,15 @@ namespace Orleans.Lattice.Api.Backup;
 /// and artifact export are streamed as <see cref="IAsyncEnumerable{T}"/> so a
 /// large catalog or artifact enumerates with bounded memory rather than being
 /// materialized whole.
+/// <para>
+/// The blocking capture and restore verbs (<see cref="CreateBackupAsync"/>,
+/// <see cref="CreateIncrementalBackupAsync"/>, <see cref="CreateBackupSetAsync"/>,
+/// <see cref="RestoreBackupAsync"/> and <see cref="ColdRestoreAsync"/>) are deprecated
+/// (diagnostic <c>LATTICE0002</c>) in favour of the accept-then-poll
+/// <see cref="ILatticeBackupOperations"/>, and will be removed in the next major version.
+/// Each is now a thin wrapper that starts the matching tracked operation and waits
+/// for it, so it behaves as before and the work is visible to the operation verbs.
+/// </para>
 /// </remarks>
 public interface ILatticeBackupControl
 {
@@ -29,6 +38,7 @@ public interface ILatticeBackupControl
     /// <returns>The captured backup's id and manifest.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
+    [Obsolete("CreateBackupAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartBackupAsync and poll GetOperationStatusAsync instead. CreateBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<LatticeBackupCaptureResult> CreateBackupAsync(
         LatticeBackupCaptureRequest request,
         CancellationToken cancellationToken = default);
@@ -42,6 +52,7 @@ public interface ILatticeBackupControl
     /// <returns>The captured backup's id and manifest.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
+    [Obsolete("CreateIncrementalBackupAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartIncrementalBackupAsync and poll GetOperationStatusAsync instead. CreateIncrementalBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
         LatticeBackupIncrementalCaptureRequest request,
         CancellationToken cancellationToken = default);
@@ -59,6 +70,7 @@ public interface ILatticeBackupControl
     /// <returns>The set manifest and the per-tree member results in scope order.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a scope in the set.</exception>
+    [Obsolete("CreateBackupSetAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartBackupSetAsync and poll GetOperationStatusAsync instead. CreateBackupSetAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
         LatticeBackupSetCaptureRequest request,
         CancellationToken cancellationToken = default);
@@ -162,6 +174,7 @@ public interface ILatticeBackupControl
     /// <returns>The restore outcome.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - when no target tree can be resolved - the reserved backup catalog tree.</exception>
+    [Obsolete("RestoreBackupAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartRestoreAsync and poll GetOperationStatusAsync instead. RestoreBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<LatticeRestoreResult> RestoreBackupAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
@@ -273,6 +286,7 @@ public interface ILatticeBackupControl
     /// pre-apply validation (a broken base chain or a missing / tampered artifact).
     /// </exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - when no target tree can be resolved - the reserved backup catalog tree.</exception>
+    [Obsolete("ColdRestoreAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartColdRestoreAsync and poll GetOperationStatusAsync instead. ColdRestoreAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<LatticeRestoreResult> ColdRestoreAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);

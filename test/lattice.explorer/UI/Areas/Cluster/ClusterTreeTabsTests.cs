@@ -159,7 +159,12 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
 
         var form = cut.Find("form[aria-label='Change history retention']");
         form.QuerySelector("select")!.Change("FullValue");
-        cut.Find("form[aria-label='Change history retention'] input").Input("3600");
+        // #4148: the window is a duration in days, hours, minutes and seconds, not a count of seconds typed as text.
+        var boxes = cut.FindAll("form[aria-label='Change history retention'] .lt-duration__input");
+        Assert.That(boxes.Select(box => box.GetAttribute("aria-label")), Is.EqualTo(new[] { "Window, days", "Window, hours", "Window, minutes", "Window, seconds" }));
+        Assert.That(boxes.Select(box => box.GetAttribute("value")), Is.EqualTo(new[] { "7", "0", "0", "0" }), "the stored window, in its units");
+        boxes[0].Input("0");
+        cut.FindAll("form[aria-label='Change history retention'] .lt-duration__input")[1].Input("1");
         cut.Find("form[aria-label='Change history retention']").Submit();
 
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("1 hour")));
