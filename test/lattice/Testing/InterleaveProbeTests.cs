@@ -11,14 +11,18 @@ namespace Orleans.Lattice.Tests.Testing;
 [TestFixture]
 public sealed class InterleaveProbeTests
 {
+    /// <summary>Used only where the call is meant to hang, so the bound is the expected outcome.</summary>
     private static readonly TimeSpan ShortHang = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>Never reached by a call that answers, so it can never decide a passing case.</summary>
+    private static readonly TimeSpan LongHang = TimeSpan.FromMinutes(10);
 
     [Test]
     public async Task AnswersWhileHeldAsync_returns_the_result_of_a_call_that_answers_while_held()
     {
         var hold = new TaskCompletionSource();
         var answer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var probe = InterleaveProbe.AnswersWhileHeldAsync(answer.Task, hold.Task, "the read", ShortHang);
+        var probe = InterleaveProbe.AnswersWhileHeldAsync(answer.Task, hold.Task, "the read", LongHang);
         answer.SetResult(42);
 
         Assert.Multiple(async () =>
@@ -62,7 +66,26 @@ public sealed class InterleaveProbeTests
             await probe;
         });
 
-        Assert.That(failure, Does.Contain("the hold was released before the read answered"));
+        Assert.That(failure, Does.Contain("the read did not answer before the hold ended"));
+    }
+
+    [Test]
+    public void AnswersWhileHeldAsync_fails_a_call_that_answers_just_after_the_hold_ends_on_its_own()
+    {
+        // Synchronous continuations make the order deterministic: the hold ends,
+        // then the queued call answers, before the probe looks at either.
+        var hold = new TaskCompletionSource();
+        var answer = new TaskCompletionSource<int>();
+
+        var failure = CaptureFailure(async () =>
+        {
+            var probe = InterleaveProbe.AnswersWhileHeldAsync(answer.Task, hold.Task, "the read", TimeSpan.FromMinutes(10));
+            hold.SetResult();
+            answer.SetResult(1);
+            await probe;
+        });
+
+        Assert.That(failure, Does.Contain("the read did not answer before the hold ended"));
     }
 
     [Test]
@@ -80,7 +103,7 @@ public sealed class InterleaveProbeTests
         var call = Task.FromException<int>(new TimeoutException("Response did not arrive on time"));
 
         var failure = CaptureFailure(() =>
-            InterleaveProbe.AnswersWhileHeldAsync(call, new TaskCompletionSource().Task, "the read", ShortHang));
+            InterleaveProbe.AnswersWhileHeldAsync(call, new TaskCompletionSource().Task, "the read", LongHang));
 
         Assert.That(failure, Does.Contain("the read did not answer while the hold was in force")
             .And.Contain("Response did not arrive on time"));
@@ -92,7 +115,7 @@ public sealed class InterleaveProbeTests
         var call = Task.FromException<int>(new InvalidOperationException("boom"));
 
         Assert.ThrowsAsync<InvalidOperationException>(() =>
-            InterleaveProbe.AnswersWhileHeldAsync(call, new TaskCompletionSource().Task, "the read", ShortHang));
+            InterleaveProbe.AnswersWhileHeldAsync(call, new TaskCompletionSource().Task, "the read", LongHang));
     }
 
     [Test]

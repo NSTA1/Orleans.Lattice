@@ -21,7 +21,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// The behavioural tests park one point write inside its leaf call with an
-/// incoming grain call filter and assert that a second point write on the same
+/// outgoing grain call filter - before the call is sent, so no response timeout
+/// ends the parked turn - and assert that a second point write on the same
 /// shard root completes while the first is still parked. The attribute is
 /// honoured by the Orleans scheduler, which a unit-level harness does not run,
 /// so only a real activation can observe it. The reflection test is the
@@ -163,7 +164,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
-            siloBuilder.AddIncomingGrainCallFilter<GatingLeafSetFilter>();
+            siloBuilder.AddOutgoingGrainCallFilter<GatingLeafSetFilter>();
         }
     }
 
@@ -174,7 +175,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
     /// TestingHost silo runs in-process, and it matches a single key so it
     /// cannot park any other write.
     /// </summary>
-    private sealed class GatingLeafSetFilter : IIncomingGrainCallFilter
+    private sealed class GatingLeafSetFilter : IOutgoingGrainCallFilter
     {
         internal static volatile TaskCompletionSource? Gate;
         internal static volatile TaskCompletionSource? Entered;
@@ -197,7 +198,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
             Entered = null;
         }
 
-        public async Task Invoke(IIncomingGrainCallContext context)
+        public async Task Invoke(IOutgoingGrainCallContext context)
         {
             ArgumentNullException.ThrowIfNull(context);
 

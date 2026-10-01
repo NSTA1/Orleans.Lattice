@@ -12,8 +12,9 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// acknowledged while a resize phase holds the coordinator's turn, and the resize
 /// must then unwind to its pre-resize state.
 /// <para>
-/// The phase is pinned deterministically: an incoming-call filter holds the
-/// snapshot slice the resize's phase timer drives, so the non-reentrant resize
+/// The phase is pinned deterministically: an outgoing-call filter holds the
+/// coordinator's call to the snapshot slice its phase timer drives, before the
+/// call is sent, so no response timeout ends the turn and the non-reentrant resize
 /// coordinator sits inside <c>WaitForSnapshotAsync</c> for as long as the test
 /// chooses - the exact shape of the incident, where a slow snapshot pass held the
 /// turn and every undo timed out behind it. Before the fix the undo, and every
@@ -129,7 +130,7 @@ public sealed class TreeResizeUndoInFlightIntegrationTests
     /// tree until the test releases it, keeping the resize coordinator inside the
     /// phase turn that awaits the slice.
     /// </summary>
-    private sealed class SliceGate : IIncomingGrainCallFilter
+    private sealed class SliceGate : IOutgoingGrainCallFilter
     {
         private static readonly ConcurrentDictionary<string, Hold> Holds = new(StringComparer.Ordinal);
 
@@ -140,7 +141,7 @@ public sealed class TreeResizeUndoInFlightIntegrationTests
             foreach (var hold in Holds.Values) hold.Release.TrySetResult();
         }
 
-        public async Task Invoke(IIncomingGrainCallContext context)
+        public async Task Invoke(IOutgoingGrainCallContext context)
         {
             if (context.MethodName == nameof(ITreeSnapshotGrain.RunSnapshotSliceAsync)
                 && Holds.TryGetValue(context.TargetId.Key.ToString()!, out var hold))
@@ -166,7 +167,7 @@ public sealed class TreeResizeUndoInFlightIntegrationTests
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddIncomingGrainCallFilter<SliceGate>();
+            siloBuilder.AddOutgoingGrainCallFilter<SliceGate>();
         }
     }
 }

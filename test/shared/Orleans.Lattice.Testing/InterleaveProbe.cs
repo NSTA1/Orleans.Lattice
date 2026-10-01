@@ -45,8 +45,8 @@ public static class InterleaveProbe
     /// <typeparam name="T">The call's result type.</typeparam>
     /// <param name="call">The call issued while the turn was held.</param>
     /// <param name="released">
-    /// Completes when the test releases the hold; the test must not release it
-    /// until this probe returns.
+    /// Completes when the hold ends - the test releases it, or the held turn gives
+    /// up by itself. The test must not release it until this probe returns.
     /// </param>
     /// <param name="what">What the call is, quoted in a failure.</param>
     /// <param name="hangBound">The hang bound; defaults to <see cref="HangBound"/>.</param>
@@ -65,8 +65,8 @@ public static class InterleaveProbe
     /// </summary>
     /// <param name="call">The call issued while the turn was held.</param>
     /// <param name="released">
-    /// Completes when the test releases the hold; the test must not release it
-    /// until this probe returns.
+    /// Completes when the hold ends - the test releases it, or the held turn gives
+    /// up by itself. The test must not release it until this probe returns.
     /// </param>
     /// <param name="what">What the call is, quoted in a failure.</param>
     /// <param name="hangBound">The hang bound; defaults to <see cref="HangBound"/>.</param>
@@ -83,7 +83,7 @@ public static class InterleaveProbe
         ArgumentNullException.ThrowIfNull(released);
         ArgumentNullException.ThrowIfNull(what);
 
-        if (released.IsCompleted && !call.IsCompleted)
+        if (released.IsCompleted)
         {
             Assert.Fail($"precondition: the hold was already released when {what} was probed, so whether it "
                 + "answers proves nothing about interleaving.");
@@ -92,27 +92,31 @@ public static class InterleaveProbe
         var bound = hangBound ?? HangBound;
         using var stop = new CancellationTokenSource();
         var hang = Task.Delay(bound, stop.Token);
-        await Task.WhenAny(call, released, hang);
+        var first = await Task.WhenAny(call, released, hang);
         stop.Cancel();
 
-        // The test releases the hold only after the probe returns, so a completed
-        // call answered while the hold was in force - unless it gave up instead.
-        // A grain call queued behind the held turn faults with the runtime's
-        // response timeout, usually before the hang bound, and that is the
-        // regression this probe exists to name.
-        if (call.IsFaulted && call.Exception!.InnerException is TimeoutException timeout && !released.IsCompleted)
+        // The verdict is which finished first, never whether the call is complete
+        // by now: a call queued behind a turn that gave up on its own answers a
+        // moment after the hold ends, and would read as complete here.
+        if (first == call)
         {
-            Assert.Fail($"{what} did not answer while the hold was in force: it timed out waiting, which is what a "
-                + "call queued behind the held turn does. Timeout: " + Truncate(timeout.Message));
+            // A grain call queued behind the held turn faults with the runtime's
+            // response timeout, usually before the hang bound, and that is the
+            // regression this probe exists to name.
+            if (call.IsFaulted && call.Exception!.InnerException is TimeoutException timeout)
+            {
+                Assert.Fail($"{what} did not answer while the hold was in force: it timed out waiting, which is "
+                    + "what a call queued behind the held turn does. Timeout: " + Truncate(timeout.Message));
+            }
+
+            return;
         }
 
-        if (call.IsCompleted) return;
-
-        if (released.IsCompleted)
+        if (first == released)
         {
-            Assert.Fail($"precondition: the hold was released before {what} answered, so the probe cannot tell "
-                + "an interleaved call from one that queued behind the held turn. Release the hold only after "
-                + "the probe returns.");
+            Assert.Fail($"{what} did not answer before the hold ended (the test released it, or the held turn gave "
+                + "up on its own). A call queued behind a held turn answers only once the turn ends, so this is that "
+                + "regression - unless the test released the hold before the probe returned, which proves nothing.");
         }
 
         Assert.Fail($"{what} did not answer while the hold was in force. The hold is released only after the "

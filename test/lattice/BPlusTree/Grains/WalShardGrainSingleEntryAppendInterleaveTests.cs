@@ -173,11 +173,11 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
 
             var during = await InterleaveProbe.AnswersWhileHeldAsync(
                 grain.GetNextSequenceAsync(CancellationToken.None).AsTask(),
-                GatingAppendWalStorageProvider.AppendGate!.Task,
+                GatingAppendWalStorageProvider.AppendLeft!.Task,
                 "GetNextSequenceAsync, issued while a batched append is parked in the provider,");
             var page = await InterleaveProbe.AnswersWhileHeldAsync(
                 grain.ReadAsync(0, 100, CancellationToken.None).AsTask(),
-                GatingAppendWalStorageProvider.AppendGate!.Task,
+                GatingAppendWalStorageProvider.AppendLeft!.Task,
                 "ReadAsync, issued while a batched append is parked in the provider,");
 
             Assert.Multiple(() =>
@@ -297,8 +297,9 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
         await writer.AppendAsync(MakeEntry(tree, "seed")).WaitAsync(TimeSpan.FromSeconds(15));
 
         GatingAppendWalStorageProvider.Arm(tree);
-        Task<long>? first = null;
-        Task<long>? second = null;
+        Task<long> first;
+        Task<long> second;
+        int entered;
         try
         {
             first = writer.AppendAsync(MakeEntry(tree, "first"));
@@ -314,7 +315,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
                 // the verdict is not a race against a clock.
                 await InterleaveProbe.AnswersWhileHeldAsync(
                     GatingAppendWalStorageProvider.SecondEntered!.Task,
-                    GatingAppendWalStorageProvider.AppendGate!.Task,
+                    GatingAppendWalStorageProvider.AppendLeft!.Task,
                     "With the option on, the second point append reaching the provider");
             }
             else
@@ -326,21 +327,19 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
                     () => GatingAppendWalStorageProvider.EnteredCount >= 2, TimeSpan.FromSeconds(3));
             }
 
-            return GatingAppendWalStorageProvider.EnteredCount;
+            entered = GatingAppendWalStorageProvider.EnteredCount;
         }
         finally
         {
             GatingAppendWalStorageProvider.Release();
-            if (first is not null)
-            {
-                await first.WaitAsync(TimeSpan.FromSeconds(15));
-            }
-            if (second is not null)
-            {
-                await second.WaitAsync(TimeSpan.FromSeconds(15));
-            }
-            GatingAppendWalStorageProvider.Reset();
         }
+
+        // Drained only once the probe has passed, so a parked append's own flush
+        // deadline can never mask the probe's verdict.
+        await first.WaitAsync(TimeSpan.FromSeconds(15));
+        await second.WaitAsync(TimeSpan.FromSeconds(15));
+        GatingAppendWalStorageProvider.Reset();
+        return entered;
     }
 
     private async Task<bool> ReaderBlocksWhileAppendParkedAsync(
@@ -374,7 +373,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             await GatingAppendWalStorageProvider.AppendEntered!.Task
                 .WaitAsync(TimeSpan.FromSeconds(15));
 
-            await whileParked(grain, GatingAppendWalStorageProvider.AppendGate!.Task);
+            await whileParked(grain, GatingAppendWalStorageProvider.AppendLeft!.Task);
         }
         finally
         {
@@ -431,6 +430,15 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
         internal static volatile TaskCompletionSource? AppendGate;
         internal static volatile TaskCompletionSource? AppendEntered;
         internal static volatile TaskCompletionSource? SecondEntered;
+
+        /// <summary>
+        /// Completes when a parked append leaves the gate, whether the test
+        /// released it or the shard's own flush deadline cancelled it. That is
+        /// the end of the hold a probe must answer inside: a cancelled append
+        /// ends the turn just as a release does, and a reader queued behind it
+        /// would otherwise answer afterwards and pass for an interleaved one.
+        /// </summary>
+        internal static volatile TaskCompletionSource? AppendLeft;
         private static volatile string? _gatedTree;
         private static int _enteredCount;
 
@@ -443,6 +451,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             Interlocked.Exchange(ref _enteredCount, 0);
             AppendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             SecondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            AppendLeft = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             AppendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
@@ -454,6 +463,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             AppendGate = null;
             AppendEntered = null;
             SecondEntered = null;
+            AppendLeft = null;
             Interlocked.Exchange(ref _enteredCount, 0);
         }
 
@@ -464,7 +474,15 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             {
                 if (Interlocked.Increment(ref _enteredCount) == 2) SecondEntered?.TrySetResult();
                 AppendEntered?.TrySetResult();
-                await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                var left = AppendLeft;
+                try
+                {
+                    await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    left?.TrySetResult();
+                }
             }
         }
 

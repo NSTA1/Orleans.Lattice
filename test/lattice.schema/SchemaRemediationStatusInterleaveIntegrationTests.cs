@@ -14,9 +14,10 @@ namespace Orleans.Lattice.Schema.Tests;
 /// queued behind it, so the Explorer's Schema operation page timed out instead of
 /// showing progress.
 /// <para>
-/// The run is pinned deterministically: an incoming-call filter holds the build
+/// The run is pinned deterministically: an outgoing-call filter holds the build
 /// phase's first write into the destination tree on a
-/// <see cref="TaskCompletionSource"/>, so the coordinator sits inside
+/// <see cref="TaskCompletionSource"/> before it is sent, so no response timeout
+/// ends the turn and the coordinator sits inside
 /// <c>BuildDestinationAsync</c> for as long as the test chooses, and releases it
 /// only after the status read has answered, so <see cref="InterleaveProbe"/>
 /// decides the claim without timing it (issue #4142).
@@ -95,7 +96,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
     /// remediation destination (<c>{treeId}/remediated/{operationId}</c>) until the
     /// test releases it, keeping the coordinator inside its build phase.
     /// </summary>
-    private sealed class BuildWriteGate : IIncomingGrainCallFilter
+    private sealed class BuildWriteGate : IOutgoingGrainCallFilter
     {
         private const string DestinationInfix = "/remediated/";
 
@@ -108,7 +109,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
             foreach (var hold in Holds.Values) hold.Release.TrySetResult();
         }
 
-        public async Task Invoke(IIncomingGrainCallContext context)
+        public async Task Invoke(IOutgoingGrainCallContext context)
         {
             if (context.InterfaceMethod?.DeclaringType == typeof(ILattice)
                 && context.MethodName == nameof(ILattice.SetAsync)
@@ -138,7 +139,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.AddLatticeSchemaEnforcement();
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddIncomingGrainCallFilter<BuildWriteGate>();
+            siloBuilder.AddOutgoingGrainCallFilter<BuildWriteGate>();
         }
     }
 }
