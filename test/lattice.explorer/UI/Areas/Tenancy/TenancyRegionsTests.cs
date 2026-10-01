@@ -275,7 +275,7 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
             Assert.That(rows.Select(row => row.Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim()),
                 Is.EqualTo(statuses.Select(status => TenancyFormat.RegionStatusMeaning(status))));
             Assert.That(rows[0].Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim(),
-                Is.EqualTo("Waiting for a platform operator to promote it; this tenant is not served here until it is Online."));
+                Is.EqualTo("Not served here until it is Online. Nothing in Lattice advances an added region: a platform operator of the hosting deployment promotes it once the tenant's data is in place."));
         });
     }
 
@@ -327,7 +327,7 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
         {
             Assert.That(Cluster.Tenants["acme"].Regions.Single(region => region.RegionId == "us-east").Status, Is.EqualTo(TenantRegionLifecycleStatus.Provisioning));
             Assert.That(Services.GetToasts().Last().Message, Is.EqualTo("Tenant acme is adding us-east. " + TenancyRegions.NotServedYet));
-            Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Does.Contain("Tenant acme is not served anywhere."));
+            Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Does.Contain("Tenant acme is not served anywhere:").And.Contain("it has residency set and none of its regions is Online yet."));
         });
     }
 

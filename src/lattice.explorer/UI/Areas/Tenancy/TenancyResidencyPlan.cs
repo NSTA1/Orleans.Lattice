@@ -53,6 +53,15 @@ internal sealed class TenancyResidencyPlan
         && !_regions.Any(region => _planned.Contains(region.RegionId) && region.Status == TenantRegionLifecycleStatus.Online);
 
     /// <summary>
+    /// Whether applying the plan stops serving a tenant that is served now: it
+    /// <see cref="LeavesNoOnlineRegion"/>, and today the tenant either has no
+    /// residency (so every region serves it) or has an Online region. A tenant
+    /// that is already served nowhere loses nothing by the change, so applying it
+    /// is not a service-stopping action.
+    /// </summary>
+    public bool StopsServing => LeavesNoOnlineRegion && (!HasResidency || HasOnlineRegion);
+
+    /// <summary>
     /// What applying the plan changes for each region, one sentence each, in the
     /// cluster's order: where the tenant stays served, joins or leaves the
     /// residency, and stops being served. Empty while the plan is unchanged.
@@ -73,6 +82,28 @@ internal sealed class TenancyResidencyPlan
         _regions.Clear();
         _regions.AddRange(regions);
         Revert();
+    }
+
+    /// <summary>
+    /// Takes a newer reading of the same tenant's regions, as a page following a
+    /// change reads it, without discarding an edit in progress: an unchanged plan
+    /// follows the reading, and a changed one keeps the regions it plans that
+    /// still exist.
+    /// </summary>
+    /// <param name="regions">The per-region status.</param>
+    public void Update(IReadOnlyList<TenantRegionStatusDescriptor> regions)
+    {
+        ArgumentNullException.ThrowIfNull(regions);
+        if (!IsChanged)
+        {
+            Reset(regions);
+            return;
+        }
+
+        _regions.Clear();
+        _regions.AddRange(regions);
+        _planned.RemoveWhere(id => !_regions.Any(region => string.Equals(region.RegionId, id, StringComparison.Ordinal)));
+        Project();
     }
 
     /// <summary>Returns the plan to the committed residency.</summary>

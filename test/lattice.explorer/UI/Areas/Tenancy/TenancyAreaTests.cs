@@ -460,6 +460,33 @@ public sealed class TenancyAreaTests : TenancyTestContext
     }
 
     [Test]
+    [TestCase(TenantRegionLifecycleStatus.Offline)]
+    [TestCase(TenantRegionLifecycleStatus.Removed)]
+    public async Task Home_never_says_a_tenant_whose_regions_have_all_left_its_residency_is_served_in_every_region(TenantRegionLifecycleStatus status)
+    {
+        // The tenancy engine counts an Offline or Removed region as residency set, and
+        // serves such a tenant only where it is Online - nowhere.
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = status };
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.That(await Catalog.HasResidencySetAsync("acme", CancellationToken.None), Is.True);
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant."));
+    }
+
+    [Test]
+    public async Task Home_does_not_tell_a_tenant_admin_a_drained_tenant_is_served_in_every_region()
+    {
+        UseTenancyAs(isOperator: false);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = TenantRegionLifecycleStatus.Removed };
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("You administer tenant acme."));
+    }
+
+    [Test]
     public async Task Home_counts_tenants_for_an_operator()
     {
         UseTenancyAs(isOperator: true);
