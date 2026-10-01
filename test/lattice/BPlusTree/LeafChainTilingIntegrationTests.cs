@@ -133,7 +133,7 @@ public sealed class LeafChainTilingIntegrationTests
     }
 
     /// <summary>
-    /// Answers <c>TryUnlinkSuccessorAsync</c> with <c>false</c> while armed,
+    /// Answers <c>TryUnlinkSuccessorAsync</c> with a declination while armed,
     /// without invoking the leaf, so the predecessor is left exactly as it was.
     /// </summary>
     private sealed class UnlinkDeclineFilter : IIncomingGrainCallFilter
@@ -147,7 +147,7 @@ public sealed class LeafChainTilingIntegrationTests
                 && context.InterfaceMethod?.Name == nameof(IBPlusLeafGrain.TryUnlinkSuccessorAsync))
             {
                 UnlinkDeclineGate.CountDecline();
-                context.Result = false;
+                context.Result = LeafUnlinkOutcome.DeclinedPredecessorMoved;
                 return Task.CompletedTask;
             }
 

@@ -273,7 +273,7 @@ public sealed partial class ShardRootGrainLeafReclaimWallClockBoundTests
                         NextSibling = ci.ArgAt<GrainId?>(1),
                         HighKeyExclusive = ci.ArgAt<string?>(2),
                     };
-                    return Task.FromResult(true);
+                    return Task.FromResult(LeafUnlinkOutcome.Unlinked);
                 });
 
             leaves[id] = leaf;

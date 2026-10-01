@@ -218,7 +218,8 @@ public sealed partial class ShardRootGrainOrphanRepairTests
                 .Returns(ci =>
                 {
                     var probe = probes[self];
-                    if (probe.NextSibling != ci.ArgAt<GrainId>(0)) return Task.FromResult(false);
+                    if (probe.NextSibling != ci.ArgAt<GrainId>(0))
+                        return Task.FromResult(LeafUnlinkOutcome.DeclinedPredecessorMoved);
 
                     var absorb = ci.ArgAt<string?>(2);
                     var high = probe.HighKeyExclusive;
@@ -232,7 +233,7 @@ public sealed partial class ShardRootGrainOrphanRepairTests
                         NextSibling = ci.ArgAt<GrainId?>(1),
                         HighKeyExclusive = widened,
                     };
-                    return Task.FromResult(true);
+                    return Task.FromResult(LeafUnlinkOutcome.Unlinked);
                 });
 
             harness.Leaves[id] = leaf;
@@ -473,7 +474,7 @@ public sealed partial class ShardRootGrainOrphanRepairTests
         // frozen one is a pinned WAL that a re-run can no longer clear.
         var h = CreateHarness();
         h.A.TryUnlinkSuccessorAsync(Arg.Any<GrainId>(), Arg.Any<GrainId?>(), Arg.Any<string?>())
-            .Returns(Task.FromResult(false));
+            .Returns(Task.FromResult(LeafUnlinkOutcome.DeclinedPredecessorMoved));
 
         var page = await RepairAsync(h);
 
@@ -493,7 +494,7 @@ public sealed partial class ShardRootGrainOrphanRepairTests
         // unknown must not leave the leaf latched.
         var h = CreateHarness();
         h.A.TryUnlinkSuccessorAsync(Arg.Any<GrainId>(), Arg.Any<GrainId?>(), Arg.Any<string?>())
-            .Returns<Task<bool>>(_ => throw new TimeoutException("storage"));
+            .Returns<Task<LeafUnlinkOutcome>>(_ => throw new TimeoutException("storage"));
 
         Assert.That(async () => await RepairAsync(h), Throws.TypeOf<TimeoutException>());
 

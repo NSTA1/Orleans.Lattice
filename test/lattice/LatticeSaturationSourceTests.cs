@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree.Grains;
+
 namespace Orleans.Lattice.Tests;
 
 /// <summary>
@@ -112,7 +114,7 @@ public class LatticeSaturationSourceTests
     }
 
     /// <summary>
-    /// The six attributed seams must be distinct values, since the whole
+    /// The seven attributed seams must be distinct values, since the whole
     /// point is to tell them apart when choosing a retry policy.
     /// </summary>
     [Test]
@@ -120,9 +122,44 @@ public class LatticeSaturationSourceTests
     {
         var values = Enum.GetValues<LatticeSaturationSource>();
         Assert.That(values, Is.Unique);
-        Assert.That(values, Has.Length.EqualTo(7),
-            "Unspecified plus the six refusal seams; adding a seventh seam needs a retry-policy decision "
+        Assert.That(values, Has.Length.EqualTo(8),
+            "Unspecified plus the seven refusal seams; adding an eighth seam needs a retry-policy decision "
             + "in ShardActivationRetry.IsRetryableSaturation, so this count is deliberately pinned.");
+    }
+
+    /// <summary>
+    /// The envelope seam must stay out of the in-library retry set. It refuses a
+    /// batch write whose stages summed past
+    /// <see cref="LatticeOptions.SetManyEnvelopeBudget"/>, so the budget has
+    /// already been spent against a tree that is not settling and an immediate
+    /// retry re-fans the whole batch into that same regime (#2685).
+    /// <para>
+    /// <c>ShardActivationRetry.IsRetryableSaturation</c> is an allow-list - it
+    /// compares for equality against <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>
+    /// alone - so a newly appended member is non-retryable by construction
+    /// rather than by anyone remembering to exclude it. This test pins that
+    /// property for this member, because the deny-list shape would have made the
+    /// new seam silently retryable and its own documentation false.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void SetManyEnvelope_is_a_distinct_declared_seam_that_is_not_auto_retryable()
+    {
+        var ex = new LatticeSaturatedException(
+            "envelope budget spent", "tree-g", LatticeSaturationSource.SetManyEnvelope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.SaturationSource, Is.EqualTo(LatticeSaturationSource.SetManyEnvelope),
+                "the envelope seam must round-trip, so a handler can tell it from a fan-out refusal "
+                + "- the fan-out may have been entirely healthy and the stages merely summed.");
+            Assert.That((int)LatticeSaturationSource.SetManyEnvelope, Is.EqualTo(7),
+                "the discriminator is wire format: members are append-only and TxRegistryCapacity holds 6.");
+            Assert.That(ShardActivationRetry.IsRetryableSaturation(ex), Is.False,
+                "An envelope refusal must not be retried inside the library. The budget was spent "
+                + "against a tree that is not settling, so re-fanning the batch amplifies exactly "
+                + "the condition the refusal reports.");
+        });
     }
 
     /// <summary>
