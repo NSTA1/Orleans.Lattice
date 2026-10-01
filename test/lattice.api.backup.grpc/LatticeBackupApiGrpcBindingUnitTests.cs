@@ -98,7 +98,7 @@ public sealed class LatticeBackupApiGrpcBindingUnitTests
 
         LatticeBackupGrpcServiceBase.BindService(binder, service);
 
-        Assert.That(binder.AddedMethods, Is.EqualTo(19));
+        Assert.That(binder.AddedMethods, Is.EqualTo(27));
     }
 
     [Test]

@@ -48,6 +48,17 @@ internal static class ShellDesignAssets
     /// <summary>The specifier <see cref="TabsModule"/> is imported by, resolved against the document's base.</summary>
     public const string TabsModuleSpecifier = "./" + TabsModule;
 
+    /// <summary>
+    /// The date and time field's small script: it reports the reader's time zone, so the
+    /// field can show the local time beside the UTC one, and keeps the arrow and page keys
+    /// in its calendar from scrolling the page. <see cref="Components.LtDateTimeInput"/>
+    /// imports it itself.
+    /// </summary>
+    public const string DateTimeModule = DesignBasePath + "lattice-datetime.js";
+
+    /// <summary>The specifier <see cref="DateTimeModule"/> is imported by, resolved against the document's base.</summary>
+    public const string DateTimeModuleSpecifier = "./" + DateTimeModule;
+
     /// <summary>The favicon: the lattice mark on an ink tile, linked from the documentation site.</summary>
     public const string Favicon = DesignBasePath + "favicon.svg";
 

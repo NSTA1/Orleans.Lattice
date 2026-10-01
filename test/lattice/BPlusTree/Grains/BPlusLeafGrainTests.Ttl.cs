@@ -203,7 +203,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromMinutes(1));
 
-        Assert.That(removed, Is.EqualTo(1));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(1));
         Assert.That(grain.EntriesForTest.ContainsKey("dead"), Is.False);
     }
 
@@ -222,7 +222,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(0));
         Assert.That(grain.EntriesForTest.ContainsKey("recent"), Is.True);
     }
 
@@ -236,7 +236,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.Zero);
 
-        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(0));
         Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
     }
 }

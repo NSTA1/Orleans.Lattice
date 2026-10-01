@@ -39,8 +39,9 @@ namespace Orleans.Lattice.Storage.File;
 /// </list>
 /// <para>
 /// The on-disk payload for each entry is the
-/// <see cref="WalRecord"/>-shaped Orleans-serialised bytes, identical to
-/// the Azure Table provider's row payload, so
+/// <see cref="WalRecord"/>-shaped Orleans-serialised bytes inside
+/// file-specific record framing. The Azure Table provider stores the same
+/// encoded record shape in each row before its optional compression layer, so
 /// <see cref="AppendEncodedBatchAsync"/> stores the caller's pre-encoded
 /// segments verbatim (zero re-encode) and
 /// <see cref="ReadEncodedAsync"/> returns them verbatim (zero
@@ -65,8 +66,9 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     /// <param name="options">The file provider options. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">Orleans serializer used to project a
     /// provider-boundary <see cref="WalEntry"/> onto the durability-shaped
-    /// <see cref="WalRecord"/> stored on disk, matching the Azure Table
-    /// provider's on-disk format. Must not be <see langword="null"/>.</param>
+    /// <see cref="WalRecord"/> stored on disk, matching the uncompressed
+    /// record encoding used by the Azure Table provider. Must not be
+    /// <see langword="null"/>.</param>
     public FileWalStorageProvider(IOptions<FileWalStorageOptions> options, Serializer<WalRecord> serializer)
         : this(options, serializer, GcWalReadPressureGovernor.Instance)
     {
@@ -334,7 +336,13 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 
             if (records.Length > 0)
             {
-                ArrayPool<WalRecord>.Shared.Return(records, clearArray: true);
+                // Only the first `count` slots were populated; clearing that
+                // prefix drops the references the caller could observe, where
+                // clearArray: true additionally wipes the whole rounded-up
+                // rental - work proportional to the bucket rather than to the
+                // window actually read.
+                records.AsSpan(0, count).Clear();
+                ArrayPool<WalRecord>.Shared.Return(records);
             }
         }
     }

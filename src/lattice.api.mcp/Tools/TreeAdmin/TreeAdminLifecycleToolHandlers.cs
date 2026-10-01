@@ -291,12 +291,12 @@ internal static class TreeAdminLifecycleToolHandlers
         return restore;
     }
 
-    /// <summary>Triggers an online reshard that grows a tree to a target physical shard count.</summary>
+    /// <summary>Triggers an online reshard that grows or shrinks a tree to a target physical shard count.</summary>
     public static Task<TreeReshardStatus> ReshardTreeAsync(
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree to reshard. Must not be null, empty, or a reserved system tree id.")]
         string treeId,
-        [Description("The desired number of distinct physical shards to grow or shrink the tree to. A count equal to the current physical shard count is a no-op (an empty tree is re-pinned directly to any count). Must be at least 2 and at most 4096.")]
+        [Description("The desired number of distinct physical shards to grow or shrink the tree to. A count equal to the current physical shard count is a no-op (an empty tree is re-pinned directly to any count). Must be at least 2 and at most the smaller of the tree's virtual-slot count and 4096.")]
         int targetShardCount,
         CancellationToken cancellationToken = default)
     {

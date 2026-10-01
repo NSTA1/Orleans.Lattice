@@ -186,8 +186,8 @@ The contract, stated precisely:
   the activation confirming them - every write under `Eventual` mode, which the
   drain applies, or a `Synchronous` write whose confirmation failed. Later writes
   from the same activation are still diffed against the entries it last
-  confirmed itself, so an entry for a value the grain has since replaced can be
-  left behind.
+  confirmed itself, so an entry for a value the grain has since replaced - or
+  cleared, since a clear removes only the confirmed entries - can be left behind.
 - **A grain the backfill has not yet reached is absent**, not stale. Queries
   under-report during an incomplete backfill rather than returning wrong values.
 - **`SnapshotCursor` gives page-to-page stability over the index**, not over

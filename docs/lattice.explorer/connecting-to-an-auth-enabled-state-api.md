@@ -30,8 +30,9 @@ The shipped methods are:
 
 - `basic` - always available. It accepts the Basic scheme and also handles an
   empty advertisement. The session chrome renders a username/password form.
-- `entra` from `Orleans.Lattice.Explorer.Entra` - interactive Entra sign-in for
-  desktop or CLI hosts.
+- `entra` from `Orleans.Lattice.Explorer.Entra` - an interactive MSAL Entra
+  sign-in, run from the host process (browser auth-code with PKCE, or device
+  code), for hosts that do not use the hosted-web OpenID Connect cookie flow.
 - `entra` from `Orleans.Lattice.Explorer.Entra.Web` - hosted-web Entra sign-in
   for the Blazor Server web head. It exchanges the browser OpenID Connect
   session for a downstream State API bearer token.
@@ -119,13 +120,22 @@ the Explorer configuration store. Token providers own any optional persistence o
 their refresh material.
 
 The Basic credential may be stored by the injected credential store. In the web
-head that store is a Data Protection-protected, `HttpOnly`, secure browser
-cookie. Signing out clears the store and reconfigures the connection without the
-credential.
+head that store is `CookieCredentialStore`: a Data Protection-protected,
+`HttpOnly`, `Secure`, `SameSite=Strict` browser cookie, written and cleared by
+the `auth/login` and `auth/logout` endpoints. Signing out clears the store and
+reconfigures the connection without the credential. Inside a running circuit the
+response has already started, so the cookie cannot be deleted there; a clear
+therefore also revokes the presented cookie value, and a revoked value reads as
+no credential from then on. That revocation is held in the web head's process
+only, so a restart loses it and another replica does not see it.
 
 A sign-in is bound to the endpoint it was minted for. If the endpoint changes,
 the auth session signs out instead of carrying the credential to a different
-host.
+host. The cookie carries the same binding: it records the endpoint the
+credential was minted for, and the store refuses the credential unless that is
+recognisably the endpoint now configured, including when no endpoint can be
+resolved. That check does not rely on the in-process revocation, so it holds
+after a restart and on every replica.
 
 ## Reaching an endpoint behind an origin-locked proxy
 

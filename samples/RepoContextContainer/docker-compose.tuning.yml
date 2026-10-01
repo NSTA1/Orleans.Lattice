@@ -19,7 +19,7 @@
 #   docs/lattice.api.mcp.repocontext/local-deployment-runbook.md
 #
 # The runbook and this file are kept in step by
-# LocalDeploymentRunbookComposeParityTests, which resolves the two compose files
+# LocalDeploymentRunbookHygieneTests, which resolves the two compose files
 # with `docker compose config` and asserts the runbook's settings table
 # enumerates exactly what the resolved document declares.
 #

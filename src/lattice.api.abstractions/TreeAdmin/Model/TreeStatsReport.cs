@@ -3,6 +3,8 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <summary>
 /// A rolled-up statistics snapshot for one tree: topology and live-key counts from
 /// the cheap diagnostic projection, joined with the tree's storage byte breakdown.
+/// The cheap projection does not count tombstones, so <see cref="TotalTombstones"/>
+/// is reported as 0.
 /// A single-call "tree health at a glance" for a management surface.
 /// </summary>
 [GenerateSerializer]
@@ -22,7 +24,7 @@ public sealed record TreeStatsReport
     /// <summary>Total count of live (non-tombstoned) keys across all shards.</summary>
     [Id(3)] public long TotalLiveKeys { get; init; }
 
-    /// <summary>Total count of tombstoned keys across all shards.</summary>
+    /// <summary>Always 0 in this report because the cheap diagnostics path does not count tombstones.</summary>
     [Id(4)] public long TotalTombstones { get; init; }
 
     /// <summary>Bytes of durable leaf state persisted for the tree.</summary>

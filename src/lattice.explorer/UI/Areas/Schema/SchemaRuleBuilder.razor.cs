@@ -49,7 +49,7 @@ public partial class SchemaRuleBuilder : IDisposable
         new(nameof(SchemaRuleDraftKind.Pattern), "Matches a pattern"),
     ];
 
-    private const string StrictHint = "On: replicated and restored values are checked as well, and one that fails goes to the dead letters instead of being applied. Off: only direct writes are checked.";
+    private const string StrictHint = "On: replicated CRDT and atomic-batch entries are checked as well, and one that fails goes to the dead letters instead of being applied; plain last-writer-wins replication, restore and merge are never checked. Off: only direct writes are checked.";
 
     private readonly ComponentLifetime _lifetime = new();
     private readonly List<SchemaRuleCard> _cards = [];

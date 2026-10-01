@@ -19,15 +19,23 @@ This package is the seam between them. It carries:
 
 - **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`,
   `ILatticeStateMetricsObserver`, `ILatticeDataApi`, `ILatticeAuthAdmin`,
-  `ILatticeBackupControl`, `ILatticeSchemaControl`,
-  `ILatticeReplicationControl`, `ILatticeTelemetry`, `ILatticeTreeAdmin`,
+  `ILatticeBackupControl`, `ILatticeBackupOperations`, `ILatticeSchemaControl`,
+  `ILatticeReplicationControl`, `ILatticeReplicationStatus`,
+  `ILatticeTelemetry`, `ILatticeTreeAdmin`,
   `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`,
   `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`,
-  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, the app-control
-  `ILatticeAppsControl`, and the region-discovery `ILatticeRegionCatalog`.
+  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, the installable-app
+  `ILatticeAppsControl`, `ILatticeAppRoleBindings`, `ILatticeAppCatalog`,
+  `ILatticeAppWorkspace` and `ILatticeAppBridge`, and the region-discovery
+  `ILatticeRegionCatalog`.
 - **Their request / response models** - the results, pages, records, and
   requests those interfaces exchange, with their stable Orleans serialization
   aliases.
+- **Shared operation tracking** - `Orleans.Lattice.Api.Operations` provides the
+  accept-then-poll handle, status, list-page, and cancel contract used by backup
+  and future long-running facades. Backup's blocking verbs are deprecated and
+  will be removed in the next major version; migrate at
+  https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs.
 
 The facade packages reference this package and implement the interfaces; the
 binding packages reference this package and consume them. Publishing the

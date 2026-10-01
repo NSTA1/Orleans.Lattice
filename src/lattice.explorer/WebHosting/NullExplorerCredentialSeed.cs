@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Explorer.Web;
 /// <para>
 /// The environment credential seed exists for a single-operator launcher: it
 /// applies <c>LATTICE_EXPLORER_USERNAME</c> / <c>LATTICE_EXPLORER_PASSWORD</c> in
-/// memory when the credential store is empty. That is safe in the desktop head,
-/// where one process serves exactly one operator, but the web head is multi-user:
+/// memory when the credential store is empty. That is safe only when one process
+/// serves exactly one operator, but the web head is multi-user:
 /// its <see cref="CookieCredentialStore"/> is per browser, so it is empty for
 /// every anonymous visitor. Seeding there would sign each of them in with the
 /// process-wide operator credential, handing full cluster authority to anyone who

@@ -12,7 +12,7 @@ distinct durability boundaries and growth rates:
 
 | Layer | Lives in | Grows with | Durability boundary |
 |---|---|---|---|
-| Write-ahead log (WAL) | Per-shard `IWalStorageProvider` rows | Total mutation count since last GC | Foreground commit: a mutation is durable once its WAL append returns |
+| Write-ahead log (WAL) | Per-partition `IWalStorageProvider` rows (the mutation key's hash picks the partition, not the tree's physical shard) | Total mutation count since last GC | Foreground commit: a mutation is durable once its WAL append returns |
 | Leaf state row | `BPlusLeafGrain` persistent state | Fixed-shape topology + checkpoint metadata. **Does not grow** with live-key count. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
 | Snapshot blob | The leaf's snapshot row (a separate `leaf-snapshot` grain state), plus separate segment rows when a capture exceeds `LeafSnapshotSegmentBytes` | Entry count (live keys plus uncompacted tombstones) * canonical row size | Each snapshot capture - whenever the leaf's durable coverage lags its checkpoint (the WAL GC trims only covered prefixes) and when a checkpoint nears the WAL retention horizon; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
 
@@ -112,8 +112,8 @@ The activation path therefore tolerates any combination of:
 
 - A fresh leaf with no snapshot and no WAL entries past the
   checkpoint (zero-cost replay).
-- A fresh leaf (`ProjectionCheckpointOffset` = -1, the "nothing
-  applied" sentinel) joining a WAL partition already populated by
+- A fresh leaf (its persisted checkpoint at -1, the "nothing
+  scanned" sentinel) joining a WAL partition already populated by
   sibling leaves. The fall-off-log detector does not apply its
   replay budget to the sentinel because the per-leaf range filter
   inside the materialiser drops every WAL entry that falls outside

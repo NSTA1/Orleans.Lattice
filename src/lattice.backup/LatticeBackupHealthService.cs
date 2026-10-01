@@ -97,7 +97,7 @@ internal sealed class LatticeBackupHealthService(
         // A replicated tree's backup is only a restore point if every peer can read
         // the sink holding it. Fold the last cross-cluster verdict in: a positively
         // refuted sink downgrades an otherwise healthy backup to Warning so the
-        // misconfiguration is visible in the Explorer HEALTH column long before
+        // misconfiguration is visible in the Explorer Backups area's backup catalogue Health column long before
         // anyone attempts a coordinated restore.
         var sharing = ResolveSharing(manifest.Scope.TreeId);
         if (sharing is { Status: BackupSinkSharingStatus.NotShared } && status == BackupHealthStatus.Healthy)
@@ -201,7 +201,7 @@ internal sealed class LatticeBackupHealthService(
 
     /// <summary>
     /// Renders the cross-cluster sharing verdict as one sentence naming the peers
-    /// that could not be confirmed, so the Explorer HEALTH column's reason states
+    /// that could not be confirmed, so the Explorer Backups area's backup catalogue Health column reason states
     /// the remediation rather than merely that something is wrong.
     /// </summary>
     private static string DescribeSharing(BackupSinkSharingReport sharing)

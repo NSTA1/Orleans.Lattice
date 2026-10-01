@@ -129,6 +129,8 @@ public sealed class BackupHealthPageTests : BackupsTestContext
         var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
         cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-backups-form"), Has.Count.EqualTo(1)));
 
+        // #4148: the interval is one duration field with a box per unit.
+        Assert.That(cut.FindAll("form.lt-backups-form .lt-duration__input").Select(input => input.GetAttribute("aria-label")), Is.EqualTo(new[] { "Verify every, hours", "Verify every, minutes" }));
         cut.FindAll("form.lt-backups-form input")[0].Input("2");
         cut.FindAll("form.lt-backups-form input")[1].Input("15");
         cut.Find("form.lt-backups-form").Submit();
@@ -157,7 +159,7 @@ public sealed class BackupHealthPageTests : BackupsTestContext
         cut.FindAll("form.lt-backups-form input")[0].Input("0");
         cut.FindAll("form.lt-backups-form input")[1].Input("0");
         cut.Find("form.lt-backups-form").Submit();
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("whole number"));
+        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Give at least 1 min."));
 
         Backups.Configure = (_, _) => Task.FromException(new LatticeAuthorizationDeniedException());
         cut.FindAll("form.lt-backups-form input")[0].Input("1");

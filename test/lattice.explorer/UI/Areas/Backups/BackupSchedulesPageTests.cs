@@ -58,6 +58,9 @@ public sealed class BackupSchedulesPageTests : BackupsTestContext
 
         cut.Find("form.lt-backups-form select").Change("incremental");
         var inputs = cut.FindAll("form.lt-backups-form input");
+        // #4148: the interval is one duration field with a box per unit.
+        Assert.That(inputs.Select(input => input.GetAttribute("aria-label")), Is.EqualTo(new[] { "Every, hours", "Every, minutes" }));
+        Assert.That(inputs.Select(input => input.ClassList.Contains("lt-duration__input")), Is.All.True);
         inputs[0].Input("1");
         cut.FindAll("form.lt-backups-form input")[1].Input("30");
         cut.Find("form.lt-backups-form").Submit();

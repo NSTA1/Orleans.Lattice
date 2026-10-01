@@ -105,9 +105,9 @@ public sealed class LatticeWalGc(
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     // Per-tree byte-pressure latch for the advisory policy's hysteresis band.
-    // A tree is "armed" (in pressure) once its retained WAL crosses the full
+    // A tree is "armed" (in pressure) once its WAL occupancy crosses the full
     // ceiling (high-water), and stays armed - re-triggering a trim on each
-    // pass - until a trim drives retained below WalBytePressureReclaimTarget x
+    // pass - until a trim drives occupancy below WalBytePressureReclaimTarget x
     // ceiling (low-water). While disarmed, growth between the low- and high-
     // water marks does not re-trigger, so a tree hovering near the ceiling is
     // not trimmed on every pass. The singleton lifetime of this GC carries the
@@ -720,15 +720,16 @@ public sealed class LatticeWalGc(
     /// so those two - and only those two - leave nothing behind.
     /// </para>
     /// <para>
-    /// This is the backlog evidence that survives a default deployment.
+    /// This is the backlog evidence that survives every deployment.
     /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/> is the obvious
-    /// quantity to reach for and it is <see langword="null"/> whenever
-    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset, because
-    /// <c>SampleRetainedBytesAsync</c> returns early for zero hot-path cost when
-    /// the policy is disabled - which is exactly the deployment shape in which a
-    /// stranded tree had no corrective signal at all. The stop reason is decided
-    /// by the scan itself on every pass, so it costs nothing extra and is never
-    /// gated behind an opt-in.
+    /// quantity to reach for, but it is <see langword="null"/> whenever no byte
+    /// sample is taken - neither <see cref="LatticeOptions.WalMaxRetainedBytes"/>
+    /// nor the durability hold's <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>
+    /// is set, so <c>SampleRetainedBytesAsync</c> returns early - or the provider
+    /// cannot account bytes. Before the hold became default-on that was the
+    /// default deployment, in which a stranded tree had no corrective signal at
+    /// all. The stop reason is decided by the scan itself on every pass, so it
+    /// costs nothing extra and is never gated behind an opt-in.
     /// </para>
     /// <para>
     /// Written as an explicit member exclusion rather than a list of the four
@@ -2105,7 +2106,7 @@ public sealed class LatticeWalGc(
     /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),
     /// increments <see cref="LatticeMetrics.StoragePolicyBytesReclaimed"/> by
     /// the freed byte count. Updates the per-tree hysteresis latch against the
-    /// post-trim footprint: a trim that drove retained below the low-water mark
+    /// post-trim footprint: a trim that drove WAL occupancy below the low-water mark
     /// (<see cref="LatticeOptions.WalBytePressureReclaimTarget"/> of the ceiling)
     /// disarms the policy so it does not re-trigger until retained crosses the
     /// ceiling again. Also pushes the over-threshold flag to the observable
@@ -2148,9 +2149,9 @@ public sealed class LatticeWalGc(
     /// Decides whether this pass triggers a byte-pressure trim, applying the
     /// hysteresis band defined by
     /// <see cref="LatticeOptions.WalBytePressureReclaimTarget"/>. A tree arms
-    /// (enters pressure) only when its retained WAL crosses the full ceiling
+    /// (enters pressure) only when its WAL occupancy crosses the full ceiling
     /// (high-water) and stays armed - re-triggering on every pass - until a
-    /// trim drives retained at or below the low-water mark
+    /// trim drives occupancy at or below the low-water mark
     /// (<c>reclaimTarget x ceiling</c>). While disarmed, growth between the
     /// low- and high-water marks does not re-trigger, so a tree hovering just
     /// under the ceiling is not trimmed on every pass. Returns
@@ -2188,7 +2189,7 @@ public sealed class LatticeWalGc(
 
     /// <summary>
     /// Computes the low-water byte mark a byte-pressure trim aims to bring
-    /// retained WAL at or below, from the ceiling and the configured reclaim
+    /// WAL occupancy at or below, from the ceiling and the configured reclaim
     /// target. The target is clamped to the open-closed interval <c>(0, 1]</c>;
     /// out-of-range or non-finite values fall back to the default.
     /// </summary>

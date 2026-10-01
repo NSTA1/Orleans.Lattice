@@ -33,11 +33,11 @@ Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint
 
 ## Discovery
 
-The `lattice_capabilities` meta-tool reports, for the authenticated caller, its resolved subject id, the connected cluster's cluster and service ids, and one entry per facade group saying whether the group is available - its tool module is registered on this server **and** the caller's effective permissions grant an operation the group covers - plus, on a remote head, the endpoint the group is served from. It reports groups, not individual tools; the session's tool list is the per-tool view. Discovery is permission-scoped: a group's tools are listed only to a caller holding an Allow grant for an operation the group covers (and only the tools the registered authorizer permits by name), so a caller never sees a group it holds no grant for. The scopeless `Telemetry` and `AppInstall` capabilities count only from a grant written at cluster-wide scope, so a tree-scoped rule carrying the `Telemetry` bit lists nothing. The data group narrows the listing per tool: its mutating tools are listed only to a caller whose grants include a mutating data-plane operation (see the data tools below). Otherwise the filter is deliberately coarse - one grant lists the whole group - and the facade's access gate still authorizes every call per tree and per verb, so a listed tool can be refused for a tree, a verb, or a Deny rule the caller's grants do not cover. `lattice_capabilities` is offered to every authenticated caller and is the one tool the coarse authorizer does not gate; an unauthenticated session is offered no tools at all.
+The `lattice_capabilities` meta-tool reports, for the authenticated caller, its resolved subject id, the connected cluster's cluster and service ids, and one entry per facade group saying whether the group is available - its tool module is registered on this server **and** the caller's effective permissions grant an operation the group covers - plus, on a remote head, the endpoint the group is served from. It reports groups, not individual tools; the session's tool list is the per-tool view. Discovery is permission-scoped: a group's tools are listed only to a caller holding an Allow grant for an operation the group covers (and only the tools the registered authorizer permits by name), so a caller never sees a group it holds no grant for. The scopeless `Telemetry` and `AppInstall` capabilities count only from a whole-tree grant written at cluster-wide scope (`LatticeScope.ClusterWide()`), so neither a tree-scoped rule carrying the `Telemetry` bit nor a key- or prefix-scoped rule on the cluster-wide tree id lists the telemetry group. The data group narrows the listing per tool: its mutating tools are listed only to a caller whose grants include a mutating data-plane operation (see the data tools below). Otherwise the filter is deliberately coarse - one grant lists the whole group - and the facade's access gate still authorizes every call per tree and per verb, so a listed tool can be refused for a tree, a verb, or a Deny rule the caller's grants do not cover. `lattice_capabilities` is offered to every authenticated caller and is the one tool the coarse authorizer does not gate; an unauthenticated session is offered no tools at all.
 
 ## Installable app tools
 
-A host that registers [`Orleans.Lattice.Api.Mcp.Apps`](../lattice.api.mcp.apps/README.md) (`AddAppMcpTools()`) also advertises every enabled [installable app](../lattice.apps/README.md)'s tools on this endpoint. They are not named `lattice_<group>_<verb>`: each is namespaced by its app slug as `{slug}_{tool}`, for example `crm_find_contact`. They are added to an authenticated caller's session after the group tools, through the same per-session tool collection and the same coarse authorizer, and each is listed only to a caller the shared access gate allows every operation of the tool's declared app role on at least one of that role's scopes (an allow narrowed by a key filter does not count). An app tool whose name collides with a tool already in the session is skipped, so an app can never shadow a built-in or group tool, and an app whose slug is `lattice` or `repocontext` (the leading segments of the built-in tool namespaces) contributes no tools at all. App tools never appear in the `lattice_capabilities` report, which describes facade groups only, and with the package unregistered the tool list is unchanged.
+A host that registers [`Orleans.Lattice.Api.Mcp.Apps`](../lattice.api.mcp.apps/README.md) (`AddAppMcpTools()`) also advertises every enabled [installable app](../lattice.apps/README.md)'s tools on this endpoint. They are not named `lattice_<group>_<verb>`: each is namespaced by its app slug as `{slug}_{tool}`, for example `crm_find_contact`. They are added to an authenticated caller's session after the group tools, through the same per-session tool collection and the same coarse authorizer, and each is listed only to a caller that holds the tool's declared app role. A role is held by binding - the caller is a member of a group the install binds to that role - and the shared access gate can then only take it away, never confer it: the tool is withheld when, on each of the role's scopes, the gate refuses at least one of the role's operations, so an explicit deny on a bound member wins and the caller's other rights never list an app tool (see [the app tool surface](../lattice.api.mcp.apps/README.md#authorization) for the exact rule). An app tool whose name collides with a tool already in the session is skipped, so an app can never shadow a built-in or group tool, and an app whose slug is `lattice` or `repocontext` (the leading segments of the built-in tool namespaces) contributes no tools at all. App tools never appear in the `lattice_capabilities` report, which describes facade groups only, and with the package unregistered the tool list is unchanged.
 
 ## Region targeting
 
@@ -136,7 +136,7 @@ The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; e
 
 ## Backup tools (`lattice_backup_*`)
 
-Backup control over `ILatticeBackupControl`. Registered by `AddBackupTools(enableControl)`. The five inspect tools are always exposed; the five control tools require `enableControl: true`.
+Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Registered by `AddBackupTools(enableControl)`. The seven read-only tools are always exposed; the ten control tools require `enableControl: true` (the count includes the three deprecated aliases).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -145,11 +145,20 @@ Backup control over `ILatticeBackupControl`. Registered by `AddBackupTools(enabl
 | `lattice_backup_inventory` | inspect | Catalog-wide inventory summary. |
 | `lattice_backup_scope_status` | inspect | A scope's schedule and last-run status. |
 | `lattice_backup_export_artifact` | inspect | Export one bounded, base64-encoded page of a backup artifact's bytes, resumed from `chunkOffset` until `endOfStream`. |
-| `lattice_backup_create` | control | Capture a full backup. |
-| `lattice_backup_create_incremental` | control | Capture an incremental backup. |
-| `lattice_backup_restore` | control | Restore a backup. |
-| `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore. |
+| `lattice_backup_operation_status` | inspect | Read a tracked backup or restore operation by operation id; returns `found` plus the operation view when visible. |
+| `lattice_backup_operation_list` | inspect | Page the caller's tracked backup and restore operations newest-first. |
+| `lattice_backup_start` | control | Start a tracked full backup and return `{ operationId, kind, treeIds, created, statusTool }`. |
+| `lattice_backup_start_incremental` | control | Start a tracked incremental backup layered on a base backup and return an operation handle. |
+| `lattice_backup_start_set` | control | Start a tracked backup set over `treeIds` and return an operation handle. |
+| `lattice_backup_start_restore` | control | Start a tracked restore and return an operation handle; a succeeded status includes `restoreResult` for `lattice_backup_revert_restore`. |
+| `lattice_backup_operation_cancel` | control | Request cancellation of a tracked backup or restore operation. |
+| `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore from a prior restore result. |
 | `lattice_backup_delete` | control | Delete a backup and its unshared artifacts. |
+| `lattice_backup_create` | control | Deprecated alias for `lattice_backup_start`; will be removed in the next major version and now returns an operation handle instead of blocking. |
+| `lattice_backup_create_incremental` | control | Deprecated alias for `lattice_backup_start_incremental`; will be removed in the next major version and now returns an operation handle instead of blocking. |
+| `lattice_backup_restore` | control | Deprecated alias for `lattice_backup_start_restore`; will be removed in the next major version and keeps its `operationId` argument as the restore engine idempotency key. |
+
+The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 17.
 
 ## Auth tools (`lattice_auth_*`)
 
@@ -226,7 +235,7 @@ Read-only administrative diagnostics and storage accounting over `ILatticeTreeAd
 | Tool | Kind | Purpose |
 |---|---|---|
 | `lattice_treeadmin_shard_hotness` | inspect | Read a tree's per-shard read/write hotness with tree-level totals. |
-| `lattice_treeadmin_shard_diagnostics` | inspect | Read a whole-tree diagnostic report; the `deep` flag walks leaf state for authoritative counts. |
+| `lattice_treeadmin_shard_diagnostics` | inspect | Read a whole-tree diagnostic report. Both modes walk every shard's leaf chain: the default counts live keys only (its tombstone counts read zero), and the `deep` flag also counts tombstoned and expired entries. |
 | `lattice_treeadmin_shard_map_inspect` | inspect | Inspect a tree's shard-map topology (physical tree id, virtual/physical shard counts, map version). |
 | `lattice_treeadmin_projection_digest` | inspect | Read a single shard's leaf-projection content digest for cheap divergence detection. |
 | `lattice_treeadmin_tree_stats` | inspect | Read a tree's rolled-up topology, live-key counts, and storage byte breakdown in one call. |
@@ -249,19 +258,19 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_get_config` | read | Read a tree's registry-backed configuration (sizing, alias, per-tree overrides). |
 | `lattice_treeadmin_tree_get_shard_map` | read | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts). |
 | `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status - including, while a purge runs, `purgeInProgress` with `purgedShardCount` of `purgeShardCount` shards done. Answers without waiting for a shard's purge. |
-| `lattice_treeadmin_tree_reshard_status` | read | Read the current online-reshard state and shard-map fan-out. |
-| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state - running, an accepted undo still unwinding (`undoRequested`), or none - and effective B+ node capacities. |
-| `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree. |
+| `lattice_treeadmin_tree_reshard_status` | read | Read the current online-reshard state and shard-map fan-out, with the running reshard's target and starting shard counts to measure its progress against. |
+| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state - running, an accepted undo still unwinding (`undoRequested`), or none - and effective B+ node capacities, with the phase and the completed and total work units of a running resize. |
+| `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree and, while one runs, its phase and how many of its shards are copied. |
 | `lattice_treeadmin_tree_create` | manage | Explicitly create or register a tree with optional initial sizing. |
 | `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. |
 | `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides - publish-events, projection-digest maintenance, durable-history retention, and the advisory WAL retained-byte ceiling - each written only when its `apply*` flag is set (a null value on an applied dimension clears that override). |
 | `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
 | `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |
 | `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. Accept-then-poll: the shard walk runs in the background, and the call returns within a bounded wait - with `purgeInProgress` still `true` for a tree too large to purge in that time, which is not a failure; poll `lattice_treeadmin_tree_deletion_status`. A call while the purge runs or after it completed returns the status without error. |
-| `lattice_treeadmin_tree_reshard` | manage | Start an online reshard that grows or shrinks a tree to a target physical shard count. |
+| `lattice_treeadmin_tree_reshard` | manage | Start an online reshard that grows or shrinks a tree to a target physical shard count: at least 2, and at most the tree's virtual slot count, never more than 4096. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
 | `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. Accept-then-poll: admitted even while a resize phase runs, it returns within a bounded wait with `undoRequested` set if the unwind is still in progress. |
-| `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot. |
+| `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot into a fresh destination tree, in `Offline` or `Online` `mode`; any other `mode` value is rejected before a tree is resolved. |
 
 ### Bulk load, restore, and WAL placement
 
@@ -296,7 +305,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tag_index_reconcile` | manage | Reconcile a tag index. |
 | `lattice_treeadmin_compaction_trigger` | manage | Trigger an out-of-cycle tombstone-compaction pass on one physical shard of a tree (`shardIndex`), bypassing the shard's cooldown; reaps only tombstones and TTL-expired entries. |
 | `lattice_treeadmin_retention_get` | read | Read a tree's durable-history retention policy. |
-| `lattice_treeadmin_retention_set` | manage | Set a tree's durable-history retention policy. |
+| `lattice_treeadmin_retention_set` | manage | Set or clear a tree's durable-history retention policy: a null `mode` or `windowSeconds` clears that part, a non-positive window is rejected, and a `mode` other than `MetadataOnly`, `FullValue` or `Hybrid` is rejected before a tree is resolved. |
 
 The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`, except `lattice_treeadmin_compaction_trigger` and `lattice_treeadmin_retention_set`, which are mutating but non-destructive to readable state and so carry `readOnlyHint = false` and `destructiveHint = false`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map.
 
@@ -322,11 +331,11 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `lattice_tenant_create` | manage | Register a new tenant in the active status, seeding the admin subjects that may see it. Omit `adminSubjects` (or pass an empty list) and the calling subject is seeded so the creator can see what it created; supply a non-empty list and that set is used verbatim (the caller is not added on top). Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
+| `lattice_tenant_create` | manage | Register a new tenant in the active status, seeding the admin subjects that may see it. Omit `adminSubjects` (or pass an empty list) and the calling subject is seeded so the creator can see what it created; supply a non-empty list and that set is used instead (the caller is not added on top): a null, empty or whitespace entry is rejected, duplicates collapse, and where an identity directory is registered with validation required, an id it cannot resolve is refused. Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
 | `lattice_tenant_suspend` | manage | Move a tenant to the suspended status. Idempotent; the reserved default tenant cannot be suspended. |
 | `lattice_tenant_resume` | manage | Return a suspended tenant to the active status. Idempotent; fails closed if the tenant does not exist. |
 | `lattice_tenant_delete` | manage | Delete a tenant, cascading a soft-delete to every tree the tenant owns before removing its registry record. The reserved default tenant cannot be deleted. |
-| `lattice_tenant_set_quotas` | manage | Author a tenant's resource quotas and burst allowance, replacing whatever quotas it currently carries. Each ceiling (`maxBytes`, `maxKeys`, `maxMemoryBytes`, `maxTreeCount`, `maxOpsPerSecond`) is null for unbounded on that dimension; pass every dimension null to lift the caps again. `burstPercent` must be non-negative. The reserved default tenant cannot be given quotas, and it fails closed if the tenant does not exist. |
+| `lattice_tenant_set_quotas` | manage | Author a tenant's resource quotas and burst allowance, replacing whatever quotas it currently carries. Each ceiling (`maxBytes`, `maxKeys`, `maxMemoryBytes`, `maxTreeCount`, `maxOpsPerSecond`) is null for unbounded on that dimension, and a bounded ceiling must be non-negative; pass every dimension null to lift the caps again. `burstPercent` must be non-negative. The reserved default tenant cannot be given quotas, and it fails closed if the tenant does not exist. |
 
 Every tool carries `destructiveHint = true` and `readOnlyHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's own fail-closed tenant-admin access gate, so an unauthorized caller is default-denied on every mutation.
 
@@ -370,13 +379,13 @@ Every facade-backed tool call is routed through a single translation seam, so a 
 
 | Fault | What the client sees |
 |---|---|
-| A remote gRPC `RpcException` of any status | The status code plus the binding's sanitised detail (for example a `FailedPrecondition` guidance message verbatim, a `PermissionDenied`/`Unauthenticated` denial, or a server-side fault code that points at the cluster logs). |
+| A remote gRPC `RpcException` of any status | The binding's sanitised detail, prefixed with the status code - except a `FailedPrecondition` guidance message, which is surfaced verbatim on its own. A `PermissionDenied`/`Unauthenticated` denial stays a denial, and a server-side fault code points at the cluster logs. |
 | A local MCP-host fault (assembly load failure, argument or mapping error) | The exception type name and message, so an operator can diagnose a host-side problem directly. |
 | A fail-closed authorization denial | Surfaced as a denial with its safe message; it is never downgraded or swallowed. |
 
 The seam never forwards a raw server exception or stack trace across the gRPC boundary: the deliberately generic `Internal` wire message stays generic, and the translation only ever adds the gRPC status code and the detail the binding already chose to expose (see [Security](security.md)).
 
-Every group tool (everything except the two meta-tools) binds its arguments strictly: an argument the tool does not declare - typically a misspelled parameter name - is rejected before any facade call, with a message naming the offending argument and listing the accepted ones, rather than being silently ignored. Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. Those two statuses are what a remote head reports from the data gRPC binding; a co-hosted server surfaces the same fault as the facade's own exception type and message. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front, before any facade call, with a tool error that names the parameter ("The 'value' parameter must be base64-encoded; the supplied text is not valid base64.") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults.
+Every group tool (everything except the two meta-tools) binds its arguments strictly: an argument the tool does not declare - typically a misspelled parameter name - is rejected before any facade call, with a message naming the offending argument and listing the accepted ones, rather than being silently ignored. The echoed names are sanitised: at most five are named (the rest are counted), each is cut to 64 characters, and any character other than an ASCII letter or digit, `_`, `-` or `.` is replaced with `?`. Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. Those two statuses are what a remote head reports from the data gRPC binding; a co-hosted server surfaces the same fault as the facade's own exception type and message. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front, before any facade call, with a tool error that names the parameter ("The 'value' parameter must be base64-encoded; the supplied text is not valid base64.") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_tree_summary`, `lattice_state_get_shard_summaries`, `lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults, and `lattice_state_get_physical_shard_count` answers an unknown tree with a null count and `treeExists` set to `false`.
 
 ### Client errors are answered, not logged as faults
 
@@ -388,6 +397,8 @@ The ModelContextProtocol SDK logs every exception a tool throws at Error level w
 | `invalid_argument` | A missing, empty, or unrecognised argument, including one the SDK's argument binder cannot bind. |
 | `rejected_content` | An argument whose content is refused, for example a repository-context memory body carrying leaked tool-call framing or a credential-bearing URL. |
 | `not_found` | A record or resource the call names that does not exist, for example `repocontext_update` against a key with no record. |
+
+The message of a classified client error is sanitised once, before it is returned or logged: every control character and Unicode line or paragraph separator is replaced with `?`, and a message longer than 2,048 characters is cut there and ends in `...`, so a caller-chosen key, path or argument name cannot forge a record in a line-oriented log.
 
 The built-in `lattice_*` tools raise only the two argument-binding reasons - `unknown_argument`, and `invalid_argument` for an argument the SDK's binder cannot bind; `rejected_content`, `not_found`, and the other `invalid_argument` cases come from the [repository-context tools](../lattice.api.mcp.repocontext/tools.md#tool-parameters). A caller mistake that a tool does not classify is still thrown, so it still logs at Error and is not counted. In the built-in groups that includes a `value` that is not valid base64 on `lattice_data_set`, an argument the facade rejects, and an `InvalidArgument` status from a remote head. Several repository-context refusals are unclassified too, for example a fencing conflict or a claim on a non-memory key; the repository-context page lists them.
 

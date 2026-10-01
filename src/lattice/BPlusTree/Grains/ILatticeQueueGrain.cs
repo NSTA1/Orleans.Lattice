@@ -25,8 +25,9 @@ internal interface ILatticeQueueGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Appends <paramref name="value"/> and returns the assigned monotonic
-    /// id. When the backing tree's <see cref="LatticeOptions.QueueCapacity"/>
-    /// is set and reached, the oldest entry is evicted first (FIFO).
+    /// id. When <see cref="LatticeOptions.QueueCapacity"/> resolved for this
+    /// queue name is set and reached, the oldest entry is evicted first
+    /// (FIFO).
     /// </summary>
     Task<long> EnqueueAsync(byte[] value, CancellationToken cancellationToken = default);
 

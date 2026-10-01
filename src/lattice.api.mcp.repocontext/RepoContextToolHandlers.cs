@@ -10,20 +10,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The adapter behind the repository-context tool module. It exposes the
-/// read-only <c>repocontext_health</c> probe - which reports that the module is
-/// registered, that the caller cleared the fail-closed authorization gate, and
-/// whether retrieval can actually serve -
-/// the mutating <c>repocontext_bootstrap</c> onboarding tool that ingests a
-/// codebase into the context store, and the day-to-day capture, maintenance, and
-/// retrieval tools: the read-only <c>repocontext_recall</c>, <c>_scan</c>, and
-/// <c>_list_topics</c>, and the mutating <c>repocontext_remember</c>,
-/// <c>_update</c>, and <c>_forget</c>.
+/// read-only repository-context probes, recall and search tools, structural graph
+/// navigation, context bundles, usage statistics, drift reports, and claim status;
+/// and, when the tool group contributes them, the mutating onboarding, memory
+/// capture, memory maintenance, destructive repository, and claim-management tools.
 /// </summary>
 /// <remarks>
-/// The bootstrap handler resolves its coordinator from the request service provider
-/// and adds no authorization path of its own - the fail-closed gate that advertises
-/// the mutating tool only to a write-opted-in caller is inherited from the discovery
-/// core.
+/// Handlers resolve collaborators from the request service provider and add no
+/// authorization path of their own - advertisement and invocation both inherit the
+/// fail-closed gate from the MCP discovery core.
 /// </remarks>
 internal static class RepoContextToolHandlers
 {

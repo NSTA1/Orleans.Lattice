@@ -47,6 +47,37 @@ internal sealed partial class BPlusLeafGrain
     private const int DigestScratchBytes = 256;
 
     /// <summary>
+    /// Width, in bytes, of the fixed metadata block a single entry contributes:
+    /// an 8-byte wall-clock tick count, a 4-byte HLC counter, a one-byte
+    /// tombstone flag and an 8-byte expiry tick count, staged contiguously and
+    /// emitted as one <c>Append</c>.
+    /// </summary>
+    private const int EntryFieldBlockBytes = 21;
+
+    /// <summary>
+    /// Stack budget for the per-contribution scratch span. Covers
+    /// <see cref="EntryFieldBlockBytes"/> rounded up to a machine word, which
+    /// also satisfies the widest span any field helper slices out of it
+    /// (<see cref="FeedVectorClock"/> stages a 12-byte clock pair).
+    /// </summary>
+    private const int EntryScratchBytes = 24;
+
+    /// <summary>
+    /// Width, in bytes, of the staged (wall-clock ticks, counter) pair a single
+    /// vector-clock replica contributes. Callers of
+    /// <see cref="FeedVectorClock"/> must pass a scratch span at least this
+    /// wide.
+    /// </summary>
+    private const int ClockPairBytes = 12;
+
+    /// <summary>
+    /// Width, in bytes, of the little-endian length prefix that precedes every
+    /// string field, reserved at the head of the staging buffer so the prefix
+    /// and the transcoded body leave as one <c>Append</c>.
+    /// </summary>
+    private const int LengthPrefixBytes = 4;
+
+    /// <summary>
     /// Cached <see cref="XxHash128"/> reused across every per-entry
     /// contribution computed inside this grain activation. Lazily
     /// created on first use and reset (not recreated) between
@@ -525,24 +556,23 @@ internal sealed partial class BPlusLeafGrain
     {
         _entryHasher ??= new XxHash128();
         var hasher = _entryHasher;
-        Span<byte> scratch = stackalloc byte[8];
+        Span<byte> scratch = stackalloc byte[EntryScratchBytes];
 
         // (key) - UTF-8 bytes, length-prefixed so adjacent fields cannot collide.
         FeedString(hasher, key, scratch);
 
-        // (hlc.WallClockTicks, hlc.Counter)
+        // (hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks)
+        // Staged contiguously and emitted as a single append. XxHash128 hashes
+        // the concatenation of everything appended, so folding four adjacent
+        // appends into one is byte-identical by construction - and each Append
+        // is a virtual dispatch into a streaming state machine that has to
+        // reconcile its residual buffer, which is pure overhead when the
+        // caller already knows the fields are adjacent.
         BinaryPrimitives.WriteInt64LittleEndian(scratch, lww.Timestamp.WallClockTicks);
-        hasher.Append(scratch[..8]);
-        BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], lww.Timestamp.Counter);
-        hasher.Append(scratch[..4]);
-
-        // (isTombstone)
-        scratch[0] = lww.IsTombstone ? (byte)1 : (byte)0;
-        hasher.Append(scratch[..1]);
-
-        // (expiresAtTicks)
-        BinaryPrimitives.WriteInt64LittleEndian(scratch, lww.ExpiresAtTicks);
-        hasher.Append(scratch[..8]);
+        BinaryPrimitives.WriteInt32LittleEndian(scratch[8..12], lww.Timestamp.Counter);
+        scratch[12] = lww.IsTombstone ? (byte)1 : (byte)0;
+        BinaryPrimitives.WriteInt64LittleEndian(scratch[13..EntryFieldBlockBytes], lww.ExpiresAtTicks);
+        hasher.Append(scratch[..EntryFieldBlockBytes]);
 
         // (originClusterId) - null encoded as length 0xFFFFFFFF, distinct from empty string.
         FeedNullableString(hasher, lww.OriginClusterId, scratch);
@@ -580,12 +610,19 @@ internal sealed partial class BPlusLeafGrain
     /// reports, which is by definition the same number a separate
     /// <see cref="Encoding.GetByteCount(string)"/> pass would have produced, so
     /// the emitted bytes are identical to the two-pass form this replaced while
-    /// the string is scanned half as often. The scratch buffer is sized to the
-    /// key's own worst case rather than to a fixed 256 bytes, so an ordinary
-    /// short key no longer zero-initialises a quarter-kilobyte of stack it
-    /// never reads - C# zero-fills every <c>stackalloc</c>, and this runs once
-    /// per key, once per origin id and once per vector-clock replica on every
-    /// folded row.
+    /// the string is scanned half as often.
+    /// </para>
+    /// <para>
+    /// The prefix is reserved at the head of the staging buffer rather than
+    /// written into <paramref name="scratch"/>, so the prefix and the
+    /// transcoded body leave as a single <c>Append</c>; the digest stream is
+    /// unchanged, because XxHash128 hashes the concatenation of everything
+    /// appended. The staging buffer is a <em>constant</em> size rather than one
+    /// sized to the key's own worst case: a variable-length <c>stackalloc</c>
+    /// compiles to a real <c>localloc</c> with a stack probe on every call,
+    /// which costs more than zero-filling the fixed budget it avoids, and this
+    /// runs once per key, once per origin id and once per vector-clock replica
+    /// on every folded row.
     /// </para>
     /// <para>
     /// Internal rather than private so the microbenchmark host can drive it
@@ -599,23 +636,24 @@ internal sealed partial class BPlusLeafGrain
         {
             // GetByteCount("") is 0 for every encoding, so the empty case can
             // skip the transcode entirely and still emit the same prefix.
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], 0);
-            hasher.Append(scratch[..4]);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], 0);
+            hasher.Append(scratch[..LengthPrefixBytes]);
             return;
         }
 
-        var maxByteCount = Encoding.UTF8.GetMaxByteCount(value.Length);
-        if (maxByteCount <= DigestScratchBytes)
+        if (Encoding.UTF8.GetMaxByteCount(value.Length) <= DigestScratchBytes)
         {
             // The whole worst case fits, so the exact byte count is not needed
-            // before the transcode: encode once and let the written length be
-            // the prefix. Only maxByteCount bytes of stack are zero-filled
-            // rather than the full budget.
-            Span<byte> tight = stackalloc byte[maxByteCount];
-            var encoded = Encoding.UTF8.GetBytes(value, tight);
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], encoded);
-            hasher.Append(scratch[..4]);
-            hasher.Append(tight[..encoded]);
+            // before the transcode: encode once into a staging buffer whose
+            // head reserves the length prefix, then emit prefix and body as a
+            // single append. The buffer is a constant size rather than
+            // max-byte-count sized so the method keeps a fixed stack frame
+            // slot instead of emitting a variable localloc with a stack probe
+            // on every call.
+            Span<byte> staged = stackalloc byte[LengthPrefixBytes + DigestScratchBytes];
+            var encoded = Encoding.UTF8.GetBytes(value, staged[LengthPrefixBytes..]);
+            BinaryPrimitives.WriteInt32LittleEndian(staged[..LengthPrefixBytes], encoded);
+            hasher.Append(staged[..(LengthPrefixBytes + encoded)]);
             return;
         }
 
@@ -624,26 +662,25 @@ internal sealed partial class BPlusLeafGrain
         // shape, because renting for a long-but-mostly-ASCII string would cost
         // more than the second scan it saves.
         var byteCount = Encoding.UTF8.GetByteCount(value);
-        BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], byteCount);
-        hasher.Append(scratch[..4]);
         if (byteCount <= DigestScratchBytes)
         {
-            Span<byte> buf = stackalloc byte[DigestScratchBytes];
-            var written = Encoding.UTF8.GetBytes(value, buf);
-            hasher.Append(buf[..written]);
+            Span<byte> buf = stackalloc byte[LengthPrefixBytes + DigestScratchBytes];
+            var written = Encoding.UTF8.GetBytes(value, buf[LengthPrefixBytes..]);
+            BinaryPrimitives.WriteInt32LittleEndian(buf[..LengthPrefixBytes], written);
+            hasher.Append(buf[..(LengthPrefixBytes + written)]);
+            return;
         }
-        else
+
+        var rented = ArrayPool<byte>.Shared.Rent(LengthPrefixBytes + byteCount);
+        try
         {
-            var rented = ArrayPool<byte>.Shared.Rent(byteCount);
-            try
-            {
-                var written = Encoding.UTF8.GetBytes(value, rented);
-                hasher.Append(rented.AsSpan(0, written));
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
+            var written = Encoding.UTF8.GetBytes(value, rented.AsSpan(LengthPrefixBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(rented.AsSpan(0, LengthPrefixBytes), written);
+            hasher.Append(rented.AsSpan(0, LengthPrefixBytes + written));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
         }
     }
 
@@ -651,8 +688,8 @@ internal sealed partial class BPlusLeafGrain
     {
         if (value is null)
         {
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], -1);
-            hasher.Append(scratch[..4]);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], -1);
+            hasher.Append(scratch[..LengthPrefixBytes]);
             return;
         }
         FeedString(hasher, value, scratch);
@@ -663,13 +700,15 @@ internal sealed partial class BPlusLeafGrain
     /// replica order that does not depend on dictionary insertion order.
     /// Internal so the microbenchmark can drive it against a verbatim copy of
     /// its pre-trim shape; not part of the public surface.
+    /// <paramref name="scratch"/> must be at least
+    /// <see cref="ClockPairBytes"/> bytes wide.
     /// </summary>
     internal static void FeedVectorClock(XxHash128 hasher, VersionVector? vc, Span<byte> scratch)
     {
         if (vc is null || vc.Entries.Count == 0)
         {
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], -1);
-            hasher.Append(scratch[..4]);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], -1);
+            hasher.Append(scratch[..LengthPrefixBytes]);
             return;
         }
 
@@ -682,15 +721,12 @@ internal sealed partial class BPlusLeafGrain
         var count = vc.Entries.Count;
         if (count == 1)
         {
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], 1);
-            hasher.Append(scratch[..4]);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], 1);
+            hasher.Append(scratch[..LengthPrefixBytes]);
             foreach (var (replica, clock) in vc.Entries)
             {
                 FeedString(hasher, replica, scratch);
-                BinaryPrimitives.WriteInt64LittleEndian(scratch, clock.WallClockTicks);
-                hasher.Append(scratch[..8]);
-                BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], clock.Counter);
-                hasher.Append(scratch[..4]);
+                AppendClock(hasher, clock, scratch);
             }
 
             return;
@@ -698,33 +734,65 @@ internal sealed partial class BPlusLeafGrain
 
         // Replica ids are sorted with Ordinal so the digest is stable
         // regardless of which replica the dictionary insertion order
-        // happened to pick. Rent the scratch array from the shared pool
-        // to avoid a per-entry heap allocation on replicated trees.
+        // happened to pick. Both the ids and their clocks are rented from the
+        // shared pool and sorted together through the paired-array overload of
+        // Array.Sort, which carries each clock along with its id. That removes
+        // three costs the keys-only form paid: the per-replica dictionary
+        // lookup needed to recover each clock after the sort, and - because
+        // the keys-only Array.Sort(T[], int, int, IComparer<T>) overload
+        // converts the comparer to a Comparison<T> method group internally - a
+        // delegate allocation on every single call.
         var replicas = ArrayPool<string>.Shared.Rent(count);
+        var clocks = ArrayPool<HybridLogicalClock>.Shared.Rent(count);
+        var written = 0;
         try
         {
-            var i = 0;
-            foreach (var k in vc.Entries.Keys) replicas[i++] = k;
-            Array.Sort(replicas, 0, count, StringComparer.Ordinal);
+            foreach (var (replica, clock) in vc.Entries)
+            {
+                replicas[written] = replica;
+                clocks[written] = clock;
+                written++;
+            }
 
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], count);
-            hasher.Append(scratch[..4]);
+            Array.Sort(replicas, clocks, 0, count, StringComparer.Ordinal);
+
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], count);
+            hasher.Append(scratch[..LengthPrefixBytes]);
 
             for (var j = 0; j < count; j++)
             {
-                var replica = replicas[j];
-                FeedString(hasher, replica, scratch);
-                var clock = vc.Entries[replica];
-                BinaryPrimitives.WriteInt64LittleEndian(scratch, clock.WallClockTicks);
-                hasher.Append(scratch[..8]);
-                BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], clock.Counter);
-                hasher.Append(scratch[..4]);
+                FeedString(hasher, replicas[j], scratch);
+                AppendClock(hasher, clocks[j], scratch);
             }
         }
         finally
         {
-            // clearArray: true so we don't pin string references in the pool.
-            ArrayPool<string>.Shared.Return(replicas, clearArray: true);
+            // Only the prefix we actually wrote holds string references, so
+            // clearing it is enough to avoid pinning them in the pool; the
+            // clearArray: true form additionally wipes the whole rounded-up
+            // bucket, which is work proportional to the rental rather than to
+            // the write. The clock rental holds no references at all
+            // (HybridLogicalClock is a pure-value struct), so it needs no
+            // clear whatsoever.
+            replicas.AsSpan(0, written).Clear();
+            ArrayPool<string>.Shared.Return(replicas);
+            ArrayPool<HybridLogicalClock>.Shared.Return(clocks);
         }
+    }
+
+    /// <summary>
+    /// Stages a replica's (wall-clock ticks, counter) pair contiguously into
+    /// <paramref name="scratch"/> and emits it as a single append. The two
+    /// fields are adjacent in the digest stream, so one append over
+    /// <see cref="ClockPairBytes"/> bytes is byte-identical to the separate
+    /// 8-byte and 4-byte appends it replaces, while halving the streaming
+    /// hasher's per-call bookkeeping. <paramref name="scratch"/> must be at
+    /// least <see cref="ClockPairBytes"/> bytes wide.
+    /// </summary>
+    private static void AppendClock(XxHash128 hasher, HybridLogicalClock clock, Span<byte> scratch)
+    {
+        BinaryPrimitives.WriteInt64LittleEndian(scratch, clock.WallClockTicks);
+        BinaryPrimitives.WriteInt32LittleEndian(scratch[8..ClockPairBytes], clock.Counter);
+        hasher.Append(scratch[..ClockPairBytes]);
     }
 }

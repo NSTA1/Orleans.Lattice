@@ -14,7 +14,7 @@ namespace Orleans.Lattice;
 /// <b>Zero-cost default.</b> <see cref="Skips"/> is <c>true</c> when the
 /// registered interceptor is the default <see cref="NullLatticeWriteInterceptor"/>,
 /// or when the turn is system-origin and the interceptor has not opted into
-/// system-origin ingest via <see cref="ILatticeWriteInterceptor.InterceptsSystemOrigin"/>.
+/// intercepted system-origin writes via <see cref="ILatticeWriteInterceptor.InterceptsSystemOrigin"/>.
 /// Call sites additionally gate on the null type by reference before invoking
 /// any method here, so the default host never constructs a request, never calls
 /// the interceptor, and never allocates on the write path.

@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// caller would be denied - so the MCP layer adds no authorization path of its
 /// own.
 /// </summary>
-internal sealed class FakeLatticeBackupControl : ILatticeBackupControl
+internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
 {
     private readonly Dictionary<string, BackupManifest> _backups = new(StringComparer.Ordinal);
     private readonly Dictionary<(string BackupId, string ArtifactId), byte[]> _artifacts = new();

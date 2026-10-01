@@ -30,6 +30,6 @@ Both tier flags (`AllTreesGrantsEnabled` and `AccessAdministrationDelegationEnab
 - **Start-up log.** `AddLatticeAuth` registers a hosted service that logs one informational line at silo start: `Lattice authorization posture: DefaultEffect=..., AllTreesGrantsEnabled=..., AccessAdministrationDelegationEnabled=...`. It is the first place an operator sees the effective posture.
 - **`ILatticeAuthAdmin.ExplainAsync`.** The returned `AuthExplanation` carries a `Posture` (`AuthPolicyPosture`) reporting both flags, so an explain of a request that fell through to `DefaultEffect` shows whether a `Tree:*` rule would have applied had the tier been on.
 - **`ILatticeAuthAdmin.EffectivePermissionsAsync`.** The returned `AuthEffectivePermissions` carries the same `Posture`, so a listing that includes an inert `Tree:*` rule also reports that the tier is off.
-- **`ILatticeAuthAdmin.GetAccessModelAsync`.** The returned `AccessModelDescriptor` carries `AllTreesGrantsEnabled` and `AccessAdministrationDelegationEnabled`, which the Explorer's Access area renders as live on/off posture badges beside the authentication mode.
+- **`ILatticeAuthAdmin.GetAccessModelAsync`.** The returned `AccessModelDescriptor` carries `AllTreesGrantsEnabled` and `AccessAdministrationDelegationEnabled`, which the Explorer's Access area renders as on/off entries in its access-posture banner, beside the authentication mode.
 
 The `AuthPolicyPosture` record reports only the two opt-in tier flags; `DefaultEffect` is surfaced separately on `AuthExplanation`.

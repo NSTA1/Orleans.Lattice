@@ -38,9 +38,9 @@ public sealed record CatalogRequest
 
     /// <summary>
     /// When <see langword="true"/>, includes reserved internal system trees
-    /// (the registry, WAL, queue, and materialised-view backing trees) in the
-    /// tree catalog. Defaults to <see langword="false"/> so the catalog shows
-    /// only user-facing trees.
+    /// (the registry, WAL, queue, and materialised-view backing trees) and
+    /// <c>sys-</c> system-data trees in the tree catalog. Defaults to
+    /// <see langword="false"/> so the catalog shows only user-facing trees.
     /// </summary>
     [Id(2)] public bool IncludeSystemTrees { get; init; }
 

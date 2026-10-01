@@ -72,11 +72,14 @@ public sealed class LatticeReplicationSecurityOptions
     /// self-assertion, and the receiver-side origin checks that consume it then
     /// compare two caller-chosen values. The in-box sender always stamps its
     /// configured local cluster id alongside the secret, and every origin-taking
-    /// verb already refuses an unstamped call, so a standard estate is unaffected.
-    /// Under a single cluster-wide secret every peer resolves the same value, so
-    /// the check passes for every origin and costs only a resolution per call.
-    /// Under a symmetric per-peer scheme it binds the origin to the credential,
-    /// which is the isolation it exists to provide.
+    /// verb already refuses an unstamped call. Under a single cluster-wide secret
+    /// every peer resolves the same value in steady state, so the check passes for
+    /// every origin and costs only a resolution per call. During rotation, calls
+    /// between peers that have flipped at different times are refused until both
+    /// sides resolve the same outbound secret again; see
+    /// <c>docs/lattice.replication/transport-security.md</c>. Under a symmetric
+    /// per-peer scheme it binds the origin to the credential, which is the
+    /// isolation it exists to provide.
     /// </para>
     /// <para>
     /// Operators running an <i>asymmetric</i> per-peer scheme - where the secret a

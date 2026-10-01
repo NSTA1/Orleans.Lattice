@@ -103,9 +103,9 @@ public class LatticeOptions
     public long? MaxLiveKeys { get; set; } = DefaultMaxLiveKeys;
 
     /// <summary>
-    /// Optional enforcing cap, in bytes, on the estimated retained storage a
+    /// Optional enforcing cap, in bytes, on the estimated storage occupancy a
     /// single tree may occupy (the same figure the
-    /// <c>orleans.lattice.storage.total_bytes</c> gauge reports: WAL rows plus
+    /// <c>orleans.lattice.storage.total_bytes</c> gauge reports: WAL occupancy plus
     /// snapshot blobs plus leaf/shard-root state). When set and breached, a
     /// locally-authored write is rejected with a
     /// <see cref="LatticeQuotaExceededException"/> carrying the <c>bytes</c>
@@ -133,7 +133,7 @@ public class LatticeOptions
 
     /// <summary>
     /// Optional non-enforcing advisory ceiling, in bytes, on the estimated
-    /// retained storage, used to right-size <see cref="MaxEstimatedBytes"/>
+    /// storage occupancy, used to right-size <see cref="MaxEstimatedBytes"/>
     /// before turning enforcement on. Drives the same non-rejecting
     /// <c>orleans.lattice.admission.over_advisory</c> /
     /// <c>orleans.lattice.admission.would_reject</c> dry-run signals as
@@ -2602,9 +2602,10 @@ public class LatticeOptions
     /// ~50 ms to several seconds. The 16 default at the canonical
     /// <c>WalPartitions = 8</c> caches 128 concurrent flushes against
     /// a single storage account, which is at the edge of the per-
-    /// account budget. If you need more headroom, increase
-    /// <see cref="WalPartitions"/> (fan-out across accounts) before
-    /// lifting the per-partition cap further. Raising the cap above
+    /// account budget. If you need more headroom, add named WAL storage
+    /// providers and pin partitions to them before increasing
+    /// <see cref="WalPartitions"/>; more partitions alone do not spread
+    /// writes across storage accounts. Raising the cap above
     /// what the storage provider can usefully serve in parallel
     /// degrades latency without improving throughput.
     /// </para>
@@ -3037,7 +3038,7 @@ public class LatticeOptions
     /// </para>
     /// <para>
     /// When this is set and positive, a partition whose durable offset floor is
-    /// <b>absent</b> is not trimmed while the tree's retained WAL is below the
+    /// <b>absent</b> is not trimmed while the tree's WAL occupancy is below the
     /// ceiling. Absent means the collector could not establish that <i>any</i>
     /// leaf has durably applied <i>anything</i>, so it has no evidence that a
     /// single entry it is about to release has been written down anywhere. The
@@ -3079,7 +3080,7 @@ public class LatticeOptions
     /// </para>
     /// <para>
     /// <b>A hold that cannot be bounded does not engage.</b> The ceiling is
-    /// measured against the tree's retained bytes, so a provider that cannot
+    /// measured against the tree's WAL occupancy bytes, so a provider that cannot
     /// report bytes leaves the hold with nothing to bound it. On that shape the
     /// hold declines and the pass trims as it did before, reporting
     /// <see cref="WalGcTrimStopReason.DurabilityUnverified"/> so the condition
@@ -3149,8 +3150,8 @@ public class LatticeOptions
     /// Low-water fraction of <see cref="WalMaxRetainedBytes"/> that disarms the
     /// advisory byte-pressure policy, providing hysteresis so a tree hovering
     /// near the ceiling does not trigger a trim on every pass. The policy arms
-    /// when retained WAL crosses the full ceiling (high-water) and re-triggers
-    /// a byte-pressure trim on each pass until a trim drives retained bytes at
+    /// when WAL occupancy crosses the full ceiling (high-water) and re-triggers
+    /// a byte-pressure trim on each pass until a trim drives occupancy bytes at
     /// or below <c>WalMaxRetainedBytes x WalBytePressureReclaimTarget</c>
     /// (low-water), at which point it disarms; growth that then stays inside the
     /// <c>(low-water, ceiling]</c> band does not re-trigger until the ceiling is
@@ -4437,6 +4438,78 @@ public class LatticeOptions
     /// finite in the next major version (#3386).
     /// </summary>
     public static readonly TimeSpan DefaultSetManyFanOutBudget = Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// Wall-clock budget for the <b>whole</b> batched write, measured from the
+    /// first statement of <c>SetManyAsync</c> and covering every stage it runs:
+    /// <c>gate</c>, <c>route</c>, <c>bucket</c> and <c>fanout</c>.
+    /// <para>
+    /// <b>What it bounds that <see cref="SetManyFanOutBudget"/> cannot.</b> A
+    /// per-stage budget can only ever observe one stage, so it is blind to a
+    /// breach that no single stage causes. Issue #2685 measured exactly that: a
+    /// <c>gate</c> of 4,108.96 ms and a <c>fanout</c> of 26,709.17 ms summing to
+    /// 30,818 ms against a 30,000 ms Orleans response timeout, with neither
+    /// stage breaching alone. A fan-out budget sized for the fan-out - 30
+    /// seconds is the figure #3348 supports - never fires at 26.7 s, so the
+    /// caller is handed an anonymous <see cref="TimeoutException"/> naming
+    /// nothing. This budget is armed against the running total, which is the
+    /// only quantity that moves when stages sum.
+    /// </para>
+    /// <para>
+    /// <b>It composes with <see cref="SetManyFanOutBudget"/> rather than
+    /// replacing it.</b> The fan-out waits for the narrower of the two, so a
+    /// deployment that sets both keeps its per-fan-out ceiling and additionally
+    /// stops the fan-out being granted a fresh full window by a call that has
+    /// already spent most of the caller's patience upstream. Setting only this
+    /// one is the simpler configuration and is what the sizing rule below
+    /// assumes.
+    /// </para>
+    /// <para>
+    /// <b>The default is unbounded, and the bound is opt-in</b>, matching
+    /// <see cref="SetManyFanOutBudget"/>. <see cref="DefaultSetManyEnvelopeBudget"/>
+    /// is <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, which is
+    /// exactly the historical behaviour, so upgrading an existing deployment
+    /// changes nothing and no conforming caller can regress.
+    /// </para>
+    /// <para>
+    /// <b>Sizing rule.</b> Set it <em>below</em> the response timeout that
+    /// governs the call - the silo's <c>SiloMessagingOptions.ResponseTimeout</c>
+    /// for a silo-to-silo write, or the client's
+    /// <c>ClientMessagingOptions.ResponseTimeout</c> for an external one - with
+    /// enough margin that the refusal is built and marshalled back while the
+    /// caller is still listening. Above that deadline it is dead configuration:
+    /// the caller's own RPC deadline expires first and it sees a generic Orleans
+    /// timeout instead of the attributed refusal, which is the very outcome this
+    /// exists to replace. Against the 30-second Orleans default, 25 seconds
+    /// leaves a 5-second margin, mirroring
+    /// <see cref="DefaultMaxScanPageStallHeadroom"/>.
+    /// </para>
+    /// <para>
+    /// <b>This refusal rolls nothing back</b>, on exactly the terms
+    /// <see cref="SetManyFanOutBudget"/> documents. A batch write is not atomic
+    /// across shards; branches that already committed stay committed and
+    /// branches still in flight are left running rather than cancelled, so the
+    /// durable outcome is the one an unbounded wait would have produced. The
+    /// budget changes when the caller learns and what it is told, not what is
+    /// written. Callers needing all-or-nothing semantics use the atomic write
+    /// surface, which is unaffected.
+    /// </para>
+    /// <para>
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> is the default
+    /// and means the envelope is unbounded. The registered options validator
+    /// rejects zero and any other negative value: zero would refuse every batch
+    /// write immediately, which is never a useful configuration and is far more
+    /// likely to be a mistake.
+    /// </para>
+    /// </summary>
+    public TimeSpan SetManyEnvelopeBudget { get; set; } = DefaultSetManyEnvelopeBudget;
+
+    /// <summary>
+    /// Default value for <see cref="SetManyEnvelopeBudget"/>
+    /// (<see cref="System.Threading.Timeout.InfiniteTimeSpan"/> - the batched
+    /// write envelope is unbounded unless a finite budget is configured).
+    /// </summary>
+    public static readonly TimeSpan DefaultSetManyEnvelopeBudget = Timeout.InfiniteTimeSpan;
 
     /// <summary>
     /// Per-append pacing delay the WAL writer applies on the local admission

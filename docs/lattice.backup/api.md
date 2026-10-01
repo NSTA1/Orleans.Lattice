@@ -106,7 +106,7 @@ Rebuilds the in-cluster catalog from the durable sink, treating the sink as the 
 
 Restores a backup into a **fresh** cluster from the durable sink alone, with zero dependency on any surviving `sys-backup-catalog` tree. This is the disaster-recovery entry point: a cluster that lost its grain storage (so its catalog is gone) but still has the external sink can enumerate, resolve, chain-walk, and restore its backups from the sink.
 
-- `Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - bootstraps the reserved `sys-` trees if they are absent, resolves the target (tip) manifest from the sink alone (never the catalog), then hands the request to the ordinary restore engine (`ILatticeBackupRestoreService.RestoreAsync`), which walks the `BaseBackupId` chain and validates every referenced artifact catalog-first with a sink fallback - so on a cluster that lost its catalog the whole chain resolves from the sink - and replays it through the HLC-preserving seams; it then re-projects the catalog from the sink so the recovered cluster is left with a correct catalog. Reuses `LatticeRestoreRequest` / `LatticeRestoreResult`. Idempotent. Throws `LatticeRestoreValidationException` when the backup is absent from the sink, the base chain is broken, or an artifact is missing or tampered; `LatticeAuthorizationDeniedException` when the caller is not authorized (the delegated restore authorizes exactly as `RestoreAsync` does); and `ArgumentNullException` when `request` is null. The delegated restore can also throw the other exceptions `RestoreAsync` documents.
+- `Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - bootstraps the reserved `sys-` trees if they are absent, resolves the target (tip) manifest from the sink alone (never the catalog), then hands the request to the ordinary restore engine (`ILatticeBackupRestoreService.RestoreAsync`), which walks the `BaseBackupId` chain catalog-first with a sink fallback - so on a cluster that lost its catalog the whole chain resolves from the sink - validates every referenced artifact, read from the sink, against its recorded digest, and replays the chain through the HLC-preserving seams; it then re-projects the catalog from the sink so the recovered cluster is left with a correct catalog. Reuses `LatticeRestoreRequest` / `LatticeRestoreResult`. Idempotent. Throws `LatticeRestoreValidationException` when the backup is absent from the sink, the base chain is broken, or an artifact is missing or tampered; `LatticeAuthorizationDeniedException` when the caller is not authorized (the delegated restore authorizes exactly as `RestoreAsync` does); and `ArgumentNullException` when `request` is null. The delegated restore can also throw the other exceptions `RestoreAsync` documents.
 
 ### `ILatticeBackupHealthService`
 
@@ -226,6 +226,28 @@ The per-restore admission controller the restore stream consults once per record
 | `OverQuota` | Would take the active tenant past its key quota; the record is dead-lettered. |
 
 An in-process control value only (no serializer surface).
+
+## Operation constants and helpers
+
+### `BackupOperationKinds`
+
+Public constants for tracked backup operation kinds. `Prefix` is `backup.`, and the concrete kinds are `Capture` (`backup.capture`), `IncrementalCapture` (`backup.incremental-capture`), `SetCapture` (`backup.set-capture`), `Restore` (`backup.restore`), and `ColdRestore` (`backup.cold-restore`).
+
+### `BackupOperationPhases`
+
+Public constants for progress phases reported by tracked operations: `Capturing`, `CapturingMembers`, `Cataloguing`, `Bootstrapping`, `Validating`, `Applying`, and `Replaying`. A kind reports only the phases that apply to the work in hand.
+
+### `BackupOperationUnits`
+
+Public constants for progress unit names: `Entries` (`entries`), `Shards` (`shards`), `Members` (`members`), and `Manifests` (`manifests`).
+
+### `BackupOperationResultKeys`
+
+Public constants for the string result map carried by a succeeded tracked operation: `backupId`, `setId`, `memberBackupIds`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `shadowPhysicalTreeId`, `previousPhysicalTreeId`, `deadLetteredCrossTenant`, and `deadLetteredOverQuota`.
+
+### `BackupOperationResults`
+
+Helpers for reading operation result maps. `TryReadRestoreResult(IReadOnlyDictionary<string, string> result, out LatticeRestoreResult? restore)` reconstructs the full restore result when the map has the restore keys, and `ReadMemberBackupIds(IReadOnlyDictionary<string, string> result)` parses the comma-separated set-member backup ids.
 
 ## Requests and results
 

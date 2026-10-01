@@ -107,7 +107,7 @@ The transport authorizer receives a `LatticeAuthApiAuthorizationContext` naming 
 
 | Status | When |
 |---|---|
-| `PermissionDenied` | The transport authorizer refused the call (no trailers), or the facade administrator check denied the caller (with the trailers above). |
+| `PermissionDenied` | The transport authorizer refused the call (no trailers), the facade administrator check denied the caller (with the trailers above), or a `ListRules` call with `AuthPageRequest.ActiveTenantOnly` set asserted a tenant the caller may not act as (no trailers). |
 | `InvalidArgument` | The facade threw an `ArgumentException` - for example the policy store rejecting a rule shape it will not persist, a `LatticeAppOwnedRuleException` for a write or delete of an app-owned (`app:`) rule id, or a `LatticeDirectoryValidationException` from identity-directory validation. The status detail is the exception message. |
 | `Cancelled` | The call was cancelled, including while the transport authorizer was deciding. |
 | `Internal` | Any other failure. The server logs it and returns a generic message. |

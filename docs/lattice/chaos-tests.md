@@ -30,7 +30,7 @@ enforcement policy or target schema version is changed concurrently, and
 that every stored value stays self-describing and decodable across a
 version advance and an eager background migration.
 
-Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `TestCategory!=Chaos` - the iterative-development Tier 1 filter among them - skips them. Most are also marked `[NonParallelizable]` so each has its cluster to itself; `AdmissionControlChaosTests`, `BoundedCacheEvictionChaosTests`, `ClusterSplitConcurrencyChaosTests`, `ShardConsolidationChaosTests`, `LatticePredicatePushdownChaosTests` and the replication suite's `AntiEntropyRemediationGuardChaosTests` are not.
+Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `TestCategory!=Chaos` - the Tier 2 filter of the tiered test workflow among them - skips them. Most are also marked `[NonParallelizable]` so each has its cluster to itself; `AdmissionControlChaosTests`, `BoundedCacheEvictionChaosTests`, `ClusterSplitConcurrencyChaosTests`, `ShardConsolidationChaosTests`, `LatticePredicatePushdownChaosTests` and the replication suite's `AntiEntropyRemediationGuardChaosTests` are not.
 
 ### Core chaos suite (`test/lattice/BPlusTree/`, plus one fixture in `test/lattice/Predicates/`)
 
@@ -39,7 +39,7 @@ Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `Test
 | Happy-path chaos | `ChaosIntegrationTests.cs` | Strong invariants *during* heavy concurrent load with manually-triggered splits. |
 | Chaos + storage faults | `ChaosWithFaultsIntegrationTests.cs` | Parametrized theory that injects random storage faults; asserts eventual convergence after the fault window closes. |
 | Chaos + online resize | `ChaosResizeIntegrationTests.cs` | Full-workload chaos while `ResizeAsync` changes fan-out in the background under `SnapshotMode.Online`. Exercises the `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup), shadow-forwarding on every source shard, and the alias swap. |
-| Chaos + online reshard | `ChaosReshardIntegrationTests.cs` | Full-workload chaos while `ReshardAsync` grows the physical shard count (4 → 8) in the background. Exercises the `TreeReshardGrain` migration loop, dispatch-budget clamping, `HotShardMonitorGrain` interlock, and `ShardMap` convergence when reshard-dispatched splits race with workload writes. The same fixture also shrinks a tree (4 to 2) under the same workload, exercising fold planning, every fold's drain, freeze, swap and finalise racing live writes, and the release of each retired donor's storage while scans and counts may still hold a pre-fold shard map. |
+| Chaos + online reshard | `ChaosReshardIntegrationTests.cs` | Full-workload chaos while `ReshardAsync` grows the physical shard count (4 to 8) in the background. Exercises the reshard coordinator's migration loop and its dispatch-budget clamping (`MaxConcurrentMigrations`), and `ShardMap` convergence when reshard-dispatched splits race with workload writes. The same fixture also shrinks a tree (4 to 2) under the same workload, exercising fold planning, every fold's drain, freeze, swap and finalise racing live writes, and the release of each retired donor's storage while scans and counts may still hold a pre-fold shard map. |
 | Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial view. Quiescent topology (no concurrent split/resize/reshard). |
 | Atomic-write reader isolation across shard split | `ShardSplitTopologyTests.cs` | Same zero-or-all visibility invariant as `AtomicVisibilityChaosTests`, but the topology mutator drives a manual `SplitAsync` on shard 0 concurrently with a chain of `SetManyAtomicAsync` sagas. Exercises shadow-forward of saga prepares onto the destination shard and the saga terminal-broadcast retry onto the new owner via `StaleShardRoutingException`. |
 | Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner via `StaleTreeRoutingException`. |
@@ -47,13 +47,13 @@ Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `Test
 | Digest determinism under load | `ChaosDigestIntegrationTests.cs` | `ILattice.GetLeafProjectionDigestAsync` is byte-stable across repeated calls in a write-quiescent window after concurrent writer / scanner load, and per-shard `EntryCount` sums equal `CountAsync`. |
 | Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | A worker repeatedly issues `DeleteRangeAsync` over the middle band of a 600-key universe (`rd-000200` to `rd-000400`) while point writers, a refill writer re-inserting delete-band keys, scanners and a split coordinator run. Post-window, every key in the two protected bands is present and envelope-valid - the delete never strays outside its range - and scanners never observe a malformed value. The live count inside the delete band is deliberately not pinned, because deletes and refills race. |
 | Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Four writers increment an eight-key counter universe through a read-then-`SetIfVersionAsync` (CAS) loop while a split coordinator churns shards. A lost CAS returns `false` and the caller re-reads with `GetWithVersionAsync` and retries; post-window, every stored counter equals the number of successful CAS calls made against it, so no update was lost, and no caller saw an exception outside the documented transient class. |
-| Scan cancellation under load | `ScanCancellationChaosTests.cs` | Scanner workers repeatedly open `ScanKeysAsync` / `ScanEntriesAsync`, cancel 5-25 ms in, and re-open while writers churn the universe. Cancellation must surface as `OperationCanceledException` (an enumeration abort is tolerated), a partial scan must never yield an unknown key or a malformed value, and a fresh full scan after the window must return exactly the pinned universe - the check that no cancelled enumerator left state behind. |
-| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | Two-silo `TestCluster`, sustained write/read load on an `ILattice` tree, secondary silo restarted every ~2.5 s via `TestCluster.RestartSiloAsync`. Post-window invariants: pinned `CountAsync`, envelope-valid value on every key, no caller-visible exception outside the documented transient class. Uses `ProcessScopeMemoryGrainStorage` (a static-dictionary-backed `IGrainStorage` shared across every silo in the test process) so secondary-silo restart does not wipe the shard-root / registry topology - per-silo Orleans memory storage would otherwise let a re-placed `ShardRootGrain` activation read empty state and overwrite the live topology with a fresh leaf root (the underlying split-brain that previously surfaced as `InvalidCastException`). |
+| Scan cancellation under load | `ScanCancellationChaosTests.cs` | Scanner workers repeatedly open `ScanKeysAsync` / `ScanEntriesAsync`, cancel 5-24 ms in, and re-open while writers churn the universe. Cancellation must surface as `OperationCanceledException` (an enumeration abort is tolerated), a partial scan must never yield an unknown key or a malformed value, and a fresh full scan after the window must return exactly the pinned universe - the check that no cancelled enumerator left state behind. |
+| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | Two-silo `TestCluster`, sustained write/read load on an `ILattice` tree, secondary silo restarted every ~2.5 s via `TestCluster.RestartSiloAsync`. Post-window invariants: pinned `CountAsync` and an envelope-valid value on every key, read back with a bounded retry (up to 60 s) that absorbs only silo-reactivation faults; during the window every exception is tolerated and counted, and only a read that returns a malformed value fails the run. Uses `ProcessScopeMemoryGrainStorage` (a static-dictionary-backed `IGrainStorage` shared across every silo in the test process) so secondary-silo restart does not wipe the shard-root / registry topology - per-silo Orleans memory storage would otherwise let a re-placed shard-root activation read empty state and overwrite the live topology with a fresh leaf root (the underlying split-brain that previously surfaced as `InvalidCastException`). It also registers one process-shared `InMemoryWalStorageProvider` on every silo through `AddWalStorage`, because a reactivated leaf rebuilds its entries from the write-ahead log and the default per-silo provider would vanish with the restarted silo, silently emptying every WAL partition it hosted. |
 | Cross-tree atomic write under shard churn | `ChaosCrossTreeAtomicWriteIntegrationTests.cs` | A commit worker drives one all-or-nothing `SetManyAtomicAsync` saga per generation into the same logical slot of three distinct trees, while per-tree split coordinators churn shards and reader workers probe every settled committed generation. Asserts cross-tree all-or-nothing: a settled committed key is present in **all three trees or none**, and every committed generation is durably present in all trees post-window, even as splits move keys between shards mid-saga on every tree. |
 | Admission cap under cross-shard pressure | `AdmissionControlChaosTests.cs` | Concurrent cross-shard writers drive one tree with an enforcing `LatticeOptions.MaxLiveKeys` cap and a second tree with only an advisory `LatticeOptions.AdmissionAdvisoryLiveKeys` ceiling. The enforcing cap must reject some writes with `LatticeQuotaExceededException` and keep rejecting once its aggregate settles above the cap - overshoot past the configured value is allowed - while the advisory tree never rejects. |
 | Bounded read-through cache eviction | `BoundedCacheEvictionChaosTests.cs` | Pins `LatticeOptions.MaxCacheValueBytes` so small that almost every cached payload is evicted down to its metadata, so nearly every read takes the eviction path back to the primary leaf. Under concurrent overwrite churn, eviction must never turn a live key into a false miss or surface a stale or cross-key payload. |
 | Guarded atomic write under split churn | `ChaosPredicateAtomicSetManyIntegrationTests.cs` | Guarded `SetManyAtomicAsync<T>` batches (`Score >= Guard`, evaluated server-side against each key's pre-saga value) under split churn and concurrent point writes: a batch over an always-matching band always commits and stamps every key, and a batch holding a permanently failing key always returns `PreconditionFailed` and writes nothing. |
-| Conditional batch write under split churn | `ChaosPredicateConditionalSetManyIntegrationTests.cs` | The guarded `SetManyAsync<T>` overload stamps a marker onto a band of keys while splits move them and point writers rewrite them: a key whose current value fails the guard is never written, a matching key is, and only submitted keys are ever considered. |
+| Conditional batch write under split churn | `ChaosPredicateConditionalSetManyIntegrationTests.cs` | The guarded `SetManyAsync<T>` overload stamps a marker onto a band of keys while splits move them and point writers rewrite them: a key whose current value fails the guard is never written, a matching key is, and only submitted keys are ever considered. After the window it also audits the quiesced tree for leaves that no descent from their shard root reaches, and reads every key back through the routing path, so a split that lost its separator fails the run. |
 | Predicate-filtered cursors under split churn | `ChaosPredicateCursorIntegrationTests.cs` | Predicate-filtered key, entry and snapshot-entry cursors paged across a mid-paging split: pages stay in ascending key order, every surfaced item satisfies the predicate, and a stable band returns exactly its matching keys. |
 | Conditional range-delete cursor under split churn | `ChaosPredicateDeleteRangeCursorIntegrationTests.cs` | A resumable conditional range-delete cursor stepped to completion in bounded pages under split churn and conflicting writes tombstones every in-range key that matches the predicate and nothing else. |
 | Predicate `GetManyAsync` under split churn | `ChaosPredicateGetManyIntegrationTests.cs` | The predicate `GetManyAsync<T>` overload, evaluated server-side on the owning leaf: every returned value satisfies the predicate, and a stable band returns exactly its matching keys however splits move them. |
@@ -120,7 +120,7 @@ Fixture and parameter differences:
 | Happy-path | `FourShardClusterFixture` (tree not pre-registered: 64 shards) | 128 (library default) | 128 (library default) | `chaos-{i:D5}` | 500 |
 | Chaos + faults | `MultiShardFaultInjectionClusterFixture` (tree not pre-registered: 64 shards) | 128 (library default) | 128 (library default) | `fchaos-{i:D5}` | 200 |
 | Chaos + resize | `FourShardClusterFixture` (4 shards) | 4 -> `16` mid-run | 128 (library default) -> `16` mid-run | `resize-chaos-{i:D5}` | 200 |
-| Chaos + reshard | `FourShardClusterFixture` (4 shards -> 8) | 4 | 128 (library default) | `reshard-chaos-{i:D5}` | 200 |
+| Chaos + reshard | `FourShardClusterFixture` (4 shards -> 8, or -> 2 in the shrink run) | 4 | 128 (library default) | `reshard-chaos-{i:D5}` | 200 |
 
 ```mermaid
 flowchart LR
@@ -152,10 +152,14 @@ Worker categories (the exact mix and counts vary per test; each fixture declares
 * **Point readers** - `GetAsync`; validates envelope if a value is returned.
 * **Bulk readers** - `GetManyAsync` for 16 random keys (happy-path /
   faults only).
-* **Scanners** - rotating `ScanKeysAsync`, `ScanEntriesAsync`, reverse scan,
-  range scan. Each full-tree scan must yield exactly the universe with
-  no duplicates and no unknown keys.
-* **Counters** - `CountAsync` must always equal the pinned universe size.
+* **Scanners** - happy-path: rotating `ScanKeysAsync`, `ScanEntriesAsync`,
+  reverse scan and range scan, each of which must yield exactly the
+  universe (or the range) in order, with no duplicates and no unknown
+  keys; resize and reshard: full-tree `ScanKeysAsync` with no duplicates
+  and no unknown keys; faults: `ScanEntriesAsync`, checking order,
+  unknown keys and envelopes.
+* **Counters** - `CountAsync` must always equal the pinned universe size
+  (the faults fixture lets the count drift during its fault window).
 * **Topology mutator** - test-specific:
   * happy-path: every ~200 ms drives a manual split, and then a split
     pass, on a randomly chosen non-empty shard.
@@ -164,7 +168,9 @@ Worker categories (the exact mix and counts vary per test; each fixture declares
   * resize: initiates `ResizeAsync` once at the window start and pumps
     the coordinator to completion.
   * reshard: initiates `ReshardAsync(8)` once at the window start and
-    pumps `RunReshardPassAsync` + per-shard split passes to completion.
+    pumps the reshard coordinator and the per-shard split passes to
+    completion; the shrink run initiates `ReshardAsync(2)` instead and
+    pumps the coordinator and every fold it starts.
 
 ## Test 1 - Happy-path chaos (`ChaosIntegrationTests`)
 
@@ -212,7 +218,9 @@ After the chaos window closes:
 * `ScanKeysAsync` yields exactly the pinned universe (no gaps, no extras).
 * Every worker category performed at least one operation (proves the
   workload ran under real concurrency, not a degenerate single-thread
-  schedule).
+  schedule); splits and atomic writes count attempts.
+* Once the atomic writer's committed and transiently failed sagas total
+  at least three, at least half of them committed.
 * Zero envelope violations were observed *during* the window.
 
 ## Test 2 - Chaos + storage faults theory (`ChaosWithFaultsIntegrationTests`)
@@ -304,25 +312,33 @@ After healing:
 * `ScanKeysAsync` yields exactly the pinned universe.
 * `ScanEntriesAsync` yields exactly the pinned universe with every value
   matching its envelope.
-* Every universe key is recoverable via `GetAsync`.
+* Every universe key appears in the post-heal `ScanKeysAsync`.
 * Zero envelope violations were observed during the whole run.
-* Every workload category performed at least one operation; the
-  injector armed at least one fault (for `p > 0`).
+* Point writes, point reads, scans, counts and splits each completed at
+  least once and at least one atomic write was attempted; the injector
+  armed at least one fault (for `p > 0`); in the no-fault baseline at
+  least 70% of atomic writes committed (with fewer than ten attempts: at
+  least one committed and at most one failed).
 
 ## Test 3 - Chaos + online resize (`ChaosResizeIntegrationTests`)
 
 This test targets the online resize path. A full concurrent workload
 runs against a seeded tree while `ResizeAsync` changes the B+ fan-out
 to `MaxLeafKeys = 16` / `MaxInternalChildren = 16` under
-`SnapshotMode.Online`. The entire resize - snapshot drain, alias swap,
-per-shard reject phase, cleanup - happens inside the chaos window.
+`SnapshotMode.Online`. The resize starts inside the chaos window and its
+phases - snapshot drain, alias swap, per-shard reject phase, cleanup - are
+pumped there under live traffic; any phase still running when the window
+closes is finished in a post-window drain of up to 30 s before the
+invariants are checked.
 
 ### Recovery surfaces exercised
 
 * `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup)
   under sustained traffic.
-* Shadow-forwarding on every source shard - live writes during the
-  drain must be mirrored to the destination with their original HLCs.
+* Shadow-forwarding on every source shard - the workload's live point
+  writes during the drain must be mirrored to the destination with their
+  original HLCs (the forward carries last-writer-wins writes only; typed
+  CRDT deltas and bulk appends are not mirrored).
 * Alias swap - mid-flight `GetAsync` / `SetAsync` on a stateless-worker
   `LatticeGrain` activation holding a stale alias must transparently
   re-resolve and retry.
@@ -352,19 +368,31 @@ count from 4 to 8 while the tree continues to serve traffic. The
 reshard is kicked off synchronously before the chaos timer starts (so
 cold-activation cost doesn't burn the window on slow Release CI
 runners); the in-window driver only pumps the migration loop to
-completion.
+completion. A second test in the fixture runs the same workload while
+`ReshardAsync(2)` shrinks a fresh 4-shard tree to 2 shards, its driver
+pumping the coordinator and every fold it starts. Both runs finish any
+residual work in a post-window drain of up to 30 s.
 
 ### Recovery surfaces exercised
 
 * `TreeReshardGrain` migration loop under sustained traffic -
   eligibility filtering, dispatch-budget clamping
   (`MaxConcurrentMigrations`), re-evaluation across ticks.
-* `HotShardMonitorGrain` interlock - the autonomic monitor must
-  suppress its own passes while a reshard is in flight.
 * `ShardMap` convergence when reshard-dispatched splits race with
   workload writes (shadow-write, drain, swap, reject, permanent
   `MovedAwaySlots`).
 * No invariant drift across the full reshard window.
+* Shrink run: fold planning and concurrency under sustained traffic,
+  every fold's drain, freeze, swap and finalise racing live writes, and
+  the release of each retired donor's storage while scans and counts may
+  still hold a pre-fold shard map.
+
+Neither run exercises the autonomic hot-shard monitor's rule that
+suppresses its passes while a reshard is in flight: the fixture keeps
+the default `HotShardSampleInterval` and `AutoSplitMinTreeAge`, so every
+monitor pass returns inside the minimum-tree-age grace period, before it
+reaches that rule, until well after a reshard normally completes, and no
+assertion reads the monitor.
 
 ### Tolerated transients
 
@@ -384,6 +412,11 @@ After the chaos window closes:
   physical shards.
 * Every worker category performed at least one operation.
 * Zero envelope violations observed during the window.
+
+The shrink run checks the same count, scan, idle-coordinator, worker and
+envelope criteria, and additionally that the final `ShardMap` holds exactly
+two distinct physical shards and that each of the two shards that left the
+map reports itself retired and holds no leaves.
 
 ## Test 5 - Atomic-write reader isolation (`AtomicVisibilityChaosTests`)
 
@@ -438,7 +471,7 @@ never a partial subset.
 | Invariant | Mechanism under test |
 |---|---|
 | Saga prepares survive a mid-flight shard split | Source shard's shadow-forward pipeline mirrors prepared entries to the destination during the split's drain phase; saga terminal-broadcast retries onto the new owner via `StaleShardRoutingException` |
-| Saga prepares survive a mid-flight online resize | Source physical tree shadow-forwards every live write (including saga prepares) to the destination physical tree during the snapshot drain; alias swap is observed via `StaleTreeRoutingException` and the saga terminal-broadcast retries onto the new owner |
+| Saga prepares survive a mid-flight online resize | Source physical tree shadow-forwards every last-writer-wins write (including saga prepares; typed CRDT deltas and bulk appends are not mirrored) to the destination physical tree during the snapshot drain; the alias swap is observed via the stale tree-routing signal and the saga terminal-broadcast retries onto the new owner |
 | Saga prepares survive a mid-flight online reshard | `TreeReshardGrain` migration loop dispatches per-shard splits; the retroactive prepared-mutation sweep at `BeginShadowWrite` and the terminal-fan-out shadow-forward fallback together mirror prepares and the saga's `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup; the registry's `TxDecisionRetention` tombstone window absorbs duplicate terminals |
 
 ### Workload (per fixture)
@@ -601,8 +634,8 @@ Producer-side: the `orleans.lattice.replication.ship.*` family (see [Metrics](me
 These are not chaos tests in the bombardment sense - they are
 deterministic single-write smoke tests that pin the simpler
 invariants the cross-cluster convergence suite relies on. They ship
-under `[Category("Chaos")]` so the strict-delta integration filter
-runs them alongside the suite they diagnose; a failure here
+under `[Category("Chaos")]` so they run in the chaos tier alongside the
+suites they diagnose; a failure here
 short-circuits failure analysis on the larger convergence /
 atomic-visibility fixtures by isolating which seam broke.
 
@@ -644,7 +677,7 @@ continuously throughout the ~15 s window.
 
 * **Seed phase** - 200 `SetAsync` keys per tree across three trees (`xct-{run}-0..2`), each on a four-shard fixture (`FourShardClusterFixture`) so splits are enabled.
 * **Commit worker** - one cross-tree saga per generation at a 50 ms cadence: a `LatticeTreeBatch` per tree writing `x-{gen}` into all three trees under operation id `xctop-{run}-{gen}`. Asserts each saga returns `Committed`.
-* **Reader workers** - three readers probe every **settled** generation (commit frontier minus a `SettleMargin` of 5) in all three trees; a settled generation that reads absent in any tree is a failure.
+* **Reader workers** - three readers repeatedly probe the six most recently **settled** generations (ending at the commit frontier minus a `SettleMargin` of 5) in all three trees; a settled generation that reads absent in any tree is a failure.
 * **Split coordinators** - one per tree at a 250 ms cadence, picking a random non-empty shard and driving `SplitAsync` + `RunSplitPassAsync`.
 
 ### Pass criteria
@@ -667,11 +700,12 @@ in-flight tail.
 
 ### Tolerated transients
 
-`StaleShardRoutingException`, `EnumerationAbortedException`, cursor
+The stale shard-routing signal, `EnumerationAbortedException`, cursor
 snapshot/pin exhaustion, `TimeoutException`, and the saga's own
 rollback / topology-churn / fan-out-saturation / "fewer than 2 virtual
-slots" `InvalidOperationException` messages are bucketed as transient and
-retried; any other exception fails the test.
+slots" `InvalidOperationException` messages are bucketed as transient -
+the commit worker moves on to its next generation, and the readers and
+split coordinators keep looping; any other exception fails the test.
 
 ## Test 12 - Cross-cluster cross-tree atomic visibility (`CrossClusterCrossTreeAtomicVisibilityChaosTests`)
 
@@ -820,7 +854,6 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 | `TreeResizeGrain` phase machine under live traffic | - | - | ✅ | - |
 | Per-source-shard shadow-forwarding under live traffic | - | - | ✅ | - |
 | `TreeReshardGrain` migration loop + dispatch-budget clamping | - | - | - | ✅ |
-| `HotShardMonitorGrain` ↔ reshard interlock | - | - | - | ✅ |
 
 ### Saga-atomicity surfaces (Tests 5, 6, 8)
 
@@ -901,9 +934,11 @@ added without a per-suite runtime table to maintain.
   600 keys (16 keys for the saga-atomicity suites) across up to ~16 parallel
   workers - writers, scanners, and a topology or saga driver - with a chaos
   window of roughly 6-20 s (up to 90 s for the shard-consolidation suite) and
-  a heal / drain budget up to ~60 s for the saga-atomicity suites. Trees
-  start at 4 shards, or 64 where a fixture does not pre-register its tree,
-  and grow under split / reshard.
+  a heal / drain budget up to ~60 s for the saga-atomicity suites. Most
+  trees start at 4 shards (64 where a fixture does not pre-register its
+  tree; the multi-silo restart and bounded-cache fixtures pin 2 and 1) and
+  grow under split or reshard; the shrinking reshard run folds its tree
+  from 4 shards to 2.
 - Cross-cluster suites (`test/lattice.replication/Chaos/`) run two or three
   in-process clusters over a fault-injectable inter-site delivery layer, with a
   single-key or single-tree universe (the atomic-visibility suite uses ~72

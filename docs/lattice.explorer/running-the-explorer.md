@@ -47,17 +47,24 @@ app.MapLatticeExplorer();
 
 ## Package shape
 
-The shipped Explorer rewrite has five Explorer packages:
+The Explorer is four packages and one standalone host:
 
 - `Orleans.Lattice.Explorer.Web` - the ASP.NET Core hosting library with
-  `AddLatticeExplorerWeb` and `MapLatticeExplorer`.
-- `Orleans.Lattice.Explorer.WebHost` - the standalone executable head.
+  `AddLatticeExplorerWeb` and `MapLatticeExplorer`, and the one package a host
+  references; the other three restore with it.
 - `Orleans.Lattice.Explorer.Core` - connection, configuration, authentication,
   tenant and session services shared by heads.
 - `Orleans.Lattice.Explorer.UI` - the Razor UI package. Its static web assets are
   served from `_content/Orleans.Lattice.Explorer.UI/`.
 - `Orleans.Lattice.Explorer.AppKit` - the static app-frame kit served by the app
   frame route for Lattice Apps.
+- `Orleans.Lattice.Explorer.WebHost` - the standalone executable head, built from
+  `src/lattice.explorer/Web`. It is a project in this repository, not a NuGet
+  package.
+
+The optional Entra sign-in providers ship as their own packages:
+[`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) and
+[`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md).
 
 The native areas live in the UI package. There is no public area registration
 API; third-party user interfaces are added as Lattice Apps.
@@ -250,7 +257,9 @@ The web head maps two local form-post endpoints below the Explorer mount:
 - `POST auth/logout` clears the local State API credential.
 
 Both endpoints validate antiforgery tokens and redirect back to the Explorer base
-href. A federated provider such as the hosted-web Entra package can publish a
+href. They are mapped by the public `AuthEndpoints.MapExplorerAuthEndpoints`
+extension, which `MapLatticeExplorer` calls with the base href as the redirect
+target. A federated provider such as the hosted-web Entra package can publish a
 separate sign-out path so the identity menu posts there instead and ends the
 browser identity-provider session as well.
 

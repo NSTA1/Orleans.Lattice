@@ -110,6 +110,12 @@ internal sealed partial class BPlusLeafGrain
             LowKeyInclusive = state.State.LowKeyInclusive,
             HighKeyExclusive = state.State.HighKeyExclusive,
             HasBlockingState = HasReclaimBlockingState(),
+
+            // Gated on HasInterruptedSplit, never the raw field: SplitSiblingId
+            // survives the division that set it, so publishing it ungated would
+            // make every leaf that has ever split refuse to fold its successor
+            // forever. See LeafReclaimProbe.SplitTargetSiblingId.
+            SplitTargetSiblingId = HasInterruptedSplit ? state.State.SplitSiblingId : null,
         };
     }
 
@@ -496,7 +502,7 @@ internal sealed partial class BPlusLeafGrain
     /// that window survives in cache and vanishes on the next rebuild.
     /// </para>
     /// </remarks>
-    public async Task<bool> TryUnlinkSuccessorAsync(
+    public async Task<LeafUnlinkOutcome> TryUnlinkSuccessorAsync(
         GrainId expectedNext,
         GrainId? newNext,
         string? absorbHighKeyExclusive)
@@ -518,7 +524,7 @@ internal sealed partial class BPlusLeafGrain
             // the rows the split had just moved into it. Declining is the only
             // safe answer; reclaim is background work and the next pass sees
             // the settled topology.
-            if (state.State.NextSibling != expectedNext) return false;
+            if (state.State.NextSibling != expectedNext) return LeafUnlinkOutcome.DeclinedPredecessorMoved;
 
             // The SAME hazard arriving in the OPPOSITE order, which the
             // comparison above cannot see. See issue #2160.
@@ -563,7 +569,7 @@ internal sealed partial class BPlusLeafGrain
             if (HasInterruptedSplit
                 && state.State.SplitSiblingId == expectedNext)
             {
-                return false;
+                return LeafUnlinkOutcome.DeclinedSplitInFlight;
             }
 
             // THIRD declination, and the only one that is about US rather
@@ -594,7 +600,7 @@ internal sealed partial class BPlusLeafGrain
             // And the declination is temporary - consolidation lifts the seal
             // through UnmarkSlotsMovedAwayAsync, after which this leaf folds
             // again. See HasWidenBlockingState.
-            if (HasWidenBlockingState()) return false;
+            if (HasWidenBlockingState()) return LeafUnlinkOutcome.DeclinedWidenSealed;
 
             var prevNext = state.State.NextSibling;
             var prevHigh = state.State.HighKeyExclusive;
@@ -638,7 +644,7 @@ internal sealed partial class BPlusLeafGrain
                 throw;
             }
 
-            return true;
+            return LeafUnlinkOutcome.Unlinked;
         }
         finally
         {

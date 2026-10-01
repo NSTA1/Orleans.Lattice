@@ -34,7 +34,7 @@ Two further public seams are `TryAdd`-registered by `AddLatticeStateApiGrpc`, so
 
 Silo-internal **system trees** (the reserved `_lattice_*` prefix) are hidden from every public surface. The read facade refuses them (`GetEntry`, `ScanEntries`, `GetTreeStructure`, `GetEntryHistory`) and the change feed (`ObserveChanges`) refuses a subscription to one, so internal WAL keys, change kinds, and HLC timestamps never leak through the API. Materialised-view (`view-*`) trees stay readable and observable, mirroring the read paths.
 
-`CatalogRequest.IncludeSystemTrees` is an **operator-convenience filter, not a security boundary**: it only adds reserved trees to a `ListTrees` catalog listing for diagnostics. It does not unlock reading or observing their contents - those paths reject system trees regardless of the flag - and it must not be relied on to gate access.
+`CatalogRequest.IncludeSystemTrees` is an **operator-convenience filter, not a security boundary**: it only adds the trees a catalog hides by default to the listing for diagnostics (on `ListTrees` the internal `_lattice_` trees, the materialised-view backing trees and the `sys-` system data trees; on `ListViews` the `sys-` system views). It does not unlock reading or observing their contents - those paths reject system trees regardless of the flag - and it must not be relied on to gate access.
 
 ## Default-deny posture
 

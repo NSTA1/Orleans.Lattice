@@ -41,9 +41,19 @@ default; with only the core no-op gate registered, every call is allowed.
 - **Propagation is not re-consented.** The trust boundary is the existing peer
   enrolment, so authorization gates the authoring cluster only.
 - **Opt-in and absent by default.** Nothing is registered unless the host calls
-  `AddLatticeReplicationApi()`.
-- **Must be registered after `AddLatticeReplication(..., enableRuntimeConfig: true)`.**
+  `AddLatticeReplicationApi()` or `AddLatticeReplicationStatusApi()`.
+- **`AddLatticeReplicationApi()` must be registered after `AddLatticeReplication(..., enableRuntimeConfig: true)`.**
   The call fails fast with an actionable message otherwise.
+
+## Peer status
+
+`AddLatticeReplicationStatusApi()` adds a separate, read-only facade,
+`ILatticeReplicationStatus`. It reports each replication link - one tree, one
+peer region, one direction - across the whole local cluster, with its backlog,
+error streak, time since last contact, in-flight count, and a health derived
+against the `LatticeReplicationStatusOptions` thresholds. The report is paged and
+permission-scoped by the same capability as the config read. It needs only
+`AddLatticeReplication(...)` registered before it, and fails fast otherwise.
 
 ## Usage
 
@@ -51,7 +61,8 @@ default; with only the core no-op gate registered, every call is allowed.
 siloBuilder
     .AddLattice(/* ... */)
     .AddLatticeReplication(/* ... */, enableRuntimeConfig: true)
-    .AddLatticeReplicationApi();
+    .AddLatticeReplicationApi()
+    .AddLatticeReplicationStatusApi(); // optional: read-only peer status
 ```
 
 Bind a transport over the facade to drive replication configuration remotely.

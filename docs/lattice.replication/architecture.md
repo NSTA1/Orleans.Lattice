@@ -57,7 +57,8 @@ flowchart LR
    WAL is the source of truth for incremental replication: shipping and
    recovery read from it, never from the primary tree. Snapshot bootstrap is the
    exception - the default snapshot provider exports a point-in-time view of the
-   tree's committed leaf projections rather than replaying the WAL. The WAL grain
+   tree's committed leaf projections, plus the prepared rows of any saga still
+   undecided at the export, rather than replaying the WAL. The WAL grain
    contract and the turn-safe batching protocol live in
    [`wal.md`](wal.md); the pluggable durability backend lives in
    [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).

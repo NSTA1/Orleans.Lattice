@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Grpc.Core;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 
 namespace Orleans.Lattice.Api.Backup.Grpc;
@@ -56,6 +57,7 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>Captures a full backup of the request's scope.</summary>
+    [Obsolete("CreateBackupAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartBackupAsync and poll GetBackupOperationStatusAsync instead. CreateBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeBackupCaptureResult> CreateBackupAsync(
         LatticeBackupCaptureRequest request,
         CancellationToken cancellationToken = default)
@@ -71,6 +73,7 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>Captures an incremental backup layered on a base backup.</summary>
+    [Obsolete("CreateIncrementalBackupAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartIncrementalBackupAsync and poll GetBackupOperationStatusAsync instead. CreateIncrementalBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
         LatticeBackupIncrementalCaptureRequest request,
         CancellationToken cancellationToken = default)
@@ -95,6 +98,7 @@ public sealed class LatticeBackupApiGrpcClient
     /// Captures a backup set - one full backup per scope, grouped under a single
     /// set manifest - optionally at a single cross-tree causal fence.
     /// </summary>
+    [Obsolete("CreateBackupSetAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartBackupSetAsync and poll GetBackupOperationStatusAsync instead. CreateBackupSetAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
         LatticeBackupSetCaptureRequest request,
         CancellationToken cancellationToken = default)
@@ -118,6 +122,163 @@ public sealed class LatticeBackupApiGrpcClient
         return new LatticeBackupSetCaptureResult(response.SetManifest, members);
     }
 
+    /// <summary>
+    /// Starts a tracked full capture and returns its handle at once; poll
+    /// <see cref="GetBackupOperationStatusAsync"/> for progress and the outcome.
+    /// </summary>
+    /// <param name="request">The capture request. Must not be <c>null</c>.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartBackupAsync(
+        LatticeBackupCaptureRequest request,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(
+            _methods.StartBackup,
+            new BackupCaptureRequestMessage
+            {
+                Name = request.Name,
+                Scope = request.Scope,
+                PageSize = request.PageSize,
+                TrackingOperationId = operationId,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked incremental capture and returns its handle at once.</summary>
+    /// <param name="request">The incremental-capture request. Must not be <c>null</c>.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartIncrementalBackupAsync(
+        LatticeBackupIncrementalCaptureRequest request,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(
+            _methods.StartIncrementalBackup,
+            new BackupIncrementalCaptureRequestMessage
+            {
+                Name = request.Name,
+                Scope = request.Scope,
+                BaseBackupId = request.BaseBackupId,
+                PageSize = request.PageSize,
+                TrackingOperationId = operationId,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked backup-set capture and returns its handle at once.</summary>
+    /// <param name="request">The set-capture request. Must not be <c>null</c>.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(
+            _methods.StartBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = request.Name,
+                Scopes = request.Scopes,
+                CrossTreeConsistent = request.CrossTreeConsistent,
+                PageSize = request.PageSize,
+                TrackingOperationId = operationId,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked restore and returns its handle at once.</summary>
+    /// <param name="request">The restore request. Must not be <c>null</c>.</param>
+    /// <param name="operationId">An optional idempotency id for the tracked operation; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartRestoreAsync(
+        LatticeRestoreRequest request,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.StartRestore, ToRestoreMessage(request, operationId), cancellationToken);
+    }
+
+    /// <summary>Starts a tracked catalog-free cold restore and returns its handle at once.</summary>
+    /// <param name="request">The restore request. Must not be <c>null</c>.</param>
+    /// <param name="operationId">An optional idempotency id for the tracked operation; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartColdRestoreAsync(
+        LatticeRestoreRequest request,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.StartColdRestore, ToRestoreMessage(request, operationId), cancellationToken);
+    }
+
+    /// <summary>Reads a tracked backup operation's status.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    public async Task<LatticeOperationStatus?> GetBackupOperationStatusAsync(
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.GetBackupOperationStatus,
+            new BackupOperationRequestMessage { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    /// <summary>Lists one page of the caller's tracked backup operations, newest-first.</summary>
+    /// <param name="request">The page request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The page.</returns>
+    public Task<LatticeOperationPage> ListBackupOperationsAsync(
+        LatticeOperationListRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.ListBackupOperations, request, cancellationToken);
+    }
+
+    /// <summary>Requests cancellation of a tracked backup operation.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status after the request, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    public async Task<LatticeOperationStatus?> CancelBackupOperationAsync(
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.CancelBackupOperation,
+            new BackupOperationRequestMessage { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    private static RestoreRequestMessage ToRestoreMessage(LatticeRestoreRequest request, string? trackingOperationId) =>
+        new()
+        {
+            BackupId = request.BackupId,
+            TargetTreeId = request.TargetTreeId,
+            Scope = request.Scope,
+            Mode = request.Mode,
+            OperationId = request.OperationId,
+            ApplyBatchSize = request.ApplyBatchSize,
+            TrackingOperationId = trackingOperationId,
+        };
     /// <summary>Lists the catalogued backups as a deterministic, cursor-resumable page.</summary>
     public Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
@@ -174,6 +335,7 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>Restores a backup into its target tree.</summary>
+    [Obsolete("RestoreBackupAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartRestoreAsync and poll GetBackupOperationStatusAsync instead. RestoreBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<LatticeRestoreResult> RestoreBackupAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default)

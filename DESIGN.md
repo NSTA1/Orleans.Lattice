@@ -130,7 +130,12 @@ loads its tokens from `docs-site/template/public/tokens.css` and composes its
 pages in `main.css` beside it, which sets a few values of its own, such as the
 42rem prose measure and the home page's display size. The frontmatter above
 mirrors both, and they change together. Other surfaces that must match the
-site, such as the video series, read `tokens.css`.
+site, such as the video series, read `tokens.css`. The Explorer draws in the
+same system: the `Orleans.Lattice.Explorer.UI` and
+`Orleans.Lattice.Explorer.AppKit` packages serve byte-identical copies of
+`tokens.css` and the fonts, which a test fails the build on the moment they
+drift from the site's, and tests hold the Explorer UI's stylesheets to this
+document's marker, hairline, single-accent and no-card rules.
 
 ## Overview
 
@@ -445,8 +450,8 @@ The Explorer draws every field one way, so a toolbar or a form lines up
 wherever it is (issue #4120).
 
 - **One field structure.** Every field primitive (`LtTextInput`, `LtNameInput`,
-  `LtComboBox`, `LtMultiComboBox`, `LtSelect`, `LtSearchInput`) is a visible
-  label row over a control box. The label is one line
+  `LtComboBox`, `LtMultiComboBox`, `LtSelect`, `LtSearchInput`,
+  `LtDateTimeInput`, `LtDurationInput`) is a visible label row over a control box. The label is one line
   (`--lt-op-label-line-height`, 20px) at the label weight. The control box is one
   control height (`--lt-op-control-height`: 44px comfortable, 28px compact), with
   the same control border, sunken fill and padding in Paper and Board. A search
@@ -463,6 +468,15 @@ wherever it is (issue #4120).
   its content, with no offset. An area stylesheet never re-aligns a toolbar.
 - **One placeholder face.** A placeholder is a hint, never a value, so it is
   prose in the UI face, even in a field whose value is an id set in mono.
+- **Time is never free text.** A point in time is an `LtDateTimeInput`: a typed
+  ISO 8601 instant to the second, the zone (always UTC) written in its control
+  box, a calendar button, and the reader's local time as secondary text, so no
+  time is converted silently. Its picker floats below the field on a hairline
+  rule and opens in the flow of the page on a phone; the chosen day takes the
+  marker with an ink ring and the strong weight, and today is ringed. A
+  duration is an `LtDurationInput`: a whole-number box per unit, each followed
+  by its unit, in one control box. `ShellTimeFieldHygieneTests` keeps a field
+  that names a date, a time or a duration from being a bare `LtTextInput`.
 
 `ControlAlignmentTests` measures these rules in a browser across every area,
 at desktop and phone widths, in Paper and Board and in both densities.

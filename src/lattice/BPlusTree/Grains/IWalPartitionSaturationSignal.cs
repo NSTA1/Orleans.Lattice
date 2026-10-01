@@ -51,7 +51,7 @@ internal interface IWalPartitionSaturationSignal
     /// <see cref="WalSaturationState.Healthy"/> when the sampler has
     /// not yet observed the partition.
     /// </summary>
-    /// <param name="treeId">The logical tree id to query.</param>
+    /// <param name="treeId">The WAL tree id to query.</param>
     /// <param name="partition">The WAL writer partition to query.</param>
     /// <returns>The most recent observed saturation state for the partition.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="treeId"/> is <c>null</c>.</exception>
@@ -64,7 +64,7 @@ internal interface IWalPartitionSaturationSignal
     /// when the partition is already healthy; otherwise the awaiter
     /// completes on the next sample tick that observes it healthy.
     /// </summary>
-    /// <param name="treeId">The logical tree id to wait on.</param>
+    /// <param name="treeId">The WAL tree id to wait on.</param>
     /// <param name="partition">The WAL writer partition to wait on.</param>
     /// <param name="cancellationToken">Cancels the wait. A cancelled
     /// wait throws <see cref="OperationCanceledException"/>.</param>
@@ -86,7 +86,7 @@ internal interface IWalPartitionSaturationSignal
     /// Used by the gate only when
     /// <see cref="LatticeOptions.WalSaturationAcuteOnly"/> is set.
     /// </summary>
-    /// <param name="treeId">The logical tree id to wait on.</param>
+    /// <param name="treeId">The WAL tree id to wait on.</param>
     /// <param name="partition">The WAL writer partition to wait on.</param>
     /// <param name="cancellationToken">Cancels the wait. A cancelled
     /// wait throws <see cref="OperationCanceledException"/>.</param>

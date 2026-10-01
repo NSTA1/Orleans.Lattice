@@ -101,6 +101,17 @@ compose file refuses to start without the second. When `.env` already exists the
 leaves it untouched and only adjudicates it; `-Force` replaces the derived knobs and
 carries every other key in the file across.
 
+The script can also refuse. It refuses when the host cannot offer even the 6 GiB
+floor - its ceiling is 45% of host memory less 5 GiB for the embedder - and when the
+host's free memory cannot hold both derived grants right now; pass `-IgnoreHostLoad`
+only when the competing load is about to end. When the ceiling lands between the
+floor and the corpus requirement it grants the ceiling and warns, naming the
+shortfall. `-DryRun` prints the derivation without writing anything. The corpus is
+measured under `-WorkspacePath`, which defaults to the repository containing the
+script and not to `REPO_PATH`, so pass it when the deployment indexes a different
+tree. `-ExpectedCorpusFiles` refuses a measured corpus that has moved more than
+`-CorpusTolerance` (default 2%) from the count you declare.
+
 #### `${VAR:?...}` checks presence, not meaning (#2863)
 
 The refusal described above is narrower than it reads. `${VAR:?...}` errors when the
@@ -160,7 +171,11 @@ docker compose -f docker-compose.yml -f docker-compose.tuning.yml logs embedder 
 ```
 
 The provenance bracket on that line names who chose the value, so `DECLARED 'auto'`
-distinguishes a migrated deployment from one that merely started.
+distinguishes a migrated deployment from one that merely started. To check before
+deploying instead, pass `-BuildCommit <sha>` to `Assert-TuningEnv.ps1`, which also
+checks the `.env`'s tokens against what that commit's binary understands. The
+guards themselves are exercised, refusing direction included, by
+`pwsh -File ./scripts/Test-TuningIntegrity.ps1`.
 
 ### What this runbook does not establish
 
@@ -335,8 +350,9 @@ The base compose file declares the mount as:
 
 and documents the default as *this repo's parent directory, so this repo is one
 registerable child added at `/workspace/<repo>`*. That description is exactly correct
-for an ordinary clone at `C:\dev\lattice`: the grandparent of the compose file is
-`C:\dev` and the registerable child is `lattice`.
+for an ordinary clone at `C:\dev\lattice`: three levels above the compose file's
+directory - the repository root's parent - is `C:\dev`, and the registerable child is
+`lattice`.
 
 It is **wrong for a git worktree**, and the difference is invisible. Composed from
 `C:\dev\copilot-worktrees\lattice\<worktree>\samples\RepoContextContainer`, `../../..`
@@ -702,7 +718,7 @@ matters more than anything below: a wrong `cpus` makes the box slow, a wrong
 | `repocontext` | `image` | `repocontext-mcp:local` | The base file declares `build:` and no `image:`, so `up -d --no-build` cannot resolve an image without this pin. The tag is moved between builds; see [Pin and roll back](#pin-and-roll-back). |
 | `repocontext` | `LATTICE_DURABILITY` | `local` | Base default: SQLite grain storage and reminders plus the file WAL, no external services. See [container.md](container.md). |
 | `repocontext` | `LATTICE_DATA_ROOT` | `/data` | Base default. All durable local state on one named volume, so it survives restart, recreation, and image upgrade. See [container.md](container.md). |
-| `repocontext` | `LATTICE_BACKUP_BLOB_CONNECTION_STRING` | `redacted` | Presence of this string is what **enables** backup at all; unset, the container runs with no backup and says so at WARNING rather than being silently indistinguishable from a backed-up one. The value is the fixed, public Azurite development account, published in Microsoft's own documentation and not a secret. It is tracked verbatim in the compose file and deliberately not copied here: reproducing a credential-shaped string in documentation teaches readers to read such strings as unremarkable. |
+| `repocontext` | `LATTICE_BACKUP_BLOB_CONNECTION_STRING` | `redacted` | Presence of this string is what **enables** backup at all; unset, the container runs with no backup and says so on `/health/backup` - a `Healthy` body stating that backup is DISABLED - and as `lattice_repocontext_backup_state` `0`, rather than being silently indistinguishable from a backed-up one. No startup log line reports it: the service that would write one is registered only when backup is enabled. The value is the fixed, public Azurite development account, published in Microsoft's own documentation and not a secret. It is tracked verbatim in the compose file and deliberately not copied here: reproducing a credential-shaped string in documentation teaches readers to read such strings as unremarkable. |
 | `repocontext` | `LATTICE_BACKUP_INCREMENTAL_MINUTES` | `60` | Library default, restated in the deployment so the configured cadence is visible here and not only in code. An initial full capture runs at startup, because manifest validation rejects an incremental with no base. |
 | `repocontext` | `LATTICE_BACKUP_FULL_HOURS` | `24` | Library default, restated for the same reason as the row above. It is validated (it must resolve to at least one minute) and recorded on the memory tree's backup schedule, but it drives no capture: the host registers the scheduled full capture disabled, takes one full baseline per process start, and requests only incrementals after it. |
 | `repocontext` | `LATTICE_BACKUP_RETENTION_KEEP_LAST` | `60` | Retention keeps a backup satisfying **either** bound, and always preserves the base chain a retained increment depends on. |
@@ -1027,7 +1043,10 @@ given in advance, a divergence between declared and effective values, or a
 processor count whose source cannot be established; `3` when the baseline was written
 by a different instrument vintage and cannot be compared; `4` when the deployment
 could not be read; and `5` when the compose files it resolved are not the ones the
-container was created from.
+container was created from. `pwsh -File ./scripts/Test-DeployManifest.ps1` exercises
+its refusing direction without a daemon and, where `docker compose config` is
+available, its real compose-resolving path; that half needs no running stack and is
+reported as skipped, never as passed, when it cannot run.
 
 A persistent 503 has its own diagnosis section in the
 [sample README](../../samples/RepoContextContainer/README.md); do not skip it in

@@ -18,7 +18,8 @@ namespace Orleans.Lattice;
 /// <see cref="RemoveAtAsync(int, CancellationToken, int)"/> resolve the
 /// visible position to a dot / parent-dot against that snapshot, and
 /// <see cref="InsertAfterAsync(OrSetDot, string, T, CancellationToken, int)"/>
-/// reads to mint the next per-replica counter. The state-independent
+/// reads to mint the next counter - a Lamport clock one above the highest
+/// counter observed from any replica. The state-independent
 /// mutations
 /// (<see cref="RemoveAsync(OrSetDot, CancellationToken, int)"/> by dot and
 /// <see cref="MergeAsync(Rga, CancellationToken, int)"/> from a
@@ -400,7 +401,7 @@ public readonly record struct RgaAccessor<T>
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // CAS-free producer-side delta apply, matching MvRegisterAccessor
         // and OrMapAccessor: a single local read computes the dot-explicit
-        // delta (the read mints the next per-replica counter from the
+        // delta (the read mints the next Lamport counter from the
         // local snapshot's view), then ApplyCrdtDeltaAsync folds the delta
         // into the persisted state through the typed-delta WAL seam.
         // Concurrent local writers minting the same dot is the caller's

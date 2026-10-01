@@ -64,23 +64,27 @@ The package family ships from this repository:
 
 ## Retired packages
 
-These package ids were published from this repository and are no longer built.
+These package ids are no longer built from this repository. Only
+`Orleans.Lattice.Explorer.Access`, `Orleans.Lattice.Explorer.Backup` and
+`Orleans.Lattice.Explorer.Schema` were ever published; the design system, the
+plugins and the MAUI head were never tagged, so nuget.org has no version of them.
 The Explorer rewrite (epic [#3807](https://github.com/NSTA1/Orleans.Lattice/issues/3807))
 removed the Explorer plugin model with no successor extension point, retired the
 MAUI desktop head, and folded the design system into `Orleans.Lattice.Explorer.UI`,
 which now ships the rewritten Explorer under its existing id. The retired ids
-have no publish tag glob and no row in the tables above; their last released
-versions stay on nuget.org and should be marked deprecated there, pointing at
-`Orleans.Lattice.Explorer.Web` (the hosting entry point) as the alternative.
+have no publish tag glob and no row in the tables above; the last released
+versions of the three published ids stay on nuget.org and should be marked
+deprecated there, pointing at `Orleans.Lattice.Explorer.Web` (the hosting entry
+point) as the alternative.
 
-- `Orleans.Lattice.Explorer.DesignSystem`, last tagged `lattice.explorer.designsystem-v<X.Y.Z>`. Its successor is `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.DesignSystem`, never tagged (its tag shape was `lattice.explorer.designsystem-v<X.Y.Z>`). Its successor is `Orleans.Lattice.Explorer.UI`.
 - `Orleans.Lattice.Explorer.Access`, last tagged `lattice.explorer.access-v<X.Y.Z>`. Its successor is the Access area, compiled into `Orleans.Lattice.Explorer.UI`.
 - `Orleans.Lattice.Explorer.Backup`, last tagged `lattice.explorer.backup-v<X.Y.Z>`. Its successor is the Backups area, compiled into `Orleans.Lattice.Explorer.UI`.
 - `Orleans.Lattice.Explorer.Schema`, last tagged `lattice.explorer.schema-v<X.Y.Z>`. Its successor is the Schema area, compiled into `Orleans.Lattice.Explorer.UI`.
-- `Orleans.Lattice.Explorer.Plugins.*` (Abstractions, Selection, Data, History, Metrics, Topology, TagIndex, DeadLetter, Telemetry, Tenancy, Tenants, MyTenant), last tagged `lattice.explorer.plugins.<name>-v<X.Y.Z>`. There is no successor: the Explorer has no plugin model, its native areas are compiled in, and the only third-party UI surface is a Lattice App UI.
+- `Orleans.Lattice.Explorer.Plugins.*` (Abstractions, Selection, Data, History, Metrics, Topology, TagIndex, DeadLetter, Telemetry, Tenancy, Tenants, MyTenant), never tagged (their tag shape was `lattice.explorer.plugins.<name>-v<X.Y.Z>`). There is no successor: the Explorer has no plugin model, its native areas are compiled in, and the only third-party UI surface is a Lattice App UI.
 - `Orleans.Lattice.Explorer`, the MAUI desktop head, never tagged. Its successor is `Orleans.Lattice.Explorer.Web`, the Blazor Server head.
 
-A patch to one of these ids can still be cut from an older `release/<X.Y>` line
+A patch to one of the three published ids can still be cut from an older `release/<X.Y>` line
 that carries its sources and its tag glob, exactly like any held-back package.
 
 ## Tag shape
@@ -180,7 +184,7 @@ A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGE
 
 > **Every shipped package must have a live release line branch containing the tree it shipped from.**
 
-Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.8.x`, both `release/9.4` and `release/9.8` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
+Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.8.x`, both `release/9.4` and `release/9.8` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since been rewritten twice - the plugin console of [#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790), then the rewrite of epic [#3807](https://github.com/NSTA1/Orleans.Lattice/issues/3807) that replaced it - and cutting from trunk would drag those rewrites into a patch release.
 
 Retire a release line branch only once no shipped package still points at it.
 
@@ -226,7 +230,7 @@ The practical consequences are worth stating plainly:
 - A documentation fix that must appear on the site has to reach the **newest** line. Cherry-picking it only onto an older line updates that line's sources but will never publish.
 - Once a line stops being the newest, its documentation is frozen as far as the site is concerned. There is no per-version docs archive; see the limitation below.
 
-One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.8.x`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
+One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.8.x`, the site therefore describes Explorer ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
 
 ## Release protocol
 
@@ -292,7 +296,7 @@ One known limitation: the site is a single artifact built from one commit, so wh
 
    A `Docs` run whose `build` job succeeded - including the link and anchor gate - but whose `deploy` job reports `completed/failure` with **no steps and no log** (`gh run view <id> --log-failed` answers `log not found`) was not broken by the workflow at all: it was refused by the `github-pages` environment's deployment branch policy. A wave deploys the site from a **tag** ref, so that environment has to permit one, and a policy list that names only the branch `main` will reject every release deploy while leaving the chore PR's own `Docs` run green (it never reaches `deploy`). Inspect the policy with `gh api repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies`; it must list the tag pattern `lattice-v*` **and** the branch pattern `release/*` (and, per [Documentation fixes between waves](#documentation-fixes-between-waves), must **not** list `main`). Add a missing tag policy with `gh api --method POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies -f name='lattice-v*' -f type='tag'`, then re-run the failed job with `gh run rerun <id> --failed`. As with a broken link, the NuGet packages already pushed are unaffected.
 
-8. **Bump the reference-architecture package pins as a post-release action.** The package version bump itself (the `<Version>` slot) belongs in the shipping chore PR alongside the changelog, per steps 1 and 4 - that is what tag-and-publish releases to NuGet. The `reference-architecture/` hosts, by contrast, consume the family through `PackageReference` to **published** NuGet packages (never `ProjectReference` into `src/`), and CI's reference-architecture lane (a step of the `extras` job, which the required `build-and-test` check aggregates) restores those versions from nuget.org. So a pin bump to a version that has not shipped yet fails restore with `NU1102: Unable to find package ... with version (>= X.Y.Z)`. Never bump a reference-architecture pin in the same PR that ships the package - that PR cannot go green until the very package it is publishing exists. Instead, the order is: **(a)** the chore PR bumps `<Version>` + folds the changelog and merges; **(b)** the tag publishes the package (steps 6-7); **(c)** raise a **separate follow-up PR** that advances the affected `reference-architecture/**/*.csproj` pins to the just-published version(s). **You do not need to pre-verify that the new version is indexed on nuget.org.** That follow-up PR's own `build-and-test` reference-architecture lane builds every kit csproj, and because the kit consumes the family by `PackageReference` the build restores each pinned package from nuget.org - so the restore *is* the published-and-restorable gate, and a green lane is positive proof the pins resolve. If NuGet indexing has not caught up yet (it lags the publish run's `completed/success` by a few minutes) the lane fails with `NU1102` and you simply re-run it once indexing lands. The same restore runs a second time server-side at deploy time, when `az acr build` builds the three host images from `reference-architecture/`, so an unrestorable pin cannot reach a deployed environment. Only reference-architecture hosts that actually consume a bumped package need updating; leave the others untouched.
+8. **Bump the reference-architecture package pins as a post-release action.** The package version bump itself (the `<Version>` slot) belongs in the shipping chore PR alongside the changelog, per steps 1 and 4 - that is what tag-and-publish releases to NuGet. The deployed hosts under `reference-architecture/hosts/`, by contrast, consume the family through `PackageReference` to **published** NuGet packages (never `ProjectReference` into `src/`; only the `reference-architecture/local-dev/` harness builds from source), and CI's reference-architecture lane (a step of the `extras` job, which the required `build-and-test` check aggregates) restores those versions from nuget.org. So a pin bump to a version that has not shipped yet fails restore with `NU1102: Unable to find package ... with version (>= X.Y.Z)`. Never bump a reference-architecture pin in the same PR that ships the package - that PR cannot go green until the very package it is publishing exists. Instead, the order is: **(a)** the chore PR bumps `<Version>` + folds the changelog and merges; **(b)** the tag publishes the package (steps 6-7); **(c)** raise a **separate follow-up PR** that advances the affected `reference-architecture/**/*.csproj` pins to the just-published version(s). **You do not need to pre-verify that the new version is indexed on nuget.org.** That follow-up PR's own `build-and-test` reference-architecture lane builds every kit csproj, and because the kit consumes the family by `PackageReference` the build restores each pinned package from nuget.org - so the restore *is* the published-and-restorable gate, and a green lane is positive proof the pins resolve. If NuGet indexing has not caught up yet (it lags the publish run's `completed/success` by a few minutes) the lane fails with `NU1102` and you simply re-run it once indexing lands. The same restore runs a second time server-side at deploy time, when `az acr build` builds the three host images from `reference-architecture/`, so an unrestorable pin cannot reach a deployed environment. Only reference-architecture hosts that actually consume a bumped package need updating; leave the others untouched.
 
 ## Recovery for an accidental bulk push
 
@@ -351,5 +355,5 @@ Two further habits keep a catch-up honest. **Bring the whole `## Unreleased` sec
 
 The two rolling section titles - `## Unreleased` and `## Released` - are plain, unbracketed headings, and `CHANGELOG.md` carries **no footer link-reference definitions**; each dated section keeps its bracketed `## [YYYY-MM-DD]` form.
 
-Earlier revisions followed the "Keep a Changelog" convention of a footer `[YYYY-MM-DD]: .../compare/<base>...<target>` block (plus `[Unreleased]: .../compare/vX.Y.Z...HEAD`). That convention was dropped because it rendered inconsistently: the family tags **per-package** (`lattice.<pkg>-v<X.Y.Z>`) and only mints a **family** tag (`vX.Y.Z`) for a coordinated lockstep release, so most dates had no single tag to anchor a link - only the occasional lockstep date and `Unreleased` turned into links, while every per-package-wave date stayed plain bracketed text, a half-linked ladder. Each dated section's opening paragraph already enumerates the exact per-package versions and their `lattice.<pkg>-v<X.Y.Z>` tags, which is the authoritative record; compare those tags directly for a diff. Do not reintroduce footer compare-link definitions.
+Earlier revisions followed the "Keep a Changelog" convention of a footer `[YYYY-MM-DD]: .../compare/<base>...<target>` block (plus `[Unreleased]: .../compare/vX.Y.Z...HEAD`). That convention was dropped because it rendered inconsistently: the family tags **per-package** (`lattice.<pkg>-v<X.Y.Z>`) and mints a **family** tag (`vX.Y.Z`) only to anchor a release wave, not for every date that ships, so most dates had no single tag to anchor a link - only the occasional lockstep date and `Unreleased` turned into links, while every per-package-wave date stayed plain bracketed text, a half-linked ladder. Each dated section's opening paragraph already enumerates the exact per-package versions and their `lattice.<pkg>-v<X.Y.Z>` tags, which is the authoritative record; compare those tags directly for a diff. Do not reintroduce footer compare-link definitions.
 
