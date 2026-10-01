@@ -58,6 +58,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Repository-context hash staging.** Three SHA-256 paths staged their input through throwaway arrays, one also re-materialising each declaration as a string. They hash spans in place now: 46-99% less allocated and 14-58% faster across source ids, reuse tokens and symbol digests. ([#4107](https://github.com/NSTA1/Orleans.Lattice/pull/4107)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Performance - Identity digest allocations.** Three SHA-256 identity paths staged input or digest bytes through throwaway arrays. They hash from stack or pooled buffers now: 72-88% less allocated on the credential metadata digest, 69-91% on the Explorer cookie digest, 16-27% on backup artifacts. ([#4094](https://github.com/NSTA1/Orleans.Lattice/pull/4094)) (`Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Backup`)
 
 - **Performance - Leaf snapshot vector clock decode.** Decoding a row's version vector read its exact entry count, then grew a default-sized dictionary into it one rehash at a time. It presizes from that count instead: 29% faster and 28% less allocated at four replicas, 40% and 38% at sixteen. ([#4079](https://github.com/NSTA1/Orleans.Lattice/pull/4079)) (`Orleans.Lattice`)
