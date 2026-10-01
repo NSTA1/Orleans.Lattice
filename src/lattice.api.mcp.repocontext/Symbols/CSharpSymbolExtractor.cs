@@ -38,21 +38,21 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
         }
 
         var symbols = new List<ExtractedSymbol>();
-        WalkMembers(root.Members, prefix: string.Empty, symbols);
+        WalkMembers(content, root.Members, prefix: string.Empty, symbols);
         return symbols;
     }
 
     private static void WalkMembers(
-        SyntaxList<MemberDeclarationSyntax> members, string prefix, List<ExtractedSymbol> symbols)
+        string source, SyntaxList<MemberDeclarationSyntax> members, string prefix, List<ExtractedSymbol> symbols)
     {
         foreach (var member in members)
         {
-            WalkMember(member, prefix, symbols);
+            WalkMember(source, member, prefix, symbols);
         }
     }
 
     private static void WalkMember(
-        MemberDeclarationSyntax member, string prefix, List<ExtractedSymbol> symbols)
+        string source, MemberDeclarationSyntax member, string prefix, List<ExtractedSymbol> symbols)
     {
         switch (member)
         {
@@ -60,8 +60,8 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var name = ns.Name.ToString();
                 var fqName = Combine(prefix, name);
-                symbols.Add(Build(fqName, SymbolKind.Namespace, ns, $"namespace {fqName}"));
-                WalkMembers(ns.Members, fqName, symbols);
+                symbols.Add(Build(source, fqName, SymbolKind.Namespace, ns, $"namespace {fqName}"));
+                WalkMembers(source, ns.Members, fqName, symbols);
                 break;
             }
 
@@ -69,20 +69,20 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var fqName = Combine(prefix, type.Identifier.Text + TypeParameters(type.TypeParameterList));
                 var kind = type is InterfaceDeclarationSyntax ? SymbolKind.Interface : SymbolKind.Type;
-                symbols.Add(Build(fqName, kind, type, TypeSignature(type), CollectTypeReferences(type)));
-                WalkMembers(type.Members, fqName, symbols);
+                symbols.Add(Build(source, fqName, kind, type, TypeSignature(type), CollectTypeReferences(type)));
+                WalkMembers(source, type.Members, fqName, symbols);
                 break;
             }
 
             case EnumDeclarationSyntax enumDecl:
             {
                 var fqName = Combine(prefix, enumDecl.Identifier.Text);
-                symbols.Add(Build(fqName, SymbolKind.Enum, enumDecl,
+                symbols.Add(Build(source, fqName, SymbolKind.Enum, enumDecl,
                     $"{Modifiers(enumDecl.Modifiers)}enum {enumDecl.Identifier.Text}".Trim()));
                 foreach (var value in enumDecl.Members)
                 {
                     var valueFq = Combine(fqName, value.Identifier.Text);
-                    symbols.Add(Build(valueFq, SymbolKind.Field, value, value.Identifier.Text));
+                    symbols.Add(Build(source, valueFq, SymbolKind.Field, value, value.Identifier.Text));
                 }
 
                 break;
@@ -93,7 +93,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
                 var fqName = Combine(prefix, del.Identifier.Text + TypeParameters(del.TypeParameterList));
                 var signature =
                     $"{Modifiers(del.Modifiers)}delegate {del.ReturnType} {del.Identifier.Text}{Parameters(del.ParameterList)}";
-                symbols.Add(Build(fqName, SymbolKind.Other, del, Collapse(signature)));
+                symbols.Add(Build(source, fqName, SymbolKind.Other, del, Collapse(signature)));
                 break;
             }
 
@@ -103,7 +103,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
                 var fqName = Combine(prefix, name) + ParameterTypes(method.ParameterList);
                 var signature =
                     $"{Modifiers(method.Modifiers)}{method.ReturnType} {name}{Parameters(method.ParameterList)}";
-                symbols.Add(Build(fqName, SymbolKind.Method, method, Collapse(signature)));
+                symbols.Add(Build(source, fqName, SymbolKind.Method, method, Collapse(signature)));
                 break;
             }
 
@@ -111,7 +111,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var fqName = Combine(prefix, ctor.Identifier.Text) + ParameterTypes(ctor.ParameterList);
                 var signature = $"{Modifiers(ctor.Modifiers)}{ctor.Identifier.Text}{Parameters(ctor.ParameterList)}";
-                symbols.Add(Build(fqName, SymbolKind.Method, ctor, Collapse(signature)));
+                symbols.Add(Build(source, fqName, SymbolKind.Method, ctor, Collapse(signature)));
                 break;
             }
 
@@ -119,7 +119,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var fqName = Combine(prefix, property.Identifier.Text);
                 var signature = $"{Modifiers(property.Modifiers)}{property.Type} {property.Identifier.Text}";
-                symbols.Add(Build(fqName, SymbolKind.Property, property, Collapse(signature)));
+                symbols.Add(Build(source, fqName, SymbolKind.Property, property, Collapse(signature)));
                 break;
             }
 
@@ -127,7 +127,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var fqName = Combine(prefix, "this") + ParameterTypes(indexer.ParameterList);
                 var signature = $"{Modifiers(indexer.Modifiers)}{indexer.Type} this{Parameters(indexer.ParameterList)}";
-                symbols.Add(Build(fqName, SymbolKind.Property, indexer, Collapse(signature)));
+                symbols.Add(Build(source, fqName, SymbolKind.Property, indexer, Collapse(signature)));
                 break;
             }
 
@@ -135,7 +135,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var fqName = Combine(prefix, evt.Identifier.Text);
                 var signature = $"{Modifiers(evt.Modifiers)}event {evt.Type} {evt.Identifier.Text}";
-                symbols.Add(Build(fqName, SymbolKind.Field, evt, Collapse(signature)));
+                symbols.Add(Build(source, fqName, SymbolKind.Field, evt, Collapse(signature)));
                 break;
             }
 
@@ -146,7 +146,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
                     var fqName = Combine(prefix, variable.Identifier.Text);
                     var signature =
                         $"{Modifiers(evtField.Modifiers)}event {evtField.Declaration.Type} {variable.Identifier.Text}";
-                    symbols.Add(Build(fqName, SymbolKind.Field, variable, Collapse(signature)));
+                    symbols.Add(Build(source, fqName, SymbolKind.Field, variable, Collapse(signature)));
                 }
 
                 break;
@@ -159,7 +159,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
                     var fqName = Combine(prefix, variable.Identifier.Text);
                     var signature =
                         $"{Modifiers(field.Modifiers)}{field.Declaration.Type} {variable.Identifier.Text}";
-                    symbols.Add(Build(fqName, SymbolKind.Field, variable, Collapse(signature)));
+                    symbols.Add(Build(source, fqName, SymbolKind.Field, variable, Collapse(signature)));
                 }
 
                 break;
@@ -167,16 +167,31 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
         }
     }
 
+    /// <summary>
+    /// Builds one extracted symbol record. The declaration digest is taken over the
+    /// node's own slice of <paramref name="source"/> rather than over
+    /// <c>node.ToString()</c>: both name the same text - a node's <see cref="SyntaxNode.Span"/>
+    /// is exactly the range <c>ToString</c> renders - but slicing the file text the
+    /// extractor already holds digests it in place, where <c>ToString</c> would
+    /// materialise every declaration a second time as a string and then a third time as
+    /// its UTF-8 encoding, once per symbol and again for each enclosing declaration.
+    /// </summary>
     private static ExtractedSymbol Build(
-        string fqName, SymbolKind kind, SyntaxNode node, string signature, IReadOnlyList<string>? references = null)
+        string source,
+        string fqName,
+        SymbolKind kind,
+        SyntaxNode node,
+        string signature,
+        IReadOnlyList<string>? references = null)
     {
-        var span = node.GetLocation().GetLineSpan();
-        var digest = FileDigest.Compute(Encoding.UTF8.GetBytes(node.ToString()));
+        var lineSpan = node.GetLocation().GetLineSpan();
+        var textSpan = node.Span;
+        var digest = FileDigest.Compute(source.AsSpan(textSpan.Start, textSpan.Length));
         return new ExtractedSymbol(
             fqName,
             kind,
-            span.StartLinePosition.Line + 1,
-            span.EndLinePosition.Line + 1,
+            lineSpan.StartLinePosition.Line + 1,
+            lineSpan.EndLinePosition.Line + 1,
             signature,
             digest)
         {

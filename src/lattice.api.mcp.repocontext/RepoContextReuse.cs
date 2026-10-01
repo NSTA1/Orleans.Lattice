@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -37,6 +38,20 @@ internal static class RepoContextReuse
     private const char PossessionSeparator = '\u0000';
     private const char KnownSeparator = '@';
 
+    /// <summary>The UTF-8 byte the <see cref="PossessionSeparator"/> encodes to.</summary>
+    private const byte SeparatorByte = 0;
+
+    /// <summary>The number of separators a <see cref="Receipt"/> input carries.</summary>
+    private const int SeparatorCount = 4;
+
+    /// <summary>
+    /// The UTF-8 scratch budget these helpers take on the stack before renting. A
+    /// receipt's five parts are all bounded (a repository id, a relative path, a hex
+    /// digest, a short kind, and a symbol name), so the per-unit receipt path stays
+    /// inside it; a whole file body does not, and rents.
+    /// </summary>
+    private const int StackTranscodeBytes = 1024;
+
     /// <summary>
     /// Computes the stable content hash of a file version: the lowercase hex SHA-256
     /// of the UTF-8 encoding of <paramref name="content"/>. Two identical bodies hash
@@ -47,9 +62,27 @@ internal static class RepoContextReuse
     internal static string ContentHash(string content)
     {
         ArgumentNullException.ThrowIfNull(content);
-        Span<byte> hash = stackalloc byte[32];
-        SHA256.HashData(Encoding.UTF8.GetBytes(content), hash);
-        return Convert.ToHexStringLower(hash);
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(content.Length);
+        byte[]? rented = null;
+        var buffer = maxBytes <= StackTranscodeBytes
+            ? stackalloc byte[StackTranscodeBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        var written = 0;
+        try
+        {
+            written = Encoding.UTF8.GetBytes(content, buffer);
+            Span<byte> hash = stackalloc byte[32];
+            SHA256.HashData(buffer[..written], hash);
+            return Convert.ToHexStringLower(hash);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                rented.AsSpan(0, written).Clear();
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     /// <summary>
@@ -73,10 +106,42 @@ internal static class RepoContextReuse
         ArgumentNullException.ThrowIfNull(kind);
         ArgumentNullException.ThrowIfNull(unitKey);
 
-        var input = $"{repoId}{PossessionSeparator}{path}{PossessionSeparator}{contentHash}{PossessionSeparator}{kind}{PossessionSeparator}{unitKey}";
-        Span<byte> hash = stackalloc byte[32];
-        SHA256.HashData(Encoding.UTF8.GetBytes(input), hash);
-        return Convert.ToHexStringLower(hash);
+        var maxBytes =
+            Encoding.UTF8.GetMaxByteCount(repoId.Length) +
+            Encoding.UTF8.GetMaxByteCount(path.Length) +
+            Encoding.UTF8.GetMaxByteCount(contentHash.Length) +
+            Encoding.UTF8.GetMaxByteCount(kind.Length) +
+            Encoding.UTF8.GetMaxByteCount(unitKey.Length) +
+            SeparatorCount;
+        byte[]? rented = null;
+        var buffer = maxBytes <= StackTranscodeBytes
+            ? stackalloc byte[StackTranscodeBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        var written = 0;
+        try
+        {
+            written = Encoding.UTF8.GetBytes(repoId, buffer);
+            buffer[written++] = SeparatorByte;
+            written += Encoding.UTF8.GetBytes(path, buffer[written..]);
+            buffer[written++] = SeparatorByte;
+            written += Encoding.UTF8.GetBytes(contentHash, buffer[written..]);
+            buffer[written++] = SeparatorByte;
+            written += Encoding.UTF8.GetBytes(kind, buffer[written..]);
+            buffer[written++] = SeparatorByte;
+            written += Encoding.UTF8.GetBytes(unitKey, buffer[written..]);
+
+            Span<byte> hash = stackalloc byte[32];
+            SHA256.HashData(buffer[..written], hash);
+            return Convert.ToHexStringLower(hash);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                rented.AsSpan(0, written).Clear();
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     /// <summary>
@@ -90,7 +155,15 @@ internal static class RepoContextReuse
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(contentHash);
-        return string.Concat(path, PossessionSeparator.ToString(), contentHash);
+        return string.Create(
+            path.Length + 1 + contentHash.Length,
+            (path, contentHash),
+            static (destination, state) =>
+            {
+                state.path.CopyTo(destination);
+                destination[state.path.Length] = PossessionSeparator;
+                state.contentHash.CopyTo(destination[(state.path.Length + 1)..]);
+            });
     }
 
     /// <summary>

@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.IO.Hashing;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -49,6 +51,45 @@ internal static class FileDigest
         Span<byte> hash = stackalloc byte[16];
         XxHash128.Hash(content, hash);
         return XxHash128Prefix + Convert.ToHexStringLower(hash);
+    }
+
+    /// <summary>
+    /// The UTF-8 scratch budget <see cref="Compute(ReadOnlySpan{char})"/> takes on the
+    /// stack before renting. Most digested slices - a field, a property, a short method -
+    /// transcode well inside it, so the common case rents nothing at all.
+    /// </summary>
+    private const int StackTranscodeBytes = 512;
+
+    /// <summary>
+    /// Computes the same digest as <see cref="Compute(ReadOnlySpan{byte})"/> for text
+    /// that is already in memory as UTF-16, transcoding it through a stack or pooled
+    /// buffer rather than through a throwaway array. This is what lets a caller digest a
+    /// slice of a file it already holds without materialising that slice as a string and
+    /// then materialising its UTF-8 encoding a second time.
+    /// </summary>
+    /// <param name="text">The text to digest.</param>
+    /// <returns>The modern tagged digest string.</returns>
+    internal static string Compute(ReadOnlySpan<char> text)
+    {
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(text.Length);
+        byte[]? rented = null;
+        var buffer = maxBytes <= StackTranscodeBytes
+            ? stackalloc byte[StackTranscodeBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        var written = 0;
+        try
+        {
+            written = Encoding.UTF8.GetBytes(text, buffer);
+            return Compute(buffer[..written]);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                rented.AsSpan(0, written).Clear();
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     /// <summary>
