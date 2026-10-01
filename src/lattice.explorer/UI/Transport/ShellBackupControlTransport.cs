@@ -2,6 +2,10 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Backup;
 
+// Still calls the deprecated blocking backup verbs (LATTICE0002); the Explorer moves to
+// ILatticeBackupOperations in the second #4122 change, which removes this suppression.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
 /// <summary>

@@ -26,6 +26,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Type-ahead pickers.** Every field that names an existing tree, region, user or group, tenant or key now suggests matching values as you type. A pick-existing field refuses an unknown value, a suggest field flags an existing one, and a source that cannot list falls back to free text. ([#3949](https://github.com/NSTA1/Orleans.Lattice/issues/3949)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Explorer - Date, time and duration pickers.** History's As of is a calendar and time picker in UTC that shows the zone, your local time and quick picks; backup intervals and the retention window take a whole number per unit instead of free text. ([#4148](https://github.com/NSTA1/Orleans.Lattice/issues/4148)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Admin - Operation progress.** Resize, snapshot and reshard statuses now report the step they have reached and their progress in shards or units, and the Explorer draws it as a progress bar, follows an accepted undo or purge until it finishes, and shows when a deleted tree stops being recoverable. ([#3958](https://github.com/NSTA1/Orleans.Lattice/issues/3958)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tenant switcher.** A platform operator who can reach two or more tenants gets a tenant switcher in the top bar, with a Switch tenant palette command. It lists the reachable tenants, including default, and makes the same operator-gated switch as a t/ address. ([#3962](https://github.com/NSTA1/Orleans.Lattice/issues/3962)) (`Orleans.Lattice.Explorer.UI`)
@@ -63,6 +65,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Online reshard shrinks.** `ReshardAsync` accepts a count below a populated tree's current one and folds adjacent shards together online, completing only once the retired shards' storage is released; the `shrink_unsupported` rejection reason is gone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Changed
+
+- **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Leaf digest string feeding.** Feeding a string to the digest appended its length prefix separately from the body, and sized its staging buffer to the key's own worst case, emitting a variable `localloc` per call. It stages both into one constant-size buffer now: 20-46% faster. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Vector clock digest folding.** Folding a multi-replica clock sorted a rented key array then re-looked-up every clock, and the keys-only `Array.Sort` overload allocated a comparer delegate per call. A paired-array sort carries clocks along now: 14-34% faster, 96% less allocated. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
+
+- **Performance - Pooled return prefix clearing.** Five more pooled staging sites returned their rental with `clearArray: true`, memsetting the whole rounded-up bucket rather than the slots written. They clear exactly the written prefix now: 50% faster on a sparse 4096-slot rental. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`)
 
 - **Agents - Delegated sessions run targeted tests only.** The agent playbooks and the testing master now bind a sub-session to a named fixture or method filter, never a whole test project reflexively. The scope rule is a host-capacity rule, not only a wall-clock one: concurrent sessions contend superlinearly, a contended run presents as a hang, and an unscoped run can perturb a co-located rig somebody is measuring. ([#4130](https://github.com/NSTA1/Orleans.Lattice/pull/4130)) (`repository-wide`)
 
@@ -117,6 +127,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Backup - Blocking capture and restore verbs.** `CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Fixed
+
+- **Auth - Grants a host seeds at startup are honoured as soon as they are written.** Since the alias-swap fix above, a silo whose policy had never been written warmed its access gate over an empty snapshot at once, and the rebuild after the first seeded rules could take seconds while the policy tree's shards were being created. Requests in that window were denied as "no matching rule". The first rule written over an empty snapshot now makes the gate wait for a rebuild that saw it. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice.Auth`)
 
 - **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. On a host with an access gate, a resize swap driven by its own phase timer runs as system origin. It is no longer refused as an anonymous alias change on every tick. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
 

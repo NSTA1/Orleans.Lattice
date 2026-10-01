@@ -35,6 +35,8 @@ public sealed class FieldPrimitiveStructureTests : ShellDesignTestContext
         yield return new TestCaseData(nameof(LtMultiComboBox)).SetArgDisplayNames(nameof(LtMultiComboBox));
         yield return new TestCaseData(nameof(LtSelect)).SetArgDisplayNames(nameof(LtSelect));
         yield return new TestCaseData(nameof(LtSearchInput)).SetArgDisplayNames(nameof(LtSearchInput));
+        yield return new TestCaseData(nameof(LtDateTimeInput)).SetArgDisplayNames(nameof(LtDateTimeInput));
+        yield return new TestCaseData(nameof(LtDurationInput)).SetArgDisplayNames(nameof(LtDurationInput));
     }
 
     [TestCaseSource(nameof(Fields))]
@@ -102,6 +104,8 @@ public sealed class FieldPrimitiveStructureTests : ShellDesignTestContext
             nameof(LtMultiComboBox) => Root(Render<LtMultiComboBox>(p => p.Add(x => x.Label, "The field").Add(x => x.Source, source).Add(x => x.Noun, "tree"))),
             nameof(LtSelect) => Root(Render<LtSelect>(p => p.Add(x => x.Label, "The field").Add(x => x.Options, [new LtSelectOption("a", "A")]))),
             nameof(LtSearchInput) => Root(Render<LtSearchInput>(p => p.Add(x => x.Label, "The field"))),
+            nameof(LtDateTimeInput) => Root(Render<LtDateTimeInput>(p => p.Add(x => x.Label, "The field").Add(x => x.EmptyText, "Latest"))),
+            nameof(LtDurationInput) => Root(Render<LtDurationInput>(p => p.Add(x => x.Label, "The field"))),
             _ => throw new ArgumentOutOfRangeException(nameof(primitive), primitive, "not a field primitive"),
         };
     }

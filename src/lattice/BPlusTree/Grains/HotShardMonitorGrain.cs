@@ -648,7 +648,11 @@ internal sealed class HotShardMonitorGrain(
         }
         finally
         {
-            ArrayPool<IShardRootGrain>.Shared.Return(shards, clearArray: true);
+            // Only the first shardCount slots were populated; the rental is
+            // rounded up to the next pool bucket, so clearArray: true would
+            // wipe slack this method never touched.
+            shards.AsSpan(0, shardCount).Clear();
+            ArrayPool<IShardRootGrain>.Shared.Return(shards);
         }
     }
 
@@ -691,10 +695,13 @@ internal sealed class HotShardMonitorGrain(
     {
         var probed = candidates.Count;
         var countTasks = ArrayPool<Task<int>>.Shared.Rent(probed);
+        // Hoisted above the try so the finally can clear exactly the prefix
+        // that was written: a dispatch failure breaks out early, so the
+        // written count is not always `probed`.
+        var dispatched = 0;
         try
         {
             ExceptionDispatchInfo? failure = null;
-            var dispatched = 0;
             using (LatticeAccessGateContext.EnterSystemOrigin())
             {
                 for (int i = 0; i < probed; i++)
@@ -758,7 +765,10 @@ internal sealed class HotShardMonitorGrain(
         }
         finally
         {
-            ArrayPool<Task<int>>.Shared.Return(countTasks, clearArray: true);
+            // Only the dispatched prefix holds Task references; clearArray:
+            // true would additionally wipe the whole rounded-up rental.
+            countTasks.AsSpan(0, dispatched).Clear();
+            ArrayPool<Task<int>>.Shared.Return(countTasks);
         }
     }
 

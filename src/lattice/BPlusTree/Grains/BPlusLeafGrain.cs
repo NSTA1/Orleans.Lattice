@@ -1977,12 +1977,16 @@ internal sealed partial class BPlusLeafGrain(
         {
             // Return only the buffers we rented; direct-allocation
             // small-batch buffers are normal heap arrays and will be
-            // collected by the GC. clearArray: true on the pool path
-            // so the rented array does not pin string / byte[] /
-            // VersionVector references in the pool slot between rents.
+            // collected by the GC. On the pool path clear just the
+            // written prefix, so the rented array does not pin string /
+            // byte[] / VersionVector references in the pool slot between
+            // rents - clearArray: true would instead wipe the whole
+            // rounded-up bucket, which above the 128-entry threshold is
+            // up to twice the slots this batch actually wrote.
             if (rentedFromPool)
             {
-                ArrayPool<WalRecord>.Shared.Return(walEntries, clearArray: true);
+                walEntries.AsSpan(0, count).Clear();
+                ArrayPool<WalRecord>.Shared.Return(walEntries);
             }
         }
     }

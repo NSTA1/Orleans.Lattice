@@ -104,7 +104,7 @@ The Schedules page works on one tree, selected with `?tree={tree}` or the **Show
 
 Each row shows whether a schedule is registered, its interval, last run, and last success. A registered schedule can be cancelled when the caller may capture that backup kind. Cancelling opens a dialog named **Cancel this schedule?** and states that existing backups are kept.
 
-The registration form can create or change a full or incremental schedule. It asks for hours and minutes, rejects non-whole or zero total intervals, and notes that an interval under one minute is raised to one minute by the scheduler. Successful saves and cancellations reload the schedule status.
+The registration form can create or change a full or incremental schedule. Its **Every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes; it refuses a box that is not a whole number and an interval under one minute, the shortest the scheduler runs. Successful saves and cancellations reload the schedule status.
 
 ## Health
 
@@ -112,7 +112,7 @@ Health appears only when the backup sink is durable and external. The Health pag
 
 A health report shows status, checked time, explanation, whether the manifest is present, missing or uncommitted artifacts, hash mismatches, and peer-cluster visibility when applicable. Focused health actions are offered only when the scope probe grants list authority for that backup.
 
-Periodic monitoring can be turned on or off per backup. The form asks for hours and minutes and saves a monitoring interval; the monitor applies the config on its next sweep.
+Periodic monitoring can be turned on or off per backup. Its **Verify every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes, at least one minute; the monitor applies the config on its next sweep.
 
 ## Maintenance
 

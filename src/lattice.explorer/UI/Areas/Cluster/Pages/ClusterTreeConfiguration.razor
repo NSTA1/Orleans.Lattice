@@ -54,7 +54,7 @@ else
         {
             <form class="lt-cluster-form" @onsubmit="SaveRetentionAsync" aria-label="Change history retention">
                 <LtSelect Label="Retention mode" Options="ModeOptions" @bind-Value="_mode" />
-                <LtTextInput Label="Window in seconds" Mono="true" @bind-Value="_window" Error="@_windowError" Hint="Leave empty for no age bound. New revisions adopt the change; written ones keep their shape." inputmode="numeric" />
+                <LtDurationInput @ref="_windowField" Label="Window" Units="@WindowUnits" Optional="true" Min="@TimeSpan.FromSeconds(1)" @bind-Value="_window" Hint="Leave empty for no age bound. New revisions adopt the change; written ones keep their shape." />
                 <div class="lt-cluster-form__actions">
                     <LtButton Type="LtButtonType.Submit" Disabled="@_saving">Save retention</LtButton>
                 </div>

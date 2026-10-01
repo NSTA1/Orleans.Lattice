@@ -78,10 +78,7 @@ else if (FocusedId is { } focused)
                 <h3 id="lt-backups-monitor-title" class="lt-backups-section__title">Periodic monitoring</h3>
                 <form class="lt-backups-form" @onsubmit="ConfigureAsync">
                     <LtSwitch Label="Verify this backup periodically" Checked="@_monitor" CheckedChanged="value => _monitor = value" OnText="On" OffText="Off" />
-                    <div class="lt-backups-form__row">
-                        <LtTextInput Label="Every hours" Value="@_hours" ValueChanged="value => _hours = value" inputmode="numeric" />
-                        <LtTextInput Label="and minutes" Value="@_minutes" ValueChanged="value => _minutes = value" inputmode="numeric" Error="@_intervalError" />
-                    </div>
+                    <LtDurationInput @ref="_intervalField" Label="Verify every" Value="@_interval" ValueChanged="value => _interval = value" Min="@BackupsFormat.ShortestInterval" />
                     <p class="lt-backups-note">The monitor applies this on its next sweep.</p>
                     @if (_configureMessage is { } configureMessage)
                     {
