@@ -129,6 +129,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 ### Fixed
 
 - **Explorer - An app's installer is told when they will hold no role in it.** Binding roles, the install's confirmation, Your apps and the app's page say whether you are in each bound group, and offer to join it or re-bind instead of a missing Open. ([#4150](https://github.com/NSTA1/Orleans.Lattice/issues/4150)) (`Orleans.Lattice.Explorer.UI`)
+- **Core - Key history shows each write once.** Copies made by resize, reshard and replication no longer repeat a revision, and the Explorer says "Set - value not kept". ([#4149](https://github.com/NSTA1/Orleans.Lattice/issues/4149)) (`Orleans.Lattice`, `Orleans.Lattice.Explorer`)
 
 - **Auth - Grants a host seeds at startup are honoured as soon as they are written.** Since the alias-swap fix above, a silo whose policy had never been written warmed its access gate over an empty snapshot at once, and the rebuild after the first seeded rules could take seconds while the policy tree's shards were being created. Requests in that window were denied as "no matching rule". The first rule written over an empty snapshot now makes the gate wait for a rebuild that saw it. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice.Auth`)
 

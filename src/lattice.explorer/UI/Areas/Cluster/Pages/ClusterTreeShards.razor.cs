@@ -77,16 +77,15 @@ public partial class ClusterTreeShards : IDisposable
     /// </returns>
     internal static IReadOnlyList<ClusterShardRow> Join(ShardMapInspection? map, TreeAdminDiagnosticReport? diagnostics, TreeHotnessReport? hotness)
     {
-        var slots = map?.PhysicalShardIndices
-            .GroupBy(index => index)
-            .ToDictionary(group => group.Key, group => group.Count());
+        var routed = map is { PhysicalShardIndices.IsDefaultOrEmpty: false } ? map.PhysicalShardIndices : default;
+        var slots = SlotsByShard(map);
         var shards = diagnostics?.Shards.ToDictionary(shard => shard.ShardIndex);
         var heat = hotness?.Shards.ToDictionary(shard => shard.ShardIndex);
 
         var indices = new SortedSet<int>();
-        if (slots is { Count: > 0 })
+        if (!routed.IsDefaultOrEmpty)
         {
-            indices.UnionWith(slots.Keys);
+            indices.UnionWith(routed);
         }
         else
         {
@@ -102,7 +101,7 @@ public partial class ClusterTreeShards : IDisposable
                 ShardHotnessSnapshot? hot = heat is not null && heat.TryGetValue(index, out var h) ? h : null;
                 return new ClusterShardRow(
                     index,
-                    slots is not null ? slots.GetValueOrDefault(index) : null,
+                    slots is not null && slots.TryGetValue(index, out var owned) ? owned : null,
                     shard?.Depth,
                     shard?.LiveKeys,
                     diagnostics is { Deep: true } ? shard?.Tombstones : null,
@@ -113,6 +112,33 @@ public partial class ClusterTreeShards : IDisposable
                     shard?.BulkOperationPending ?? false);
             }),
         ];
+    }
+
+    /// <summary>
+    /// The virtual slots the live map routes to each shard, from the inspection's
+    /// per-shard counts. <see langword="null"/> when there is no map, or the
+    /// cluster predates the counts: the distinct indices alone cannot say how
+    /// many slots each shard owns.
+    /// </summary>
+    /// <param name="map">The live shard map, or <see langword="null"/>.</param>
+    /// <returns>The slot count by shard index, or <see langword="null"/>.</returns>
+    private static Dictionary<int, int>? SlotsByShard(ShardMapInspection? map)
+    {
+        if (map is null
+            || map.PhysicalShardIndices.IsDefaultOrEmpty
+            || map.SlotCounts.IsDefaultOrEmpty
+            || map.SlotCounts.Length != map.PhysicalShardIndices.Length)
+        {
+            return null;
+        }
+
+        var slots = new Dictionary<int, int>(map.PhysicalShardIndices.Length);
+        for (var i = 0; i < map.PhysicalShardIndices.Length; i++)
+        {
+            slots[map.PhysicalShardIndices[i]] = map.SlotCounts[i];
+        }
+
+        return slots;
     }
 
     private static string Number(long? value) => value is { } number ? ClusterFormat.Count(number) : Unknown;
