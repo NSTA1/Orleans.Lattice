@@ -21,9 +21,11 @@ namespace Orleans.Lattice.Auth;
 /// flight.
 /// </para>
 /// <para>
-/// The compiled snapshot is warmed on the first request (awaited once while the
-/// engine's epoch is still zero) so a live cluster never evaluates against an
-/// empty snapshot; every subsequent request takes the synchronous fast path.
+/// The compiled snapshot is warmed on the first request (awaited while
+/// <see cref="CompiledPolicySnapshotMaintainer.IsWarm"/> is false) so a live
+/// cluster never evaluates against a snapshot that has not been built, nor against
+/// an empty one after the first rule commits; every other request takes the
+/// synchronous fast path.
 /// </para>
 /// </remarks>
 internal sealed class PolicyAccessGate(
@@ -120,17 +122,20 @@ internal sealed class PolicyAccessGate(
             return new ValueTask<LatticeAccessDecision>(deny);
         }
 
-        // Warm fast path: once any rebuild has advanced the epoch, evaluation is
-        // synchronous and in-memory, so complete without allocating a state
-        // machine.
-        if (maintainer.CurrentEpoch > 0)
+        // Warm fast path: once the snapshot is warm, evaluation is synchronous and
+        // in-memory, so complete without allocating a state machine. Warm is not
+        // "the epoch has advanced": an empty snapshot goes cold again when the first
+        // rule commits, so the grants a host has just seeded are never answered as
+        // "no matching rule" while their rebuild is still scanning.
+        if (maintainer.IsWarm)
         {
             return EvaluateAndObserve(in request, start, cancellationToken);
         }
 
-        // Cold path (first request on this silo): warm the snapshot once, then
-        // evaluate. The request is copied by value into the async helper because
-        // an async method cannot take an 'in' parameter.
+        // Cold path (first request on this silo, or the first rule's rebuild still
+        // in flight): warm the snapshot, then evaluate. The request is copied by
+        // value into the async helper because an async method cannot take an 'in'
+        // parameter.
         return WarmThenEvaluateAsync(request, start, cancellationToken);
     }
 
