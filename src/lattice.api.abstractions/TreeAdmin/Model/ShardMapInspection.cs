@@ -40,4 +40,13 @@ public sealed record ShardMapInspection
     /// Never the default (empty only for a tree with no shards).
     /// </summary>
     [Id(5)] public ImmutableArray<int> PhysicalShardIndices { get; init; } = ImmutableArray<int>.Empty;
+
+    /// <summary>
+    /// The number of virtual slots routed to each shard, position for position
+    /// with <see cref="PhysicalShardIndices"/>: entry <c>i</c> is how many of the
+    /// <see cref="VirtualShardCount"/> slots resolve to shard
+    /// <c>PhysicalShardIndices[i]</c>, so the entries sum to
+    /// <see cref="VirtualShardCount"/>. Empty from a server that predates it.
+    /// </summary>
+    [Id(6)] public ImmutableArray<int> SlotCounts { get; init; } = ImmutableArray<int>.Empty;
 }

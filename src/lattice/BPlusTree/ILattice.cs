@@ -1010,6 +1010,15 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="ShardMap"/>. Used by infrastructure helpers (e.g. the
     /// streaming bulk loader) that need to address shard grains directly
     /// without re-implementing alias resolution and shard-map fetching.
+    /// <para>
+    /// The snapshot is cached per activation and is not invalidated when a
+    /// reshard, split or fold changes the map: a routed operation corrects it on
+    /// its first stale-routing refusal, but a read that only enumerates the
+    /// shards never meets one. A caller that reports the tree's topology, or
+    /// whose correctness depends on seeing a just-landed map, must use
+    /// <see cref="GetRoutingAsync(bool, CancellationToken)"/> with
+    /// <c>forceRefresh: true</c>.
+    /// </para>
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);

@@ -364,7 +364,7 @@ public sealed class LatticeTreeAdminTests
         var factory = Substitute.For<IGrainFactory>();
         var lattice = Lattice(factory);
         var map = new ShardMap { Slots = new[] { 1, 0, 1, 0 }, Version = 5 };
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(new RoutingInfo("phys-orders", map));
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>()).Returns(new RoutingInfo("phys-orders", map));
         var facade = Create(Substitute.For<ILatticeSchemaControl>(), factory);
 
         var inspection = await facade.InspectShardMapAsync(Tree);
@@ -377,7 +377,47 @@ public sealed class LatticeTreeAdminTests
             Assert.That(inspection.PhysicalShardCount, Is.EqualTo(2));
             Assert.That(inspection.MapVersion, Is.EqualTo(5));
             Assert.That(inspection.PhysicalShardIndices, Is.EqualTo(new[] { 0, 1 }));
+            Assert.That(inspection.SlotCounts, Is.EqualTo(new[] { 2, 2 }));
         });
+    }
+
+    [Test]
+    public async Task InspectShardMapAsync_counts_the_virtual_slots_each_shard_owns()
+    {
+        // Issue #4146: the Shards tab showed one slot per shard because it
+        // counted the distinct indices instead of the slots routed to each.
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Lattice(factory);
+        var map = new ShardMap { Slots = new[] { 7, 2, 7, 7, 2, 9, 7, 7 }, Version = 3 };
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>()).Returns(new RoutingInfo(Tree, map));
+        var facade = Create(Substitute.For<ILatticeSchemaControl>(), factory);
+
+        var inspection = await facade.InspectShardMapAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inspection.PhysicalShardIndices, Is.EqualTo(new[] { 2, 7, 9 }));
+            Assert.That(inspection.SlotCounts, Is.EqualTo(new[] { 2, 5, 1 }));
+            Assert.That(inspection.SlotCounts.Sum(), Is.EqualTo(inspection.VirtualShardCount));
+        });
+    }
+
+    [Test]
+    public async Task InspectShardMapAsync_force_refreshes_the_routing_it_reports()
+    {
+        // Issue #4146: the tree's stateless worker caches its routing per
+        // activation and a reshard does not invalidate it, so an unforced read
+        // reported the pre-reshard map long after the reshard had finished.
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Lattice(factory);
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
+            .Returns(new RoutingInfo(Tree, new ShardMap { Slots = new[] { 0, 1 }, Version = 2 }));
+        var facade = Create(Substitute.For<ILatticeSchemaControl>(), factory);
+
+        await facade.InspectShardMapAsync(Tree);
+
+        _ = lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
+        _ = lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
