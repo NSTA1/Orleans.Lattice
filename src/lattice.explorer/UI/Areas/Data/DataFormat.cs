@@ -9,12 +9,19 @@ internal static class DataFormat
     /// <summary>The <c>?at=</c> format: an ISO 8601 UTC instant to the second.</summary>
     public const string InstantFormat = "yyyy-MM-ddTHH:mm:ssZ";
 
-    /// <summary>A hybrid-logical clock's wall time, as <c>2026-09-28 14:02:11 UTC</c>, or a dash for none.</summary>
+    /// <summary>
+    /// A hybrid-logical clock's wall time, as <c>2026-09-28 14:02:11 UTC</c>, or a
+    /// dash for none. The dash is for a table cell or a definition only: prose
+    /// checks <see cref="HasTime"/> and says the absence in words instead.
+    /// </summary>
     /// <param name="hlc">The clock.</param>
     public static string Time(HybridLogicalClock hlc) =>
-        hlc.WallClockTicks <= 0 || hlc.WallClockTicks > DateTimeOffset.MaxValue.UtcTicks
-            ? "-"
-            : Time(new DateTimeOffset(hlc.WallClockTicks, TimeSpan.Zero));
+        HasTime(hlc) ? Time(new DateTimeOffset(hlc.WallClockTicks, TimeSpan.Zero)) : "-";
+
+    /// <summary>Whether a hybrid-logical clock names a wall time <see cref="Time(HybridLogicalClock)"/> can show.</summary>
+    /// <param name="hlc">The clock.</param>
+    public static bool HasTime(HybridLogicalClock hlc) =>
+        hlc.WallClockTicks > 0 && hlc.WallClockTicks <= DateTimeOffset.MaxValue.UtcTicks;
 
     /// <summary>An instant as <c>2026-09-28 14:02:11 UTC</c>.</summary>
     /// <param name="instant">The instant.</param>
