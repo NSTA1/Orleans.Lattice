@@ -44,12 +44,14 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 | Clear version config | Remove the tree's version config and report whether one was present. |
 | Remediate | Apply a value transform across a tree and adopt a target policy. |
 | Get remediation status | Read the status or last report of remediation for a tree. |
-| Scan compliance | Run a read-only compliance audit and return counts and reasons. |
+| Scan compliance | Run a read-only compliance audit and return counts and reasons. Deprecated in favour of the accept-then-poll scan below. |
+| Start a compliance scan | Start the same audit in the background and poll its progress and report (`ILatticeSchemaComplianceOperations`; see [Schema compliance operations](operations.md)). |
 | Probe capabilities | Report, with no side effects, which schema operations the caller may perform over a tree. |
 
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.
+- [Schema compliance operations](operations.md) - the accept-then-poll compliance scan, and migrating from the blocking scan.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
 - [Architecture](architecture.md) - how the facade authorizes, streams dead letters, gates versioning, and audits compliance.
 

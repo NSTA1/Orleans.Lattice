@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using Orleans.Lattice;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Schema;
 
@@ -47,6 +48,20 @@ internal sealed class LatticeSchemaComplianceAdmin(
         Dictionary<string, int>? breakdown = null;
 
         var source = _grainFactory.GetGrain<ILattice>(treeId);
+
+        // Tracked-operation progress (#4126): null outside a tracked operation, so
+        // the blocking scan pays one null check and never counts the tree.
+        var progress = LatticeOperationProgress.Current;
+        long? total = null;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(SchemaComplianceScanOperation.CountingPhase).ConfigureAwait(false);
+            total = await source.CountAsync(cancellationToken).ConfigureAwait(false);
+            await progress.ReportAsync(
+                SchemaComplianceScanOperation.ScanningPhase, 0, total, SchemaComplianceScanOperation.EntriesUnit)
+                .ConfigureAwait(false);
+        }
+
         await foreach (var entry in source
             .ScanEntriesAsync(cancellationToken: cancellationToken)
             .ConfigureAwait(false))
@@ -64,6 +79,16 @@ internal sealed class LatticeSchemaComplianceAdmin(
             {
                 compliant++;
             }
+
+            if (progress is not null && ((compliant + nonCompliant) & (ProgressReportInterval - 1)) == 0)
+            {
+                total = await ReportScannedAsync(progress, compliant + nonCompliant, total).ConfigureAwait(false);
+            }
+        }
+
+        if (progress is not null)
+        {
+            await ReportScannedAsync(progress, compliant + nonCompliant, total).ConfigureAwait(false);
         }
 
         return new LatticeSchemaComplianceReport
@@ -75,6 +100,28 @@ internal sealed class LatticeSchemaComplianceAdmin(
             ScannedCount = compliant + nonCompliant,
             RuleBreakdown = BuildBreakdown(breakdown),
         };
+    }
+
+    /// <summary>
+    /// How many scanned values pass between progress reports (a power of two). The
+    /// sink coalesces reports anyway; this keeps the per-value cost to a mask test.
+    /// </summary>
+    private const int ProgressReportInterval = 256;
+
+    private static async ValueTask<long?> ReportScannedAsync(ILatticeOperationProgress progress, long scanned, long? total)
+    {
+        // The count was taken before the scan over a writable tree, so a scan can
+        // pass it. A total is never reported below the entries already scanned:
+        // once passed it becomes unknown rather than wrong.
+        if (total is { } known && scanned > known)
+        {
+            total = null;
+        }
+
+        await progress.ReportAsync(
+            SchemaComplianceScanOperation.ScanningPhase, scanned, total, SchemaComplianceScanOperation.EntriesUnit)
+            .ConfigureAwait(false);
+        return total;
     }
 
     private static IReadOnlyList<LatticeSchemaComplianceRuleCount> BuildBreakdown(Dictionary<string, int>? breakdown)

@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Admin - Compliance scans and fresh storage usage run in the background.** Start either and poll its progress in entries or trees; it outlives a caller timeout. The blocking compliance scan is deprecated (`LATTICE0002`). ([#4126](https://github.com/NSTA1/Orleans.Lattice/issues/4126)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
 - **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 - **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)

@@ -179,6 +179,14 @@ operation would start from:
 | `TreeSnapshotStatus` | `Phase` (`TreeSnapshotPhase?`), `CopiedShardCount`, `ShardCount` (`int?`) | `CopiedShardCount` of `ShardCount` source shards. |
 | `TreeReshardStatus` | `TargetShardCount`, `StartPhysicalShardCount` (both `int?`) | `CurrentPhysicalShardCount - StartPhysicalShardCount` of `TargetShardCount - StartPhysicalShardCount` (both negative for a shrink): each split of a grow adds one physical shard, and each fold of a shrink removes one, once its routing swap has durably committed. |
 
+A fresh, deep storage-usage measure is accept-then-poll too, on the shared
+long-running operation contract rather than a bespoke status:
+`ILatticeStorageUsageOperations.StartStorageUsageRefreshAsync` returns a handle at
+once, and the operation reports `trees` measured of the registered tree count, then
+records the cluster totals. Prefer it to `GetStorageUsageAsync(deep: true)`, which
+holds one request open across the whole leaf walk. See
+[Storage usage operations](operations.md).
+
 Each progress member is null (or 0 for a count of completed work) when nothing is
 in flight, and null when the status comes from a build that does not report it,
 such as a reshard started before `StartPhysicalShardCount` was recorded. A caller
@@ -207,9 +215,13 @@ Alongside the request/response records the operations use, the facade publishes 
 - `TreeOrphanedLeafGapReason` - why one region of the tree could not be given a verdict: `ShardSplitInProgress`, `ShardPassAlreadyRunning`, `ChainTruncated`, `ChainTruncatedUnrecoverable`, `WalkBudgetExhaustedWithoutResumePosition`, `LeafBoundsUndecidable`, or `EntryLeafUnreachable`.
 - `TreeOrphanedLeafGap` - one such region: its shard, the reason, and the leaf id and key the pass stopped on.
 - `ApiTreeAdminTypeAliases` - the stable Orleans serialization alias constants (prefix `oit.`) that the tree-administration records in `Orleans.Lattice.Api.Abstractions` carry.
+- `ILatticeStorageUsageOperations` - the accept-then-poll fresh storage usage, registered by `AddLatticeTreeAdminApi`: `StartStorageUsageRefreshAsync(string? operationId = null, CancellationToken cancellationToken = default)` plus the shared `ILatticeOperations` status, list and cancel verbs, scoped to callers holding cluster telemetry. See [Storage usage operations](operations.md).
+- `StorageUsageRefreshOperation` - the refresh's kind (`treeadmin.storage-usage-refresh`), phase (`Measuring`) and unit (`trees`) constants.
+- `StorageUsageRefreshResults` - the refresh's result keys, `ToResultMap`, and `TryReadSummary`, which rebuilds the cluster totals as a deep `ClusterStorageUsageSummary` with no per-tree rows.
 
 ## See also
 
+- [Storage usage operations](operations.md) - the accept-then-poll fresh storage usage.
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the schema control facade this surface composes by delegation.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared control-surface contract package that publishes `ILatticeTreeAdmin`.
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server binding that advertises the tree-administration group.

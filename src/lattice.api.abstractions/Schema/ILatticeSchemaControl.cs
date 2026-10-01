@@ -212,6 +212,7 @@ public interface ILatticeSchemaControl
     /// <returns>The compliance report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree's schema.</exception>
+    [Obsolete("ScanComplianceAsync blocks until every value of the tree has been read, so a large scan is cut off by the caller's timeout. Use ILatticeSchemaComplianceOperations.StartComplianceScanAsync and poll GetOperationStatusAsync instead. ScanComplianceAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-scan")]
     Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
         string treeId, CancellationToken cancellationToken = default);
 

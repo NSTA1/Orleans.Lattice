@@ -11,7 +11,9 @@
     "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#LatticeSchemaGrpcMethods",
     "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#LatticeSchemaGrpcService",
     "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#ILatticeSchemaRemediationAdmin",
-    "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#ILatticeSchemaVersionAdmin"
+    "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#ILatticeSchemaVersionAdmin",
+    "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#ILatticeSchemaComplianceOperations",
+    "src/lattice.api.schema/LatticeSchemaComplianceOperations.cs#LatticeSchemaComplianceOperations"
   ],
   "in_process": {
     "interface": "ILatticeSchemaControl",
@@ -689,6 +691,28 @@
       "fields": [],
       "source": "src/lattice.api.schema.grpc/Model/SchemaAckResponse.cs#SchemaAckResponse"
     },
+    "SchemaComplianceOperationRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaComplianceOperationRequest.cs#SchemaComplianceOperationRequest"
+    },
+    "SchemaComplianceOperationStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "LatticeOperationStatus?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaComplianceOperationStatusResponse.cs#SchemaComplianceOperationStatusResponse"
+    },
     "SchemaComplianceReportResponse": {
       "kind": "record",
       "fields": [
@@ -699,6 +723,22 @@
         }
       ],
       "source": "src/lattice.api.schema.grpc/Model/SchemaComplianceReportResponse.cs#SchemaComplianceReportResponse"
+    },
+    "SchemaComplianceScanStartRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaComplianceScanStartRequest.cs#SchemaComplianceScanStartRequest"
     },
     "SchemaCountResponse": {
       "kind": "record",
@@ -872,6 +912,54 @@
       ]
     },
     {
+      "id": "cancel-compliance-scan",
+      "in_process": "ILatticeSchemaComplianceOperations.CancelOperationAsync",
+      "grpc_method": "/orleans.lattice.api.schema/CancelComplianceScan",
+      "transport_scope": "both",
+      "request": "SchemaComplianceOperationRequest",
+      "response": "SchemaComplianceOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller may not read the tree."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeSchemaComplianceOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.compliance-scan kind, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#CancelComplianceScan"
+      ]
+    },
+    {
       "id": "clear-policy",
       "in_process": "ILatticeSchemaControl.ClearPolicyAsync",
       "grpc_method": "/orleans.lattice.api.schema/ClearPolicy",
@@ -1014,6 +1102,50 @@
       ]
     },
     {
+      "id": "get-compliance-scan-status",
+      "in_process": "ILatticeSchemaComplianceOperations.GetOperationStatusAsync",
+      "grpc_method": "/orleans.lattice.api.schema/GetComplianceScanStatus",
+      "transport_scope": "both",
+      "request": "SchemaComplianceOperationRequest",
+      "response": "SchemaComplianceOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeSchemaComplianceOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.compliance-scan kind, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetComplianceScanStatus"
+      ]
+    },
+    {
       "id": "get-policy",
       "in_process": "ILatticeSchemaControl.GetPolicyAsync",
       "grpc_method": "/orleans.lattice.api.schema/GetPolicy",
@@ -1126,6 +1258,50 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetVersionConfigMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#GetVersionConfig"
+      ]
+    },
+    {
+      "id": "list-compliance-scans",
+      "in_process": "ILatticeSchemaComplianceOperations.ListOperationsAsync",
+      "grpc_method": "/orleans.lattice.api.schema/ListComplianceScans",
+      "transport_scope": "both",
+      "request": "LatticeOperationListRequest",
+      "response": "LatticeOperationPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeSchemaComplianceOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.compliance-scan kind, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ListComplianceScans"
       ]
     },
     {
@@ -1286,7 +1462,13 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ScanComplianceMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ScanCompliance"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-compliance-scan",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "set-policy",
@@ -1364,6 +1546,56 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetVersionConfigAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#SetVersionConfigMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#SetVersionConfig"
+      ]
+    },
+    {
+      "id": "start-compliance-scan",
+      "in_process": "ILatticeSchemaComplianceOperations.StartComplianceScanAsync",
+      "grpc_method": "/orleans.lattice.api.schema/StartComplianceScan",
+      "transport_scope": "both",
+      "request": "SchemaComplianceScanStartRequest",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "schema.compliance-scan",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller may not read the tree."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeSchemaComplianceOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#StartComplianceScanAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#ILatticeSchemaComplianceOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#StartComplianceScanAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StartComplianceScan",
+        "docs/lattice.api.schema/operations.md"
       ]
     },
     {
@@ -1460,6 +1692,12 @@
       "retryable": false,
       "meaning": "A remediation or migration rebuild breached a per-tree admission cap.",
       "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ToResourceExhausted"
+    },
+    {
+      "id": "unimplemented",
+      "grpc_status": "Unimplemented",
+      "meaning": "Server registered no ILatticeSchemaComplianceOperations.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ComplianceOperations"
     }
   ]
 }
