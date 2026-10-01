@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Membership;
 
@@ -159,6 +160,17 @@ internal sealed class LatticeMembershipDirectory(
         Queue<string> frontier,
         CancellationToken cancellationToken)
     {
+        // A never-written edges tree is unregistered and holds no edges. Reading it
+        // would register it, and subject resolution can run inside the tree
+        // registry's non-interleaved SetAliasAsync turn (the access gate's alias
+        // check), where that registration queues behind the turn awaiting it
+        // (issue 4128).
+        if (frontier.Count == 0
+            || !await grainFactory.GetLatticeRegistry().ExistsAsync(MembershipConstants.EdgesTree).ConfigureAwait(false))
+        {
+            return;
+        }
+
         while (frontier.Count > 0)
         {
             var current = frontier.Dequeue();
