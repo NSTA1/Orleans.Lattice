@@ -7,7 +7,8 @@ namespace Orleans.Lattice.Apps;
 /// <summary>Strict JSON parsing followed by semantic validation, without activating app code.</summary>
 public static class AppManifestParser
 {
-    private static readonly JsonSerializerOptions Options = new()
+    /// <summary>The strict manifest JSON options, shared with <see cref="AppManifestDigest"/> so both read and write one shape.</summary>
+    internal static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,

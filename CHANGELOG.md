@@ -255,6 +255,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Apps - An install consented to a manifest nobody reviewed.** The commit re-read the manifest, so a source could add a bridge operation after review. A description now reports `ManifestDigest`; an install sending it as `ExpectedManifestDigest` is refused if it changed. The Explorer sends it. ([#4021](https://github.com/NSTA1/Orleans.Lattice/issues/4021)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Hardened credential, frame and script policy.** A sign-in is sent only to the endpoint it was minted for (`IExplorerAuthSession.GetAuthenticationFor`); the CSP drops `'unsafe-inline'` scripts; only the frame endpoint lifts `X-Frame-Options`; a frame gets only consented bridge grants. ([#4020](https://github.com/NSTA1/Orleans.Lattice/issues/4020)) (`Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)
 
 - **Explorer - The connection test no longer probes arbitrary hosts.** Connection settings, the editable dialog and its test need `AllowInteractiveEndpointConfiguration`, else the dialog is read-only. The anonymous probe reports fixed words and sends transport headers only to the configured endpoint. ([#4018](https://github.com/NSTA1/Orleans.Lattice/issues/4018)) (`Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.Web`)

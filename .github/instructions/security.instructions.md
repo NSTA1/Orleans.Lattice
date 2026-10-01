@@ -192,6 +192,11 @@ gate will tell you if you forget.
   guard. Do not add an alias write that bypasses the guard.
 - The gRPC binding is default-deny: `DenyAppsApiAuthorizer` is registered unless the
   host supplies its own `ILatticeAppsApiAuthorizer`.
+- An install is pinned to what the operator reviewed. Every `AppDescriptor` carries
+  the `ManifestDigest` of the manifest and provenance it describes, and an install or
+  upgrade whose `AppInstallRequest.ExpectedManifestDigest` differs from the digest of
+  the manifest re-resolved at commit is refused before anything is recorded (#4021).
+  A review-then-install client must send the digest; the Explorer does.
 
 ## Release-status note for security fixes
 
