@@ -185,11 +185,17 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     /// </summary>
     /// <param name="treeId">The tree to create; it must not exist yet.</param>
     /// <param name="entries">How many keys it holds.</param>
-    public async Task SeedTreeAsync(string treeId, int entries)
+    /// <param name="shardCount">The physical shard count to create it with, or <see langword="null"/> for the default.</param>
+    public async Task SeedTreeAsync(string treeId, int entries, int? shardCount = null)
     {
         var grains = Head.Services.GetRequiredService<IGrainFactory>();
         using (LatticeSystemOrigin.Enter())
         {
+            if (shardCount is { } shards)
+            {
+                await Head.Services.GetRequiredService<ILatticeTreeAdmin>().CreateTreeAsync(treeId, shardCount: shards);
+            }
+
             var tree = grains.GetGrain<ILattice>(treeId);
             for (var i = 0; i < entries; i++)
             {

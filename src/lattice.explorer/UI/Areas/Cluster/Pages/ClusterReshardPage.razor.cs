@@ -59,9 +59,33 @@ public partial class ClusterReshardPage : IDisposable
         _access = ClusterTreeAccess.None(TreeId);
         var token = _lifetime.Token;
         var access = ClusterLoad<LatticeTreeAdminCapabilities>.RunAsync(ct => ClusterTreeAccess.ProbeAsync(Facades.RequireTreeAdmin(), TreeId, ct), token);
-        var status = ClusterLoad<TreeReshardStatus>.RunAsync(ct => Facades.RequireTreeAdmin().GetReshardStatusAsync(TreeId, ct), token);
+        var status = ClusterLoad<TreeReshardStatus>.RunAsync(ct => ReadAsync(admin => admin.GetReshardStatusAsync(TreeId, ct), ct), token);
         _access = (await access).Value ?? _access;
         Show(await status);
+    }
+
+    /// <summary>
+    /// Reads a reshard status. A tree no reshard has given a map of its own routes
+    /// over the default map, which the status reports as zero shards and zero
+    /// slots (issue #4146); the live map then supplies the figures, so the page
+    /// never says the tree has no shards. A failed map read keeps the status as read.
+    /// </summary>
+    /// <param name="read">The status read.</param>
+    /// <param name="cancellationToken">Cancels the reads.</param>
+    /// <returns>The status, with the live map's figures when it has none.</returns>
+    private async Task<TreeReshardStatus> ReadAsync(Func<ILatticeTreeAdmin, Task<TreeReshardStatus>> read, CancellationToken cancellationToken)
+    {
+        var admin = Facades.RequireTreeAdmin();
+        var status = await read(admin);
+        if (status.VirtualShardCount > 0)
+        {
+            return status;
+        }
+
+        var map = await ClusterLoad<ShardMapInspection>.RunAsync(ct => admin.InspectShardMapAsync(TreeId, ct), cancellationToken);
+        return map.Value is { } live
+            ? status with { CurrentPhysicalShardCount = live.PhysicalShardCount, VirtualShardCount = live.VirtualShardCount, MapVersion = live.MapVersion }
+            : status;
     }
 
     private void Show(ClusterLoad<TreeReshardStatus> status)
@@ -80,7 +104,7 @@ public partial class ClusterReshardPage : IDisposable
     private async Task<ClusterPollOutcome> RefreshAsync(CancellationToken cancellationToken)
     {
         var status = await ClusterLoad<TreeReshardStatus>.RunAsync(
-            ct => Facades.RequireTreeAdmin().GetReshardStatusAsync(TreeId, ct),
+            ct => ReadAsync(admin => admin.GetReshardStatusAsync(TreeId, ct), ct),
             cancellationToken);
         if (status.Value is not { } value)
         {
@@ -147,7 +171,7 @@ public partial class ClusterReshardPage : IDisposable
 
         _busy = true;
         var started = await ClusterLoad<TreeReshardStatus>.RunAsync(
-            ct => Facades.RequireTreeAdmin().ReshardTreeAsync(TreeId, plan.Target, ct),
+            ct => ReadAsync(admin => admin.ReshardTreeAsync(TreeId, plan.Target, ct), ct),
             _lifetime.Token);
         _busy = false;
 
