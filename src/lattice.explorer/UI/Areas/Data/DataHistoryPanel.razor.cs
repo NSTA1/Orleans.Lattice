@@ -68,8 +68,11 @@ public partial class DataHistoryPanel : IDisposable
     /// <summary>The As-of field's hint: the form it takes, rather than a sample time that reads as a value.</summary>
     internal const string AtHint = "As yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
 
-    /// <summary>What a metadata-only revision holds, said once for the timeline.</summary>
-    internal const string MetadataOnlyText = "Revisions marked \"metadata only\" kept only the value's size and hash, so there is no value to show for them.";
+    /// <summary>What a revision whose value bytes were not kept is called on the timeline.</summary>
+    internal const string ValueNotKeptKindText = "Set - value not kept";
+
+    /// <summary>What a revision whose value bytes were not kept holds, said once for the timeline.</summary>
+    internal const string MetadataOnlyText = "\"Value not kept\" marks a write whose value this tree's history retention did not keep: only its size and hash are recorded, so there is no value to show. It is still a change to the key, not a metadata change.";
 
     private string? MetadataOnlyNote =>
         _timeline is { } timeline && timeline.Rows.Any(row => row.RenderMode == HistoryRowRenderMode.MetadataOnly)
@@ -159,7 +162,7 @@ public partial class DataHistoryPanel : IDisposable
         HistoryRowRenderMode.CrdtMembers when row.IsSnapshot => "Full state",
         HistoryRowRenderMode.CrdtMembers => "CRDT change",
         HistoryRowRenderMode.LiveTail => "Live " + (row.Kind == HistoryRowKind.Delete ? "delete" : "set"),
-        HistoryRowRenderMode.MetadataOnly => "Set (metadata only)",
+        HistoryRowRenderMode.MetadataOnly => ValueNotKeptKindText,
         _ => "Set",
     };
 

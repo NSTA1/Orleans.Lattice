@@ -118,7 +118,36 @@ public sealed class DataHistoryPanelTests : DataTestContext
         {
             Assert.That(cut.FindAll(".lt-data-timeline__rev .lt-data-note"), Is.Empty, "no revision repeats the note");
             Assert.That(cut.FindAll(".lt-data-note").Count(note => note.TextContent == DataHistoryPanel.MetadataOnlyText), Is.EqualTo(1));
-            Assert.That(cut.FindAll(".lt-data-timeline__kind").Select(kind => kind.TextContent), Is.All.EqualTo("Set (metadata only)"));
+            Assert.That(cut.FindAll(".lt-data-timeline__kind").Select(kind => kind.TextContent), Is.All.EqualTo("Set - value not kept"));
+        });
+    }
+
+    [Test]
+    public void A_revision_whose_value_was_not_kept_is_not_called_a_metadata_change()
+    {
+        // #4149: "Set (metadata only)" read as a change to the key's metadata, when it
+        // is a write whose value bytes the retention mode did not keep.
+        SeedHistory("orders", "k", "\"a\"");
+        Client.History[("orders", "k")] =
+        [
+            .. Client.History[("orders", "k")].Select(revision => revision with
+            {
+                ValuePreview = [],
+                Retention = new RevisionRetention { Mode = HistoryRetentionMode.MetadataOnly, ValueRetained = false },
+            }),
+        ];
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        var timeline = cut.Find(".lt-data-timeline").TextContent;
+        var note = string.Join(" ", cut.FindAll(".lt-data-note").Select(element => element.TextContent));
+        Assert.Multiple(() =>
+        {
+            Assert.That(timeline, Does.Not.Contain("metadata only"));
+            Assert.That(cut.Find(".lt-data-timeline__kind").TextContent, Is.EqualTo("Set - value not kept"));
+            Assert.That(note, Does.Contain("size and hash"));
+            Assert.That(note, Does.Contain("not a metadata change"));
         });
     }
 
