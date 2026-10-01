@@ -80,6 +80,19 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_wal_move_reclaim",
     ];
 
+    /// <summary>The accept-then-poll operation tools (#4126), each backed by a facade the host registers.</summary>
+    private static readonly string[] OperationTools =
+    [
+        "lattice_treeadmin_schema_compliance_scan_cancel",
+        "lattice_treeadmin_schema_compliance_scan_list",
+        "lattice_treeadmin_schema_compliance_scan_start",
+        "lattice_treeadmin_schema_compliance_scan_status",
+        "lattice_treeadmin_storage_usage_refresh_cancel",
+        "lattice_treeadmin_storage_usage_refresh_list",
+        "lattice_treeadmin_storage_usage_refresh_start",
+        "lattice_treeadmin_storage_usage_refresh_status",
+    ];
+
     private string _root = null!;
     private WebApplication _app = null!;
 
@@ -145,6 +158,11 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// which matches the count observed from a branch-built image. The opt-in adds the
     /// 26 verbs named above and nothing else.
     /// </para>
+    /// <para>
+    /// The accept-then-poll compliance scan and storage re-measure (#4126) add the 8
+    /// tools named in <see cref="OperationTools"/>: read and cluster-telemetry verbs,
+    /// not lifecycle ones, so the opt-in's set is unchanged and the total is 87.
+    /// </para>
     /// </remarks>
     [Test]
     public void The_advertised_surface_is_the_measured_size()
@@ -163,9 +181,24 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(admitted, Is.Unique, "A duplicate tool name would make the count meaningless.");
             Assert.That(
-                admitted, Has.Count.EqualTo(79),
-                "53 before the lifecycle opt-in plus the 26 verbs it contributes. Add the two meta tools for the "
-                + "81 a client sees, against 55 before.");
+                admitted, Has.Count.EqualTo(87),
+                "53 before the lifecycle opt-in plus the 26 verbs it contributes, plus the 8 #4126 operation tools. "
+                + "Add the two meta tools for the 89 a client sees, against 55 before.");
+        });
+    }
+
+    [Test]
+    public void The_operation_tools_are_advertised_over_facades_the_host_registers()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TreeAdminToolNames(), Is.SupersetOf(OperationTools));
+            Assert.That(
+                _app.Services.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaComplianceOperations>(), Is.Not.Null,
+                "An advertised compliance-scan tool needs the facade it invokes.");
+            Assert.That(
+                _app.Services.GetService<Orleans.Lattice.Api.TreeAdmin.ILatticeStorageUsageOperations>(), Is.Not.Null,
+                "An advertised storage re-measure tool needs the facade it invokes.");
         });
     }
 

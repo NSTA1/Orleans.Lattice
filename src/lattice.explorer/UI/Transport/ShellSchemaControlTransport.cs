@@ -140,7 +140,10 @@ internal sealed class ShellSchemaControlTransport(ShellTransportChannel channel)
     public Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
+        // Forwards the deprecated verb to the client's deprecated twin (LATTICE0002).
+#pragma warning disable LATTICE0002
         return CallAsync(treeId, static (client, state, ct) => client.ScanComplianceAsync(state, ct), null, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <inheritdoc />

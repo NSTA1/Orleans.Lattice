@@ -43,11 +43,15 @@ Methods (one per RPC):
 | `ClearVersionConfigAsync` | `Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `RemediateAsync` | `Task<LatticeSchemaRemediationReport> RemediateAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, CancellationToken cancellationToken = default)` |
 | `GetRemediationStatusAsync` | `Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)` |
-| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` - deprecated (`LATTICE0002`) |
+| `StartComplianceScanAsync` | `Task<LatticeOperationHandle> StartComplianceScanAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `GetComplianceScanStatusAsync` | `Task<LatticeOperationStatus?> GetComplianceScanStatusAsync(string operationId, CancellationToken cancellationToken = default)` |
+| `ListComplianceScansAsync` | `Task<LatticeOperationPage> ListComplianceScansAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
+| `CancelComplianceScanAsync` | `Task<LatticeOperationStatus?> CancelComplianceScanAsync(string operationId, CancellationToken cancellationToken = default)` |
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
 
-Methods that take a tree id throw `ArgumentException` on a null or empty id. `SetPolicyAsync` and `RemediateAsync` throw `ArgumentNullException` on a null policy or target policy (the version config and value transform are value types). `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+Methods that take a tree id throw `ArgumentException` on a null or empty id. `SetPolicyAsync` and `RemediateAsync` throw `ArgumentNullException` on a null policy or target policy (the version config and value transform are value types). `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired. `ScanComplianceAsync` calls the blocking `ScanCompliance` RPC and is deprecated (`LATTICE0002`, removed in the next major version); `StartComplianceScanAsync` starts the same scan as a tracked operation over the `StartComplianceScan` RPC and returns at once, and the `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` RPCs follow it (status and cancel return `null` for an operation the caller may not see). The server answers `Unimplemented` when its host registers no `ILatticeSchemaComplianceOperations`. See [Schema compliance operations](../lattice.api.schema/operations.md).
 
 ## Server-side options
 
@@ -85,7 +89,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeSchemaApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read).
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read), followed - appended after `Unknown` so the shipped numeric values stay stable - by `StartComplianceScan`, `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan`. A start targets its tree; a status, list or cancel names an operation rather than a tree, so its `TargetId` is `null` and the facade scopes it to the caller.
 
 ### `LatticeSchemaApiAuthorizationContext`
 

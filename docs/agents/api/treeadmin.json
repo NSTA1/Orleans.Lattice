@@ -11,7 +11,9 @@
     "src/lattice.api.treeadmin/LatticeTreeAdmin.cs",
     "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs",
     "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs",
-    "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs"
+    "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+    "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations",
+    "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations"
   ],
   "in_process": {
     "interface": "ILatticeTreeAdmin",
@@ -784,6 +786,39 @@
         }
       ],
       "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminSnapshotRequest.cs#TreeAdminSnapshotRequest"
+    },
+    "TreeAdminStorageUsageOperationRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageOperationRequest.cs#TreeAdminStorageUsageOperationRequest"
+    },
+    "TreeAdminStorageUsageOperationStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "LatticeOperationStatus?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageOperationStatusResponse.cs#TreeAdminStorageUsageOperationStatusResponse"
+    },
+    "TreeAdminStorageUsageRefreshRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageRefreshRequest.cs#TreeAdminStorageUsageRefreshRequest"
     },
     "TreeAdminStorageUsageRequest": {
       "kind": "record",
@@ -2129,6 +2164,54 @@
       ]
     },
     {
+      "id": "cancel-storage-usage-refresh",
+      "in_process": "ILatticeStorageUsageOperations.CancelOperationAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CancelStorageUsageRefresh",
+      "transport_scope": "both",
+      "request": "TreeAdminStorageUsageOperationRequest",
+      "response": "TreeAdminStorageUsageOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks cluster telemetry authority."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CancelStorageUsageRefresh"
+      ]
+    },
+    {
       "id": "check-tree-exists",
       "in_process": "ILatticeTreeAdmin.CheckTreeExistsAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/CheckTreeExists",
@@ -2890,6 +2973,50 @@
       ]
     },
     {
+      "id": "get-storage-usage-refresh-status",
+      "in_process": "ILatticeStorageUsageOperations.GetOperationStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetStorageUsageRefreshStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminStorageUsageOperationRequest",
+      "response": "TreeAdminStorageUsageOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetStorageUsageRefreshStatus"
+      ]
+    },
+    {
       "id": "get-tag-index-status",
       "in_process": "ILatticeTreeAdmin.GetTagIndexStatusAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/GetTagIndexStatus",
@@ -3203,6 +3330,50 @@
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#InspectShardMapAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#InspectShardMap"
+      ]
+    },
+    {
+      "id": "list-storage-usage-refreshes",
+      "in_process": "ILatticeStorageUsageOperations.ListOperationsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListStorageUsageRefreshes",
+      "transport_scope": "both",
+      "request": "LatticeOperationListRequest",
+      "response": "LatticeOperationPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListStorageUsageRefreshes"
       ]
     },
     {
@@ -4937,6 +5108,56 @@
       ]
     },
     {
+      "id": "start-storage-usage-refresh",
+      "in_process": "ILatticeStorageUsageOperations.StartStorageUsageRefreshAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/StartStorageUsageRefresh",
+      "transport_scope": "both",
+      "request": "TreeAdminStorageUsageRefreshRequest",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "treeadmin.storage-usage-refresh",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks cluster telemetry authority."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartStorageUsageRefresh",
+        "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
       "id": "survey-orphaned-leaves",
       "in_process": "ILatticeTreeAdmin.SurveyOrphanedLeavesAsync",
       "grpc_method": null,
@@ -5156,6 +5377,12 @@
       "retryable": false,
       "meaning": "The registered ITreeOwnershipGuard refused an alias assignment; the status message carries the guard's caller-safe reason.",
       "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "unimplemented",
+      "grpc_status": "Unimplemented",
+      "meaning": "Server registered no ILatticeStorageUsageOperations.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#StorageUsageOperations"
     }
   ]
 }

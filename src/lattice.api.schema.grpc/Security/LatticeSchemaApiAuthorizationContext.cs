@@ -63,6 +63,21 @@ public enum LatticeSchemaApiOperation
     /// rather than have it silently masquerade as a benign read.
     /// </summary>
     Unknown,
+
+    // The values below were appended after Unknown (#4126) so the shipped numeric
+    // values of every earlier member, Unknown included, stay stable.
+
+    /// <summary>The read-only accept-then-poll <c>StartComplianceScan</c> RPC.</summary>
+    StartComplianceScan,
+
+    /// <summary>The read-only <c>GetComplianceScanStatus</c> RPC.</summary>
+    GetComplianceScanStatus,
+
+    /// <summary>The read-only <c>ListComplianceScans</c> RPC.</summary>
+    ListComplianceScans,
+
+    /// <summary>The <c>CancelComplianceScan</c> RPC.</summary>
+    CancelComplianceScan,
 }
 
 /// <summary>
