@@ -713,4 +713,38 @@ internal static class TypeAliases
     /// incremental flush ceiling has advanced past. See issue #2165.
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
+
+    /// <summary>Alias for the coordinated-operation grain interface.</summary>
+    internal const string ILatticeOperationGrain = "ol.opg";
+
+    /// <summary>Alias for the coordinated-operation record.</summary>
+    internal const string LatticeOperationRecord = "ol.opr";
+
+    /// <summary>Alias for a coordinated-operation progress report.</summary>
+    internal const string LatticeOperationProgressReport = "ol.opp";
+
+    /// <summary>Alias for a coordinated-operation completion.</summary>
+    internal const string LatticeOperationCompletion = "ol.opc";
+
+    /// <summary>Alias for a coordinated-operation begin request.</summary>
+    internal const string LatticeOperationBeginRequest = "ol.opb";
+
+    /// <summary>Alias for a coordinated-operation begin result.</summary>
+    internal const string LatticeOperationBeginResult = "ol.opn";
+
+    /// <summary>Alias for the coordinated-operation grain state.</summary>
+    internal const string LatticeOperationGrainState = "ol.ops";
+
+    /// <summary>Alias for the coordinated-operation index grain interface.</summary>
+    internal const string ILatticeOperationIndexGrain = "ol.oig";
+
+    /// <summary>Alias for the coordinated-operation index state.</summary>
+    internal const string LatticeOperationIndexState = "ol.ois";
+
+    /// <summary>Alias for one coordinated-operation index entry.</summary>
+    internal const string LatticeOperationIndexEntry = "ol.oie";
+
+    /// <summary>Alias for one page of the coordinated-operation index.</summary>
+    internal const string LatticeOperationIndexPage = "ol.oip";
 }
+
