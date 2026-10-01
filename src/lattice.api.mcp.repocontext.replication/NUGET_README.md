@@ -6,7 +6,7 @@ This is an opt-in **multi-cluster** add-on for the repository-context package. I
 
 ## Why a separate package
 
-The repository-context core deliberately does not reference `Orleans.Lattice.Replication`: that zero-dependency boundary is what keeps its config-only seam free, so a single-cluster deployment never pulls in the replication engine. Enabling multi-cluster has to call into the replication package, so it lives here as an opt-in companion - exactly like the other `*.Replication` / `*.Grpc` add-ons. You take the replication-engine dependency only when you install this package.
+The repository-context core does not reference `Orleans.Lattice.Replication` itself and never registers the replication engine, so a single-cluster deployment never runs it - although the package still arrives transitively through `Orleans.Lattice.Apps`, which uses it to enrol an app's declared replication intent. Enabling multi-cluster has to call into the replication package's registration, so it lives here as an opt-in companion - exactly like the other `*.Replication` / `*.Grpc` add-ons. Installing this package and calling `EnableRepoContextMultiCluster(...)` is what turns the engine on.
 
 ## What it does
 

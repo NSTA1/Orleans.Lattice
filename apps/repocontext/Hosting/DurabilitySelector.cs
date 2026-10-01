@@ -201,9 +201,10 @@ public static class DurabilitySelector
                     // Attribute every SQLite lock failure to the grain, operation and
                     // write convoy that suffered it (issue #2431). The lock storm that
                     // motivated this could only be attributed by log proximity, which
-                    // is not attribution. It observes every lock failure, and for
-                    // the materialiser pin-store writes it also re-issues the
-                    // SQLite write under the bounded retry policy below.
+                    // is not attribution. It observes every lock failure, and for the
+                    // leaf checkpoint/snapshot, shard-root, and materialiser pin-store
+                    // writes and clears it also re-issues the SQLite operation under
+                    // the bounded retry policy below.
                     AddSqliteLockAttribution(services.Services, name);
                     break;
             }

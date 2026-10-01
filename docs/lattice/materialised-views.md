@@ -895,7 +895,12 @@ with a smaller batch. Each self-throttled pass is emitted on
 `orleans.lattice.view.source_backpressure` (tagged with the observed source
 regime). Set `ObeySourceBackpressure` to `false` to opt out and always drain at
 full rate. The throttle engages only while the source is actually saturated, so
-leaving it on costs nothing on a healthy source.
+leaving it on costs nothing on a healthy source. The maintainer reads the signal
+under the source's logical id, while the signal is sampled under the id of the
+write-ahead log the source's writes land in, so while the source resolves to a
+different physical copy - after a resize, a shadow-cutover restore or a schema
+remediation (see [Source-identity rebind](#source-identity-rebind)) - the
+maintainer does not see that copy's saturation and drains at full rate.
 
 Separately from this client-side self-throttle, the maintainer's catch-up reads
 no longer contend with foreground writes at the WAL grain itself. Each
@@ -971,7 +976,7 @@ row notes its rule:
 | `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. When set it must not be empty or whitespace, and `ReplicationMode` must be `ShipView`. |
 | `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. A non-positive value falls back to the default. Has no effect when `MaxLagBudget` is 0. |
-| `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. Only engages while the source is actually saturated. |
+| `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. Only engages while the source is actually saturated, and does not see the saturation of a source that resolves to a different physical copy (see [Source back-pressure](#source-back-pressure)). |
 | `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Must be within `[0, 1]`; the effective batch (rounded up) is clamped to `[1, BatchSize]`. |
 | `ThrottledPauseMs` | 50 | Milliseconds background drain ticks are skipped after a pass that saw a `Throttled` source. `<= 0` disables the deferral. |
 | `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Must be at least 1; the effective batch is capped at `BatchSize`. |

@@ -48,7 +48,7 @@ public interface IWalSaturationSignal
     /// worst-case latency of one
     /// <see cref="LatticeOptions.WalSaturationSampleInterval"/>.
     /// </summary>
-    /// <param name="treeId">The logical tree id to query.</param>
+    /// <param name="treeId">The WAL tree id to query.</param>
     /// <returns>The most recent observed saturation state for the tree.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="treeId"/> is <c>null</c>.</exception>
     WalSaturationState GetCurrentState(string treeId);
@@ -76,7 +76,7 @@ public interface IWalSaturationSignal
     /// <see cref="LatticeOptions.WalSaturationSampleInterval"/> beyond
     /// the underlying recovery.
     /// </summary>
-    /// <param name="treeId">The logical tree id to wait on.</param>
+    /// <param name="treeId">The WAL tree id to wait on.</param>
     /// <param name="cancellationToken">Cancels the wait. A cancelled
     /// wait throws <see cref="OperationCanceledException"/>.</param>
     /// <returns>A task that completes when the tree is observed

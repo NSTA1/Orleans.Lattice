@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// supplies what that map is measured against.
 /// </summary>
 /// <param name="InProgress"><see langword="true"/> while a reshard is in flight.</param>
-/// <param name="TargetShardCount">The physical shard count the reshard grows the tree to, or zero when none is in flight.</param>
+/// <param name="TargetShardCount">The physical shard count the reshard moves the tree toward, or zero when none is in flight.</param>
 /// <param name="StartShardCount">
 /// The physical shard count the tree had when the reshard started, or zero when
 /// none is in flight or the reshard was started by a build that did not record it.

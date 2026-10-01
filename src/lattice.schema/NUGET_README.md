@@ -14,7 +14,10 @@ The package ships two independent, strictly opt-in capabilities:
   UTF-8, maximum byte length, regex, or a structured predicate), managed through
   `ILatticeSchemaAdmin`. A non-compliant local write throws
   `LatticeSchemaViolationException`; under strict ingest a non-compliant
-  replicated or restored item is dead-lettered instead of applied. Existing data
+  ingested item that reaches the check (a replicated typed-CRDT entry, or an
+  entry of a replicated atomic batch) is dead-lettered instead of applied, while
+  a plain (non-atomic) last-writer-wins replication apply and a backup restore
+  write below the check and are not validated. Existing data
   is brought into compliance by a shadow-build-and-cutover remediation
   (`ILatticeSchemaRemediationAdmin`), and `ILatticeSchemaComplianceAdmin` audits a
   tree without changing it.

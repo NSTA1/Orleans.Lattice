@@ -612,7 +612,10 @@ snapshot they capture at scan start for every page, and are not re-run
 under a fresh one. A streaming scan whose starting snapshot cannot be
 fetched keeps going until a page reaches a prepared key, which then
 throws at once; every page already yielded held no prepared key, so
-what the caller received is consistent. Previously each of these
+what the caller received is consistent. A `CountAsync` narrowed by an
+access-gate key filter is computed by enumerating the keys, so it
+behaves like these scans rather than like the multi-key reads above.
+Previously each of these
 failures was treated as "stable",
 which let a registry blip certify exactly the torn read the check
 exists to prevent.
@@ -729,8 +732,14 @@ capped at the smaller of a 30-second saga ceiling and the tree's
 `LatticeOptions.WalAppendDispatchTimeout`, so the saga's quiesce always
 wins over the writer-side admission deadline; it returns early once
 the host starts stopping, and is silently skipped when no
-`IWalSaturationSignal` is registered in DI. If the budget elapses with
-the tree still `Saturated` - or the writer-side admission gate itself
+`IWalSaturationSignal` is registered in DI. The gate reads the signal
+under the id the tree was addressed by, while the signal is sampled under
+the id of the write-ahead log the tree's writes land in, so on an aliased
+tree - after a resize, a shadow-cutover restore or a schema remediation,
+whose writes land in the physical copy's log - the gate does not see that
+log's saturation and the saga dispatches without waiting for it. If the
+budget elapses with the tree still `Saturated` - or the writer-side
+admission gate itself
 refuses the dispatch as saturated - the saga takes a saturation
 fast-path that mirrors the shutdown one: it skips the retry and the
 compensate pivot (either would re-enter the same throttled storage
@@ -1061,12 +1070,21 @@ must be distinct and non-empty, and each tree's slice must not repeat a
 key - staging a `Set` and a `Delete` for the same key counts as a repeat.
 A batch that breaks either rule throws `ArgumentException` before any
 write is staged or any saga state is persisted, so the `operationId`
-stays free for a corrected retry. Unlike the single-tree calls, the
-cross-tree write checks neither the tree's write-size bounds nor its
-`MaxLiveKeys` / `MaxEstimatedBytes` caps up front: no cap refuses it, and a
-key longer than `MaxKeyLength` or a value larger than `MaxValueSizeBytes`
-fails inside the saga, which aborts every tree, so the call throws
-`InvalidOperationException` rather than `ArgumentException`.
+stays free for a corrected retry. Each participating tree's write bounds
+are applied up front as well, against that tree's own options, before
+anything is staged or persisted: a key longer than its tree's
+[`MaxKeyLength`](configuration.md#maxkeylength) - a delete key included -
+or an upsert value larger than its
+[`MaxValueSizeBytes`](configuration.md#maxvaluesizebytes) fails with
+`ArgumentException`, and a tree whose slice carries an upsert while that
+tree is at an enforcing [`MaxLiveKeys`](configuration.md#maxlivekeys) or
+[`MaxEstimatedBytes`](configuration.md#maxestimatedbytes) cap fails the
+whole write with `LatticeQuotaExceededException`. The caps are a
+best-effort check against the tree's cached footprint that lets the write
+through when the footprint cannot be read, and a slice that only deletes
+skips them. The checks run on a fresh submission only: a re-submission
+that re-attaches to a cross-tree write already under way is not checked
+again.
 
 ### Usage
 

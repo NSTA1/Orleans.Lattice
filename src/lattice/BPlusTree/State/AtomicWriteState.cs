@@ -36,22 +36,20 @@ internal sealed class AtomicPreValue
     /// <summary>
     /// Origin cluster id captured from the pre-saga entry's
     /// <see cref="Primitives.LwwValue{T}.OriginClusterId"/>, or <c>null</c>
-    /// when the key was absent or authored locally. Restored through
-    /// <see cref="LatticeOriginContext.With"/> during compensation so the
-    /// rolled-back value re-lands with its original origin stamp.
-    /// Wire-compatible: missing field on legacy persisted state decodes
-    /// to <c>null</c>.
+    /// when the key was absent or authored locally. Retained so guarded and
+    /// diagnostic paths can describe the observed pre-saga value; abort
+    /// compensation does not restore values per key. Wire-compatible: missing
+    /// field on legacy persisted state decodes to <c>null</c>.
     /// </summary>
     [Id(4)] public string? OriginClusterId { get; set; }
 
     /// <summary>
     /// Vector-clock frontier captured from the pre-saga entry's
     /// <see cref="Primitives.LwwValue{T}.VectorClock"/>, or <c>null</c>
-    /// when the key was absent or the entry carried no frontier.
-    /// Restored through <see cref="LatticeVectorClockContext.With"/>
-    /// during compensation so the rolled-back value re-lands with its
-    /// original frontier. Wire-compatible: missing field on legacy
-    /// persisted state decodes to <c>null</c>.
+    /// when the key was absent or the entry carried no frontier. Retained so
+    /// guarded and diagnostic paths can describe the observed pre-saga value;
+    /// abort compensation does not restore values per key. Wire-compatible:
+    /// missing field on legacy persisted state decodes to <c>null</c>.
     /// </summary>
     [Id(5)] public Orleans.Lattice.VersionVector? VectorClock { get; set; }
 }
@@ -121,8 +119,7 @@ internal sealed class AtomicWriteState
     /// <summary>
     /// Stable per-saga transaction id minted on the first
     /// <see cref="AtomicWritePhase.Prepare"/> and persisted across crash
-    /// recovery so the saga's per-key writes (and its compensation
-    /// rewrites) all carry the same
+    /// recovery so the saga's prepared per-key writes all carry the same
     /// <see cref="LatticeMutation.TransactionId"/>. <see cref="Guid.Empty"/>
     /// when unset (legacy persisted state from before this field
     /// existed); a fresh activation re-mints a value lazily during
@@ -138,8 +135,8 @@ internal sealed class AtomicWriteState
     /// the <c>SetManyAtomicAsync</c> call in a
     /// <see cref="LatticeDeltaContext.With(byte[])"/> scope. Re-stamped
     /// onto Orleans <see cref="Runtime.RequestContext"/> on every
-    /// per-key <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues -
-    /// including compensation rewrites - so every emitted
+    /// per-key <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues during
+    /// <see cref="AtomicWritePhase.Execute"/> so every emitted
     /// <see cref="LatticeMutation"/> carries the same author-delta as
     /// the original batch. Opaque bytes (Orleans-serialized typed delta
     /// record); the lattice library never opens the payload.
@@ -169,12 +166,9 @@ internal sealed class AtomicWriteState
     /// identical <see cref="LatticeMutation.VectorClock"/> - closing
     /// the per-key VC drift a remote receiver would otherwise see as
     /// a partial-set state where the writer's frontier said all N
-    /// should be visible together. Compensation rewrites override the
-    /// saga-wide stamp per-key with each
-    /// <see cref="AtomicPreValue.VectorClock"/> via
-    /// <see cref="LatticeVectorClockContext.With"/>; the
-    /// saga-wide stamp is restored when each rollback's scope
-    /// disposes. Wire-compatible: missing field on legacy persisted
+    /// should be visible together. Abort compensation records the abort
+    /// decision and broadcasts abort terminals; it does not restore
+    /// per-key values. Wire-compatible: missing field on legacy persisted
     /// state decodes to <see langword="null"/>.
     /// </summary>
     [Id(11)] public Orleans.Lattice.VersionVector? VectorClock { get; set; }
@@ -187,14 +181,12 @@ internal sealed class AtomicWriteState
     /// <see cref="Runtime.RequestContext"/> via
     /// <see cref="LatticeAtomicBatchContext.With"/> on every per-key
     /// call the saga issues during
-    /// <see cref="AtomicWritePhase.Execute"/> and
-    /// <see cref="AtomicWritePhase.Compensate"/> so every emitted
+    /// <see cref="AtomicWritePhase.Execute"/> so every emitted
     /// <see cref="LatticeMutation"/> in the batch carries the
     /// identical <see cref="LatticeMutation.AtomicBatchSize"/>. The
     /// per-key index is computed deterministically from the saga's
-    /// per-operation iteration order, so compensation rolls inherit
-    /// the same <see cref="LatticeMutation.AtomicBatchIndex"/> as the
-    /// original prepare for that key. Wire-compatible: missing field
+    /// per-operation iteration order. Abort compensation records the abort
+    /// decision and does not issue per-key rollback writes. Wire-compatible: missing field
     /// on legacy persisted state decodes to <c>0</c> (the
     /// "not-in-a-saga" sentinel the publish helpers stamp on
     /// single-key non-saga writes).

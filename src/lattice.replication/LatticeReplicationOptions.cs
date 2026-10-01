@@ -1549,12 +1549,13 @@ public class LatticeReplicationOptions
     /// <c>WalPartitions</c> count or the shipper will miss writes
     /// authored against partitions <c>[ReplogPartitions, WalPartitions)</c>.
     /// Adequate for low-fan-in workloads; raise for hot trees that
-    /// benefit from parallel WAL append paths. Hosts that explicitly
-    /// configure <see cref="LatticeOptions.WalPartitions"/> get the
-    /// reverse-mirrored value on this option via
-    /// <c>LatticeReplicationServiceCollectionExtensions</c>'s
-    /// post-configure step, so this default only applies when neither
-    /// option is touched.
+    /// benefit from parallel WAL append paths. The post-configure mirror in
+    /// <c>LatticeReplicationServiceCollectionExtensions</c> runs one way only:
+    /// a non-default <see cref="ReplogPartitions"/> is copied onto
+    /// <see cref="LatticeOptions.WalPartitions"/> while that is still at its
+    /// default, and nothing copies <see cref="LatticeOptions.WalPartitions"/>
+    /// back onto this option, so a host that raises the core partition count
+    /// directly must set <see cref="ReplogPartitions"/> to the same value.
     /// </summary>
     public const int DefaultReplogPartitions = 8;
 

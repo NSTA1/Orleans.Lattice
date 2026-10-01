@@ -130,7 +130,7 @@ public partial class BPlusLeafGrainTests
 
         // First pass: grace not yet elapsed - nothing removed.
         var removed1 = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
-        Assert.That(removed1, Is.EqualTo(0));
+        Assert.That(removed1.EntriesRemoved, Is.EqualTo(0));
         Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True,
             "Tombstone should still be present after an in-grace pass.");
 
@@ -138,7 +138,7 @@ public partial class BPlusLeafGrainTests
         // Without the fix, the first pass stamped LastCompactionVersion = Version,
         // so this pass short-circuits and the tombstone is never reclaimed.
         var removed2 = await grain.CompactTombstonesAsync(TimeSpan.Zero);
-        Assert.That(removed2, Is.EqualTo(1),
+        Assert.That(removed2.EntriesRemoved, Is.EqualTo(1),
             "An eligible tombstone must be swept even if a prior in-grace pass ran.");
         Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.False);
     }

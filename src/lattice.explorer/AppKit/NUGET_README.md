@@ -22,7 +22,7 @@ This package is in progress and has not shipped a release.
 | `frame.html` | The static bootstrap document every app frame loads. No inline script or style. |
 | `boot.js` | The loader: handshake, bundle verification, materialisation, and `globalThis.lattice`. |
 | `lattice-app.css` | The kit stylesheet: tokens, fonts, type, spacing, booktabs tables, buttons, inputs, focus ring. |
-| `tokens.css`, `fonts/` | The documentation site's own tokens and fonts, staged byte-identically at build time, never hand-copied. |
+| `tokens.css`, `fonts/` | The documentation site's own tokens and fonts, kept as byte-identical copies that a test fails the build on the moment they drift from the site's. |
 | `protocol.schema.json` | The JSON Schema of every protocol message, in both directions. |
 
 The `example/` folder beside the package is a minimal manifest-shaped bundle:
@@ -33,7 +33,8 @@ a manifest, an entry fragment, one stylesheet and one module.
 A frame is untrusted. It is loaded as `<iframe sandbox="allow-scripts">`, so it
 has an opaque origin, and it is served with a policy that forbids inline script
 and style, every network connection, and every other frame:
-`sandbox allow-scripts; default-src 'none'; script-src 'self' blob:; style-src 'self' blob:; img-src 'self' blob: data:; font-src 'self' blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'`.
+`sandbox allow-scripts; default-src 'none'; script-src 'self' blob:; style-src 'self' blob:; img-src 'self' blob: data:; font-src 'self' blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'; webrtc 'block'`
+(a browser that does not support the `webrtc` directive ignores it).
 No credential and no Explorer state ever enters it. An app's bundle is never
 served over HTTP: the Explorer fetches it on the user's credential, verifies
 every digest, and transfers the bytes over a `MessageChannel` port, and the
@@ -41,10 +42,12 @@ bootstrap turns them into `blob:` URLs.
 
 The frame reaches the cluster only through the operations below. Each request
 is checked by the Explorer's broker and then authoritatively by the cluster,
-against the app's consented bridge operations intersected with the signed-in
-user's own rights. The protocol has **no lifecycle, consent, authentication,
-cross-app or fetch operations**, and the frame is **sized by the host**: there
-is no auto-height channel.
+against the app's consented bridge operations and the app roles the signed-in
+user holds by binding (never the user's other rights), and it then runs under
+the user's own identity, so the user's own access rules still apply. The
+protocol has **no lifecycle, consent, authentication, cross-app or fetch
+operations**, and the frame is **sized by the host**: there is no auto-height
+channel.
 
 ## Protocol v1
 
@@ -164,7 +167,10 @@ keys everything off attributes the bootstrap sets on `<html>`: `data-theme`
 `lt-app-` prefix: `lt-app-table` (booktabs), `lt-app-button` with `--quiet` and
 `--destructive`, `lt-app-input`, `lt-app-label`, `lt-app-row`, `lt-app-stack`,
 `lt-app-muted` and `lt-app-mono`, plus `lt-app-scroll`, a wrapper that lets a
-wide table scroll inside itself.
+wide table scroll inside itself, and `lt-app-notice`, the plain-text notice the
+bootstrap shows in place of the app when the app cannot be loaded, when the
+Explorer closes it, or when the frame document is opened outside the Explorer,
+which an app may use for its own status line.
 
 The defaults are fluid, because a frame fills the Explorer's content region at
 every width down to a 360px phone: controls are 44px touch targets in

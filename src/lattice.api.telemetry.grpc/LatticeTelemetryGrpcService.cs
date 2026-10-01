@@ -104,8 +104,8 @@ internal abstract class LatticeTelemetryGrpcServiceBase
 /// facade is the single enforcement point.
 /// </para>
 /// <para>
-/// A desktop client head therefore cannot widen its own scope by editing a
-/// request: the widened visibility travels as a request, the facade validates it
+/// A client head therefore cannot widen its own scope by editing a request: the
+/// widened visibility travels as a request, the facade validates it
 /// server-side, and a refused widening comes back degraded and flagged rather than
 /// honoured.
 /// </para>

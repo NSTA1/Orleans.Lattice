@@ -264,7 +264,7 @@ public static class RepoContextGarbageCollection
                 + $"The declaration is inert and the resolved heap count is "
                 + $"{RenderHeapCount(facts)}. A variable an operator set that binds to nothing "
                 + $"reads as configured, so it is named here rather than left to look applied. "
-                + $"{HeapCountKey} takes effect only when {ServerGcKey}=1."));
+                + $"{HeapCountKey} takes effect only under Server GC, which this host selects by default."));
         }
 
         var notation = DescribeHeapCountNotationHazard(declaredHeapCount, facts.ResolvedHeapCount);

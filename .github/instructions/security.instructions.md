@@ -74,24 +74,42 @@ gate will tell you if you forget.
 - Discovery must not advertise a capability the caller does not hold. The two
   scopeless operations, which name no tree (`LatticeOperation.Telemetry` and
   `LatticeOperation.AppInstall`), are carried only from an Allow rule written at
-  cluster-wide scope (`LatticeScope.ClusterWideTreeId`), never from a rule scoped to
-  one tree, which can never confer a scopeless capability (#3645, #3863). Inside a
-  group the caller may use, the built-in permission resolver's reported operations
-  also set a per-tool minimum: a tool is withheld when the caller holds none of the
-  operations it requires, so a caller holding only a read grant is offered neither
-  a mutating data tool (#3863) nor a mutating repository-context tool.
+  cluster-wide scope - a tree-kind scope on `LatticeScope.ClusterWideTreeId`, as
+  `LatticeScope.ClusterWide()` writes it - never from a rule scoped to one tree, and
+  never from a key- or prefix-kind rule on the cluster-wide tree id, none of which
+  can confer a scopeless capability at the gate (#3645, #3863, #4082). Inside a
+  group the caller may use, the reported operations also set a per-tool minimum,
+  applied unconditionally: a tool is withheld when the caller holds none of the
+  operations it requires, and an access set that carries no granted operation
+  reaches no tool at all, because missing evidence is a denial (#4082). So a caller
+  holding only a read grant is offered neither a mutating data tool (#3863) nor a
+  mutating repository-context tool.
 - An asserted active tenant is validated, never trusted. The region catalog
   re-resolves the caller-supplied assertion (the `lattice-active-tenant` header by
   default) through `ITenantContextResolver` - the validating seam the data plane
   uses - and honours it only when the resolved tenant matches; a refused or
   unresolvable assertion degrades to the current region alone and is never
   echoed back (#3645).
+- Client-error text is untrusted. Every client-error message a tool call raises -
+  a missing, malformed or unknown argument, refused content, an unknown record -
+  is sanitized once, at the credential-stamping tool every call funnels through,
+  before it is echoed to the caller or written to the log: control characters and
+  the Unicode line and paragraph separators are replaced and the text is truncated
+  to a fixed length, so caller content can neither forge a log record nor choose
+  its size (#4056). Unknown argument names are further reduced to a safe character
+  set, truncated, and capped in number (#3972). An authorization denial is never
+  marked as a client error; it surfaces as a denial.
 
 ### Telemetry metric-name allow-list (`src/lattice.api.telemetry`, consumed by `src/lattice.api.mcp.telemetry`)
 - The PromQL `__name__` / metric-name allow-list fails closed: an unparseable,
   ambiguous, or non-exact-match `__name__` matcher is treated as **not** on the
   allow-list (deny), never as a bypass. Label-matcher parsing must not offer a path
   that evades the allow-list.
+- A `*`-wildcard allow-list entry admits a name only by whole-name match: it is
+  anchored with `\z` rather than `$` (which also matches before a trailing newline)
+  and compiled without `Singleline`, so a name carrying a newline is refused in any
+  position, and it compiles with `RegexOptions.NonBacktracking` because the names
+  it tests are caller-supplied (#3929).
 - Match `__name__` label names via span comparison; only allocate a substring on the
   actual matched-name path, never for every in-brace label.
 - The allow-list (`TelemetryMetricAccessPolicy`) and the PromQL matcher parsing
@@ -126,6 +144,24 @@ gate will tell you if you forget.
   The inbound rows are capped, because an admitted run's origin id is still the
   peer's own claim; a new pair beyond the cap is not recorded.
 
+### Replication origin binding (`src/lattice.replication`, `src/lattice.replication.grpc`)
+- A body-declared origin cluster id is never an authorization input on its own.
+  The gRPC receiver refuses a data-plane call that consumes one (push,
+  content-manifest exchange, peer high-water-mark read), and every saga control
+  call, unless the transport-stamped origin header is present and names the same
+  cluster; an absent header is refused rather than tolerated (#3893).
+- `LatticeReplicationSecurityOptions.BindCredentialToOriginCluster` defaults to
+  `true` (#4082). With it on, the receiver's gRPC authentication interceptor also
+  requires the presented credential to equal the secret this cluster would itself
+  use to call the claimed origin
+  (`ILatticeReplicationSecretSource.GetOutboundSecretAsync`), so the claimed origin
+  is authenticated rather than self-asserted - matching the flat accepted-secret set
+  proves only that the caller holds some accepted secret. A missing origin, an
+  origin with no configured secret, and a mismatch are one indistinguishable
+  `PermissionDenied`, compared in constant time. An estate running an asymmetric
+  per-peer secret scheme must set it to `false`, and must then not rely on a claimed
+  origin for any security decision.
+
 ### Identity-directory validation (`src/lattice.membership`, `src/lattice.api.auth`)
 - Administrative membership-reference create paths (`UpsertGroupAsync`,
   `AddMemberAsync`) validate the supplied principal id against the identity
@@ -152,7 +188,13 @@ gate will tell you if you forget.
   That store is a singleton holding no credential in memory - it reads each
   browser's own encrypted cookie from the ambient request - and its revocation set
   must stay process-wide, because a per-circuit set would forget the revocation on
-  the next launch.
+  the next launch. Because that set is also bounded and process-local - a restart,
+  a second web head, or an eviction loses it - the store additionally stamps the
+  endpoint a credential was minted for inside the protected cookie payload and
+  refuses on read a credential whose stamp is not recognisably the endpoint now
+  configured, failing closed when no endpoint can be resolved; and only a value the
+  store itself minted is admitted to the bounded revocation set, so fabricated
+  logout posts cannot evict a genuine revocation (#3972).
 - The web head emits security response headers (content-security-policy,
   x-content-type-options, x-frame-options / frame-ancestors, referrer-policy, and
   the rest of the hardening set) via middleware on the Explorer branch, using
@@ -172,9 +214,18 @@ gate will tell you if you forget.
 - Every verb of the app control facade (`ILatticeAppsControl`), the read verbs
   included, authorizes `AppInstall` over the cluster-wide scope through the shared
   access gate before it touches registry, source, or activation state, so a denied
-  caller learns nothing about which apps exist. The registry and activation-status
-  reads beneath it are ungated in-process surfaces, so the gate belongs at the facade;
-  do not add a verb that reaches them first.
+  caller learns nothing about which apps exist. The catalogue facade
+  (`ILatticeAppCatalog`) and the role re-binding facade (`ILatticeAppRoleBindings`)
+  apply the same gate, and the control and catalogue facades' capability probes run
+  it too, reporting the outcome as a flag instead of throwing. The registry and
+  activation-status reads beneath them are ungated in-process surfaces, so the gate
+  belongs at the facade; do not add a verb that reaches them first.
+- The per-user workspace facade (`ILatticeAppWorkspace`) is gated per caller instead:
+  every verb requires the caller to match at least one app-owned compiled rule of an
+  enabled install in the active tenant, fails closed on a missing membership context
+  or an unresolved tenant, and answers a caller without a grant exactly as it
+  answers for an app that does not exist. Consent, capability ceilings, approved
+  exception scopes and role-to-group bindings stay behind `AppInstall`.
 - Rule ids in the app-owned namespace (`LatticeAppRuleIds.Prefix`, `app:`) are written
   only from inside a system-origin scope, by the app activation path persisting the
   rules the role compiler produced. The authorization

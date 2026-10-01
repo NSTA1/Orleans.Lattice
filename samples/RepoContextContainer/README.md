@@ -489,8 +489,8 @@ pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 7 refuses a doo
 | Variable | Default | Meaning |
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | `/memory-archive` in this sample; unset (feature off) otherwise | Container path the archive is written to. Unset disables the whole mechanism. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. A positive value below 30 is raised to 30; a zero, negative or unparseable value falls back to 300. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores into an empty store, or into one whose restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores; an unrecognised value falls back to `auto`. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. A positive value below 30 is raised to 30, and one above the longest delay a timer can wait (about 49.7 days) is lowered to it; a zero, negative or unparseable value, or one too large to represent as a duration (for example `1e20`), falls back to 300. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores into an empty store, or into one whose restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores; `none` and `false` are accepted for `off` and `on-empty` for `auto`, and any other value falls back to `auto`. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop. A positive value is clamped to 1-60; a zero, negative or unparseable value falls back to 20. |
 | `REPOCONTEXT_MEMORY_ARCHIVE_PATH` | none - **required** | HOST path bound at `/memory-archive`. Deliberately has no default: a relative one resolves against the compose invocation directory (issue #2627). Must be absolute and outside every checkout and worktree. |
 
@@ -953,6 +953,12 @@ observed passing is indistinguishable from one that cannot fail, which is the
 same reason the suite itself is worth measuring rather than trusting: commit
 first, then make one check return no violations unconditionally, re-run, and
 confirm the assertions that fail are the ones covering that check and no others.
+
+Two sibling suites cover what that pure suite cannot see, since it neither runs
+git nor runs the script: `Test-ArchiveGitReading.ps1` checks the archive check's
+pinned git messages against the git actually installed, and
+`Test-ProvenanceExitCode.ps1` checks that the script's exit status says what its
+printed verdict says.
 
 ## Measuring approximate retrieval on a running container
 

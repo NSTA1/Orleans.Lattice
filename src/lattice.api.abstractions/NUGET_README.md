@@ -20,11 +20,14 @@ This package is the seam between them. It carries:
 - **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`,
   `ILatticeStateMetricsObserver`, `ILatticeDataApi`, `ILatticeAuthAdmin`,
   `ILatticeBackupControl`, `ILatticeBackupOperations`, `ILatticeSchemaControl`,
-  `ILatticeReplicationControl`, `ILatticeTelemetry`, `ILatticeTreeAdmin`,
+  `ILatticeReplicationControl`, `ILatticeReplicationStatus`,
+  `ILatticeTelemetry`, `ILatticeTreeAdmin`,
   `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`,
   `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`,
-  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, the app-control
-  `ILatticeAppsControl`, and the region-discovery `ILatticeRegionCatalog`.
+  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, the installable-app
+  `ILatticeAppsControl`, `ILatticeAppRoleBindings`, `ILatticeAppCatalog`,
+  `ILatticeAppWorkspace` and `ILatticeAppBridge`, and the region-discovery
+  `ILatticeRegionCatalog`.
 - **Their request / response models** - the results, pages, records, and
   requests those interfaces exchange, with their stable Orleans serialization
   aliases.

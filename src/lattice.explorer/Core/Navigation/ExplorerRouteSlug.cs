@@ -119,17 +119,17 @@ public static class ExplorerRouteSlug
 
     /// <summary>
     /// Derives a route slug from a dotted identifier, taking the last dotted
-    /// segment and normalising it - so the plugin id
+    /// segment and normalising it - so the area id
     /// <c>orleans.lattice.data</c> addresses as <c>data</c>.
     /// </summary>
     /// <remarks>
     /// The default derivation the shell and its consumers share, so a surface's
     /// URL spelling is predictable rather than separately invented at each call
-    /// site. It is deliberately syntactic: two plugins whose ids end in the same
+    /// site. It is deliberately syntactic: two areas whose ids end in the same
     /// segment derive the same slug, and disambiguating them is the resolving
     /// caller's business, not this helper's.
     /// </remarks>
-    /// <param name="identifier">The dotted identifier, typically a plugin id.</param>
+    /// <param name="identifier">The dotted identifier, typically an area id.</param>
     /// <returns>The derived slug, or <see cref="string.Empty"/> when nothing usable remains.</returns>
     public static string FromIdentifier(string? identifier)
     {

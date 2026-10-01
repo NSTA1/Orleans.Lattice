@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// <para>
 /// Declaring a key is what distinguishes a preference from a stray write. Before
 /// this contract the Explorer persisted state through ad hoc
-/// <c>SetAsync("detail-plugin", ...)</c> calls scattered across components, so
+/// <c>SetAsync("detail-surface", ...)</c> calls scattered across components, so
 /// nobody could answer "what does the Explorer remember about me?" without
 /// grepping, and nothing could reliably clear it. A key declared here is
 /// enumerable, scoped, resettable and documented by construction.

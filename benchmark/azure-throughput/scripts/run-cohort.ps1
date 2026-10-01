@@ -3,7 +3,7 @@
 .SYNOPSIS
 	Run one cohort on the wedge VM: restart silo, start producer with the
 	given vehicle/tickHz/duration, wait for the producer to exit, then pull
-	the merged journal back to benchmark/.run/vm/.
+	the merged journal back to benchmark/.run/azure-throughput/.
 
 .PARAMETER Vehicles
 	BENCH_VEHICLE_COUNT (default 4000).

@@ -187,9 +187,12 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         // authorizing on it authorizes the caller against a name the caller
         // picked: any party that clears the shared-secret interceptor could
         // name an authorized peer and drive saga state on a participant. The
-        // interceptor cannot compensate, because it matches the presented
-        // secret against a flat, cluster-agnostic accepted set - "holds an
-        // accepted secret" and "is cluster X" are unrelated facts.
+        // interceptor's accepted-set match cannot compensate on its own,
+        // because the set is flat and cluster-agnostic - "holds an accepted
+        // secret" and "is cluster X" are unrelated facts. With
+        // BindCredentialToOriginCluster on (the default) the interceptor also
+        // binds the presented secret to the stamped origin, which is what makes
+        // the header below an authenticated input rather than a self-assertion.
         //
         // Absent header is refused rather than falling back to the body:
         // GrpcChannelHardening stamps the header unconditionally on every

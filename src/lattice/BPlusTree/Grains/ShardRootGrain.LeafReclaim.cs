@@ -322,7 +322,7 @@ internal sealed partial class ShardRootGrain
 
             if (reclaimed < maxLeaves
                 && IsReclaimCandidate(currentProbe)
-                && await TryReclaimLeafAsync(prevId, currentId, currentProbe, path))
+                && await TryReclaimLeafAsync(prevId, prevProbe, currentId, currentProbe, path))
             {
                 reclaimed++;
 
@@ -638,10 +638,70 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<bool> TryReclaimLeafAsync(
         GrainId prevId,
+        LeafReclaimProbe prevProbe,
         GrainId currentId,
         LeafReclaimProbe currentProbe,
         Stack<GrainId> path)
     {
+        // FIRST, and before anything is latched, descended or asked. See issue
+        // #2160.
+        //
+        // The predecessor is dividing INTO this leaf. That makes it the one
+        // participant in the fold that must not be touched, and it is the one
+        // the fold cannot detect by looking at it: between CompleteSplitAsync
+        // seeding the new sibling's key range and awaiting its first
+        // MergeEntriesAsync, the sibling is a brand new grain with a declared
+        // range, zero rows, SplitState.Unsplit and no seal. Its own
+        // HasReclaimBlockingState() is legitimately false and no probe of it
+        // can ever say otherwise. The evidence lives on the predecessor, and
+        // prevProbe already carries it.
+        //
+        // WHY THIS CANNOT BE LEFT TO THE COMPARE-AND-SWAP, which declines the
+        // same case correctly one call later. The fold latches the victim
+        // BEFORE it asks: TryBeginRetirementAsync, then
+        // TryUnlinkSuccessorAsync, then AbandonRetirementAsync on the declined
+        // arm. So a declination there still leaves the victim latched across
+        // the ask - and MergeEntriesAsync calls EnterMutationScope() as its
+        // second statement, which throws LeafRetiredException while the latch
+        // is set. That exception is NOT covered by this grain's retirement
+        // backoff, which guards the write-dispatch path only, and
+        // CompleteSplitAsync has no try/catch at its merge call site. It
+        // escapes, and the tail of the division never runs: no straggler
+        // sweep, no re-narrow to the split key, no clearing of SplitInFlight,
+        // and - because the separator is published by the caller after
+        // CompleteSplitAsync returns - no parent separator either. The sibling
+        // is left spliced into the chain, holding whatever batches already
+        // merged, and unreachable by descent. That is an orphaned leaf.
+        //
+        // The latch window is not a knife edge either, and the reason is the
+        // reverse of reassuring: TryUnlinkSuccessorAsync awaits _splitGate,
+        // which the division holds for its whole duration, so the declining
+        // call BLOCKS BEHIND THE VERY MERGE IT IS ABOUT TO DECLINE. The latch
+        // is therefore held open across it by construction rather than by bad
+        // luck.
+        //
+        // The check is race-free, and reading it off prevProbe is what makes it
+        // so. SplitAsync persists SplitInFlight, SplitKey, SplitSiblingId and
+        // NextSibling in ONE block before a single PersistAsync(), and the walk
+        // reaches this leaf only by following prevProbe.NextSibling - so the
+        // same read that sent the walk here necessarily observed the marker.
+        // There is no interval in which one is visible and the other is not.
+        // A division that lands AFTER this probe is the opposite ordering and
+        // is caught by the compare-and-swap, which stays exactly where it is.
+        if (prevProbe.SplitTargetSiblingId == currentId)
+        {
+            logger.LogInformation(
+                "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor {PrevLeaf} "
+                + "is mid-division into it, so it is about to receive rows. Folding it would retire the division's "
+                + "target and strand those rows on a leaf no descent reaches. The next pass sees a settled topology.",
+                MyShardIndex,
+                TreeId,
+                currentId,
+                prevId);
+
+            return false;
+        }
+
         // Find the internal node that routes to this leaf by descending on the
         // leaf's own low bound. Routing is not retired here - it is retired
         // once the predecessor owns the range - but whether it CAN be retired
@@ -702,19 +762,49 @@ internal sealed partial class ShardRootGrain
             // split moved the predecessor underneath us and inserted a leaf
             // between it and this one; the fold is abandoned with nothing
             // changed on the predecessor.
-            var unlinked = await ResolveLeafGrain(prevId).TryUnlinkSuccessorAsync(
+            var outcome = await ResolveLeafGrain(prevId).TryUnlinkSuccessorAsync(
                 currentId,
                 currentProbe.NextSibling,
                 currentProbe.HighKeyExclusive);
 
-            if (!unlinked)
+            if (outcome != LeafUnlinkOutcome.Unlinked)
             {
-                logger.LogDebug(
-                    "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor {PrevLeaf} no longer points at it, so a split landed underneath the reclaim.",
-                    MyShardIndex,
-                    TreeId,
-                    currentId,
-                    prevId);
+                // One line per cause, because these are three unrelated races
+                // and reporting all of them as the first one is what let a
+                // production audit read the guard's silence as the guard never
+                // firing. See LeafUnlinkOutcome.
+                switch (outcome)
+                {
+                    case LeafUnlinkOutcome.DeclinedSplitInFlight:
+                        // Information, not Debug: this is the #2160 ordering,
+                        // and a deployed container does not enable Debug - so
+                        // at Debug its absence from a log proves nothing, which
+                        // is precisely how this went undiagnosed. Rare by
+                        // construction, because the walk now declines this case
+                        // before it ever latches; reaching here means the
+                        // division landed after the probe.
+                        logger.LogInformation(
+                            "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
+                            + "{PrevLeaf} is mid-division into it, so a split landed underneath the reclaim and that "
+                            + "leaf is about to receive rows.",
+                            MyShardIndex, TreeId, currentId, prevId);
+                        break;
+
+                    case LeafUnlinkOutcome.DeclinedWidenSealed:
+                        logger.LogDebug(
+                            "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
+                            + "{PrevLeaf} carries a moved-away seal, so widening it onto the vacated range would make "
+                            + "it the owner of keys its own read gate refuses to serve. The seal lifts on consolidation.",
+                            MyShardIndex, TreeId, currentId, prevId);
+                        break;
+
+                    default:
+                        logger.LogDebug(
+                            "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
+                            + "{PrevLeaf} no longer points at it, so a split landed underneath the reclaim.",
+                            MyShardIndex, TreeId, currentId, prevId);
+                        break;
+                }
 
                 await leaf.AbandonRetirementAsync();
                 return false;

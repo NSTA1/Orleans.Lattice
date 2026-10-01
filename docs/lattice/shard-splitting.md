@@ -294,8 +294,10 @@ semantics and apply on the shard axis regardless.
 ## Autonomic detection
 
 Each tree's hot-shard monitor is armed when the tree activates and
-re-armed from every write path until an arming attempt succeeds, and a
-keepalive reminder re-activates it after collection. The monitor arms its
+re-armed from the point, conditional, batched, predicated and CRDT write
+paths (deletes, atomic batches, bulk loads and merges do not re-arm it)
+until an arming attempt succeeds, and a keepalive reminder re-activates it
+after collection. The monitor arms its
 sampling timer before it registers that keepalive, so a reminder service
 that is still initialising cannot leave it claiming to run with nothing
 sampling; a keepalive registration deferred that way is retried after each
@@ -303,9 +305,12 @@ sampling pass until it succeeds. On each tick (default every 30 s) it:
 
 1. Polls every physical shard's `GetHotnessAsync()` in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
-3. Counts the number of in-flight splits **for this tree** by polling every
-   physical shard's `IsSplittingAsync()`. If that count is already
-   `MaxConcurrentAutoSplits`, the pass returns without triggering anything.
+3. Counts the shard migrations in flight **for this tree** by asking every
+   physical shard whether it is splitting - the source of an adaptive split
+   reports that it is, and so does the donor of a shard consolidation
+   (fold). If that count is already `MaxConcurrentAutoSplits` or more, the
+   pass triggers nothing, so a fold in flight takes up one of the tree's
+   autonomic split slots.
    Because `HotShardMonitorGrain` is keyed per-tree, the cap is enforced
    independently per tree - in a multi-tree cluster each tree may have up
    to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
@@ -341,7 +346,7 @@ individually** when:
 | Tree younger than `AutoSplitMinTreeAge` (since monitor activation, default 60 s) | Whole pass | Returns early. |
 | Resize / reshard / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Reshard/Merge/SnapshotCompleteAsync()` returns `false`. |
 | Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
-| In-flight splits already at `MaxConcurrentAutoSplits` | Whole pass | Sum of `IsSplittingAsync()` results. |
+| Shard migrations in flight (adaptive splits and fold donors) already at `MaxConcurrentAutoSplits` | Whole pass | Count of shards that report they are splitting. |
 | Cluster-wide split ceiling reached (`MaxClusterConcurrentAutoSplits` set) | Per candidate | No cluster headroom left in the admission gate; the candidate is deferred to a later tick. |
 | Tree already has `MaxPhysicalShardsPerTree` physical shards (default 256) | Per candidate (every hot shard) | Counted on `orleans.lattice.split.admission.deferred` with `reason=shard_ceiling`. |
 | Uniform load: hottest shard's rate below `HotShardMinSkewRatio` (default 1.5) times the median shard rate | Per candidate (every hot shard) | Counted on `orleans.lattice.split.admission.deferred` with `reason=uniform_load`. |
@@ -352,21 +357,21 @@ individually** when:
 
 ## Cluster-wide split concurrency (opt-in)
 
-`MaxConcurrentAutoSplits` is enforced **per tree**: because `HotShardMonitorGrain` is keyed by tree id, each tree counts only its own in-flight splits. In a multi-tenant or many-tree cluster the summed drain I/O from many trees splitting at once can saturate the storage provider even though no single tree exceeds its own cap.
+`MaxConcurrentAutoSplits` is enforced **per tree**: because the split monitor runs once per tree, each tree counts only its own in-flight migrations. In a multi-tenant or many-tree cluster the summed drain I/O from many trees splitting at once can saturate the storage provider even though no single tree exceeds its own cap.
 
-`MaxClusterConcurrentAutoSplits` (default `null` = disabled) opts in to a cluster-wide admission gate - a singleton `IClusterSplitConcurrencyGrain` (well-known integer key `0`) - that caps the aggregate number of concurrently in-flight autonomic splits across all trees. The ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When the option is `null` the monitor never requests a slot, so nothing is ever denied and the number of splits a tree starts is byte-for-byte identical to running without the option.
+`MaxClusterConcurrentAutoSplits` (default `null` = disabled) opts in to a cluster-wide admission gate - a singleton (well-known integer key `0`) - that admits a new autonomic split only while the shard migrations in flight on the trees that set the ceiling, fold donors included, leave headroom under it. The ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When the option is `null` the monitor never requests a slot, so nothing is ever denied and the number of splits a tree starts is byte-for-byte identical to running without the option.
 
-A tree with the ceiling unset does still publish an observation-only footprint to that singleton while it has splits in flight, because the same grain is the cluster's readable split-activity source (see [Reading split activity](#reading-split-activity)). Those footprints are held in a separate list and never consume admission headroom - a tree that never opted into a shared budget must not be able to throttle one that did - and publication is edge-triggered, so a tree with nothing splitting issues no call at all.
+A tree with the ceiling unset does still publish an observation-only footprint to that singleton while it has migrations in flight, because the same grain is the cluster's readable split-activity source (see [Reading split activity](#reading-split-activity)). Those footprints are held in a separate list and never consume admission headroom - a tree that never opted into a shared budget must not be able to throttle one that did - and publication is edge-triggered, so a tree with nothing splitting issues no call at all.
 
 ### Reading split activity
 
-Split progress is also exposed as a metric (`orleans.lattice.split.in_flight`), but metrics are write-only in-process: nothing can read one back to *decide* something. `ILatticeAdmin.GetSplitActivityAsync` is the readable counterpart, returning a cluster-wide `SplitActivityReport` (`InFlight`, `ReportingTrees`, `ObservedAt`, `AnyInFlight`) assembled from the footprints above. It costs a single call to the singleton and never fans out across trees or shards.
+Split progress is also exposed as a metric (`orleans.lattice.split.in_flight`), but metrics are write-only in-process: nothing can read one back to *decide* something. `ILatticeAdmin.GetSplitActivityAsync` is the readable counterpart, returning a cluster-wide `SplitActivityReport` (`InFlight`, `ReportingTrees`, `ObservedAt`, `AnyInFlight`) assembled from the footprints above. Both count shard migrations rather than only splits: a shard donating its slots to a shard consolidation (fold) counts as one in flight, exactly as an adaptive split's source does. It costs a single call to the singleton and never fans out across trees or shards.
 
-Its first consumer is the `Orleans.Lattice.Scaling` scale-in safety gate, which suppresses scale-in while any split is in flight so a silo is never drained underneath one; it is equally useful to an operator tool or a deployment guard. Because the count comes from per-pass heartbeats it trails reality by at most one `HotShardSampleInterval` and is a lower bound, and footprints expire, so a silo lost mid-split cannot pin the count above zero indefinitely.
+Its first consumer is the `Orleans.Lattice.Scaling` scale-in safety gate, which suppresses scale-in while any split or fold is in flight so a silo is never drained underneath one; it is equally useful to an operator tool or a deployment guard. The count comes from the monitors' sampling passes, so it is not exact. An unsuppressed pass refreshes it once per `HotShardSampleInterval`; a pass suppressed while the tree is resized, resharded, merged into or snapshotted, during its age grace period, or after autonomic splitting is switched off re-publishes the tree's last count unchanged, so migrations a reshard starts are not counted while it runs; and a tree whose monitor starts with autonomic splitting disabled publishes nothing. Footprints expire, so a silo lost mid-migration cannot pin the count above zero indefinitely.
 
 ### Per-tree heartbeat footprints (self-healing)
 
-Admission uses a per-tree heartbeat model rather than long-lived permits. On every sampling pass an enabled monitor reports its tree's authoritative in-flight split count (derived from real shard `IsSplitting` state) and how many new splits it wants; the gate drops any tree footprint whose time-to-live has lapsed, sums the live in-flight counts of the **other** trees, and grants new slots only up to the remaining cluster headroom. It then records this tree's footprint (its in-flight count plus any grant) with a fresh expiry of `HotShardSampleInterval * 3`. Because the count is re-reported from ground truth each pass, there is no permit to leak: a silo that crashes mid-split simply stops refreshing its footprint, so the stale entry lapses at its expiry and the next pass reclaims that share of the ceiling. This self-healing property is what makes the aggregate ceiling safe to enable.
+Admission uses a per-tree heartbeat model rather than long-lived permits. On every unsuppressed sampling pass an enabled monitor reports its tree's authoritative in-flight migration count (split sources and fold donors, read from each shard's own record of whether it is splitting) and how many new splits it wants; the gate drops any tree footprint whose time-to-live has lapsed, sums the live in-flight counts of the **other** trees, and grants new slots only up to the remaining cluster headroom. It then records this tree's footprint (its in-flight count plus any grant) with a fresh expiry of `HotShardSampleInterval * 3`. Because the count is re-reported from ground truth each pass, there is no permit to leak: a silo that crashes mid-split simply stops refreshing its footprint, so the stale entry lapses at its expiry and the next pass reclaims that share of the ceiling. This self-healing property is what makes the aggregate ceiling safe to enable.
 
 ### Per-group override
 
@@ -385,12 +390,12 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 | Option | Default | Description |
 |---|---|---|
 | `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, `HotShardMonitorGrain` will not trigger any splits. It does not gate an explicit `ReshardAsync`, which dispatches splits through the same coordinator to grow the shard count (see [Online Reshard](online-reshard.md)). |
-| `HotShardOpsPerSecondThreshold` | `200` | Operations/second above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
+| `HotShardOpsPerSecondThreshold` | `200` | Operations/second at or above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
-| `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
-| `MaxClusterConcurrentAutoSplits` | `null` | Optional cluster-wide ceiling on the aggregate number of concurrent autonomic splits across **all** trees. `null` disables the gate (per-tree caps only, zero cost); a positive value opts in to a singleton admission gate enforced in addition to each tree's `MaxConcurrentAutoSplits`. |
-| `MaxConcurrentMigrations` | `4` | Maximum concurrent splits (or, for a shrink, shard consolidations) an online reshard (`ReshardAsync`) dispatches. Independent of, and additive with, `MaxConcurrentAutoSplits`. See [Online Reshard](online-reshard.md). |
+| `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. The monitor counts the shard migrations already in flight on the tree against it, so a shard consolidation (fold) in flight takes a slot too. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
+| `MaxClusterConcurrentAutoSplits` | `null` | Optional cluster-wide ceiling on autonomic split admission across **all** trees: a new split starts only while the shard migrations in flight on the trees that set it, folds included, leave headroom under it. `null` disables the gate (per-tree caps only, zero cost); a positive value opts in to a singleton admission gate enforced in addition to each tree's `MaxConcurrentAutoSplits`. |
+| `MaxConcurrentMigrations` | `4` | Maximum concurrent splits (or, for a shrink, shard consolidations) an online reshard (`ReshardAsync`) keeps in flight. Separate from `MaxConcurrentAutoSplits`, but not additive with it: the monitor starts no split while a reshard runs, a growing reshard counts the shard migrations already in flight on the tree - autonomic splits and healing folds included - against this cap, and a shrinking reshard waits for any healing fold to finish before it starts its own. See [Online Reshard](online-reshard.md). |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `BackgroundDrainLeavesPerPass` | `64` | Maximum source leaves one Drain-phase pass visits before persisting its key cursor and yielding to the next tick. `0` or less disables the bound. The authoritative drains inside Swap and Complete are never bounded. Shared with the online snapshot copy and the cross-tree merge drain. |
 | `BackgroundDrainMaxDuration` | `10 s` | Wall-clock net for one Drain-phase pass, for leaves that are individually slow. `TimeSpan.Zero` disables it and leaves the leaf count as the only bound. |
@@ -400,7 +405,7 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 | `MaxPhysicalShardsPerTree` | `256` | Ceiling on the physical shard count autonomic splits may reach. An explicit `ReshardAsync` is not gated by it. `0` or less for no ceiling. |
 | `MaxScanRetries` | `3` | Maximum bounded retries that a scan (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. See [Consistency](consistency.md). |
 
-Automatic over-split healing, which folds shards back together once a tree's load is uniform, is tuned separately - see `ShardHealingEnabled`, `HotShardConsolidationSkewRatio`, and `MaxConcurrentShardConsolidations` in [Configuration](configuration.md#shardhealingenabled).
+Automatic over-split healing, which folds shards back together once a tree's load is uniform, is tuned separately - see `ShardHealingEnabled`, `HotShardConsolidationSkewRatio`, and `MaxConcurrentShardConsolidations` in [Configuration](configuration.md#shardhealingenabled). While a fold runs, its donor counts as a migration in flight against the split caps above, and healing admits no new fold while any shard of the tree is splitting.
 
 ## Convergence guarantees
 
@@ -434,9 +439,11 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   [Atomic Writes - After the retention window](atomic-writes.md#after-the-retention-window-indeterminate-not-inflight).
 * **No duplicate authority** - after the swap, only *T* is reachable for
   moved slots via the public API; orphan entries on *S* are unreachable
-  and reclaimed on tree purge, unless a later shard consolidation folds *T*
-  back into *S*, which drains *T*'s entries onto *S* before lifting *S*'s
-  seal so the survivor's copy is authoritative again.
+  and reclaimed when the tree is purged, or when a later shard
+  consolidation retires *S* and releases its storage, unless a later
+  consolidation folds *T* back into *S*, which drains *T*'s entries onto *S*
+  before lifting *S*'s seal so the survivor's copy is authoritative again,
+  and then releases *T*'s storage.
 * **Geometric convergence on a single hot slot** - if all heat is in one
   virtual slot, successive autonomic splits subdivide *S*'s slot set in
   half each pass, isolating the hot slot in `O(log virtualSlotsPerShard)`

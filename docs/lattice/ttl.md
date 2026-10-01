@@ -7,7 +7,7 @@ Orleans.Lattice supports **per-entry time-to-live (TTL)** on writes. An entry wr
 The public API is an overload on `ILattice`:
 
 ```csharp verify
-Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken ct = default);
+Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default);
 ```
 
 Typed convenience overloads are provided on `TypedLatticeExtensions`:
@@ -36,7 +36,7 @@ await tree.OrSet("cart:42").AddAsync(new byte[] { 1 }, "cluster-A", TimeSpan.Fro
 ```
 
 ```csharp verify
-Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken ct = default);
+Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken cancellationToken = default);
 ```
 
 The TTL overload is available on the primary write of all thirteen accessors: `GCounter.IncrementAsync`, `GSet.AddAsync`, `MaxRegister.SetAsync`, `MinRegister.SetAsync`, `MvRegister.SetAsync`, `OrFlag.EnableAsync`, `OrMap.SetAsync`, `OrSet.AddAsync`, `PnCounter.IncrementAsync`, `Sequence.InsertAtAsync`, `RwFlag.EnableAsync`, `RwSet.AddAsync`, and `VersionVector.TickAsync`.
@@ -144,7 +144,7 @@ This is required for CRDT convergence: two replicas with different views of "now
 
 ## Cross-cluster replication
 
-A replicated last-writer-wins write carries the absolute expiry the source resolved rather than a relative TTL, so inter-cluster clock skew cannot shift it on the receiving cluster, as for a replicated CRDT delta (see [Replication and cold rebuild](#replication-and-cold-rebuild)). A peer seeded by a whole-tree [snapshot bootstrap](../lattice.replication/snapshot-bootstrap.md#semantics), or repaired by the [anti-entropy bootstrap fallback](../lattice.replication/anti-entropy-bootstrap-fallback.md), likewise receives each copied key with the source entry's absolute expiry (`0` for a durable key), so a key with a TTL on the source keeps its expiry instant on the peer.
+A replicated last-writer-wins write carries the absolute expiry the source resolved rather than a relative TTL, so inter-cluster clock skew cannot shift it on the receiving cluster, as for a replicated CRDT delta (see [Replication and cold rebuild](#replication-and-cold-rebuild)). A peer seeded by a whole-tree [snapshot bootstrap](../lattice.replication/snapshot-bootstrap.md#semantics), or repaired by the [anti-entropy bootstrap fallback](../lattice.replication/anti-entropy-bootstrap-fallback.md), likewise receives each copied key with the source entry's absolute expiry (`0` for a durable key), so on a last-writer-wins tree a key with a TTL on the source keeps its expiry instant on the peer. On a typed CRDT tree those two paths copy each key's full CRDT state and merge it into the peer's row without applying the carried expiry, so a key with a TTL on the source arrives on the peer as a durable entry.
 
 ## Bulk load
 

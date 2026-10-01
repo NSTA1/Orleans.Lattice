@@ -5,10 +5,10 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 
 /// <summary>
 /// Registration helpers for the explorer's authentication session and credential
-/// store. Both heads call <see cref="AddExplorerAuth"/>; each head registers its
-/// own platform-backed <see cref="ICredentialStore"/> (DPAPI on desktop, an
-/// encrypted server cookie on web) before or after this call, overriding the
-/// safe in-memory default.
+/// store. The web head registers its encrypted-cookie
+/// <see cref="ICredentialStore"/> before this call; another host can register
+/// its own encrypted store before or after it, overriding the safe in-memory
+/// default.
 /// </summary>
 public static class ExplorerAuthServiceCollectionExtensions
 {

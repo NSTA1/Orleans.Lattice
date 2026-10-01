@@ -10,9 +10,9 @@ namespace Orleans.Lattice.Schema;
 internal interface ILatticeSchemaPolicyProvider
 {
     /// <summary>
-    /// Whether strict-mode ingest is globally enabled. The interceptor mirrors
-    /// this into <c>ILatticeWriteInterceptor.InterceptsSystemOrigin</c>, so when
-    /// it is <c>false</c> system-origin writes are never inspected.
+    /// Whether strict-mode ingest is globally enabled. The interceptor mirrors this
+    /// into <c>ILatticeWriteInterceptor.InterceptsSystemOrigin</c>, so when it is
+    /// <c>false</c> system-origin writes that reach the interceptor are skipped.
     /// </summary>
     bool StrictIngestEnabled { get; }
 

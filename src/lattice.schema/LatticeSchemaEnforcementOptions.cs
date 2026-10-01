@@ -10,21 +10,23 @@ namespace Orleans.Lattice.Schema;
 public sealed class LatticeSchemaEnforcementOptions
 {
     /// <summary>
-    /// Globally enables strict-mode ingest. When <c>false</c> (the default), the
-    /// enforcement interceptor never inspects system-origin (replication apply /
-    /// restore) writes, so trusted ingest pays zero overhead. When <c>true</c>,
-    /// system-origin writes are inspected and a non-compliant item is
-    /// dead-lettered for any tree whose policy also sets
-    /// <see cref="LatticeSchemaPolicy.StrictIngest"/>. A tree whose policy leaves
-    /// strict off is still trusted even when this global switch is on.
+    /// Globally enables strict-mode ingest for system-origin writes that reach the
+    /// enforcement interceptor. When <c>false</c> (the default), the interceptor
+    /// skips those system-origin writes, so they pay zero overhead. When
+    /// <c>true</c>, intercepted system-origin writes are inspected and a
+    /// non-compliant item is dead-lettered for any tree whose policy also sets
+    /// <see cref="LatticeSchemaPolicy.StrictIngest"/>. Replicated typed-CRDT
+    /// deltas and replicated atomic-batch entries reach the interceptor; a plain
+    /// last-writer-wins replication apply, a backup restore and a tree merge bypass
+    /// write interception and are not made schema-checked by this switch.
     /// </summary>
     public bool StrictIngest { get; set; }
 
     /// <summary>
     /// Enables the CRDT merge-result observer. Off by default so the merge path
-    /// keeps its zero-overhead property; turn on only when merge-result violation
-    /// events are wanted. See <see cref="LatticeSchemaMergeObserver"/> for the
-    /// current wiring limitation.
+    /// keeps its zero-overhead property; turn on only when non-blocking
+    /// merge-result violation events are wanted. See
+    /// <see cref="LatticeSchemaMergeObserver"/>.
     /// </summary>
     public bool ValidateCrdtMergeResults { get; set; }
 
