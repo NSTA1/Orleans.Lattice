@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Schema;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Operations;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -14,15 +16,20 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 internal sealed class SchemaOperations : IDisposable
 {
     private readonly ConcurrentDictionary<string, SchemaOperation> _operations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, OperationFollower> _followers = new(StringComparer.Ordinal);
     private readonly ComponentLifetime _circuit = new();
+    private readonly SchemaFacades _facades;
     private readonly TimeProvider _time;
 
     /// <summary>Creates the tracker.</summary>
-    /// <param name="time">The clock start and finish times are read from.</param>
-    public SchemaOperations(TimeProvider time)
+    /// <param name="time">The clock start, finish and follow reads are paced on.</param>
+    /// <param name="facades">The schema facades for this circuit.</param>
+    public SchemaOperations(TimeProvider time, SchemaFacades facades)
     {
         ArgumentNullException.ThrowIfNull(time);
+        ArgumentNullException.ThrowIfNull(facades);
         _time = time;
+        _facades = facades;
     }
 
     /// <summary>Raised, possibly off the circuit's thread, whenever an operation moves on, with its tree id.</summary>
@@ -41,14 +48,14 @@ internal sealed class SchemaOperations : IDisposable
     /// <param name="treeId">The logical tree id.</param>
     /// <param name="kind">What the operation does.</param>
     /// <param name="summary">One plain line describing it.</param>
-    /// <param name="run">The facade call, which returns the terminal report.</param>
+    /// <param name="run">The facade call that accepts the operation and returns its handle.</param>
     /// <returns>The started operation.</returns>
     /// <exception cref="InvalidOperationException">An operation this circuit started on the tree is still running.</exception>
     public SchemaOperation Start(
         string treeId,
         SchemaOperationKind kind,
         string summary,
-        Func<CancellationToken, Task<LatticeSchemaRemediationReport>> run)
+        Func<CancellationToken, Task<LatticeOperationHandle>> run)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
@@ -99,21 +106,26 @@ internal sealed class SchemaOperations : IDisposable
     public void Dispose()
     {
         _circuit.Leave();
+        foreach (var follower in _followers.Values)
+        {
+            follower.Dispose();
+        }
+
+        _followers.Clear();
     }
 
-    private async Task RunAsync(SchemaOperation started, Func<CancellationToken, Task<LatticeSchemaRemediationReport>> run)
+    private async Task RunAsync(SchemaOperation started, Func<CancellationToken, Task<LatticeOperationHandle>> run)
     {
-        Update(started with { Stage = SchemaOperationStage.Running });
-        SchemaOperation finished;
         try
         {
-            var report = await run(_circuit.Token).ConfigureAwait(false);
-            finished = started with
+            var handle = await run(_circuit.Token).ConfigureAwait(false);
+            var accepted = started with
             {
-                Stage = report.DidAbort ? SchemaOperationStage.Aborted : SchemaOperationStage.Completed,
-                Report = report,
-                FinishedAt = _time.GetUtcNow(),
+                Stage = SchemaOperationStage.Running,
+                OperationId = handle.OperationId,
             };
+            Update(accepted);
+            await FollowAsync(accepted).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_circuit.IsLeft)
         {
@@ -122,15 +134,69 @@ internal sealed class SchemaOperations : IDisposable
         }
         catch (Exception exception)
         {
-            finished = started with
+            Update(started with
             {
                 Stage = SchemaOperationStage.Failed,
                 Failure = SchemaFailure.Describe(exception, Action(started.Kind)),
                 FinishedAt = _time.GetUtcNow(),
-            };
+            });
+        }
+    }
+
+    private async Task FollowAsync(SchemaOperation accepted)
+    {
+        if (accepted.OperationId is not { } operationId)
+        {
+            return;
         }
 
-        Update(finished);
+        var follower = new OperationFollower(_time);
+        if (_followers.TryGetValue(accepted.TreeId, out var previous))
+        {
+            // The tree's earlier operation has settled (a start needs it inactive);
+            // release its follower rather than leaving it to the circuit's end.
+            previous.Dispose();
+        }
+
+        _followers[accepted.TreeId] = follower;
+        follower.Changed += () => OnFollowerChanged(accepted.TreeId, follower);
+        try
+        {
+            await follower.StartAsync(
+                ct => _facades.RequireSchemaOperations().GetOperationStatusAsync(operationId, ct),
+                _circuit.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_circuit.IsLeft)
+        {
+        }
+    }
+
+    private void OnFollowerChanged(string treeId, OperationFollower follower)
+    {
+        if (!_operations.TryGetValue(treeId, out var current) || current.OperationId is null)
+        {
+            return;
+        }
+
+        if (follower.Status is { } status)
+        {
+            Update(current with
+            {
+                Stage = StageOf(status),
+                Status = status,
+                Failure = status.State == LatticeOperationState.Failed ? status.FailureReason : current.Failure,
+                FinishedAt = status.FinishedAtUtc,
+            });
+        }
+        else if (follower.NotFound)
+        {
+            Update(current with
+            {
+                Stage = SchemaOperationStage.Failed,
+                Failure = "The operation is no longer visible.",
+                FinishedAt = _time.GetUtcNow(),
+            });
+        }
     }
 
     private void Update(SchemaOperation operation)
@@ -145,4 +211,21 @@ internal sealed class SchemaOperations : IDisposable
         SchemaOperationKind.AdvanceAndMigrate => "advance and migrate this tree",
         _ => "migrate this tree",
     };
+
+    private static SchemaOperationStage StageOf(LatticeOperationStatus status)
+    {
+        if (!status.IsTerminal)
+        {
+            return SchemaOperationStage.Running;
+        }
+
+        return status.State switch
+        {
+            LatticeOperationState.Succeeded => SchemaOperationStage.Completed,
+            LatticeOperationState.Cancelled => SchemaOperationStage.Cancelled,
+            LatticeOperationState.Failed when status.Result.TryGetValue(SchemaOperationResultKeys.Outcome, out var outcome)
+                && string.Equals(outcome, SchemaOperationResultKeys.Aborted, StringComparison.Ordinal) => SchemaOperationStage.Aborted,
+            _ => SchemaOperationStage.Failed,
+        };
+    }
 }

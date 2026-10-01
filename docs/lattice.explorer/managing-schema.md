@@ -131,7 +131,7 @@ When versioning is off, **Turn on versioning** asks for a schema family, a targe
 - **Change config** by replacing the config as typed;
 - **Turn off versioning** after a destructive confirmation named **Turn off versioning**.
 
-Advancing can only move the target version up. Migration and advance-and-migrate are staged background operations. The tab links to the Remediation tab while one is running.
+Advancing can only move the target version up. Migration and advance-and-migrate start cluster-tracked background operations. The tab links to the Remediation tab while one is running.
 
 If the cluster has not registered schema versioning, the tab says **Versioning is not available** instead of failing opaquely.
 
@@ -151,7 +151,7 @@ A remediation rewrites every value through ordered transform steps, checks each 
 
 Starting a remediation opens a destructive confirmation named **Remediate this tree**. It says every value is rewritten and checked, that a successful run cuts over to the rewritten values, and that a failed value leaves the tree unchanged. The operation runs in the background and the page can be left while it runs.
 
-The status section reads the cluster's own remediation status and also shows operations started in the current circuit. It displays stages (**Confirmed**, **Running in the cluster**, **Finished**), operation id when present, values checked, aborted-key detail, failure text, **Refresh status**, and **Clear this result** for a finished circuit operation. Running status is read again every 2 seconds.
+The status section follows the cluster operation when an operation id is known, including after the tab or circuit was closed. Progress is shown per phase - dry run, build, and cutover, plus advance for advance-and-migrate - with the values processed when the cluster reports them. A running remediation can be cancelled before cutover; once cutover starts it runs to completion. If the operation is no longer visible, the section falls back to the remediation report and still shows aborted-key detail, failure text, **Refresh status**, and **Clear this result** for a finished circuit operation.
 
 ### Dead letters
 

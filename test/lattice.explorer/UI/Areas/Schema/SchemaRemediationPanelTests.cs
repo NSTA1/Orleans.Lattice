@@ -116,6 +116,103 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
     }
 
     [Test]
+    public void A_fresh_circuit_finds_the_operation_id_in_the_report_and_draws_cluster_progress()
+    {
+        UseEstate();
+        Schema.Status["orders"] = LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 3, "physical-orders-shadow", "op-42");
+        Schema.OperationStatuses["op-42"] = FakeSchemaControl.RunningOperation("op-42", SchemaOperationKinds.Remediation, "orders") with
+        {
+            Phase = SchemaOperationPhases.Build,
+            PhaseIndex = 1,
+            CompletedUnits = 3,
+            TotalUnits = 8,
+            UnitName = SchemaOperationPhases.ValuesUnit,
+        };
+
+        var cut = Open();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-progress__phase").TextContent, Is.EqualTo("Building the remediated copy"));
+            Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("3 of 8 values"));
+            Assert.That(Stages(cut), Is.EqualTo(new[] { "Checking every value", "*Building the remediated copy", "Cutting over" }));
+            Assert.That(cut.Markup, Does.Not.Contain("physical-orders-shadow"));
+        });
+    }
+
+    [Test]
+    public void Cluster_progress_advances_when_the_clock_ticks()
+    {
+        UseEstate();
+        Schema.Status["orders"] = LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 3, null, "op-42");
+        Schema.OperationStatuses["op-42"] = FakeSchemaControl.RunningOperation("op-42", SchemaOperationKinds.Remediation, "orders") with
+        {
+            Phase = SchemaOperationPhases.Build,
+            PhaseIndex = 1,
+            CompletedUnits = 3,
+            TotalUnits = 8,
+            UnitName = SchemaOperationPhases.ValuesUnit,
+        };
+        var cut = Open();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("3 of 8 values")));
+
+        Schema.MoveOperation("op-42", status => status with { CompletedUnits = 5 });
+        Time.Advance(SchemaOperationStatus.PollInterval);
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("5 of 8 values")));
+    }
+
+    [Test]
+    public void Cancelling_a_running_operation_calls_the_cluster_and_requires_the_grant()
+    {
+        UseEstate();
+        Schema.Status["orders"] = LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 3, null, "op-42");
+        Schema.OperationStatuses["op-42"] = FakeSchemaControl.RunningOperation("op-42", SchemaOperationKinds.Remediation, "orders");
+        var cut = Open();
+        cut.WaitUntil(() => Assert.That(cut.FindAll("button").Count(button => button.TextContent.Trim() == "Cancel operation"), Is.EqualTo(1)));
+
+        Button(cut, "Cancel operation").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Schema.OperationStatuses["op-42"].CancelRequested, Is.True);
+            Assert.That(Schema.CountOf(nameof(Orleans.Lattice.Api.Operations.ILatticeOperations.CancelOperationAsync)), Is.EqualTo(1));
+        });
+
+        Schema.Capabilities["audit"] = FakeSchemaControl.ReadOnly;
+        Schema.Status["audit"] = LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 3, null, "op-43");
+        Schema.OperationStatuses["op-43"] = FakeSchemaControl.RunningOperation("op-43", SchemaOperationKinds.Remediation, "audit");
+        var readOnly = Open("audit");
+        readOnly.WaitUntil(() => Assert.That(readOnly.FindAll("button").Count(button => button.TextContent.Trim() == "Cancel operation"), Is.Zero));
+    }
+
+    [Test]
+    public void A_cancelled_cluster_operation_renders_as_cancelled_and_stops_polling()
+    {
+        UseEstate();
+        Schema.Status["orders"] = LatticeSchemaRemediationReport.Cancelled(6, "op-42");
+        Schema.OperationStatuses["op-42"] = FakeSchemaControl.RunningOperation("op-42", SchemaOperationKinds.Remediation, "orders") with
+        {
+            State = Orleans.Lattice.Api.Operations.LatticeOperationState.Cancelled,
+            Phase = SchemaOperationPhases.Build,
+            PhaseIndex = 1,
+            CompletedUnits = 6,
+            TotalUnits = 8,
+            UnitName = SchemaOperationPhases.ValuesUnit,
+            FinishedAtUtc = Time.GetUtcNow(),
+        };
+
+        var cut = Open();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-schema-status").TextContent, Is.EqualTo("The last operation was cancelled before cutover."));
+            Assert.That(cut.Find(".lt-operation-progress__state").TextContent, Does.Contain("Cancelled"));
+            Assert.That(Time.ArmedTimers, Is.Zero);
+        });
+    }
+
+    [Test]
     public void Starting_a_remediation_needs_steps_and_the_tree_named_then_follows_it_to_the_end()
     {
         UseEstate();
@@ -143,28 +240,25 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
 
         cut.WaitUntil(() =>
         {
-            Assert.That(Schema.CountOf("Remediate"), Is.EqualTo(1));
+            Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(1));
             Assert.That(Schema.LastRemediation!.Value.Policy, Is.SameAs(Schema.Policies["orders"]));
             Assert.That(Schema.LastRemediation!.Value.Transform.Children, Has.Length.EqualTo(2));
             Assert.That(cut.Find(".lt-schema-operation .lt-schema-status").TextContent, Is.EqualTo("Running in the cluster."));
-            Assert.That(Stages(cut), Is.EqualTo(new[] { "Confirmed", "*Running in the cluster", "Finished" }));
+            Assert.That(Stages(cut), Is.EqualTo(new[] { "*Checking every value", "Building the remediated copy", "Cutting over" }));
             Assert.That(cut.Find(".lt-schema-operation dl.lt-dl").TextContent, Does.Contain("Remediating every value through 2 steps"));
             Assert.That(Button(cut, "Review and start...").HasAttribute("disabled"), Is.True, "one operation per tree");
             Assert.That(cut.FindAll(".lt-schema-rules__item"), Is.Empty, "the editor clears once it has started");
         });
 
         Schema.OperationGate.SetResult(LatticeSchemaRemediationReport.Completed(1234, "physical-orders-shadow", "op-9"));
+        Button(cut, "Refresh status").Click();
 
         cut.WaitUntil(() =>
         {
-            Assert.That(Stages(cut), Is.EqualTo(new[] { "Confirmed", "Running in the cluster", "*Finished" }));
+            Assert.That(Stages(cut), Is.EqualTo(new[] { "Checking every value", "Building the remediated copy", "Cutting over" }));
             Assert.That(cut.Find(".lt-schema-operation dl.lt-dl").TextContent, Does.Contain("1,234"));
             Assert.That(cut.Markup, Does.Not.Contain("physical-orders-shadow"));
-            Assert.That(Button(cut, "Clear this result"), Is.Not.Null);
         });
-
-        Button(cut, "Clear this result").Click();
-        cut.WaitUntil(() => Assert.That(Operations.Find("orders"), Is.Null));
     }
 
     [Test]
@@ -201,14 +295,15 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=alertdialog]"), Has.Count.EqualTo(1)));
         cut.Find("[role=alertdialog] input").Input("orders");
         cut.Find("[role=alertdialog] form").Submit();
-        cut.WaitUntil(() => Assert.That(Schema.CountOf("Remediate"), Is.EqualTo(1)));
+        cut.WaitUntil(() => Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(1)));
 
         Schema.OperationGate.SetResult(LatticeSchemaRemediationReport.Aborted(
             17, "order/42", "currency does not match", System.Text.Encoding.UTF8.GetBytes("<script>alert(1)</script>"), "op-3"));
+        Button(cut, "Refresh status").Click();
 
         cut.WaitUntil(() =>
         {
-            Assert.That(Stages(cut), Is.EqualTo(new[] { "Confirmed", "Running in the cluster", "*Stopped, nothing cut over" }));
+            Assert.That(Stages(cut), Is.EqualTo(new[] { "Checking every value", "Building the remediated copy", "Cutting over" }));
             var abort = cut.Find(".lt-schema-abort");
             Assert.That(abort.TextContent, Does.Contain("Nothing was cut over"));
             Assert.That(abort.QuerySelectorAll("dd").Select(value => value.TextContent.Trim()), Is.EqualTo(new[] { "order/42", "currency does not match" }));
@@ -221,7 +316,7 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
     public void A_refused_remediation_is_explained()
     {
         UseEstate();
-        Schema.Faults["Remediate"] = new InvalidOperationException("A remediation with different parameters is already in flight.");
+        Schema.Faults["StartRemediation"] = new InvalidOperationException("A remediation with different parameters is already in flight.");
         var cut = Open();
         cut.FindAll(".lt-schema-builder select")[0].Change(nameof(SchemaTransformStepKind.Remove));
         cut.FindAll(".lt-schema-builder input")[0].Input("legacy");
