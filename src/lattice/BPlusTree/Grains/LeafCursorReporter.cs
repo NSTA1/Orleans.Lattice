@@ -326,11 +326,23 @@ internal sealed class LeafCursorReporter(
     /// real-frontier retention flush
     /// (<see cref="FlushDurableMaterialiserFrontierAsync"/>). Groups the
     /// per-partition pins by their routed durable-pin shard so each distinct
-    /// shard takes a single batched grain round-trip (monotonic-max merge) and
-    /// pre-seeds the debounce state so a subsequent coalesced
+    /// shard takes a single batched grain round-trip (monotonic-max merge) and,
+    /// <b>once a shard's write has landed</b>, records that shard's consumers in
+    /// the debounce state so a subsequent coalesced
     /// <see cref="NoteDurableMaterialiserFrontier"/> does not re-issue the same
     /// value. Transient failures are swallowed-and-logged so neither the birth
     /// path nor deactivation is ever blocked.
+    /// <para>
+    /// The debounce record is attributed per shard and only after that shard's
+    /// own write completes (issue #3319). Recording it up front, while bucketing,
+    /// claimed a durable write that had not happened yet: because the fault is
+    /// swallowed here, a faulted shard left the reporter believing those pins
+    /// were durable, and <see cref="NoteDurableMaterialiserFrontier"/> then
+    /// coalesced the next report for them away - suppressing the very retry that
+    /// would have repaired it. This is the same rollback obligation
+    /// <see cref="WriteDurablePinAsync"/> already honours on the single-consumer
+    /// path, and that <see cref="SeedShardAsync"/>'s contract states.
+    /// </para>
     /// <para>
     /// <paramref name="seed"/> selects the pin-store entry point, and that
     /// choice is load-bearing (issue #2012). Only the <b>birth</b> seed needs
@@ -379,32 +391,56 @@ internal sealed class LeafCursorReporter(
             return true;
         }
 
-        var writes = new List<Task<bool>>(byShard.Count);
+        var writes = new Task<bool>[byShard.Count];
+        var buckets = new List<MaterialiserPinReport>[byShard.Count];
+        var started = 0;
         foreach (var (key, bucket) in byShard)
         {
-            writes.Add(SeedShardAsync(key, bucket, writeThrough: seed));
+            buckets[started] = bucket;
+            writes[started] = SeedShardAsync(key, bucket, writeThrough: seed);
+            started++;
         }
 
-        try
-        {
-            // Awaited through the non-generic overload so no result array is
-            // allocated; every write has completed by the time it returns.
-            await Task.WhenAll((IEnumerable<Task>)writes).ConfigureAwait(false);
+        // Every write is already in flight, so awaiting them one at a time here
+        // costs nothing in concurrency. It buys per-shard attribution, which
+        // Task.WhenAll cannot give: it collapses the batch into a single fault,
+        // leaving no way to tell which shard's consumers may be recorded as
+        // written. Each task is awaited even after an earlier one faults, so no
+        // exception is left unobserved.
+        Exception? firstFault = null;
+        var acknowledged = true;
 
-            // A shard write that returned false was shed rather than written.
-            // This path never opts into shedding today, but a shed write is not
-            // an acknowledgement either, so it must not be reported as one.
-            for (var i = 0; i < writes.Count; i++)
+        for (var i = 0; i < writes.Length; i++)
+        {
+            try
             {
-                if (!writes[i].Result)
+                if (await writes[i].ConfigureAwait(false))
                 {
-                    return false;
+                    // Landed. Only now may these consumers be recorded as
+                    // written (issue #3319).
+                    RecordDurableWrite(treeName, buckets[i]);
+                }
+                else
+                {
+                    // Shed rather than written. Leaving the debounce untouched
+                    // is the rollback SeedShardAsync's contract asks for:
+                    // shedding is deferral, never loss, so the next report for
+                    // these consumers must still be admitted. This path never
+                    // opts into shedding today, but a shed write is not an
+                    // acknowledgement either.
+                    acknowledged = false;
                 }
             }
-
-            return true;
+            catch (Exception ex)
+            {
+                // This shard's consumers keep whatever debounce state they held
+                // before the batch, so the next report retries them.
+                firstFault ??= ex;
+                acknowledged = false;
+            }
         }
-        catch (Exception ex)
+
+        if (firstFault is not null)
         {
             // Swallow-and-log: neither the birth/create path nor deactivation
             // must fail because the durable pin store had a transient hiccup on
@@ -413,37 +449,83 @@ internal sealed class LeafCursorReporter(
             if (seed)
             {
                 logger?.LogWarning(
-                    ex,
+                    firstFault,
                     "Failed to seed one or more durable WAL materialiser block pins for tree {TreeId}; will re-seed on next checkpoint.",
                     treeName);
             }
             else
             {
                 logger?.LogWarning(
-                    ex,
+                    firstFault,
                     "Failed to flush one or more durable WAL materialiser frontier pins for tree {TreeId}; will re-flush on next checkpoint or deactivation.",
                     treeName);
             }
+        }
 
-            return false;
+        return acknowledged;
+    }
+
+    /// <summary>
+    /// Records a landed shard write in the per-<c>(tree, consumer)</c> debounce
+    /// state, merging monotonically so a concurrent advance is never walked
+    /// backwards.
+    /// </summary>
+    /// <remarks>
+    /// Called only once the shard's write has actually landed. Recording it any
+    /// earlier - as the bucketing walk once did - claims a durable write that
+    /// may never happen, and because
+    /// <see cref="NoteDurableMaterialiserFrontier"/> suppresses a report at or
+    /// below the recorded frontier <i>and</i> offset outright, with no
+    /// wall-clock escape, the next report for those consumers is dropped rather
+    /// than retried (issue #3319).
+    /// </remarks>
+    private void RecordDurableWrite(string treeName, List<MaterialiserPinReport> bucket)
+    {
+        var now = Environment.TickCount64;
+        for (var i = 0; i < bucket.Count; i++)
+        {
+            var report = bucket[i];
+            var debounceKey = (treeName, report.ConsumerId);
+            if (_durableDebounce.TryGetValue(debounceKey, out var current))
+            {
+                if (report.Frontier > current.LastWritten || report.CheckpointOffset > current.LastWrittenOffset)
+                {
+                    _durableDebounce[debounceKey] = (
+                        report.Frontier > current.LastWritten ? report.Frontier : current.LastWritten,
+                        Math.Max(report.CheckpointOffset, current.LastWrittenOffset),
+                        now);
+                }
+            }
+            else
+            {
+                _durableDebounce[debounceKey] = (report.Frontier, report.CheckpointOffset, now);
+            }
         }
     }
 
     /// <summary>
-    /// Buckets <paramref name="reports"/> by routed pin-shard key and pre-seeds
-    /// the per-<c>(tree, consumer)</c> debounce state, returning
+    /// Buckets <paramref name="reports"/> by routed pin-shard key, returning
     /// <see langword="null"/> when there is nothing to write. Synchronous by
     /// design: the caller is <c>async</c>, where <c>CollectionsMarshal</c> ref
     /// locals are illegal and every local the walk needs would otherwise be
     /// hoisted into the generated state machine.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Pure bucketing: it decides only <i>what</i> to write and deliberately
+    /// touches no debounce state. It used to pre-seed that state here, which
+    /// recorded a durable write before it had been attempted (issue #3319);
+    /// <see cref="RecordDurableWrite"/> now does it per shard once the write has
+    /// landed.
+    /// </para>
+    /// <para>
     /// Each bucket is presized from a genuine numerator and a genuine divisor -
     /// the report count over the number of shards those reports can route to -
     /// so the per-bucket list never walks the 4/8/16 doubling chain. The divisor
     /// is clamped by the report count because a batch narrower than the shard
     /// count cannot occupy every shard, and sizing each bucket by the whole
     /// batch would multiply the over-allocation by the fan-out width.
+    /// </para>
     /// </remarks>
     private Dictionary<string, List<MaterialiserPinReport>>? BucketPinReportsByShard(
         string treeName,
@@ -473,26 +555,6 @@ internal sealed class LeafCursorReporter(
             }
 
             bucket.Add(report);
-
-            // Pre-seed the debounce state so a subsequent
-            // NoteDurableMaterialiserFrontier treats this consumer as already
-            // written through at this frontier rather than issuing a redundant
-            // durable write of the same value.
-            var debounceKey = (treeName, report.ConsumerId);
-            if (_durableDebounce.TryGetValue(debounceKey, out var current))
-            {
-                if (report.Frontier > current.LastWritten || report.CheckpointOffset > current.LastWrittenOffset)
-                {
-                    _durableDebounce[debounceKey] = (
-                        report.Frontier > current.LastWritten ? report.Frontier : current.LastWritten,
-                        Math.Max(report.CheckpointOffset, current.LastWrittenOffset),
-                        Environment.TickCount64);
-                }
-            }
-            else
-            {
-                _durableDebounce[debounceKey] = (report.Frontier, report.CheckpointOffset, Environment.TickCount64);
-            }
         }
 
         return byShard;
