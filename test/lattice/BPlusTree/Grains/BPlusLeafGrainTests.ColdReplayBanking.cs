@@ -126,6 +126,97 @@ public partial class BPlusLeafGrainTests
             "authorises trimming the only durable copy of that prefix");
     }
 
+    /// <summary>Highest offset the resumed replay re-reads after rehydrating.</summary>
+    private const long ColdBankResumedOffset = 80L;
+
+    [Test]
+    public async Task Cancelled_cold_replay_lets_the_next_activation_resume_above_the_banked_frontier()
+    {
+        // THE CONSUMPTION HALF, AND WHY IT NEEDS ITS OWN TEST.
+        //
+        // The two tests above assert what the cancelled activation BANKS. Both
+        // stop at the blob. Neither drives a second activation, so the property
+        // the banking exists to produce - that progress ACCUMULATES across
+        // attempts, which is what makes the self-reinforcing loop of issue #2280
+        // terminate - was asserted only in a comment ("the next activation
+        // rehydrates and resumes from 30 instead of 0"). A comment is not a
+        // guard, and this one sits above a claim that three separate changes
+        // jointly produce and none of them individually pins.
+        //
+        // The convergence depends on a short-circuit that reads as a mere
+        // optimisation. TryRehydrateFromSnapshotAsync declines a blob at or
+        // behind the persisted checkpoint - which a cold-banked frontier ALWAYS
+        // is, because being below the checkpoint is the whole reason the
+        // checkpoint could not express it - and only the `Cache.Count > 0` guard
+        // on that decline (issue #2278) lets an empty-cache activation accept it
+        // instead. Remove that guard and every assertion in the two tests above
+        // still passes, because they never look past the blob; the leaf simply
+        // stops converging in the field. So this test is specifically written
+        // against the shape those cannot see.
+        //
+        // Distinct from Resumed_activation_rehydrates_from_incremental_snapshot
+        // _and_resumes, which covers the ORDINARY resume: a leaf whose checkpoint
+        // started at 0, so the snapshot offset equals the checkpoint it advanced
+        // to and nothing is rolled back. Here the frontier (30) sits strictly
+        // BELOW a pre-existing checkpoint (100), so the rehydrate must LOWER
+        // partition 0 from 100 to 30 and reset the never-covered partition 1 from
+        // 200 to -1. That rollback is the #2280 shape and is the one not covered.
+        var store = new LeafSnapshotStorageGrain(
+            Substitute.For<IGrainContext>(),
+            new FakePersistentState<LeafSnapshotBlob>());
+
+        var banked = await RunCancelledColdReplayAndLoadBankedBlobAsync(snapshotStore: store);
+
+        Assert.That(banked, Is.Not.Null,
+            "precondition: the cancelled cold replay must have banked a frontier for the resume to consume");
+        Assert.That(banked!.SnapshotOffsetsByPartition![0], Is.EqualTo(ColdBankReReachedOffset),
+            "precondition: the banked frontier is the re-read offset (30), strictly below the persisted " +
+            "checkpoint (100) - which is exactly why the rehydrate gate would otherwise decline it");
+
+        // The second activation models the SAME leaf coming back: the persisted
+        // checkpoints survive (100, 200), the per-activation cache does not, and
+        // the snapshot store still holds the banked blob.
+        var resumeSlice = new List<CommitLogSliceEntry>
+        {
+            new(40L, BuildCommittedSet("cold-d", Encoding.UTF8.GetBytes("v-d"), treeId: ColdBankTreeId)),
+            new(ColdBankResumedOffset, BuildCommittedSet("cold-e", Encoding.UTF8.GetBytes("v-e"), treeId: ColdBankTreeId)),
+        };
+        ReachableWalFixture.EnsureReachable(90L, resumeSlice);
+
+        var resumedReads = 0;
+        var partition0 = Substitute.For<ILeafReplayCoordinatorGrain>();
+        partition0.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(90L));
+        partition0.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        partition0.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Interlocked.Increment(ref resumedReads) == 1
+                ? Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(resumeSlice)
+                : Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(Array.Empty<CommitLogSliceEntry>()));
+
+        // Partition 1 was never covered, so the rehydrate resets it to -1 and it
+        // is re-read in full. An empty partition keeps that re-read trivial;
+        // the loss-free-ness of the reset is already covered elsewhere.
+        var partition1 = Substitute.For<ILeafReplayCoordinatorGrain>();
+        partition1.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        partition1.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        partition1.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(Array.Empty<CommitLogSliceEntry>()));
+
+        var resumed = CreateColdBankLeaf(
+            store,
+            walPartitions: 2,
+            partition0,
+            partition1,
+            new[] { ColdBankReachedCheckpoint, ColdBankUnreachedCheckpoint });
+
+        await LeafActivationHarness.ActivateAsync(resumed, CancellationToken.None);
+
+        await partition0.Received().ReadSliceAsync(
+            ColdBankReReachedOffset, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+
+        await partition0.DidNotReceive().ReadSliceAsync(
+            -1L, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
     /// <summary>
     /// Drives one cold activation that re-reads partition 0 up to
     /// <see cref="ColdBankReReachedOffset"/>, is then cancelled mid-replay
@@ -133,12 +224,15 @@ public partial class BPlusLeafGrainTests
     /// (<see langword="null"/> when it banked nothing).
     /// </summary>
     private static async Task<LeafSnapshotBlob?> RunCancelledColdReplayAndLoadBankedBlobAsync(
-        long[]? persistedCheckpoints = null)
+        long[]? persistedCheckpoints = null,
+        LeafSnapshotStorageGrain? snapshotStore = null)
     {
         const int partitions = 2;
 
-        var snapshotState = new FakePersistentState<LeafSnapshotBlob>();
-        var store = new LeafSnapshotStorageGrain(Substitute.For<IGrainContext>(), snapshotState);
+        var store = snapshotStore
+            ?? new LeafSnapshotStorageGrain(
+                Substitute.For<IGrainContext>(),
+                new FakePersistentState<LeafSnapshotBlob>());
 
         using var cts = new CancellationTokenSource();
 

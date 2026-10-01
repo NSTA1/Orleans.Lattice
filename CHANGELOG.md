@@ -126,6 +126,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - Tombstone compaction no longer times out on a tombstone-heavy leaf.** A leaf's reap yields on a work budget and resumes, reaping strictly less each pass until it drains, and a partial pass keeps the leaf queued instead of dropping it. ([#4135](https://github.com/NSTA1/Orleans.Lattice/issues/4135)) (`Orleans.Lattice`)
 
+- **Core - The cold-replay loop warning now describes what actually happens.** It told operators no snapshot is banked and the leaf cannot escape on its own, which stopped being true once a cancelled cold replay began banking its progress. It now names the three cases that still reach the threshold. ([#2280](https://github.com/NSTA1/Orleans.Lattice/issues/2280)) (`Orleans.Lattice`)
+
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tenant residency reads as served, and a change is previewed.** Each region says whether it serves the tenant; no residency means every region. A change is previewed per region, and one leaving the tenant served nowhere turns Apply off, passing only on an explicit, confirmed path. ([#4078](https://github.com/NSTA1/Orleans.Lattice/issues/4078)) (`Orleans.Lattice.Explorer.UI`)
