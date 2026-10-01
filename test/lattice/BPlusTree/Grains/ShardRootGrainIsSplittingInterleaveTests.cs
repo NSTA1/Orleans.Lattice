@@ -7,6 +7,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.Storage;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -131,7 +132,7 @@ public sealed class ShardRootGrainIsSplittingInterleaveTests
         await grain.IsSplittingAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
         GatingShardRootStorage.Arm(tree);
-        Task? blocker = null;
+        Task blocker;
         try
         {
             // Enters the non-reentrant turn and parks inside the write that
@@ -144,12 +145,9 @@ public sealed class ShardRootGrainIsSplittingInterleaveTests
             // completes when the gate is released below - which in
             // production is where the 30s response timeout fires.
             var probe = grain.IsSplittingAsync();
-            var winner = await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(10)));
-
-            Assert.That(winner, Is.SameAs(probe),
-                "IsSplittingAsync must interleave with a non-reentrant turn parked on the same shard-root " +
-                "activation. It queued behind the parked BeginSplitAsync turn instead, which is the " +
-                "head-of-line block that times out the coordinators' per-shard fan-out.");
+            var splitting = await InterleaveProbe.AnswersWhileHeldAsync(probe, GatingShardRootStorage.WriteGate!.Task,
+                "IsSplittingAsync, issued while a non-reentrant BeginSplitAsync turn is parked on the same shard-root "
+                + "activation,");
 
             // The probe answered from the live activation, not from a stale
             // snapshot. BeginSplitAsync assigns SplitInProgress before the
@@ -157,17 +155,17 @@ public sealed class ShardRootGrainIsSplittingInterleaveTests
             // one persisted write earlier than a queued reader would - the
             // staleness-window narrowing documented on the interface, made
             // observable here.
-            Assert.That(await probe, Is.True,
+            Assert.That(splitting, Is.True,
                 "The interleaved probe should observe the split record the parked turn already assigned.");
         }
         finally
         {
             GatingShardRootStorage.Release();
-            if (blocker is not null)
-            {
-                await blocker.WaitAsync(TimeSpan.FromSeconds(30));
-            }
         }
+
+        // Drained only once the probe has passed, so the blocker's own response
+        // timeout can never mask the probe's verdict.
+        await blocker.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator
