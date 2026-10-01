@@ -43,7 +43,11 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ReplicationInboundContact"/> rule. The batch fast path is recorded
 /// by the inner applier; if that batch path throws and this decorator falls back
 /// to per-entry applies, entries from runs the inner path already attempted can
-/// record contact a second time for the same push.
+/// record contact a second time for the same push. On every branch the contact is
+/// recorded only for a run the receiver admits - its tree enrolled here and its wire
+/// mode matching - re-resolved through the same <c>replicationContext</c>
+/// the canonical applier's gate consults, so a peer cannot plant a non-enrolled
+/// tree id in the peer statistics (issue #4021).
 /// </para>
 /// </summary>
 internal sealed class DeadLetterTrackingReplicationApplier(
@@ -51,7 +55,8 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
     ILogger<DeadLetterTrackingReplicationApplier> logger,
-    ReplicationPeerStats? peerStats = null) : IReplicationApplier
+    ReplicationPeerStats? peerStats = null,
+    ILatticeReplicationContext? replicationContext = null) : IReplicationApplier
 {
     private readonly ConcurrentDictionary<RetryKey, int> _failures = new();
 
@@ -90,7 +95,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         {
             if (recordContact)
             {
-                ReplicationInboundContact.Record(peerStats, options, entry, success: false);
+                ReplicationInboundContact.Record(peerStats, options, replicationContext, entry, success: false);
             }
 
             return await OnFailureAsync(entry, ex, cancellationToken).ConfigureAwait(false);
@@ -101,7 +106,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         _failures.TryRemove(KeyFor(entry), out _);
         if (recordContact)
         {
-            ReplicationInboundContact.Record(peerStats, options, entry, success: true);
+            ReplicationInboundContact.Record(peerStats, options, replicationContext, entry, success: true);
         }
 
         return result;

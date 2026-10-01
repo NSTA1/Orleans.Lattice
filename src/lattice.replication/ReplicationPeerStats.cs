@@ -65,6 +65,34 @@ public partial class ReplicationPeerStats
     private readonly ConcurrentDictionary<PeerKey, PeerState> state = new();
 
     /// <summary>
+    /// The most inbound <c>(tree, origin)</c> rows retained. Inbound rows are keyed by
+    /// values a remote peer supplies - only for trees enrolled here, but the origin id is
+    /// the peer's own claim - so the inbound half of the state is capped: once full, a
+    /// new inbound pair is not recorded, while every pair already held keeps updating
+    /// (issue #4021). Outbound rows are keyed by the locally configured peer set and are
+    /// not capped.
+    /// </summary>
+    internal const int DefaultMaxInboundRows = 16_384;
+
+    private readonly int maxInboundRows = DefaultMaxInboundRows;
+
+    private int inboundRows;
+
+    /// <summary>
+    /// Initialises an instance with a test-chosen inbound-row cap.
+    /// </summary>
+    /// <param name="maxInboundRows">The most inbound rows to retain; must be at least zero.</param>
+    internal ReplicationPeerStats(int maxInboundRows)
+        : this()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxInboundRows);
+        this.maxInboundRows = maxInboundRows;
+    }
+
+    /// <summary>The number of inbound rows currently retained.</summary>
+    internal int InboundRowCount => Volatile.Read(ref inboundRows);
+
+    /// <summary>
     /// Initialises a new instance and ensures the observable gauges declared
     /// on <see cref="LatticeReplicationMetrics"/> are registered on the
     /// shared meter. Gauge registration is process-wide and idempotent;
@@ -186,7 +214,10 @@ public partial class ReplicationPeerStats
     /// per-origin run of entries authored by the peer applied
     /// successfully on the local receiver). Resets the inbound
     /// consecutive-error counter to zero and stamps the inbound
-    /// last-contact timestamp.
+    /// last-contact timestamp. Inbound rows are bounded: once the
+    /// inbound-row cap is reached, a contact for a new
+    /// <c>(tree, originPeer)</c> pair is not recorded, while pairs already
+    /// held keep updating.
     /// </summary>
     public void RecordInboundSuccess(string tree, string originPeer) =>
         RecordSuccessCore(tree, originPeer, ReplicationContactDirection.Inbound);
@@ -194,7 +225,8 @@ public partial class ReplicationPeerStats
     /// <summary>
     /// Records a failed inbound apply attempt for entries authored by
     /// the named peer. Increments the inbound consecutive-error
-    /// counter; does not update the inbound last-contact timestamp.
+    /// counter; does not update the inbound last-contact timestamp. Bounded
+    /// like <see cref="RecordInboundSuccess(string, string)"/>.
     /// </summary>
     public void RecordInboundError(string tree, string originPeer) =>
         RecordErrorCore(tree, originPeer, ReplicationContactDirection.Inbound);
@@ -204,7 +236,11 @@ public partial class ReplicationPeerStats
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(peer);
 
-        var entry = state.GetOrAdd(new PeerKey(tree, peer, direction), static _ => new PeerState());
+        if (GetOrAddContactState(tree, peer, direction) is not { } entry)
+        {
+            return;
+        }
+
         lock (entry)
         {
             entry.ConsecutiveErrors = 0;
@@ -217,11 +253,52 @@ public partial class ReplicationPeerStats
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(peer);
 
-        var entry = state.GetOrAdd(new PeerKey(tree, peer, direction), static _ => new PeerState());
+        if (GetOrAddContactState(tree, peer, direction) is not { } entry)
+        {
+            return;
+        }
+
         lock (entry)
         {
             entry.ConsecutiveErrors++;
         }
+    }
+
+    /// <summary>
+    /// Returns the row for a contact, creating it when absent - except that a new inbound
+    /// row is refused once <see cref="DefaultMaxInboundRows"/> (or the test-chosen cap) is
+    /// reached, returning <see langword="null"/>. The cap is reserved before the row is
+    /// added, so concurrent recorders can never overshoot it. Rows are never removed, so a
+    /// lost add race always finds the winner's row. The steady state (row exists) is one
+    /// lookup with no allocation.
+    /// </summary>
+    private PeerState? GetOrAddContactState(string tree, string peer, ReplicationContactDirection direction)
+    {
+        var key = new PeerKey(tree, peer, direction);
+        if (state.TryGetValue(key, out var existing))
+        {
+            return existing;
+        }
+
+        if (direction != ReplicationContactDirection.Inbound)
+        {
+            return state.GetOrAdd(key, static _ => new PeerState());
+        }
+
+        if (Interlocked.Increment(ref inboundRows) > maxInboundRows)
+        {
+            Interlocked.Decrement(ref inboundRows);
+            return null;
+        }
+
+        var created = new PeerState();
+        if (state.TryAdd(key, created))
+        {
+            return created;
+        }
+
+        Interlocked.Decrement(ref inboundRows);
+        return state.TryGetValue(key, out existing) ? existing : null;
     }
 
     /// <summary>
