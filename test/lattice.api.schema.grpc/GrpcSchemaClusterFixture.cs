@@ -72,6 +72,7 @@ internal sealed class GrpcSchemaClusterFixture
         bool requireAuthorization = true)
     {
         var control = Control;
+        var complianceOperations = SiloServices.GetService<ILatticeSchemaComplianceOperations>();
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -82,6 +83,10 @@ internal sealed class GrpcSchemaClusterFixture
                     services.AddLogging();
                     services.AddRouting();
                     services.AddSingleton(control);
+                    if (complianceOperations is not null)
+                    {
+                        services.AddSingleton(complianceOperations);
+                    }
                     if (authorizer is not null)
                     {
                         services.AddSingleton(authorizer);

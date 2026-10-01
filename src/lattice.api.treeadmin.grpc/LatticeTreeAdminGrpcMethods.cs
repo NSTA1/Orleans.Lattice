@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
@@ -179,6 +180,18 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary durable-history retention set RPC method name.</summary>
     public const string SetHistoryRetentionMethodName = "SetHistoryRetention";
 
+    /// <summary>The unary accept-then-poll storage-usage refresh start RPC method name.</summary>
+    public const string StartStorageUsageRefreshMethodName = "StartStorageUsageRefresh";
+
+    /// <summary>The unary storage-usage refresh status RPC method name.</summary>
+    public const string GetStorageUsageRefreshStatusMethodName = "GetStorageUsageRefreshStatus";
+
+    /// <summary>The unary storage-usage refresh listing RPC method name.</summary>
+    public const string ListStorageUsageRefreshesMethodName = "ListStorageUsageRefreshes";
+
+    /// <summary>The unary storage-usage refresh cancellation RPC method name.</summary>
+    public const string CancelStorageUsageRefreshMethodName = "CancelStorageUsageRefresh";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -241,7 +254,13 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeTagReconcileReport> tagReconcileReportSerializer,
         Serializer<TreeAdminSetRetentionRequest> setRetentionRequestSerializer,
         Serializer<TreeHistoryRetention> historyRetentionSerializer,
-        Serializer<TreeCompactionTriggerResult> compactionTriggerResultSerializer)
+        Serializer<TreeCompactionTriggerResult> compactionTriggerResultSerializer,
+        Serializer<TreeAdminStorageUsageRefreshRequest> storageUsageRefreshRequestSerializer,
+        Serializer<LatticeOperationHandle> operationHandleSerializer,
+        Serializer<TreeAdminStorageUsageOperationRequest> storageUsageOperationRequestSerializer,
+        Serializer<TreeAdminStorageUsageOperationStatusResponse> storageUsageOperationStatusResponseSerializer,
+        Serializer<LatticeOperationListRequest> operationListRequestSerializer,
+        Serializer<LatticeOperationPage> operationPageSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -304,6 +323,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(setRetentionRequestSerializer);
         ArgumentNullException.ThrowIfNull(historyRetentionSerializer);
         ArgumentNullException.ThrowIfNull(compactionTriggerResultSerializer);
+        ArgumentNullException.ThrowIfNull(storageUsageRefreshRequestSerializer);
+        ArgumentNullException.ThrowIfNull(operationHandleSerializer);
+        ArgumentNullException.ThrowIfNull(storageUsageOperationRequestSerializer);
+        ArgumentNullException.ThrowIfNull(storageUsageOperationStatusResponseSerializer);
+        ArgumentNullException.ThrowIfNull(operationListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(operationPageSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -661,6 +686,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: SetHistoryRetentionMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(setRetentionRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(historyRetentionSerializer));
+
+        var storageUsageOperationRequestMarshaller = LatticeTreeAdminGrpcMarshallers.Create(storageUsageOperationRequestSerializer);
+        var storageUsageOperationStatusMarshaller = LatticeTreeAdminGrpcMarshallers.Create(storageUsageOperationStatusResponseSerializer);
+
+        StartStorageUsageRefresh = new Method<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartStorageUsageRefreshMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(storageUsageRefreshRequestSerializer),
+            LatticeTreeAdminGrpcMarshallers.Create(operationHandleSerializer));
+
+        GetStorageUsageRefreshStatus = new Method<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(
+            MethodType.Unary, ServiceName, GetStorageUsageRefreshStatusMethodName,
+            storageUsageOperationRequestMarshaller, storageUsageOperationStatusMarshaller);
+
+        ListStorageUsageRefreshes = new Method<LatticeOperationListRequest, LatticeOperationPage>(
+            MethodType.Unary, ServiceName, ListStorageUsageRefreshesMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(operationListRequestSerializer),
+            LatticeTreeAdminGrpcMarshallers.Create(operationPageSerializer));
+
+        CancelStorageUsageRefresh = new Method<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(
+            MethodType.Unary, ServiceName, CancelStorageUsageRefreshMethodName,
+            storageUsageOperationRequestMarshaller, storageUsageOperationStatusMarshaller);
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -816,6 +862,18 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>SetHistoryRetention</c> retention set RPC.</summary>
     public Method<TreeAdminSetRetentionRequest, TreeHistoryRetention> SetHistoryRetention { get; }
 
+    /// <summary>The unary <c>StartStorageUsageRefresh</c> accept-then-poll cluster-storage RPC.</summary>
+    public Method<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle> StartStorageUsageRefresh { get; }
+
+    /// <summary>The unary <c>GetStorageUsageRefreshStatus</c> RPC.</summary>
+    public Method<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse> GetStorageUsageRefreshStatus { get; }
+
+    /// <summary>The unary <c>ListStorageUsageRefreshes</c> RPC.</summary>
+    public Method<LatticeOperationListRequest, LatticeOperationPage> ListStorageUsageRefreshes { get; }
+
+    /// <summary>The unary <c>CancelStorageUsageRefresh</c> RPC.</summary>
+    public Method<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse> CancelStorageUsageRefresh { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -886,7 +944,13 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeTagReconcileReport>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminSetRetentionRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeHistoryRetention>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeCompactionTriggerResult>>());
+            serializerProvider.GetRequiredService<Serializer<TreeCompactionTriggerResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageRefreshRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationHandle>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageOperationRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageOperationStatusResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>());
     }
 }
 

@@ -32,7 +32,8 @@
     "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
     "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
     "docs/lattice.api.mcp.apps/README.md",
-    "src/lattice.api.mcp/Tools/Backup/McpBackupOperation.cs"
+    "src/lattice.api.mcp/Tools/Backup/McpBackupOperation.cs",
+    "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
   ],
   "in_process": {
     "interface": "ILatticeApiMcpToolGroup",
@@ -87,6 +88,160 @@
     }
   },
   "types": {
+    "McpLatticeOperation": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "State",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PhaseIndex",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "PhaseCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "CompletedUnits",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "TotalUnits",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "UnitName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "StartedAtUtc",
+          "type": "DateTimeOffset",
+          "required": false
+        },
+        {
+          "name": "FinishedAtUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "FailureReason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ResultReference",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Result",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        },
+        {
+          "name": "CancelRequested",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.mcp/Tools/Operations/McpLatticeOperation.cs#McpLatticeOperation"
+    },
+    "McpLatticeOperationHandle": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "Created",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "StatusTool",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.mcp/Tools/Operations/McpLatticeOperationHandle.cs#McpLatticeOperationHandle"
+    },
+    "McpLatticeOperationPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Operations",
+          "type": "IReadOnlyList<McpLatticeOperation>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.mcp/Tools/Operations/McpLatticeOperationPage.cs#McpLatticeOperationPage"
+    },
+    "McpLatticeOperationResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Operation",
+          "type": "McpLatticeOperation?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.mcp/Tools/Operations/McpLatticeOperationResult.cs#McpLatticeOperationResult"
+    },
     "McpToolGroup": {
       "kind": "enum",
       "values": [
@@ -8074,6 +8229,253 @@
       ]
     },
     {
+      "id": "lattice_treeadmin_schema_compliance_scan_cancel",
+      "in_process": "LatticeOperationToolInvocations.CancelAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#cancel-compliance-scan",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id to cancel."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.compliance-scan kind, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_compliance_scan_list",
+      "in_process": "LatticeOperationToolInvocations.ListAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#list-compliance-scans",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Maximum operations per page; <= 0 uses the server default."
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Continuation cursor from a previous page."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationPage",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.compliance-scan kind, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_compliance_scan_start",
+      "in_process": "TreeAdminOperationTools.StartComplianceScanAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#start-compliance-scan",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The tree to scan."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#StartComplianceScanAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#ILatticeSchemaComplianceOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_compliance_scan_status",
+      "in_process": "LatticeOperationToolInvocations.GetStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#get-compliance-scan-status",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id from a start tool handle."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.compliance-scan kind, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
       "id": "lattice_treeadmin_schema_count_dead_letters",
       "in_process": "TreeAdminSchemaToolHandlers.CountDeadLettersAsync",
       "grpc_method": null,
@@ -8975,6 +9377,247 @@
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminDiagnosticsToolHandlers.cs#TreeAdminDiagnosticsToolHandlers.GetStorageUsageAsync",
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_storage_usage_refresh_cancel",
+      "in_process": "LatticeOperationToolInvocations.CancelAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/treeadmin.json#cancel-storage-usage-refresh",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id to cancel."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_storage_usage_refresh_list",
+      "in_process": "LatticeOperationToolInvocations.ListAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/treeadmin.json#list-storage-usage-refreshes",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Maximum operations per page; <= 0 uses the server default."
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Continuation cursor from a previous page."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationPage",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_storage_usage_refresh_start",
+      "in_process": "TreeAdminOperationTools.StartStorageRefreshAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/treeadmin.json#start-storage-usage-refresh",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_storage_usage_refresh_status",
+      "in_process": "LatticeOperationToolInvocations.GetStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/treeadmin.json#get-storage-usage-refresh-status",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id from a start tool handle."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
       ]
     },
     {
