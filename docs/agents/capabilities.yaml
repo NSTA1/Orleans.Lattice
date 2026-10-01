@@ -100,6 +100,104 @@ capabilities:
       - "docs/lattice.api.mcp.repocontext/backlog.md"
       - "docs/lattice.api.mcp.repocontext/tools.md"
       - "samples/AgentBacklog/template/backlog-protocol.md"
+  - id: app-bridge-data-access
+    name: "App bridge data access"
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+    concepts:
+      - app-bridge
+      - app-role-grant-evaluator
+      - app-owned-tree
+    guarantees:
+      - statement: "Each bridge call validates the target, resolves the caller, applies rate limiting, and then authorizes the enabled install revision."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+      - statement: "A bridge operation must be covered by both the consented bridge grants and the installed manifest's requested bridge grants."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+      - statement: "The bridge resolves app-local tree names to effective tree ids server-side."
+        source: "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan.TryGetTree"
+      - statement: "The bridge checks app-owned grants before the core data path runs under the caller's own identity."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+      - statement: "Scan requires RangeRead rather than Read."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.ScanAsync"
+    non_guarantees:
+      - statement: "The bridge never accepts a physical tree id from the caller."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
+      - statement: "A caller's non-app-owned rules do not make the caller hold an app role."
+        source: "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan"
+      - statement: "A target whose install revision no longer matches the enabled install is denied."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
+    unsafe_sequences:
+      - sequence:
+          - "launch an app frame at one install revision"
+          - "upgrade, disable or uninstall the app"
+          - "continue sending bridge requests with the stale revision"
+        hazard: "The bridge denies the stale target because the current install revision no longer matches."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+      - sequence:
+          - "grant an operator broad Write rights outside the app-owned rules"
+          - "expect those rights to allow writes through a viewer app role"
+        hazard: "The bridge checks only app-owned grants before the data path, so broad operator rights do not widen the app UI."
+        source: "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan"
+    concurrency_rules:
+      - statement: "The bridge rate-limits each caller, tenant and app partition with a fixed window."
+        source: "src/lattice.api.apps/AppBridgeRateLimiter.cs#AppBridgeRateLimiter.TryAcquire"
+      - statement: "The rate-limiter refuses a new partition when the bounded partition table remains full after pruning."
+        source: "src/lattice.api.apps/AppBridgeRateLimiter.cs#AppBridgeRateLimiter.TryAcquire"
+      - statement: "Each install plan is derived once per compiled install and therefore once per registry record revision."
+        source: "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
+      - "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      - "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan"
+  - id: app-catalog-and-sources
+    name: "App catalog and sources"
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+      - "Orleans.Lattice.Apps"
+    concepts:
+      - app-catalog
+      - app-catalog-source
+      - app-source
+    guarantees:
+      - statement: "The catalog authorizes AppInstall before it touches any source or registry data."
+        source: "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+      - statement: "ListAvailableAsync merges selected source pages deterministically by slug and then source key."
+        source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.ListAvailableAsync"
+      - statement: "An updates filter keeps rows whose source newest version has higher semantic-version precedence than the installed version from the same source."
+        source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.ToSummaryAsync"
+      - statement: "AppSourceSet resolves without a source key only when exactly one source offers the slug."
+        source: "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet.ResolveAsync"
+      - statement: "GetIconAsync serves an icon only after AppsAssetReader verifies the manifest-pinned digest."
+        source: "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog.GetIconAsync"
+    non_guarantees:
+      - statement: "Describing an app from a source does not activate app code."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog"
+      - statement: "A catalog capability probe is advisory and every actual operation authorizes independently."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog.GetCapabilitiesAsync"
+      - statement: "Build metadata is ignored when comparing source versions by precedence."
+        source: "src/lattice.api.apps/AppVersionPrecedence.cs#AppVersionPrecedence.Compare"
+    unsafe_sequences:
+      - sequence:
+          - "register two catalog sources with the same key"
+          - "try to resolve an app from that key"
+        hazard: "The source set records a duplicate-source composition error and reports SourceMisconfigured."
+        source: "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet"
+      - sequence:
+          - "serve bytes whose digest differs from the manifest digest"
+          - "expect the catalog or workspace to return the asset"
+        hazard: "AppsAssetReader logs the mismatch and returns null instead of bytes."
+        source: "src/lattice.api.apps/AppsAssetReader.cs#AppsAssetReader.OpenAsync"
+    concurrency_rules:
+      - statement: "ListAvailableAsync fetches initial source pages in batches of at most four."
+        source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.FetchInitialAsync"
+      - statement: "ListAvailableAsync fetches at most sixty-four source pages in one call."
+        source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.MaxFetchesPerCall"
+      - statement: "A source that throws during listing is treated as exhausted for that listing."
+        source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.FetchAsync"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog"
+      - "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource"
+      - "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet"
   - id: app-change-feed-subscriptions
     name: "App change-feed subscriptions"
     packages:
@@ -207,6 +305,86 @@ capabilities:
       - "src/lattice.api.mcp.apps/AppMcpToolActivation.cs"
       - "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
       - "docs/lattice.api.mcp.apps/README.md"
+  - id: app-role-rebinding
+    name: "App role re-binding"
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+      - "Orleans.Lattice.Apps"
+    concepts:
+      - app-role-binding
+      - app-role-grant-evaluator
+      - app-role-compiler
+    guarantees:
+      - statement: "UpdateRoleBindingsAsync replaces every role-to-group binding of the installed app."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings.UpdateRoleBindingsAsync"
+      - statement: "Each replacement is pinned to the installed version named by the request."
+        source: "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+      - statement: "The update keeps the installed identity, provenance, ceiling, bridge consent and lifecycle state."
+        source: "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+      - statement: "An enabled app is re-applied after bindings are recorded."
+        source: "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+      - statement: "The role gate treats a binding as the only way to hold an app role and lets the access gate only remove it."
+        source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
+    non_guarantees:
+      - statement: "Role re-binding does not enable a disabled or merely installed app."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings.UpdateRoleBindingsAsync"
+      - statement: "Role re-binding never binds a role directly to a user."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings"
+      - statement: "Rights granted through any other authorization rule never add an app role."
+        source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
+    unsafe_sequences:
+      - sequence:
+          - "submit a replacement binding list that omits a role"
+          - "expect the previous group for that role to remain bound"
+        hazard: "The update is a full replacement, so the omitted role is bound to no group."
+        source: "docs/lattice.api.apps/README.md"
+    concurrency_rules:
+      - statement: "The registry update carries the installed version as ExpectedVersion and the just-read record revision as ExpectedRevision."
+        source: "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
+      - statement: "A re-binding writes a new registry revision, so role evaluation sees it on the next evaluation."
+        source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings"
+      - "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl"
+      - "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate"
+  - id: app-workspace-facade
+    name: "App workspace facade"
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+    concepts:
+      - app-workspace
+      - app-role-grant-evaluator
+      - app-owned-tree
+    guarantees:
+      - statement: "ListMyAppsAsync returns enabled installs in the active tenant where the caller holds at least one role."
+        source: "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.ListMyAppsAsync"
+      - statement: "A denied caller receives the same result as an app that does not exist."
+        source: "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+      - statement: "Workspace assets are opened only from the installed version's recorded source."
+        source: "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.OpenAsync"
+      - statement: "The workspace descriptor includes only roles the caller holds."
+        source: "src/lattice.api.apps/AppsWorkspaceMapping.cs#AppsWorkspaceMapping.ToDescriptor"
+    non_guarantees:
+      - statement: "The workspace does not expose the capability ceiling."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace"
+      - statement: "The workspace does not expose role-to-group bindings."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace"
+      - statement: "The workspace does not expose physical tree ids."
+        source: "src/lattice.api.apps/AppsWorkspaceMapping.cs#AppsWorkspaceMapping"
+    unsafe_sequences:
+      - sequence:
+          - "launch an app UI from the manifest bridge request alone"
+          - "skip WorkspaceAppDescriptor.Ui.Bridge"
+        hazard: "The frame can be offered an operation the operator did not consent to."
+        source: "docs/lattice.api.apps/README.md"
+    concurrency_rules:
+      - statement: "Workspace evaluation reads the current compiled registry snapshot before testing roles."
+        source: "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.ListMyAppsAsync"
+      - statement: "A re-binding that writes a new install revision is visible on the next workspace evaluation."
+        source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace"
+      - "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
   - id: atomic-action
     name: "Atomic action"
     packages:
@@ -634,6 +812,8 @@ capabilities:
         source: "src/lattice.replication/SnapshotEntry.cs#SnapshotEntry.ExpiresAtTicks"
       - statement: "Push, ExchangeContentManifest and GetPeerHighWaterMark refuse with PermissionDenied when the transport-stamped origin is missing or differs from the body-declared OriginClusterId."
         source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
+      - statement: "With BindCredentialToOriginCluster at its default true, a peer credential must equal the outbound secret configured for the stamped origin before receiver-side origin checks run."
+        source: "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs#LatticeReplicationSecurityOptions.BindCredentialToOriginCluster"
     non_guarantees:
       - statement: "A host without the replication package runs the core library alone."
         source: "PACKAGES.md"
@@ -879,6 +1059,54 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice/events.md"
+  - id: explorer-app-frame-runtime
+    name: "Explorer app frame runtime"
+    packages:
+      - "Orleans.Lattice.Explorer.UI"
+      - "Orleans.Lattice.Explorer.AppKit"
+    concepts:
+      - explorer
+      - explorer-app-frame
+      - explorer-appkit-protocol
+    guarantees:
+      - statement: "The Explorer hosts app UIs in iframe elements with sandbox allow-scripts and no other sandbox token."
+        source: "src/lattice.explorer/UI/AppFrame/AppFrame.razor.cs#AppFrame"
+      - statement: "A launch is authorized through ILatticeAppWorkspace before any bundle cache hit can be used."
+        source: "src/lattice.explorer/UI/AppFrame/AppFrameBundleLoader.cs#AppFrameBundleLoader.AuthorizeAsync"
+      - statement: "The bundle loader verifies each fetched asset digest and the bundle digest before delivery to the frame."
+        source: "src/lattice.explorer/UI/AppFrame/AppFrameBundleLoader.cs#AppFrameBundleLoader.LoadAsync"
+      - statement: "The broker never forwards a physical tree id from the frame."
+        source: "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker.HandleAsync"
+      - statement: "No credential enters the frame."
+        source: "docs/lattice.explorer/lattice-apps.md"
+    non_guarantees:
+      - statement: "The sandbox cannot guarantee zero egress from a frame."
+        source: "docs/lattice.explorer/lattice-apps.md"
+      - statement: "The AppKit protocol has no lifecycle, consent, authentication, cross-app, fetch or frame-sizing messages."
+        source: "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol"
+    unsafe_sequences:
+      - sequence:
+          - "move app bundle delivery to an HTTP route served to the frame"
+          - "let the frame fetch its own assets"
+        hazard: "The frame would gain a network path outside the MessageChannel bridge and the host-side bundle gate."
+        source: "docs/lattice.explorer/lattice-apps.md"
+      - sequence:
+          - "change the active tenant after opening an app frame"
+          - "let the frame continue using its broker session"
+        hazard: "The broker closes the session and revokes the frame instead of relaying into another tenant."
+        source: "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker.RelayAsync"
+    concurrency_rules:
+      - statement: "The app bridge broker is scoped per circuit."
+        source: "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker"
+      - statement: "The frame handshake must complete within fifteen seconds."
+        source: "src/lattice.explorer/UI/AppFrame/AppFrame.razor.cs#AppFrame.HandshakeTimeout"
+      - statement: "The web head raises the SignalR receive limit to at least 160 KiB for frame interop messages."
+        source: "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
+    sources:
+      - "docs/lattice.explorer/lattice-apps.md"
+      - "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol"
+      - "src/lattice.explorer/UI/AppFrame/AppFrame.razor.cs#AppFrame"
+      - "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker"
   - id: explorer-console
     name: "Explorer console"
     packages:
@@ -1483,6 +1711,8 @@ capabilities:
         source: "docs/lattice.api.mcp/README.md"
       - statement: "Permission-scoped discovery computes the session tool list from the authenticated caller's effective permissions."
         source: "docs/lattice.api.mcp/README.md"
+      - statement: "A transient backend fault while resolving MCP facade permissions aborts discovery with a retryable error instead of advertising a falsely narrow tool set."
+        source: "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ResolveAsync"
       - statement: "Every MCP tool is a thin adapter over the matching Orleans.Lattice.Api facade."
         source: "docs/lattice.api.mcp/README.md"
       - statement: "The credential bridge stamps the authenticated MCP session identity onto the ambient LatticeCredentialContext."
@@ -1495,10 +1725,10 @@ capabilities:
         source: "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
       - statement: "With tenancy active, region discovery scopes to an asserted tenant only after ITenantContextResolver validates it; an unvalidated assertion yields the current region alone with no tenantScope annotation."
         source: "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
-      - statement: "When the permission resolver carries operation detail, a mutating data tool is offered only to a caller holding Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad, and a tool withheld at tools/list is unreachable at tools/call."
-        source: "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.RequiredOperationsFor"
-      - statement: "A caller mistake (a missing, invalid or unknown argument, refused content, or an unknown record) is answered as an MCP error result and counted rather than thrown; an authorization denial is never classified as a client error."
-        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
+      - statement: "A built-in MCP tool is offered only when the granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName), and a tool withheld at tools/list is unreachable at tools/call."
+        source: "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.AddPermittedGroupToolsAsync"
+      - statement: "A caller mistake (a missing, invalid or unknown argument, refused content, or an unknown record) is answered as an MCP error result and counted rather than thrown; the echoed message is sanitized and length-capped, and an authorization denial is never classified as a client error."
+        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors.SanitizeForEcho"
     non_guarantees:
       - statement: "Discovery is coarse at the facade group level, so a listed group can still contain per-call verbs the facade access gate refuses."
         source: "docs/lattice.api.mcp/README.md"
@@ -1740,8 +1970,8 @@ capabilities:
         source: "docs/lattice/online-reshard.md"
       - statement: "Resharding changes key-space partitioning and write-path fan-out, not the maximum amount of data a shard can hold."
         source: "docs/lattice/online-reshard.md"
-      - statement: "A target below the current distinct-shard count shrinks the tree by online shard consolidation, and the shrink completes only once every fold it started has released its retired shard's storage."
-        source: "docs/lattice/online-reshard.md"
+      - statement: "A target below the current distinct-shard count shrinks the tree by online shard consolidation; the shrink waits for every fold it started to finish, but a retired donor releases storage only when retirement is not blocked by the live map, another migration, or resize state."
+        source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.RetireDonorAsync"
       - statement: "A retired shard keeps a routing tombstone, so a router holding a pre-shrink shard map is redirected rather than served."
         source: "docs/lattice/online-reshard.md"
       - statement: "An observably empty tree can be re-pinned in place to any in-range shard count without a coordinator."
@@ -1786,6 +2016,12 @@ capabilities:
         source: "docs/lattice/online-reshard.md"
       - statement: "From a split swap phase onward, the source emits StaleShardRoutingException and the tree router retries against the new owner."
         source: "docs/lattice/online-reshard.md"
+      - statement: "A shrink fold defers its finalise step, which releases the donor's storage, while a snapshot of or merge into the same tree is in flight; it does not wait for a resize."
+        source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.FinaliseAsync"
+      - statement: "A shrink fold refuses a donor and survivor pair while either shard is the target of any in-flight migration, and retries once that migration has finished."
+        source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.ThrowIfMigrationTargetAsync"
+      - statement: "A shard retired by an online consolidation refuses to become a split source with InvalidOperationException, so a split planned against an older map is abandoned rather than retried."
+        source: "src/lattice/BPlusTree/IShardRootGrain.cs#IShardRootGrain.BeginSplitAsync"
     sources:
       - "FEATURES.md"
       - "docs/lattice/online-reshard.md"
@@ -2140,6 +2376,47 @@ capabilities:
       - "FEATURES.md"
       - "reference-architecture.md"
       - "reference-architecture/README.md"
+  - id: replication-peer-status-reporting
+    name: "Replication peer status reporting"
+    packages:
+      - "Orleans.Lattice.Api.Replication"
+      - "Orleans.Lattice.Api.Replication.Grpc"
+    concepts:
+      - replication-peer-status
+      - replication-peer
+      - api-replication-facade
+    guarantees:
+      - statement: "GetPeerStatusAsync reports entries ordered by tree id, peer region id and direction."
+        source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus.GetPeerStatusAsync"
+      - statement: "The report reflects the whole local cluster through in-memory telemetry read on demand."
+        source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+      - statement: "A row is reported only for a tree the caller holds Replication capability over."
+        source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+      - statement: "A continuation token is issued only from a row returned to the caller."
+        source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+      - statement: "The gRPC status service maps GetPeerStatus to the same replication API authorization interceptor."
+        source: "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor.DescribeCall"
+    non_guarantees:
+      - statement: "The report is a point-in-time observation and not a durable record."
+        source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+      - statement: "The report carries no cursor position, pending batch count or error class."
+        source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+      - statement: "Peer status does not run on the shipping or apply path."
+        source: "docs/lattice.api.replication/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "filter peer status to a tree the caller may not manage"
+          - "treat the empty page as proof that the tree has no replication links"
+        hazard: "The facade returns an empty page for an unauthorized tree filter without reading statistics."
+        source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+    concurrency_rules:
+      - statement: "A page can hold fewer rows than the requested page size and still carry a continuation."
+        source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus.GetPeerStatusAsync"
+      - statement: "When the same link appears on more than one silo, the facade keeps the most recent contact whole."
+        source: "docs/lattice.api.replication/README.md"
+    sources:
+      - "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+      - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
   - id: repo-context-mcp
     name: "Repo-context MCP"
     packages:
@@ -3190,6 +3467,8 @@ capabilities:
         source: "docs/lattice.vector/architecture.md"
       - statement: "A checkpoint after vector replacement or removal re-flushes only chunks whose content hash differs from the stored chunk."
         source: "src/lattice.vector/Persistence/DurableVectorIndex.Flush.cs"
+      - statement: "RemoveAsync and ClearAsync discard buffered key-map records so FlushPendingAsync cannot resurrect removed mappings."
+        source: "src/lattice.vector/Persistence/VectorKeyDictionary.cs#VectorKeyDictionary"
     sources:
       - "FEATURES.md"
       - "docs/lattice.vector/README.md"
@@ -3436,6 +3715,8 @@ capabilities:
         source: "docs/lattice.storage.azuretable/README.md"
       - statement: "FileWalStorageProvider stores one wal.log per tree and shard and recovers by discarding torn or uncommitted tails."
         source: "docs/lattice.storage.file/architecture.md"
+      - statement: "File WAL rejects a batch whose first offset is at or below the trim watermark, because recovery discards offsets through the watermark."
+        source: "src/lattice.storage.file/FileWalShard.cs#FileWalShard.RejectOverlap"
     non_guarantees:
       - statement: "The in-memory WAL provider is process-local and lost on silo restart."
         source: "docs/lattice/wal-storage-providers.md"

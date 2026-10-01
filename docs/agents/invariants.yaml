@@ -1,5 +1,58 @@
 schema: lattice.agents/invariants/v1
 invariants:
+  - id: app-bridge-authority-is-intersection
+    name: "App bridge authority is intersected"
+    description: "An app bridge data operation succeeds only when the installed app grants it, the operator consented to it, the caller holds the app role by binding, and the caller's own data-plane identity is authorized."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Apps"
+      components:
+        - "LatticeAppBridge"
+        - "AppBridgeInstallPlan"
+        - "AppRoleGrantEvaluator"
+    violation_modes:
+      - "A caller's broad non-app-owned rule widens what the app UI can do."
+      - "A manifest bridge request is honoured without recorded bridge consent."
+      - "A bridge call bypasses the core data path's ordinary authorization."
+    detection_signals:
+      - type: exception
+        name: "AppBridgeException"
+        source: "src/lattice.api.abstractions/Apps/Model/AppBridgeException.cs#AppBridgeException"
+      - type: source
+        name: "LatticeAppBridge.AuthorizeAsync"
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+    remediation:
+      - step: "Keep app UI data requests behind ILatticeAppBridge rather than calling ILattice directly from the frame broker."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      - step: "Build app-owned grants from the installed record revision and its consented ceiling."
+        source: "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan.Build"
+    sources:
+      - "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      - "src/lattice.api.apps/AppBridgeInstallPlan.cs#AppBridgeInstallPlan"
+  - id: app-catalog-sources-cannot-impersonate
+    name: "App sources cannot impersonate"
+    description: "A catalog source result whose provenance source differs from the source descriptor key is refused as a source misconfiguration."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+      components:
+        - "AppSourceSet"
+        - "IAppCatalogSource"
+    violation_modes:
+      - "A source returns a manifest while vouching for another source key."
+      - "A duplicate source key is treated as a usable source choice."
+    detection_signals:
+      - type: source
+        name: "AppSourceSet.Check"
+        source: "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet.Check"
+    remediation:
+      - step: "Give every registered catalog source a unique descriptor key."
+        source: "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet"
+      - step: "Set AppProvenance.Source to the answering source descriptor key."
+        source: "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource"
+    sources:
+      - "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet"
+      - "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource"
   - id: app-ceiling-bounds-compiled-grants
     name: "App ceiling bounds compiled grants"
     description: "Every app-owned authorization rule is inside the install record's version-pinned ceiling; excess operations or uncovered exception scopes fail activation and emit no rules."
@@ -66,6 +119,37 @@ invariants:
       - "src/lattice.apps/Registry/AppRegistry.cs"
       - "src/lattice.api.apps/LatticeAppsControl.Install.cs"
       - "test/lattice.api.apps/LatticeAppsControlUpgradeRaceTests.cs"
+  - id: app-frame-credential-free
+    name: "App frames are credential free"
+    description: "A Lattice App frame receives verified bundle bytes and consented bridge results but never receives the Explorer credential."
+    scope:
+      packages:
+        - "Orleans.Lattice.Explorer.UI"
+        - "Orleans.Lattice.Explorer.AppKit"
+      components:
+        - "AppFrame"
+        - "AppBridgeBroker"
+        - "AppKitProtocol"
+    violation_modes:
+      - "A credential is included in a frame message."
+      - "A frame is allowed to fetch its own bundle over HTTP."
+      - "A broker relays a data operation after the active tenant changes."
+    detection_signals:
+      - type: source
+        name: "AppFrameBundleLoader.LoadAsync"
+        source: "src/lattice.explorer/UI/AppFrame/AppFrameBundleLoader.cs#AppFrameBundleLoader.LoadAsync"
+      - type: source
+        name: "AppBridgeBroker.RelayAsync"
+        source: "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker.RelayAsync"
+    remediation:
+      - step: "Fetch app UI assets through ILatticeAppWorkspace on the circuit credential and deliver bytes over the frame port."
+        source: "src/lattice.explorer/UI/AppFrame/AppFrameBundleLoader.cs#AppFrameBundleLoader.LoadAsync"
+      - step: "Close the broker session when the circuit's asserted tenant differs from the launch tenant."
+        source: "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker.RelayAsync"
+    sources:
+      - "docs/lattice.explorer/lattice-apps.md"
+      - "src/lattice.explorer/UI/AppFrame/AppFrameBundleLoader.cs#AppFrameBundleLoader"
+      - "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker"
   - id: app-lifecycle-retains-data
     name: "App lifecycle retains data"
     description: "Disable removes app authority while keeping trees and data; uninstall removes app authority, skips adopted trees and soft-deletes structural trees without purging them itself, and the core deferred purge removes those trees after their soft-delete window unless the app is installed and enabled again first."
@@ -189,6 +273,37 @@ invariants:
       - "src/lattice.api.apps/AppsControlExceptionSanitizer.cs"
       - "src/lattice.api.apps/AppsControlMapping.cs"
       - "test/lattice.api.apps/LatticeAppsControlSanitizationTests.cs"
+  - id: app-role-binding-is-only-grant
+    name: "App role binding is the only grant"
+    description: "A caller holds an app role only through a bound membership group, and an access-gate deny can remove that role but cannot add one."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+        - "Orleans.Lattice.Api.Apps"
+      components:
+        - "AppRoleGate"
+        - "AppRoleGrantEvaluator"
+        - "LatticeAppWorkspace"
+        - "LatticeAppBridge"
+    violation_modes:
+      - "A caller's non-app-owned allow rule makes the caller hold an app role."
+      - "The workspace reports a role that the bridge would refuse for the same caller."
+      - "An access-gate allow adds a role before a binding holds."
+    detection_signals:
+      - type: source
+        name: "AppRoleGate.IsHeldAsync"
+        source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
+      - type: source
+        name: "AppRoleGrantEvaluator.EvaluateAsync"
+        source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator.EvaluateAsync"
+    remediation:
+      - step: "Use AppRoleGrantEvaluator for workspace, MCP and bridge-facing role decisions."
+        source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
+      - step: "Ask the access gate only after AppRoleGate.IsHeld returns true."
+        source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
+    sources:
+      - "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate"
+      - "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
   - id: app-tree-single-owner
     name: "App trees have a single owning install"
     description: "Every structural and adopted tree an app uses belongs to exactly one install at a time, as recorded in the sys-app-trees ownership ledger, so one app's data is never readable or writable under another app's name."
@@ -635,7 +750,6 @@ invariants:
       packages:
         - "Orleans.Lattice.Explorer.Core"
         - "Orleans.Lattice.Explorer.Web"
-        - "Orleans.Lattice.Explorer.WebHost"
         - "Orleans.Lattice.Explorer.Entra"
         - "Orleans.Lattice.Explorer.Entra.Web"
       components:
@@ -665,9 +779,9 @@ invariants:
       - step: "Emit the Explorer security response headers through middleware on the Explorer branch."
         source: ".github/instructions/security.instructions.md"
       - step: "Revoke the presented cookie value in-process on every ClearAsync and refuse a revoked value in GetAsync, whether or not the delete header could be sent."
+        source: "src/lattice.explorer/WebHosting/CookieCredentialStore.cs#CookieCredentialStore"
       - step: "Bind each persisted cookie credential to the endpoint it was minted for and refuse it when the configured endpoint cannot be resolved or differs."
         source: "src/lattice.explorer/WebHosting/CookieCredentialStore.cs#CookieCredentialStore.GetAsync"
-        source: "src/lattice.explorer/WebHosting/CookieCredentialStore.cs#CookieCredentialStore"
     sources:
       - ".github/instructions/security.instructions.md"
       - "src/lattice.explorer/WebHosting/CookieCredentialStore.cs"
@@ -1054,6 +1168,34 @@ invariants:
         source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
     sources:
       - "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs"
+  - id: replication-peer-status-hides-unauthorized-trees
+    name: "Replication peer status hides unauthorized trees"
+    description: "Replication peer status reports rows only for trees the caller may manage through the Replication capability."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Replication"
+      components:
+        - "LatticeReplicationStatus"
+        - "ReplicationAccessAuthorizer"
+    violation_modes:
+      - "An unauthorized tree appears in the peer-status report."
+      - "An unauthorized tree filter discloses that the tree exists."
+      - "A continuation token is issued from a skipped unauthorized row."
+    detection_signals:
+      - type: source
+        name: "LatticeReplicationStatus.GetPeerStatusAsync"
+        source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+      - type: source
+        name: "ReplicationAccessAuthorizer.IsAuthorizedAsync"
+        source: "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer.IsAuthorizedAsync"
+    remediation:
+      - step: "Filter every status row through ReplicationAccessAuthorizer before returning it."
+        source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.IsVisibleAsync"
+      - step: "Return an empty page for an unauthorized tree filter before reading telemetry."
+        source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+    sources:
+      - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
+      - "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer"
   - id: replication-pinned-causal-floor
     name: "Replication pinned causal floor"
     description: "Steady-state receiver dedupe drops only entries at or below a pinned snapshot floor and not entries below the per-origin high-water mark."
@@ -1666,7 +1808,7 @@ invariants:
       - "Leaf grain state is treated as a fallback copy of committed values."
       - "Replay applies records outside the leaf's current ownership filter."
       - "A leaf replays only a surviving suffix after falling off the log."
-      - "A checkpoint flush failure is treated as a durability failure."
+      - "A failed projection-checkpoint persist is advertised as a durable WAL trim floor."
     detection_signals:
       - type: exception
         name: "LeafProjectionStaleException"
@@ -1680,6 +1822,8 @@ invariants:
     remediation:
       - step: "Replay retained WAL tail records from the persisted projection checkpoint."
         source: "docs/lattice/wal.md"
+      - step: "Rollback checkpoint fields and restore pending advances when checkpoint PersistAsync throws so the failed advance retries rather than publishing a false durable pin."
+        source: "src/lattice/BPlusTree/Grains/BPlusLeafGrain.Projection.cs#BPlusLeafGrain.RollbackCheckpointCommit"
       - step: "Use the WAL key filter and the leaf apply check together during replay."
         source: "docs/lattice/wal.md"
       - step: "Refuse activation with LeafProjectionStaleException when no snapshot covers a trimmed WAL gap."

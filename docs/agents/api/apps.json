@@ -8,22 +8,44 @@
     "Orleans.Lattice.Apps"
   ],
   "sources": [
+    "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge",
+    "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog",
+    "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings",
+    "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace",
     "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl",
-    "src/lattice.api.apps/LatticeAppsControl.cs#LatticeAppsControl",
-    "src/lattice.api.apps/LatticeAppsControl.Install.cs#InstallAsync",
-    "src/lattice.api.apps/LatticeAppsControl.Reads.cs#ListAsync",
-    "src/lattice.api.apps/AppsControlMapping.cs#AppsControlMapping",
+    "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#AppBridgeGrpcStatus",
+    "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcMethods.cs#LatticeAppBridgeGrpcMethods",
+    "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcService.cs#LatticeAppBridgeGrpcService",
+    "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcMethods.cs#LatticeAppCatalogGrpcMethods",
+    "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+    "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcMethods.cs#LatticeAppWorkspaceGrpcMethods",
+    "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcService.cs#LatticeAppWorkspaceGrpcService",
     "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods",
     "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#LatticeAppsGrpcService",
-    "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
+    "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor",
+    "src/lattice.api.apps.grpc/Security/LatticeAppsApiOperation.cs#LatticeAppsApiOperation",
+    "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits",
+    "src/lattice.api.apps/AppBridgeRateLimiter.cs#AppBridgeRateLimiter",
+    "src/lattice.api.apps/AppsControlMapping.cs#AppsControlMapping",
+    "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge",
+    "src/lattice.api.apps/LatticeAppBridgeApiServiceCollectionExtensions.cs#AddLatticeAppBridgeApi",
+    "src/lattice.api.apps/LatticeAppBridgeOptions.cs#LatticeAppBridgeOptions",
+    "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync",
+    "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog",
+    "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace",
+    "src/lattice.api.apps/LatticeAppsApiServiceCollectionExtensions.cs#AddLatticeAppsApi",
+    "src/lattice.api.apps/LatticeAppsControl.Install.cs#InstallAsync",
+    "src/lattice.api.apps/LatticeAppsControl.Reads.cs#ListAsync",
+    "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#UpdateRoleBindingsAsync",
+    "src/lattice.api.apps/LatticeAppsControl.cs#LatticeAppsControl"
   ],
   "in_process": {
-    "interface": "ILatticeAppsControl",
-    "registration": "AddLatticeAppsApi",
+    "interface": "ILatticeAppsControl; ILatticeAppCatalog; ILatticeAppWorkspace; ILatticeAppBridge; ILatticeAppRoleBindings",
+    "registration": "AddLatticeAppsApi registers the app-control, catalogue, workspace and role-binding facades; AddLatticeAppBridgeApi adds the bridge facade.",
     "source": "src/lattice.api.apps/LatticeAppsApiServiceCollectionExtensions.cs#AddLatticeAppsApi"
   },
   "grpc": {
-    "service": "orleans.lattice.api.apps",
+    "service": "orleans.lattice.api.apps; orleans.lattice.api.apps.catalog; orleans.lattice.api.apps.workspace; orleans.lattice.api.apps.bridge",
     "methods_source": "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods",
     "marshalling": "LatticeAppsGrpcMarshallers.Create uses Orleans Serializer<T> for gRPC payloads and clears pooled buffers after deserializing multi-segment payloads.",
     "metadata": [
@@ -41,11 +63,87 @@
     "auth": {
       "interceptor": "LatticeAppsApiGrpcAuthInterceptor",
       "authorizer": "ILatticeAppsApiAuthorizer",
-      "decision": "RequireAuthorization defaults to true; GetAuthScheme is exempt, unknown or mismatched operations deny by default, and the facade still enforces AppInstall through the access gate.",
+      "decision": "RequireAuthorization defaults to true; GetAuthScheme is exempt, app-control, catalogue, workspace and bridge methods are classified by service, method and request type, unknown or mismatched operations deny by default, and the facades still enforce their independent access gates.",
       "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
     }
   },
   "types": {
+    "AppBridgeException": {
+      "kind": "exception",
+      "fields": [
+        {
+          "name": "Failure",
+          "type": "AppBridgeFailure",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppBridgeException.cs#AppBridgeException"
+    },
+    "AppBridgeFailure": {
+      "kind": "enum",
+      "values": [
+        "Denied",
+        "NotFound",
+        "Invalid",
+        "TooLarge",
+        "Conflict",
+        "Unavailable"
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppBridgeFailure.cs#AppBridgeFailure"
+    },
+    "AppBridgePage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "ImmutableArray<AppBridgeValue>",
+          "required": false
+        },
+        {
+          "name": "Continuation",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppBridgePage.cs#AppBridgePage"
+    },
+    "AppBridgeTarget": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "AppSlug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "InstallRevision",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "LogicalTree",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppBridgeTarget.cs#AppBridgeTarget"
+    },
+    "AppBridgeValue": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Value",
+          "type": "ReadOnlyMemory<byte>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppBridgeValue.cs#AppBridgeValue"
+    },
     "AppCapabilityCeilingDescriptor": {
       "kind": "record",
       "fields": [
@@ -90,6 +188,11 @@
           "name": "Ceiling",
           "type": "AppCapabilityCeilingDescriptor",
           "required": true
+        },
+        {
+          "name": "BridgeGrants",
+          "type": "ImmutableArray<AppUiBridgeGrantDescriptor>?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppConsentReport.cs#AppConsentReport"
@@ -111,6 +214,11 @@
           "name": "Ceiling",
           "type": "AppCapabilityCeilingDescriptor",
           "required": true
+        },
+        {
+          "name": "BridgeGrants",
+          "type": "ImmutableArray<AppUiBridgeGrantDescriptor>?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppConsentUpdate.cs#AppConsentUpdate"
@@ -177,6 +285,21 @@
           "name": "Schema",
           "type": "ImmutableArray<AppSchemaDescriptor>",
           "required": false
+        },
+        {
+          "name": "Presentation",
+          "type": "AppPresentationDescriptor?",
+          "required": false
+        },
+        {
+          "name": "Ui",
+          "type": "AppUiDescriptor?",
+          "required": false
+        },
+        {
+          "name": "SourceKey",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppDescriptor.cs#AppDescriptor"
@@ -212,6 +335,43 @@
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppExceptionScope.cs#AppExceptionScope"
     },
+    "AppIconAsset": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Bytes",
+          "type": "ReadOnlyMemory<byte>",
+          "required": false
+        },
+        {
+          "name": "MediaType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Sha256",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppIconAsset.cs#AppIconAsset"
+    },
+    "AppIconDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Sha256",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppIconDescriptor.cs#AppIconDescriptor"
+    },
     "AppInstallRequest": {
       "kind": "record",
       "fields": [
@@ -234,6 +394,11 @@
           "name": "Ceiling",
           "type": "AppCapabilityCeilingDescriptor",
           "required": true
+        },
+        {
+          "name": "SourceKey",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppInstallRequest.cs#AppInstallRequest"
@@ -297,6 +462,47 @@
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppMcpToolDescriptor.cs#AppMcpToolDescriptor"
     },
+    "AppPresentationDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Summary",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Description",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Icon",
+          "type": "AppIconDescriptor?",
+          "required": false
+        },
+        {
+          "name": "Categories",
+          "type": "ImmutableArray<string>",
+          "required": false
+        },
+        {
+          "name": "DocumentationUrl",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PublisherDisplayName",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppPresentationDescriptor.cs#AppPresentationDescriptor"
+    },
     "AppProvenanceDescriptor": {
       "kind": "record",
       "fields": [
@@ -349,6 +555,53 @@
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppRoleBindingDescriptor.cs#AppRoleBindingDescriptor"
+    },
+    "AppRoleBindingsReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "RoleBindings",
+          "type": "ImmutableArray<AppRoleBindingDescriptor>",
+          "required": false
+        },
+        {
+          "name": "State",
+          "type": "AppLifecycleState",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppRoleBindingsReport.cs#AppRoleBindingsReport"
+    },
+    "AppRoleBindingsUpdate": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "RoleBindings",
+          "type": "ImmutableArray<AppRoleBindingDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppRoleBindingsUpdate.cs#AppRoleBindingsUpdate"
     },
     "AppRoleDescriptor": {
       "kind": "record",
@@ -422,6 +675,51 @@
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppSchemaDescriptor.cs#AppSchemaDescriptor"
+    },
+    "AppSourceSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "AppSourceSummaryKind",
+          "required": false
+        },
+        {
+          "name": "Capabilities",
+          "type": "AppSourceSummaryCapabilities",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppSourceSummary.cs#AppSourceSummary"
+    },
+    "AppSourceSummaryCapabilities": {
+      "kind": "flags enum",
+      "values": [
+        "None",
+        "Enumerate",
+        "Search",
+        "MultipleVersions",
+        "RequiresAcquisition"
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppSourceSummaryCapabilities.cs#AppSourceSummaryCapabilities"
+    },
+    "AppSourceSummaryKind": {
+      "kind": "enum",
+      "values": [
+        "Static",
+        "Dynamic"
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppSourceSummaryKind.cs#AppSourceSummaryKind"
     },
     "AppSubscriptionDescriptor": {
       "kind": "record",
@@ -531,6 +829,211 @@
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppTreeDescriptor.cs#AppTreeDescriptor"
     },
+    "AppUiAsset": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Bytes",
+          "type": "ReadOnlyMemory<byte>",
+          "required": false
+        },
+        {
+          "name": "MediaType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Sha256",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppUiAsset.cs#AppUiAsset"
+    },
+    "AppUiAssetDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "MediaType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Sha256",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppUiAssetDescriptor.cs#AppUiAssetDescriptor"
+    },
+    "AppUiBridgeGrantDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Operation",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Tree",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppUiBridgeGrantDescriptor.cs#AppUiBridgeGrantDescriptor"
+    },
+    "AppUiDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entry",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Styles",
+          "type": "ImmutableArray<string>",
+          "required": false
+        },
+        {
+          "name": "Scripts",
+          "type": "ImmutableArray<AppUiScriptDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Assets",
+          "type": "ImmutableArray<AppUiAssetDescriptor>",
+          "required": false
+        },
+        {
+          "name": "BundleDigest",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Bridge",
+          "type": "ImmutableArray<AppUiBridgeGrantDescriptor>",
+          "required": false
+        },
+        {
+          "name": "MinProtocol",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppUiDescriptor.cs#AppUiDescriptor"
+    },
+    "AppUiScriptDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Module",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AppUiScriptDescriptor.cs#AppUiScriptDescriptor"
+    },
+    "AppsBridgeDeleteResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Deleted",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsBridgeDeleteResponse.cs#AppsBridgeDeleteResponse"
+    },
+    "AppsBridgeGetResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Value",
+          "type": "AppBridgeValue?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsBridgeGetResponse.cs#AppsBridgeGetResponse"
+    },
+    "AppsBridgeKeyRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Target",
+          "type": "AppBridgeTarget",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsBridgeKeyRequest.cs#AppsBridgeKeyRequest"
+    },
+    "AppsBridgeScanRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Target",
+          "type": "AppBridgeTarget",
+          "required": true
+        },
+        {
+          "name": "Prefix",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Continuation",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsBridgeScanRequest.cs#AppsBridgeScanRequest"
+    },
+    "AppsBridgeSetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Target",
+          "type": "AppBridgeTarget",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Value",
+          "type": "ReadOnlyMemory<byte>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsBridgeSetRequest.cs#AppsBridgeSetRequest"
+    },
     "AppsConsentResponse": {
       "kind": "record",
       "fields": [
@@ -574,6 +1077,17 @@
       "fields": [],
       "source": "src/lattice.api.apps.grpc/Model/AppsEmptyRequest.cs#AppsEmptyRequest"
     },
+    "AppsIconResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Icon",
+          "type": "AppIconAsset?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsIconResponse.cs#AppsIconResponse"
+    },
     "AppsSlugRequest": {
       "kind": "record",
       "fields": [
@@ -584,6 +1098,87 @@
         }
       ],
       "source": "src/lattice.api.apps.grpc/Model/AppsSlugRequest.cs#AppsSlugRequest"
+    },
+    "AppsSourceAppRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SourceKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsSourceAppRequest.cs#AppsSourceAppRequest"
+    },
+    "AppsSourcesResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Sources",
+          "type": "ImmutableArray<AppSourceSummary>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsSourcesResponse.cs#AppsSourcesResponse"
+    },
+    "AppsUiAssetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsUiAssetRequest.cs#AppsUiAssetRequest"
+    },
+    "AppsUiAssetResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Asset",
+          "type": "AppUiAsset?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsUiAssetResponse.cs#AppsUiAssetResponse"
+    },
+    "AppsWorkspaceDescribeResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Descriptor",
+          "type": "WorkspaceAppDescriptor?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsWorkspaceDescribeResponse.cs#AppsWorkspaceDescribeResponse"
+    },
+    "AppsWorkspaceListResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Apps",
+          "type": "ImmutableArray<WorkspaceAppSummary>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/Model/AppsWorkspaceListResponse.cs#AppsWorkspaceListResponse"
     },
     "AuthSchemeAdvertisement": {
       "kind": "record",
@@ -621,6 +1216,135 @@
         }
       ],
       "source": "src/lattice.api.apps.grpc/Model/AuthSchemeDescriptor.cs#AuthSchemeDescriptor"
+    },
+    "AvailableAppFilter": {
+      "kind": "enum",
+      "values": [
+        "All",
+        "Installed",
+        "Available",
+        "Updates"
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AvailableAppFilter.cs#AvailableAppFilter"
+    },
+    "AvailableAppPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Apps",
+          "type": "ImmutableArray<AvailableAppSummary>",
+          "required": false
+        },
+        {
+          "name": "Continuation",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AvailableAppPage.cs#AvailableAppPage"
+    },
+    "AvailableAppQuery": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SourceKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Text",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Filter",
+          "type": "AvailableAppFilter",
+          "required": false
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Continuation",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AvailableAppQuery.cs#AvailableAppQuery"
+    },
+    "AvailableAppSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SourceKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "NewestVersion",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "AvailableVersions",
+          "type": "ImmutableArray<string>",
+          "required": false
+        },
+        {
+          "name": "Presentation",
+          "type": "AppPresentationDescriptor?",
+          "required": false
+        },
+        {
+          "name": "HasUi",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "InstalledVersion",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "InstalledState",
+          "type": "AppLifecycleState?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/AvailableAppSummary.cs#AvailableAppSummary"
+    },
+    "LatticeAppCatalogCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "CanListSources",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanListAvailable",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanDescribeFromSource",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanGetIcon",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/LatticeAppCatalogCapabilities.cs#LatticeAppCatalogCapabilities"
     },
     "LatticeAppsCapabilities": {
       "kind": "record",
@@ -719,9 +1443,594 @@
         "Prefix"
       ],
       "source": "src/lattice.auth/LatticeScopeKind.cs#LatticeScopeKind"
+    },
+    "WorkspaceAppDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "InstallRevision",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "SourceKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "State",
+          "type": "AppLifecycleState",
+          "required": false
+        },
+        {
+          "name": "Presentation",
+          "type": "AppPresentationDescriptor?",
+          "required": false
+        },
+        {
+          "name": "Trees",
+          "type": "ImmutableArray<WorkspaceTreeDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Roles",
+          "type": "ImmutableArray<AppRoleDescriptor>",
+          "required": false
+        },
+        {
+          "name": "McpTools",
+          "type": "ImmutableArray<AppMcpToolDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Subscriptions",
+          "type": "ImmutableArray<AppSubscriptionDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Replication",
+          "type": "ImmutableArray<AppReplicationDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Ui",
+          "type": "AppUiDescriptor?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/WorkspaceAppDescriptor.cs#WorkspaceAppDescriptor"
+    },
+    "WorkspaceAppSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Slug",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "InstallRevision",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Presentation",
+          "type": "AppPresentationDescriptor?",
+          "required": false
+        },
+        {
+          "name": "HasUi",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Roles",
+          "type": "ImmutableArray<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/WorkspaceAppSummary.cs#WorkspaceAppSummary"
+    },
+    "WorkspaceTreeDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Rebuildable",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Adopted",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "ShardCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxLeafKeys",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxInternalChildren",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "WalPartitions",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "SoftDeleteDuration",
+          "type": "TimeSpan?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Apps/Model/WorkspaceTreeDescriptor.cs#WorkspaceTreeDescriptor"
     }
   },
   "operations": [
+    {
+      "id": "bridge-delete",
+      "in_process": "ILatticeAppBridge.DeleteAsync",
+      "grpc_method": "/orleans.lattice.api.apps.bridge/Delete",
+      "transport_scope": "both",
+      "request": "AppsBridgeKeyRequest",
+      "response": "AppsBridgeDeleteResponse",
+      "errors": [
+        {
+          "error_id": "cancelled",
+          "condition": "The caller cancellation token is cancelled."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The transport authorizer denies the call, the active tenant or caller cannot be resolved, the install or revision is not enabled, the bridge grant is not consented, the app-owned role grant does not cover the request, or the ordinary data path denies the caller."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The requested app-local tree is not declared by the enabled install."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "The target, key, prefix, page size, continuation, or app-local tree name is malformed."
+        },
+        {
+          "error_id": "resource-exhausted",
+          "condition": "The key, value, continuation, or encoded response exceeds the bridge bound."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The per-caller rate limit is exhausted, the bridge dependencies are absent, or the underlying data path fails without a more specific bridge failure."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No operation id is carried; after an ambiguous failure, read the key before retrying if the caller must distinguish an original delete from an already-absent key.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#DeleteAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The first successful delete can remove a live value and return true, while a repeat after the tombstone can return false without replaying the original response.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#BPlusLeafGrain.DeleteCoreAsync"
+      },
+      "concurrency": {
+        "rule": "The bridge admits delete only when the consented bridge grant and the caller's app-owned role grant both cover LatticeOperation.Delete for the key, then calls the gated ILattice.DeleteAsync path under the caller's active tenant.",
+        "source": "src/lattice.api.apps/LatticeAppBridge.cs#DeleteAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge",
+        "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#AppBridgeGrpcStatus",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcMethods.cs#LatticeAppBridgeGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcService.cs#LatticeAppBridgeGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits",
+        "src/lattice.api.apps/AppBridgeRateLimiter.cs#TryAcquire",
+        "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      ]
+    },
+    {
+      "id": "bridge-get",
+      "in_process": "ILatticeAppBridge.GetAsync",
+      "grpc_method": "/orleans.lattice.api.apps.bridge/Get",
+      "transport_scope": "both",
+      "request": "AppsBridgeKeyRequest",
+      "response": "AppsBridgeGetResponse",
+      "errors": [
+        {
+          "error_id": "cancelled",
+          "condition": "The caller cancellation token is cancelled."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The transport authorizer denies the call, the active tenant or caller cannot be resolved, the install or revision is not enabled, the bridge grant is not consented, the app-owned role grant does not cover the request, or the ordinary data path denies the caller."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The requested app-local tree is not declared by the enabled install."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "The target, key, prefix, page size, continuation, or app-local tree name is malformed."
+        },
+        {
+          "error_id": "resource-exhausted",
+          "condition": "The key, value, continuation, or encoded response exceeds the bridge bound."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The per-caller rate limit is exhausted, the bridge dependencies are absent, or the underlying data path fails without a more specific bridge failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only app-bridge point read; retrying only re-runs authorization, rate limiting, and the gated data read.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#GetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation reads one key and never mutates bridge, registry, or data state.",
+        "source": "src/lattice.api.apps/LatticeAppBridge.cs#GetAsync"
+      },
+      "concurrency": {
+        "rule": "The bridge admits read only when the consented bridge grant and the caller's app-owned role grant both cover LatticeOperation.Read for the key, then calls the gated ILattice.GetAsync path under the caller's active tenant.",
+        "source": "src/lattice.api.apps/LatticeAppBridge.cs#GetAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge",
+        "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#AppBridgeGrpcStatus",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcMethods.cs#LatticeAppBridgeGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcService.cs#LatticeAppBridgeGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits",
+        "src/lattice.api.apps/AppBridgeRateLimiter.cs#TryAcquire",
+        "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      ]
+    },
+    {
+      "id": "bridge-scan",
+      "in_process": "ILatticeAppBridge.ScanAsync",
+      "grpc_method": "/orleans.lattice.api.apps.bridge/Scan",
+      "transport_scope": "both",
+      "request": "AppsBridgeScanRequest",
+      "response": "AppBridgePage",
+      "errors": [
+        {
+          "error_id": "cancelled",
+          "condition": "The caller cancellation token is cancelled."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The transport authorizer denies the call, the active tenant or caller cannot be resolved, the install or revision is not enabled, the bridge grant is not consented, the app-owned role grant does not cover the request, or the ordinary data path denies the caller."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The requested app-local tree is not declared by the enabled install."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "The target, key, prefix, page size, continuation, or app-local tree name is malformed."
+        },
+        {
+          "error_id": "resource-exhausted",
+          "condition": "The key, value, continuation, or encoded response exceeds the bridge bound."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The per-caller rate limit is exhausted, the bridge dependencies are absent, or the underlying data path fails without a more specific bridge failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only app-bridge range read; retrying only re-runs authorization, rate limiting, and the bounded scan.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ScanAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation reads a bounded page and never mutates bridge, registry, or data state.",
+        "source": "src/lattice.api.apps/LatticeAppBridge.cs#ScanAsync"
+      },
+      "concurrency": {
+        "rule": "The bridge admits scan only when the consented bridge grant and the caller's app-owned role grant both cover LatticeOperation.RangeRead for the prefix, clamps the page size, and stops before the response byte bound is exceeded.",
+        "source": "src/lattice.api.apps/LatticeAppBridge.cs#ScanAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge",
+        "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#AppBridgeGrpcStatus",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcMethods.cs#LatticeAppBridgeGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcService.cs#LatticeAppBridgeGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits",
+        "src/lattice.api.apps/AppBridgeRateLimiter.cs#TryAcquire",
+        "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      ]
+    },
+    {
+      "id": "bridge-set",
+      "in_process": "ILatticeAppBridge.SetAsync",
+      "grpc_method": "/orleans.lattice.api.apps.bridge/Set",
+      "transport_scope": "both",
+      "request": "AppsBridgeSetRequest",
+      "response": "AppsEmptyRequest",
+      "errors": [
+        {
+          "error_id": "cancelled",
+          "condition": "The caller cancellation token is cancelled."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The transport authorizer denies the call, the active tenant or caller cannot be resolved, the install or revision is not enabled, the bridge grant is not consented, the app-owned role grant does not cover the request, or the ordinary data path denies the caller."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The requested app-local tree is not declared by the enabled install."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "The target, key, prefix, page size, continuation, or app-local tree name is malformed."
+        },
+        {
+          "error_id": "resource-exhausted",
+          "condition": "The key, value, continuation, or encoded response exceeds the bridge bound."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The per-caller rate limit is exhausted, the bridge dependencies are absent, or the underlying data path fails without a more specific bridge failure."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No operation id is carried and each accepted SetAsync reaches the ordinary point-write path after bridge authorization.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#SetAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "The facade carries no operation id and each accepted point set can author a fresh LWW write even when the bytes match a previous call.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#BPlusLeafGrain.CommitSetAsync"
+      },
+      "concurrency": {
+        "rule": "The bridge admits write only when the consented bridge grant and the caller's app-owned role grant both cover LatticeOperation.Write for the key, then calls the gated ILattice.SetAsync path under the caller's active tenant.",
+        "source": "src/lattice.api.apps/LatticeAppBridge.cs#SetAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge",
+        "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#AppBridgeGrpcStatus",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcMethods.cs#LatticeAppBridgeGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppBridgeGrpcService.cs#LatticeAppBridgeGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits",
+        "src/lattice.api.apps/AppBridgeRateLimiter.cs#TryAcquire",
+        "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+      ]
+    },
+    {
+      "id": "catalog-describe-from-source",
+      "in_process": "ILatticeAppCatalog.DescribeFromSourceAsync",
+      "grpc_method": "/orleans.lattice.api.apps.catalog/DescribeFromSource",
+      "transport_scope": "both",
+      "request": "AppsSourceAppRequest",
+      "response": "AppsDescribeResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The source key, app slug, or version is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call, the facade AppInstall access-gate check fails, or active-tenant resolution is denied."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The source returns an unusable manifest result rather than a not-found or version-mismatch absence."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only pre-install source description; unknown source, app, or version returns null through the response wrapper.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#DescribeFromSourceAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Describes a source manifest and tenant install state without activation or mutation.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.cs#DescribeFromSourceAsync"
+      },
+      "concurrency": {
+        "rule": "The facade resolves the caller tenant, authorizes AppInstall, resolves the source manifest, and joins only a matching tenant install from the same source.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.cs#DescribeFromSourceAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcMethods.cs#LatticeAppCatalogGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync",
+        "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+      ]
+    },
+    {
+      "id": "catalog-get-capabilities",
+      "in_process": "ILatticeAppCatalog.GetCapabilitiesAsync",
+      "grpc_method": "/orleans.lattice.api.apps.catalog/GetCapabilities",
+      "transport_scope": "both",
+      "request": "AppsEmptyRequest",
+      "response": "LatticeAppCatalogCapabilities",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Advisory probe only; facade AppInstall denial returns all capability flags false.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#GetCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Returns all catalogue capability flags true only when the AppInstall check succeeds, and returns all false when that facade check is denied.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.cs#GetCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "The probe defaults to denied and every actual catalogue verb authorizes independently through the same access gate.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#GetCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcMethods.cs#LatticeAppCatalogGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync",
+        "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+      ]
+    },
+    {
+      "id": "catalog-get-icon",
+      "in_process": "ILatticeAppCatalog.GetIconAsync",
+      "grpc_method": "/orleans.lattice.api.apps.catalog/GetIcon",
+      "transport_scope": "both",
+      "request": "AppsSourceAppRequest",
+      "response": "AppsIconResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The source key, app slug, or version is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call or the facade AppInstall access-gate check fails."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The source returns an unusable manifest result rather than a not-found or version-mismatch absence."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only verified asset read; unknown, undeclared, unverifiable, or digest-mismatched icons return null through the response wrapper.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#GetIconAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Resolves a source manifest and opens a digest-pinned asset without activation or mutation.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.cs#GetIconAsync"
+      },
+      "concurrency": {
+        "rule": "The facade authorizes AppInstall before source access, resolves the manifest from the named source, and serves bytes only after digest verification.",
+        "source": "src/lattice.api.apps/AppsAssetReader.cs#OpenAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcMethods.cs#LatticeAppCatalogGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync",
+        "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+      ]
+    },
+    {
+      "id": "catalog-list-available",
+      "in_process": "ILatticeAppCatalog.ListAvailableAsync",
+      "grpc_method": "/orleans.lattice.api.apps.catalog/ListAvailable",
+      "transport_scope": "both",
+      "request": "AvailableAppQuery",
+      "response": "AvailableAppPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The query is null, its filter is undefined, or its source key is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call, the facade AppInstall access-gate check fails, or active-tenant resolution is denied."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only paged source listing; malformed or foreign continuations return an empty final page and source listing failures are treated as source exhaustion.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ListAvailableAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Lists configured sources and tenant install state without mutation.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync"
+      },
+      "concurrency": {
+        "rule": "The facade authorizes AppInstall before source or registry reads, fetches source pages with bounded concurrency, and merges rows by slug then source key.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcMethods.cs#LatticeAppCatalogGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync",
+        "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+      ]
+    },
+    {
+      "id": "catalog-list-sources",
+      "in_process": "ILatticeAppCatalog.ListSourcesAsync",
+      "grpc_method": "/orleans.lattice.api.apps.catalog/ListSources",
+      "transport_scope": "both",
+      "request": "AppsEmptyRequest",
+      "response": "AppsSourcesResponse",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call or the facade AppInstall access-gate check fails."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only configured-source enumeration in registration order.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ListSourcesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Maps configured source descriptors without registry or source mutation.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.cs#ListSourcesAsync"
+      },
+      "concurrency": {
+        "rule": "The facade authorizes AppInstall before returning any configured source descriptor.",
+        "source": "src/lattice.api.apps/LatticeAppCatalog.cs#ListSourcesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcMethods.cs#LatticeAppCatalogGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppCatalogGrpcService.cs#LatticeAppCatalogGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#ListAvailableAsync",
+        "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+      ]
+    },
     {
       "id": "describe",
       "in_process": "ILatticeAppsControl.DescribeAsync",
@@ -1118,7 +2427,7 @@
         "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#UpdateConsentCoreAsync"
       },
       "concurrency": {
-        "rule": "The facade reads the installed version and passes ExpectedVersion to the same-version registry upgrade so a racing upgrade is refused rather than rolled back; an enabled app is reconciled after the write.",
+        "rule": "The facade reads the installed version and revision and passes ExpectedVersion and ExpectedRevision to the same-version registry upgrade so a racing upgrade or role re-binding is refused rather than rolled back; an enabled app is reconciled after the write.",
         "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#UpdateConsentCoreAsync"
       },
       "sources": [
@@ -1127,9 +2436,225 @@
         "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#UpdateConsent",
         "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#UpdateConsent"
       ]
+    },
+    {
+      "id": "update-role-bindings",
+      "in_process": "ILatticeAppRoleBindings.UpdateRoleBindingsAsync",
+      "grpc_method": "/orleans.lattice.api.apps/UpdateRoleBindings",
+      "transport_scope": "both",
+      "request": "AppRoleBindingsUpdate",
+      "response": "AppRoleBindingsReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The request is null or malformed, or a replacement binding names an empty group, duplicates a role, or names a role absent from the installed manifest."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call, the facade AppInstall access-gate check fails, or active-tenant resolution is denied."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The app is absent or uninstalled for the caller's tenant."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The request version does not match the installed version, the current consent is not pinned to the installed version, the same-version registry upgrade is rejected, or re-applying an enabled app fails after recording the bindings."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The gRPC service has no ILatticeAppRoleBindings implementation to invoke."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "After an ambiguous failure, read Describe or GetConsent before retrying; an enabled app may already have had the new bindings recorded before re-application failed.",
+        "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#UpdateRoleBindingsAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "A same-version replacement writes the whole role-binding set and converges when repeated against the same revision, but a racing install change is refused by ExpectedRevision.",
+        "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#UpdateRoleBindingsAsync"
+      },
+      "concurrency": {
+        "rule": "The facade reads the installed version and revision, validates roles against the installed manifest, passes ExpectedVersion and ExpectedRevision to the registry, and re-applies enabled apps after the write.",
+        "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#UpdateRoleBindingsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppRoleBindings.cs#ILatticeAppRoleBindings",
+        "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#UpdateRoleBindings",
+        "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#UpdateRoleBindings",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/LatticeAppsApiServiceCollectionExtensions.cs#AddLatticeAppsApi",
+        "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#UpdateRoleBindingsAsync"
+      ]
+    },
+    {
+      "id": "workspace-describe-my-app",
+      "in_process": "ILatticeAppWorkspace.DescribeMyAppAsync",
+      "grpc_method": "/orleans.lattice.api.apps.workspace/DescribeMyApp",
+      "transport_scope": "both",
+      "request": "AppsSlugRequest",
+      "response": "AppsWorkspaceDescribeResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The app slug is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only per-user workspace description; absent apps, disabled installs, unresolved callers, and missing app-role grants return null through the response wrapper.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#DescribeMyAppAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Evaluates the caller's app-role grant and maps the installed manifest without mutation.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#DescribeMyAppAsync"
+      },
+      "concurrency": {
+        "rule": "The facade evaluates the caller through AppRoleGrantEvaluator before any source asset is read, and exposes no consent ceiling, bindings, or physical tree id.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcMethods.cs#LatticeAppWorkspaceGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcService.cs#LatticeAppWorkspaceGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppsAssetReader.cs#OpenAsync",
+        "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+      ]
+    },
+    {
+      "id": "workspace-get-icon",
+      "in_process": "ILatticeAppWorkspace.GetIconAsync",
+      "grpc_method": "/orleans.lattice.api.apps.workspace/GetIcon",
+      "transport_scope": "both",
+      "request": "AppsSlugRequest",
+      "response": "AppsIconResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The app slug is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only installed-version icon read; absent, undeclared, unverifiable, digest-mismatched, or not-granted icons return null through the response wrapper.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#GetIconAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Evaluates the caller's app-role grant and opens a digest-pinned installed-version asset without mutation.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#GetIconAsync"
+      },
+      "concurrency": {
+        "rule": "The facade evaluates an app role for the enabled installed version before opening the icon through the source recorded in provenance.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#GetIconAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcMethods.cs#LatticeAppWorkspaceGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcService.cs#LatticeAppWorkspaceGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppsAssetReader.cs#OpenAsync",
+        "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+      ]
+    },
+    {
+      "id": "workspace-get-ui-asset",
+      "in_process": "ILatticeAppWorkspace.GetUiAssetAsync",
+      "grpc_method": "/orleans.lattice.api.apps.workspace/GetUiAsset",
+      "transport_scope": "both",
+      "request": "AppsUiAssetRequest",
+      "response": "AppsUiAssetResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The app slug is malformed or the asset path is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only installed-version UI asset read; absent, undeclared, unverifiable, digest-mismatched, invalid-entry, or not-granted assets return null through the response wrapper.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#GetUiAssetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Evaluates the caller's app-role grant and opens a digest-pinned installed-version asset without mutation.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#GetUiAssetAsync"
+      },
+      "concurrency": {
+        "rule": "The caller cannot choose a version; the facade serves only declared assets of the enabled installed version after digest verification, with the UI entry fragment validated before it is served.",
+        "source": "src/lattice.api.apps/AppsAssetReader.cs#OpenAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcMethods.cs#LatticeAppWorkspaceGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcService.cs#LatticeAppWorkspaceGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppsAssetReader.cs#OpenAsync",
+        "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+      ]
+    },
+    {
+      "id": "workspace-list-my-apps",
+      "in_process": "ILatticeAppWorkspace.ListMyAppsAsync",
+      "grpc_method": "/orleans.lattice.api.apps.workspace/ListMyApps",
+      "transport_scope": "both",
+      "request": "AppsEmptyRequest",
+      "response": "AppsWorkspaceListResponse",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "The gRPC transport authorizer denies the call."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only per-user workspace listing; unresolved callers and callers with no app-role grant receive an empty list.",
+        "source": "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ListMyAppsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Enumerates enabled tenant apps from the evaluator snapshot and does not mutate registry, source, or data state.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#ListMyAppsAsync"
+      },
+      "concurrency": {
+        "rule": "The facade evaluates each enabled tenant app against the caller's app-owned role grants and lists only apps with at least one held role.",
+        "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#ListMyAppsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcMethods.cs#LatticeAppWorkspaceGrpcMethods",
+        "src/lattice.api.apps.grpc/LatticeAppWorkspaceGrpcService.cs#LatticeAppWorkspaceGrpcService",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#DescribeCall",
+        "src/lattice.api.apps/AppsAssetReader.cs#OpenAsync",
+        "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+      ]
     }
   ],
   "error_taxonomy": [
+    {
+      "id": "aborted",
+      "type": "AppBridgeException",
+      "grpc_status": "Aborted",
+      "retryable": false,
+      "meaning": "AppBridgeFailure.Conflict maps to Aborted; no shipped bridge operation reports Conflict.",
+      "source": "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#ToStatusCode"
+    },
     {
       "id": "cancelled",
       "type": "OperationCanceledException",
@@ -1177,6 +2702,30 @@
       "retryable": false,
       "meaning": "The transport authorizer, facade AppInstall access gate, or active-tenant assertion denies the caller.",
       "source": "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "resource-exhausted",
+      "type": "AppBridgeException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": false,
+      "meaning": "The app bridge request or response exceeds a bridge bound.",
+      "source": "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#ToStatusCode"
+    },
+    {
+      "id": "unavailable",
+      "type": "AppBridgeException or Exception",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "The app bridge rate limiter, dependency set, data path, or binding cannot serve the request now.",
+      "source": "src/lattice.api.apps.grpc/AppBridgeGrpcStatus.cs#ToStatusCode"
+    },
+    {
+      "id": "unimplemented",
+      "type": "RpcException",
+      "grpc_status": "Unimplemented",
+      "retryable": false,
+      "meaning": "The UpdateRoleBindings RPC is mapped but no ILatticeAppRoleBindings implementation is registered by the host.",
+      "source": "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#UpdateRoleBindings"
     }
   ]
 }

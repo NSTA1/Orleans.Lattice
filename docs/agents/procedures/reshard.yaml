@@ -42,8 +42,10 @@ postconditions:
     source: "docs/lattice.api.treeadmin/README.md"
   - check: "Virtual-slot routing is atomically swapped per split or fold and map version advances."
     source: "docs/lattice.api.treeadmin/README.md"
-  - check: "After a shrink, every retired shard's storage has been released and its shard root is a routing tombstone."
-    source: "docs/lattice/online-reshard.md"
+  - check: "A shrink materialises a default shard map before the first fold when the tree has no persisted map, so overlapping readers observe a map-version change instead of the version-0 fast path."
+    source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.InitiateConsolidationStateAsync"
+  - check: "After a shrink, a retired donor releases storage only when the live shard map no longer routes to it and the shard has no migration or resize state; otherwise the fold completes as routing-only retirement and leaves donor storage in place."
+    source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.RetireDonorAsync"
 failure_modes:
   - id: different-inflight
     signal: "InvalidOperationException for a different in-flight reshard target."
@@ -67,6 +69,10 @@ concurrency:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
   - rule: "Reshard and resize are mutually exclusive in-flight operations."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+  - rule: "A shrink fold refuses a pair while either shard is the target of any in-flight migration and retries once that migration has finished."
+    source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.ThrowIfMigrationTargetAsync"
+  - rule: "A shrink fold defers releasing the donor's storage while a snapshot of or merge into the same tree is in flight."
+    source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.FinaliseAsync"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
