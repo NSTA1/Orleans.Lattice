@@ -29,6 +29,14 @@ public partial class ClusterTreeSummary : IDisposable
     [Parameter, EditorRequired]
     public LatticeTreeAdminCapabilities Capabilities { get; set; } = default!;
 
+    /// <summary>
+    /// Raised when a reshard, resize or snapshot the tab was following finishes,
+    /// after the tab has read its statistics and alias again, so the page can
+    /// read what it shows about the tree again too.
+    /// </summary>
+    [Parameter]
+    public EventCallback OperationSettled { get; set; }
+
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
 
@@ -94,19 +102,45 @@ public partial class ClusterTreeSummary : IDisposable
             return ClusterPollOutcome.Settled;
         }
 
+        // An operation that finished changed what the tree's other reads
+        // describe - its shard count, its alias, its size - so they are read
+        // again rather than left showing the tree as it was.
+        var settled = Settled(_reshard.Value, reshard.Value) || Settled(_resize.Value, resize.Value) || Settled(_snapshot.Value, snapshot.Value);
+        var stats = settled
+            ? await ClusterLoad<TreeStatsReport>.RunAsync(ct => admin.GetTreeStatsAsync(TreeId, ct), cancellationToken)
+            : null;
+        var alias = settled
+            ? await ClusterLoad<TreeAliasResolution>.RunAsync(ct => admin.ResolveTreeAliasAsync(TreeId, ct), cancellationToken)
+            : null;
+
         var failed = reshard.Value is null || resize.Value is null || snapshot.Value is null;
-        await InvokeAsync(() =>
+        await InvokeAsync(async () =>
         {
             // A failed read keeps the last answer on screen rather than
             // replacing a running operation with an error mid-follow.
             _reshard = reshard.Value is null ? _reshard : reshard;
             _resize = resize.Value is null ? _resize : resize;
             _snapshot = snapshot.Value is null ? _snapshot : snapshot;
+            _stats = stats is { Value: not null } ? stats : _stats;
+            _alias = alias is { Value: not null } ? alias : _alias;
             StateHasChanged();
+            if (settled)
+            {
+                await OperationSettled.InvokeAsync();
+            }
         });
 
         return failed ? ClusterPollOutcome.Failed : AnyRunning ? ClusterPollOutcome.Running : ClusterPollOutcome.Settled;
     }
+
+    private static bool Settled(TreeReshardStatus? before, TreeReshardStatus? after) =>
+        before is { InProgress: true } && after is { InProgress: false };
+
+    private static bool Settled(TreeResizeStatus? before, TreeResizeStatus? after) =>
+        before is { InProgress: true } or { UndoRequested: true } && after is { InProgress: false, UndoRequested: false };
+
+    private static bool Settled(TreeSnapshotStatus? before, TreeSnapshotStatus? after) =>
+        before is { InProgress: true } && after is { InProgress: false };
 
     private static string ReshardText(TreeReshardStatus reshard) =>
         !reshard.InProgress

@@ -388,6 +388,69 @@ public sealed class ClusterOperationProgressPagesTests : ClusterTestContext
         Admin.ResolveTreeAliasAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeAliasResolution { TreeId = TreeId, PhysicalTreeId = TreeId });
     }
 
+    // ----- Reading the tree again when an operation finishes (issue #4146) -----
+
+    [Test]
+    public void A_finished_reshard_reads_the_heading_and_the_statistics_again()
+    {
+        Admin.GetTreeStatsAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new TreeStatsReport { TreeId = TreeId, ShardCount = 4, VirtualShardCount = 4096 },
+                     new TreeStatsReport { TreeId = TreeId, ShardCount = 8, VirtualShardCount = 4096 });
+        Admin.ResolveTreeAliasAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeAliasResolution { TreeId = TreeId, PhysicalTreeId = TreeId });
+        Admin.GetTreeConfigAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new TreeConfigurationReport { TreeId = TreeId, Exists = true, ShardCount = 4, MaxLeafKeys = 16 },
+                     new TreeConfigurationReport { TreeId = TreeId, Exists = true, ShardCount = 8, MaxLeafKeys = 16 });
+        Admin.GetReshardStatusAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new TreeReshardStatus { TreeId = TreeId, InProgress = true, CurrentPhysicalShardCount = 6, TargetShardCount = 8, StartPhysicalShardCount = 4 },
+                     new TreeReshardStatus { TreeId = TreeId, CurrentPhysicalShardCount = 8 });
+        Admin.GetResizeStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(Resize(false));
+        Admin.GetSnapshotStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeSnapshotStatus { TreeId = TreeId });
+
+        var cut = RenderAt("/cluster/trees/" + TreeId);
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Does.Contain("4 shards"));
+            Assert.That(PhysicalShards(cut), Is.EqualTo("4"));
+            Assert.That(Time.ArmedTimers, Is.EqualTo(1));
+        });
+
+        cut.InvokeAsync(() => Time.Advance(ClusterStatusPoller.Interval));
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Markup, Does.Contain("None in progress."));
+            Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Does.Contain("8 shards"), "the heading's shard count is read again");
+            Assert.That(PhysicalShards(cut), Is.EqualTo("8"), "the summary's statistics are read again");
+        });
+        Admin.Received(2).GetTreeConfigAsync(TreeId, Arg.Any<CancellationToken>());
+        Admin.Received(2).GetTreeStatsAsync(TreeId, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void A_reshard_still_running_does_not_read_the_heading_or_statistics_again()
+    {
+        StubSummaryReads();
+        Admin.GetReshardStatusAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(new TreeReshardStatus { TreeId = TreeId, InProgress = true, CurrentPhysicalShardCount = 5, TargetShardCount = 8, StartPhysicalShardCount = 4 });
+        Admin.GetResizeStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(Resize(false));
+        Admin.GetSnapshotStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeSnapshotStatus { TreeId = TreeId });
+
+        var cut = RenderAt("/cluster/trees/" + TreeId);
+        cut.WaitUntil(() => Assert.That(Time.ArmedTimers, Is.EqualTo(1)));
+
+        cut.InvokeAsync(() => Time.Advance(ClusterStatusPoller.Interval));
+        cut.WaitUntil(() => Assert.That(ReshardReads(), Is.EqualTo(2)));
+
+        Admin.Received(1).GetTreeConfigAsync(TreeId, Arg.Any<CancellationToken>());
+        Admin.Received(1).GetTreeStatsAsync(TreeId, Arg.Any<CancellationToken>());
+    }
+
+    private static string PhysicalShards<TComponent>(IRenderedComponent<TComponent> cut)
+        where TComponent : Microsoft.AspNetCore.Components.IComponent =>
+        cut.FindAll("section[aria-label=Statistics] dt")
+            .Single(term => term.TextContent.Trim() == "Physical shards")
+            .NextElementSibling!.TextContent.Trim();
+
     private int ReshardReads() =>
         Admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.GetReshardStatusAsync));
 

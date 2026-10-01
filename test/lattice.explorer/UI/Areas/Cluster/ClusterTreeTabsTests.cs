@@ -187,7 +187,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
         {
             TreeId = TreeId, PhysicalTreeId = "hidden-physical", PhysicalShardCount = 2, VirtualShardCount = 4, MapVersion = 3,
-            PhysicalShardIndices = [0, 0, 1, 1],
+            PhysicalShardIndices = [0, 1], SlotCounts = [2, 2],
         });
         Admin.GetShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeShardMapView { TreeId = TreeId, HasCustomMap = true, MapVersion = 3 });
         Admin.GetDiagnosticsAsync(TreeId, Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(call => new TreeAdminDiagnosticReport
@@ -242,7 +242,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
         {
             TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardCount = 2, VirtualShardCount = 6, MapVersion = 9,
-            PhysicalShardIndices = [0, 0, 0, 2, 2, 5],
+            PhysicalShardIndices = [0, 2, 5], SlotCounts = [3, 2, 1],
         });
         Admin.GetShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeShardMapView { TreeId = TreeId, HasCustomMap = true, MapVersion = 9 });
         Admin.GetDiagnosticsAsync(TreeId, Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(new TreeAdminDiagnosticReport
@@ -262,6 +262,42 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
             Is.EqualTo(new[] { "0", "2", "5" }),
             "one row per physical shard the map routes to, never a retired index"));
         Assert.That(cut.FindAll("tbody tr")[0].QuerySelectorAll("td")[0].TextContent.Trim(), Is.EqualTo("3"), "shard 0 now owns the folded slots");
+    }
+
+    [Test]
+    public void Each_shard_shows_the_virtual_slots_it_owns_not_one_per_distinct_index()
+    {
+        // Issue #4146: the inspection lists each physical shard once, so counting
+        // its indices gave every shard one slot. The counts come from the map.
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
+        {
+            TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardCount = 32, VirtualShardCount = 4096, MapVersion = 33,
+            PhysicalShardIndices = [.. Enumerable.Range(0, 32)], SlotCounts = [.. Enumerable.Repeat(128, 32)],
+        });
+        Admin.GetShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeShardMapView { TreeId = TreeId, HasCustomMap = true, MapVersion = 33 });
+        Admin.GetDiagnosticsAsync(TreeId, Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(new TreeAdminDiagnosticReport { TreeId = TreeId });
+        Admin.GetShardHotnessAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeHotnessReport { TreeId = TreeId });
+
+        var cut = RenderTab<ClusterTreeShards>();
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(32)));
+        Assert.That(cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[0].TextContent.Trim()), Has.All.EqualTo("128"));
+    }
+
+    [Test]
+    public void A_cluster_that_does_not_count_slots_leaves_the_figure_unknown_rather_than_one()
+    {
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
+        {
+            TreeId = TreeId, PhysicalTreeId = "p", PhysicalShardCount = 2, VirtualShardCount = 4096, PhysicalShardIndices = [0, 1],
+        });
+        Admin.GetDiagnosticsAsync(TreeId, Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(new TreeAdminDiagnosticReport { TreeId = TreeId });
+        Admin.GetShardHotnessAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeHotnessReport { TreeId = TreeId });
+
+        var cut = RenderTab<ClusterTreeShards>();
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2)));
+        Assert.That(cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[0].TextContent.Trim()), Has.All.EqualTo("-"));
     }
 
     [Test]
