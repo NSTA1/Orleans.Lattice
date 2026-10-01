@@ -3714,7 +3714,7 @@ internal sealed partial class BPlusLeafGrain(
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             keys.Add(key);
         }
-        if (keys.Count != orderedPrefix) keys.Sort(StringComparer.Ordinal);
+        if (keys.Count != orderedPrefix) keys.Sort(OrdinalStringOrder.Comparison);
         PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
         // Issue #2823: this answer resolved prepared writes against the
         // registry, whose decisions can change with nothing written here. See

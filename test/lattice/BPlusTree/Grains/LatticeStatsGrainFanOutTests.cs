@@ -37,7 +37,7 @@ public sealed class LatticeStatsGrainFanOutTests
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(16, physicalShardCount);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(new RoutingInfo(TreeId, map));
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>()).Returns(new RoutingInfo(TreeId, map));
         factory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
         var shards = new Dictionary<int, IShardRootGrain>();

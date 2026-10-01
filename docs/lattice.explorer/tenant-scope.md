@@ -55,6 +55,7 @@ The Explorer fails closed around it:
 - A new identity never inherits the previous identity's tenant. When a different user signs in to the same circuit, the tenant held for the previous user is cleared before the new user's own tenant is established, so not even the calls that establish it assert the previous user's tenant.
 - An open app is bound to the tenant it was opened in, and is closed once the Explorer is scoped to another tenant.
 - A staged backup operation finishes in the tenant it started in, and is listed only under that tenant.
+- A backup or restore operation tracked by the cluster is listed and read only under the tenant it started in; under another tenant its id is not found.
 
 ## The reserved default tenant
 

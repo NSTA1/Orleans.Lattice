@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -66,7 +67,7 @@ public sealed class VersionVectorProvenanceDecoder : ICrdtProvenanceDecoder
             var delta = (VersionVectorDelta)deltas[i].Delta;
             var start = result.Count;
             Emit(result, delta.Entries);
-            result.Sort(start, result.Count - start, CrdtMemberChangeCausalComparer.Instance);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeCausalComparer.Comparison);
         }
         return result;
     }
@@ -92,7 +93,7 @@ public sealed class VersionVectorProvenanceDecoder : ICrdtProvenanceDecoder
 
         var result = new List<CrdtMemberChange>(entries.Count);
         Emit(result, entries);
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 
@@ -116,7 +117,7 @@ public sealed class VersionVectorProvenanceDecoder : ICrdtProvenanceDecoder
 
         var replicas = new List<string>(entries.Count);
         foreach (var replicaId in entries.Keys) replicas.Add(replicaId);
-        replicas.Sort(StringComparer.Ordinal);
+        replicas.Sort(OrdinalStringOrder.Comparison);
 
         var result = new List<CrdtMemberValue>(replicas.Count);
         foreach (var replicaId in replicas)

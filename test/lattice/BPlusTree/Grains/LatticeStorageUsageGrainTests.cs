@@ -58,7 +58,7 @@ public sealed class LatticeStorageUsageGrainTests
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(Math.Max(16, shardCount), shardCount);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(new RoutingInfo(tree, map));
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>()).Returns(new RoutingInfo(tree, map));
         factory.GetGrain<ILattice>(tree).Returns(lattice);
 
         for (var i = 0; i < shardCount; i++)

@@ -95,7 +95,7 @@ public sealed class RwFlagProvenanceDecoder : ICrdtProvenanceDecoder
         var result = new List<CrdtMemberChange>(total);
         FlagProvenance.EmitDots(result, flag.Enables, CrdtMemberChangeKind.Added, null);
         FlagProvenance.EmitDots(result, flag.Disables, CrdtMemberChangeKind.Removed, null);
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 

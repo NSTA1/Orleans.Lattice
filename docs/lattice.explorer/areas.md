@@ -56,9 +56,11 @@ for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's k
 starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
 at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
-boundary notes and a live tail. A revision that kept only the value's size and
-hash is marked "metadata only", and the timeline explains what that means once,
-rather than under each such revision. The **As of** field is a
+boundary notes and a live tail. A revision whose value the tree's history
+retention did not keep, only its size and hash, reads "Set - value not kept", and
+the timeline explains once, rather than under each such revision, that it is still
+a write to the key and not a metadata change. Copies that resizing, resharding or
+replication make of a revision are not shown as revisions of their own. The **As of** field is a
 [date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
 It starts empty, which means the latest, and refuses a time in the future;
 pick a day and a time, use a quick pick (now, an hour, a day or a week ago), or

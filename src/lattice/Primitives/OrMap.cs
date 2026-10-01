@@ -467,7 +467,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     {
         if (typeof(TKey) == typeof(string))
         {
-            ((List<string>)(object)live).Sort(StringComparer.Ordinal);
+            ((List<string>)(object)live).Sort(OrdinalStringOrder.Comparison);
             return;
         }
         live.Sort(Comparer<TKey>.Default);

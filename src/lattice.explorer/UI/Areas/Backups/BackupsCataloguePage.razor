@@ -116,12 +116,32 @@ else
     }
 }
 
-@if (Operations.Recent is { Count: > 0 } recent)
+@if (_clusterOperations is { Count: > 0 } clusterOperations)
+{
+    <section class="lt-backups-section" aria-labelledby="lt-backups-cluster-operations-title">
+        <h2 id="lt-backups-cluster-operations-title" class="lt-backups-section__title">Backup and restore operations</h2>
+        <ul class="lt-backups-list">
+            @foreach (var operation in clusterOperations)
+            {
+                <li @key="operation.OperationId">
+                    <a class="lt-backups-link" href="@Href(BackupsAddresses.Operation(operation.OperationId))">@BackupClusterOperation.Title(operation)</a>
+                    - @OperationText.State(operation)@(operation.IsTerminal ? string.Empty : OperationProgressText(operation))
+                </li>
+            }
+        </ul>
+    </section>
+}
+else if (_clusterOperationsError is { } operationsError)
+{
+    <p class="lt-backups-note">The recent backup and restore operations could not be listed: @operationsError</p>
+}
+
+@if (SessionOperations is { Count: > 0 } recent)
 {
     <section class="lt-backups-section" aria-labelledby="lt-backups-operations-title">
         <h2 id="lt-backups-operations-title" class="lt-backups-section__title">Operations this session</h2>
         <ul class="lt-backups-list">
-            @foreach (var operation in recent.Take(10))
+            @foreach (var operation in recent)
             {
                 <li @key="operation.Id">
                     <a class="lt-backups-link" href="@Href(BackupsAddresses.Operation(operation.Id))">@operation.Title</a>

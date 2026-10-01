@@ -66,11 +66,13 @@ internal sealed class BackupOperations : IDisposable
     /// <param name="title">Its title.</param>
     /// <param name="stages">Its stages, in order.</param>
     /// <param name="work">The work, given the operation and the circuit's lifetime token.</param>
+    /// <param name="reverts">For a revert, the cluster operation id of the restore it reverts.</param>
     public BackupOperation Start(
         BackupOperationKind kind,
         string title,
         IReadOnlyList<string> stages,
-        Func<BackupOperation, CancellationToken, Task> work)
+        Func<BackupOperation, CancellationToken, Task> work,
+        string? reverts = null)
     {
         ArgumentNullException.ThrowIfNull(work);
         ObjectDisposedException.ThrowIf(_lifetime.IsLeft, this);
@@ -80,7 +82,7 @@ internal sealed class BackupOperations : IDisposable
         lock (_gate)
         {
             _next++;
-            operation = new BackupOperation(_next.ToString(CultureInfo.InvariantCulture), kind, title, stages, _time);
+            operation = new BackupOperation(_next.ToString(CultureInfo.InvariantCulture), kind, title, stages, _time, reverts);
             _operations.Add((operation, tenant));
         }
 
@@ -123,6 +125,37 @@ internal sealed class BackupOperations : IDisposable
             {
                 var (operation, owner) = _operations[i];
                 if (operation.Kind == kind && ShellAssertedTenant.Same(owner, tenant))
+                {
+                    return operation;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The most recent revert of the cluster restore <paramref name="clusterOperationId"/>
+    /// started in this circuit under the tenant it asserts now, or <see langword="null"/>.
+    /// A failed revert is skipped, so the restore can be reverted again.
+    /// </summary>
+    /// <param name="clusterOperationId">The restore's cluster operation id.</param>
+    public BackupOperation? RevertOf(string? clusterOperationId)
+    {
+        if (string.IsNullOrEmpty(clusterOperationId))
+        {
+            return null;
+        }
+
+        var tenant = _tenant.AssertedTenant;
+        lock (_gate)
+        {
+            for (var i = _operations.Count - 1; i >= 0; i--)
+            {
+                var (operation, owner) = _operations[i];
+                if (string.Equals(operation.Reverts, clusterOperationId, StringComparison.Ordinal)
+                    && operation.Status is not (BackupOperationStatus.Failed or BackupOperationStatus.Cancelled)
+                    && ShellAssertedTenant.Same(owner, tenant))
                 {
                     return operation;
                 }

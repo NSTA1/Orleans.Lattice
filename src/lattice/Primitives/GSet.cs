@@ -124,7 +124,7 @@ public sealed class GSet : ICrdt<GSet>
         if (Elements.Count == 0) yield break;
 
         var keys = new List<string>(Elements);
-        keys.Sort(StringComparer.Ordinal);
+        keys.Sort(OrdinalStringOrder.Comparison);
         foreach (var key in keys)
         {
             yield return Convert.FromBase64String(key);
@@ -155,7 +155,7 @@ public sealed class GSet : ICrdt<GSet>
 
         var keys = new string[count];
         Elements.CopyTo(keys);
-        Array.Sort(keys, StringComparer.Ordinal);
+        Array.Sort(keys, OrdinalStringOrder.Comparison);
 
         var values = new byte[count][];
         for (var i = 0; i < count; i++)

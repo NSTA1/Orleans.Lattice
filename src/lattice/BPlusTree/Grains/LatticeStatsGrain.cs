@@ -70,9 +70,12 @@ internal sealed class LatticeStatsGrain(
     private async Task<TreeDiagnosticReport> BuildReportAsync(bool deep, CancellationToken cancellationToken)
     {
         // Resolve routing (physical tree ID + shard map) via the public entry point
-        // so registry-alias resolution is handled uniformly.
+        // so registry-alias resolution is handled uniformly. Force-refreshed: the
+        // stateless worker's cached map is not invalidated by a reshard, and a
+        // diagnostic walk meets no stale-routing refusal to correct it, so the
+        // report would otherwise keep naming the pre-reshard shards (#4146).
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShardIndices = routing.Map.GetPhysicalShardIndices();
