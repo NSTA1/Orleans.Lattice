@@ -18,6 +18,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Abstractions.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
