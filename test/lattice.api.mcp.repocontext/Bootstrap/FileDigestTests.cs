@@ -104,4 +104,46 @@ public sealed class FileDigestTests
     public void Matches_throws_when_the_stored_digest_is_null()
         => Assert.Throws<ArgumentNullException>(
             () => FileDigest.Matches(null!, ReadOnlySpan<byte>.Empty));
-}
+
+    [Test]
+    public void Compute_over_text_matches_compute_over_its_utf8_bytes(
+        [Values("", "abc", "the quick brown fox", "caf\u00e9 \u00fcber \u4e2d\u6587")] string text)
+        => Assert.That(
+            FileDigest.Compute(text.AsSpan()),
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(text))));
+
+    [Test]
+    public void Compute_over_text_matches_compute_over_its_utf8_bytes_across_the_rent_boundary()
+    {
+        for (var length = 0; length <= 600; length++)
+        {
+            var text = new string('a', length);
+
+            Assert.That(
+                FileDigest.Compute(text.AsSpan()),
+                Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(text))),
+                $"An ASCII input of {length} characters must digest identically either way.");
+        }
+    }
+
+    [Test]
+    public void Compute_over_multibyte_text_matches_compute_over_its_utf8_bytes_above_the_stack_budget()
+    {
+        var text = string.Concat(Enumerable.Repeat("\u4e2d\u6587\u30c6\u30b9\u30c8", 400));
+
+        Assert.That(
+            FileDigest.Compute(text.AsSpan()),
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(text))));
+    }
+
+    [Test]
+    public void Compute_over_a_slice_matches_compute_over_the_equivalent_substring()
+    {
+        const string source = "prefix<<payload>>suffix";
+        var start = source.IndexOf("<<", StringComparison.Ordinal);
+        var length = source.IndexOf(">>", StringComparison.Ordinal) + 2 - start;
+
+        Assert.That(
+            FileDigest.Compute(source.AsSpan(start, length)),
+            Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes(source.Substring(start, length)))));
+    }}

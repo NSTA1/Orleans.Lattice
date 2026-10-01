@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 
 /// <summary>
@@ -127,4 +130,81 @@ public sealed class RepoContextReuseTests
             Assert.That(hash, Is.Empty);
         });
     }
-}
+
+    [Test]
+    public void ContentHash_is_the_sha256_of_the_utf8_body_across_the_rent_boundary()
+    {
+        foreach (var length in new[] { 0, 1, 340, 341, 342, 1023, 1024, 1025, 4096 })
+        {
+            var body = new string('x', length);
+            var expected = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(body)));
+
+            Assert.That(
+                RepoContextReuse.ContentHash(body),
+                Is.EqualTo(expected),
+                $"A body of {length} characters must hash identically.");
+        }
+    }
+
+    [Test]
+    public void ContentHash_is_the_sha256_of_a_multibyte_utf8_body()
+    {
+        var body = string.Concat(Enumerable.Repeat("caf\u00e9 \u4e2d\u6587 ", 500));
+        var expected = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(body)));
+
+        Assert.That(RepoContextReuse.ContentHash(body), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Receipt_is_the_sha256_of_the_nul_joined_parts()
+    {
+        const string repoId = "lattice";
+        const string path = "src/A.cs";
+        const string contentHash = "deadbeef";
+        const string unitKey = "Acme.Widgets.Gadget.Run";
+        var kind = RepoContextReuse.OutlineKind;
+        var expected = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(string.Join('\u0000', repoId, path, contentHash, kind, unitKey))));
+
+        Assert.That(
+            RepoContextReuse.Receipt(repoId, path, contentHash, kind, unitKey),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Receipt_is_the_sha256_of_the_nul_joined_parts_above_the_stack_budget()
+    {
+        const string repoId = "lattice";
+        var path = "src/" + new string('p', 2048) + ".cs";
+        const string contentHash = "deadbeef";
+        var unitKey = new string('u', 512);
+        var kind = RepoContextReuse.OutlineKind;
+        var expected = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(string.Join('\u0000', repoId, path, contentHash, kind, unitKey))));
+
+        Assert.That(
+            RepoContextReuse.Receipt(repoId, path, contentHash, kind, unitKey),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Receipt_is_the_sha256_of_the_nul_joined_parts_for_multibyte_parts()
+    {
+        const string repoId = "lattice";
+        const string path = "src/caf\u00e9/\u4e2d\u6587.cs";
+        const string contentHash = "deadbeef";
+        const string unitKey = "Acme.Caf\u00e9.Run";
+        var kind = RepoContextReuse.SpanKind;
+        var expected = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(string.Join('\u0000', repoId, path, contentHash, kind, unitKey))));
+
+        Assert.That(
+            RepoContextReuse.Receipt(repoId, path, contentHash, kind, unitKey),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void PossessionToken_is_the_path_and_hash_joined_by_nul()
+        => Assert.That(
+            RepoContextReuse.PossessionToken("src/A.cs", "deadbeef"),
+            Is.EqualTo("src/A.cs\u0000deadbeef"));}
