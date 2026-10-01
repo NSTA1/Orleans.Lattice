@@ -1736,3 +1736,27 @@ a.lt-chain__text:hover {
     background: repeating-linear-gradient(-45deg, CanvasText 0, CanvasText 2px, Canvas 2px, Canvas 8px);
   }
 }
+
+/* LtOperationProgress (#4122): one long-running operation's status, shared by every area. */
+.lt-operation-progress {
+  display: grid;
+  gap: var(--lt-space-2);
+  max-inline-size: var(--lt-measure);
+}
+
+.lt-operation-progress__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-4);
+  margin: 0;
+}
+
+.lt-operation-progress__step {
+  font-variant-numeric: tabular-nums;
+}
+
+.lt-operation-progress__stopped,
+.lt-operation-progress__reason {
+  margin: 0;
+}
