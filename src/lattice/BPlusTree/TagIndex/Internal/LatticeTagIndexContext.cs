@@ -621,7 +621,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 result.Add(tag);
             }
         }
-        result.Sort(StringComparer.Ordinal);
+        result.Sort(OrdinalStringOrder.Comparison);
         return result;
     }
 
