@@ -61,14 +61,14 @@ internal sealed class LatticeOperationGrain(
             OperationId = operationId,
             Kind = request.Kind,
             TenantId = tenantId,
-            TreeIds = request.TreeIds,
+            TreeIds = Copy(request.TreeIds),
             State = LatticeOperationState.Queued,
             Phase = LatticeOperationPhaseNames.Queued,
             PhaseCount = request.Phases.Count > 0 ? request.Phases.Count : null,
-            Phases = request.Phases,
+            Phases = Copy(request.Phases),
             StartedAtUtc = now,
             RunnerSilo = request.RunnerSilo,
-            Attributes = request.Attributes,
+            Attributes = Copy(request.Attributes),
         };
 
         await PersistAsync(record, now);
@@ -227,7 +227,7 @@ internal sealed class LatticeOperationGrain(
             State = completion.State,
             FailureReason = completion.FailureReason,
             ResultReference = completion.ResultReference,
-            Result = completion.Result,
+            Result = Copy(completion.Result),
             FinishedAtUtc = now,
             Phase = succeeded ? LatticeOperationPhaseNames.Completed : record.Phase,
             PhaseIndex = succeeded ? null : record.PhaseIndex,
@@ -248,6 +248,18 @@ internal sealed class LatticeOperationGrain(
 
     private ILatticeOperationIndexGrain Index(string tenantId) =>
         grainFactory.GetGrain<ILatticeOperationIndexGrain>(LatticeOperationKey.ForIndex(tenantId));
+
+    // The record is durable state, so it keeps its own read-only copy of every
+    // collection a caller hands in: a same-silo call skips the [Immutable] copy,
+    // and the record must not share an instance the sender could still change,
+    // nor hand readers one they could write into.
+    private static IReadOnlyList<string> Copy(IReadOnlyList<string> values) =>
+        values.Count == 0 ? [] : [.. values];
+
+    private static IReadOnlyDictionary<string, string> Copy(IReadOnlyDictionary<string, string> values) =>
+        values.Count == 0
+            ? LatticeOperationRecord.EmptyResult
+            : new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(new Dictionary<string, string>(values, StringComparer.Ordinal));
 
     private static int? IndexOf(IReadOnlyList<string> phases, string phase)
     {

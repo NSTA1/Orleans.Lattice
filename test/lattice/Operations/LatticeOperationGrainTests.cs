@@ -67,6 +67,32 @@ public sealed class LatticeOperationGrainTests
         new() { Kind = kind, TreeIds = ["tree-a"], Phases = phases, RunnerSilo = RunnerSilo };
 
     [Test]
+    public async Task Begin_and_complete_keep_their_own_copy_of_the_senders_collections()
+    {
+        var grain = CreateGrain();
+        var trees = new List<string> { "tree-a" };
+        var phases = new List<string> { "A", "B" };
+        var attributes = new Dictionary<string, string> { ["scope"] = "whole" };
+        var result = new Dictionary<string, string> { ["backupId"] = "b1" };
+
+        await grain.BeginAsync(new LatticeOperationBeginRequest { Kind = "test.kind", TreeIds = trees, Phases = phases, Attributes = attributes, RunnerSilo = RunnerSilo });
+        await grain.CompleteAsync(LatticeOperationCompletion.Succeeded("b1", result));
+        trees[0] = "tree-z";
+        phases.Add("C");
+        attributes["scope"] = "prefix";
+        result["backupId"] = "b2";
+
+        var record = _state.State.Record!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(record.TreeIds, Is.EqualTo(new[] { "tree-a" }));
+            Assert.That(record.Phases, Is.EqualTo(new[] { "A", "B" }));
+            Assert.That(record.Attributes["scope"], Is.EqualTo("whole"));
+            Assert.That(record.Result["backupId"], Is.EqualTo("b1"));
+        });
+    }
+
+    [Test]
     public void GrainContext_returns_the_injected_context()
     {
         var grain = CreateGrain();
