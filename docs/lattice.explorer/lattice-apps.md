@@ -62,7 +62,11 @@ namespace as an exception:
 - MCP tools;
 - the bridge operations its UI requests.
 
-Installing binds each role to a membership group and confirms the ceiling. Each
+Installing binds each role to a membership group and confirms the ceiling. The install
+is pinned to the manifest digest of the version that was reviewed, so if the source
+changes the app between the review and the install - for example to request another
+bridge operation - the cluster refuses the install, nothing is recorded, and the page
+asks you to review it again. Each
 role's group is a [picker](navigation-model.md#pickers) that suggests groups from the
 identity directory, or the auth store's own groups when there is no directory, and
 accepts any group id. Enabling,

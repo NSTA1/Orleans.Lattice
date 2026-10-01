@@ -332,7 +332,12 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         }
         finally
         {
-            System.Buffers.ArrayPool<WalEntry>.Shared.Return(window, clearArray: true);
+            // Entries hold key strings and mutation payloads, so the examined
+            // prefix is cleared before the window goes back. Only that prefix:
+            // clearArray: true memsets the whole rounded-up rental even when the
+            // window examined a handful of entries.
+            window.AsSpan(0, examined).Clear();
+            System.Buffers.ArrayPool<WalEntry>.Shared.Return(window);
         }
 
         await Task.CompletedTask;

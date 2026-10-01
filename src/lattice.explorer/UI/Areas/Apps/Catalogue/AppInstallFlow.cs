@@ -302,6 +302,9 @@ internal sealed partial class AppInstallFlow
                     RoleBindings = [.. _bindings.Select(pair => new AppRoleBindingDescriptor { RoleName = pair.Key, GroupId = pair.Value })],
                     Ceiling = Draft.ToCeiling(),
                     SourceKey = Key.SourceKey,
+                    // Pins the install to the manifest reviewed here; a source that changes it before commit
+                    // is refused rather than consented unseen. Null against a server that predates the pin.
+                    ExpectedManifestDigest = descriptor.ManifestDigest,
                 }, cancellationToken);
 
                 // A fresh install records exactly what the manifest requests and an upgrade

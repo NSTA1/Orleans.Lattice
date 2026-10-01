@@ -73,7 +73,7 @@ else
     }
     @if (TenancyFormat.IsServedNowhere(status.Regions))
     {
-        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: it has residency set and none of its regions is Online yet.</p>
+        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: @TenancyFormat.ServedNowhereReason(status.Regions)</p>
     }
 
     @if (_others.Count > 0)

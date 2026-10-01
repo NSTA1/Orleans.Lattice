@@ -21,11 +21,13 @@ internal static class AppsGrpcTestData
     {
         Slug = "demo", Version = "1.2.3", Ceiling = Ceiling,
         RoleBindings = [new() { RoleName = "reader", GroupId = "readers" }],
+        ExpectedManifestDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     };
 
     public static AppDescriptor Descriptor { get; } = new()
     {
         Slug = "demo", Version = "1.2.3", Provenance = Provenance, State = AppLifecycleState.Enabled,
+        ManifestDigest = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
         Ceiling = Ceiling, RoleBindings = Install.RoleBindings,
         Trees = [new() { Name = "events", Rebuildable = true, AdoptedTreeId = "legacy", ShardCount = 2,
             VirtualShardCount = 32, MaxLeafKeys = 100, MaxInternalChildren = 8, WalPartitions = 4,

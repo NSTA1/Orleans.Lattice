@@ -583,7 +583,11 @@ covers every declared tree. Only data operations may name trees, and an empty
 list is rejected.
 
 The requested grants are part of what an install consents to. When a fresh install
-records its consent, it records `AppUiBridgeRequest.FromManifest`. An upgrade that
+records its consent, it records `AppUiBridgeRequest.FromManifest` of the manifest
+resolved at commit; an install that carries the reviewed manifest digest is refused
+if that manifest changed after the review (see
+[pinning the reviewed manifest](../lattice.api.apps/README.md#pinning-the-reviewed-manifest)).
+An upgrade that
 **adds** a grant fails activation with `BridgeConsentRequired` until the consent is
 updated. Removing a grant never needs consent. The grants gate the
 [bridge](../lattice.api.apps/README.md#the-bridge), and the cluster enforces them

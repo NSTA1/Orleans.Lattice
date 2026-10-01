@@ -1195,25 +1195,11 @@ internal sealed partial class ReplicationApplier(
     /// context and the map are absent the applier cannot enforce the gate and
     /// the caller fails closed, dropping the entry (issue #1398). Returns
     /// <c>null</c> for a tree that has an enrollment source but is not enrolled.
+    /// The rule lives in <see cref="ReplicationInboundAdmission"/>, which inbound
+    /// contact attribution consults too.
     /// </summary>
-    private LatticeMergeMode? ResolveLocalMergeMode(string treeId, out bool hasEnrollmentSource)
-    {
-        if (_replicationContext is not null)
-        {
-            hasEnrollmentSource = true;
-            return _replicationContext.ResolveMergeMode(treeId);
-        }
-
-        var trees = options.Get(treeId).ReplicatedTrees;
-        if (trees is not null)
-        {
-            hasEnrollmentSource = true;
-            return trees.TryGetValue(treeId, out var mode) ? mode : null;
-        }
-
-        hasEnrollmentSource = false;
-        return null;
-    }
+    private LatticeMergeMode? ResolveLocalMergeMode(string treeId, out bool hasEnrollmentSource) =>
+        ReplicationInboundAdmission.ResolveLocalMergeMode(_replicationContext, options, treeId, out hasEnrollmentSource);
 
     /// <summary>
     /// Dead-letters an inbound entry the receiver-side merge-mode gate rejected

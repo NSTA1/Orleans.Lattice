@@ -30,8 +30,13 @@ internal static partial class LatticeAppsGrpcMarshallers
                 }
                 finally
                 {
-                    // Install/consent payloads can contain membership and policy data.
-                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+                    // Install/consent payloads can contain membership and policy
+                    // data, so the bytes this call copied in are cleared. Only
+                    // that prefix: clearArray: true memsets the whole rounded-up
+                    // rental, which Rent may have sized at nearly twice the
+                    // payload, and this runs on every multi-segment RPC.
+                    buffer.AsSpan(0, length).Clear();
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
             });
     }

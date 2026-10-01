@@ -171,6 +171,8 @@ Only after 6a and 6b are green, run the non-chaos test suite. **The scope rule, 
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator&FullyQualifiedName!~RepositoryWideGateRunnerTests" --nologo --blame-hang-timeout 3m --blame-hang-dump-type none
 ```
 
+**Scope that run to the fixtures your change can plausibly break, not reflexively to the whole project**, and if you are a delegated sub-session treat it as binding rather than advisory. A dozen sessions run concurrently on one host here, so an unfiltered run contends with every sibling and with any measured workload the host also carries. See "Concurrency" under Running Tests in the master for what that costs and why a contended run presents as a hang.
+
 Before Phase 8 deliver - once the user has explicitly asked for commit/push/PR - repeat that scoped run across **every** package the PR touches (again per the master's mapping; for a PR that touches only repo-level files such as `docs/` or `CHANGELOG.md` with no `src/lattice/` code, the master's targeted hygiene-gate filter suffices instead of the whole core suite). A full cross-solution `dotnet test` (no project arg) is **not** a required local step - CI runs the full cross-solution non-chaos suite on every PR, so cross-project breakage in projects you did not touch is caught there.
 
 ### Phase 7 - Review

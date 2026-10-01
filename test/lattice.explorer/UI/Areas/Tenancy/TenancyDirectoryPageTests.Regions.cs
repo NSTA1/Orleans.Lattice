@@ -35,6 +35,22 @@ public sealed partial class TenancyDirectoryPageTests
     }
 
     [Test]
+    public void A_tenant_whose_regions_have_all_left_its_residency_reads_served_in_no_region()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = TenantRegionLifecycleStatus.Removed };
+
+        var cut = RenderAt<TenancyDirectoryPage>("tenancy");
+
+        cut.WaitUntil(() =>
+        {
+            var link = cut.Find("tbody tr td a[href='tenancy/acme/regions']");
+            Assert.That(link.TextContent.Trim(), Is.EqualTo(TenancyFormat.NoResidentRegion));
+            Assert.That(link.GetAttribute("aria-label"), Is.EqualTo("None: served in no region; open the regions of tenant acme"));
+        });
+    }
+
+    [Test]
     public async Task The_set_regions_command_has_a_visible_control_and_its_picker_opens_a_tenants_regions()
     {
         UseTenancyAs(isOperator: true);
