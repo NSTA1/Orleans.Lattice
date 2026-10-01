@@ -47,6 +47,19 @@ public partial class LatticeSchemaRemediationGrainTests
         await Task.CompletedTask;
     }
 
+    private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> Bounded(
+        IAsyncEnumerable<KeyValuePair<string, byte[]>> entries, string? startInclusive, string? endExclusive)
+    {
+        await foreach (var entry in entries)
+        {
+            if ((startInclusive is null || string.CompareOrdinal(entry.Key, startInclusive) >= 0)
+                && (endExclusive is null || string.CompareOrdinal(entry.Key, endExclusive) < 0))
+            {
+                yield return entry;
+            }
+        }
+    }
+
     private sealed class Harness
     {
         public required LatticeSchemaRemediationGrain Grain { get; init; }
@@ -85,7 +98,11 @@ public partial class LatticeSchemaRemediationGrainTests
         if (activationServices is not null) context.ActivationServices.Returns(activationServices);
 
         var source = Substitute.For<ILattice>();
-        source.EntriesAsync().Returns(_ => entriesFactory());
+        // Honour the scan bounds, so a slice that resumes after a cursor sees only
+        // the entries after it, exactly as the real tree serves them.
+        source.EntriesAsync(
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Bounded(entriesFactory(), ci.ArgAt<string?>(0), ci.ArgAt<string?>(1)));
         // Source routing for cutover: a single-shard identity map on the physical
         // tree that equals the (never-aliased) logical tree id.
         source.GetRoutingAsync().Returns(new ValueTask<RoutingInfo>(

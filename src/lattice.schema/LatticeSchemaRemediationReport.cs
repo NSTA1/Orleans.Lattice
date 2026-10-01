@@ -58,6 +58,9 @@ public readonly record struct LatticeSchemaRemediationReport
     /// <summary>Whether the remediation aborted on an offending value with no cutover.</summary>
     public bool DidAbort => Phase == LatticeSchemaRemediationPhase.Aborted;
 
+    /// <summary>Whether the remediation was cancelled before cutover, with no cutover.</summary>
+    public bool WasCancelled => Phase == LatticeSchemaRemediationPhase.Cancelled;
+
     /// <summary>The idle report for a tree that has never been remediated.</summary>
     public static LatticeSchemaRemediationReport Idle { get; } =
         new() { Phase = LatticeSchemaRemediationPhase.Idle };
@@ -109,6 +112,18 @@ public readonly record struct LatticeSchemaRemediationReport
             OffendingKey = offendingKey,
             Reason = reason,
             OffendingValuePreview = offendingValuePreview,
+            OperationId = operationId,
+        };
+
+    /// <summary>Creates a cancelled terminal report: the remediation stopped before cutover at an operator's request.</summary>
+    /// <param name="scannedCount">Entries processed in the phase that was cancelled.</param>
+    /// <param name="operationId">The operation id.</param>
+    public static LatticeSchemaRemediationReport Cancelled(int scannedCount, string operationId) =>
+        new()
+        {
+            Phase = LatticeSchemaRemediationPhase.Cancelled,
+            InProgress = false,
+            ScannedCount = scannedCount,
             OperationId = operationId,
         };
 
