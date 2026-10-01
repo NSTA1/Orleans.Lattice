@@ -1,0 +1,110 @@
+@using Orleans.Lattice.Explorer.UI.Areas.Access
+
+@*
+    Why the caller cannot open an app they hold no role in, and how to fix it (issue #4150).
+    A role is held only through membership of the group it is bound to (issue #3902), so
+    the notice names the bound groups, says whether the caller is in them as far as their
+    own credential can read, and offers the fixes the caller may take: joining a bound
+    group, or binding a role to a group they are in. It never implies that administrator
+    rights hold a role, and it never guesses membership it could not read.
+*@
+@if (Assessment is null)
+{
+    return;
+}
+@if (Compact)
+{
+    <span class="lt-apps-holding lt-apps-holding--compact" data-lt-holding="@State">
+        <span>You hold no role in it: @Assessment.BindingsText. @MembershipSentence</span>
+        @Fixes
+    </span>
+}
+else
+{
+    <div class="lt-apps-holding lt-app-holding" data-lt-holding="@State">
+        <p><strong>@Headline</strong></p>
+        <p>
+            @if (Assessment.BoundGroups.Count == 0)
+            {
+                @("No role is bound to a group, so nobody holds one.")
+            }
+            else
+            {
+                @($"Its roles are bound to groups: {Assessment.BindingsText}. A role is held only by the members of the group it is bound to; administrator rights do not grant one.")
+            }
+        </p>
+        @if (!string.IsNullOrEmpty(MembershipSentence))
+        {
+            <p data-lt-holding-membership="true">@MembershipSentence</p>
+        }
+        <div class="lt-apps-holding__actions lt-app-holding__actions">
+            @Fixes
+            @if (OnCheckAgain.HasDelegate)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="OnCheckAgain">Check again</LtButton>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>The caller's holding in the app, cascaded by the page that assessed it.</summary>
+    [CascadingParameter]
+    internal AppRoleHoldingAssessment Assessment { get; set; } = default!;
+
+    /// <summary>The app's name as shown.</summary>
+    [Parameter, EditorRequired]
+    public string AppName { get; set; } = string.Empty;
+
+    /// <summary>Whether the app is enabled; nobody holds a role in an app that is not.</summary>
+    [Parameter]
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Where the caller may change the app's role bindings, or <see langword="null"/> when they may not.</summary>
+    [Parameter]
+    public string? RebindHref { get; set; }
+
+    /// <summary>Reads the caller's access again; no button is drawn without it.</summary>
+    [Parameter]
+    public EventCallback OnCheckAgain { get; set; }
+
+    /// <summary>Whether to draw one line for a table row rather than a block.</summary>
+    [Parameter]
+    public bool Compact { get; set; }
+
+    [Inject]
+    internal ExplorerNavigator Navigator { get; set; } = default!;
+
+    private string State => Assessment.HoldsAny switch
+    {
+        true => "member",
+        false => "none",
+        null => "unknown",
+    };
+
+    private string Headline => Enabled
+        ? $"You hold no role in {AppName}, so you cannot open it."
+        : $"You hold no role in {AppName}: nobody holds its roles until it is enabled.";
+
+    private string MembershipSentence => Assessment.HoldsAny switch
+    {
+        true => $"You are in {string.Join(" and ", Assessment.MemberGroups)}, so you will hold {string.Join(" and ", Assessment.HeldRoles)} {(Enabled ? "once your access catches up" : "once it is enabled")}.",
+        false when Assessment.MissingGroups.Count > 0 => $"You are not in {string.Join(" or ", Assessment.MissingGroups)}.",
+        false => string.Empty,
+        null => "Whether you are in these groups is unknown: your group membership could not be read.",
+    };
+
+    private RenderFragment Fixes => @<text>
+        @if (Assessment.MembershipKnown)
+        {
+            @foreach (var group in Assessment.MissingGroups)
+            {
+                <a class="lt-btn lt-btn--quiet" href="@Navigator.Canonicalize(AccessRoutes.Group(group)).ToHref()" data-lt-join="@group">Add me to @group</a>
+            }
+        }
+        @if (RebindHref is { } rebind && Assessment.HoldsAny != true)
+        {
+            <a class="lt-btn lt-btn--quiet" href="@rebind" data-lt-rebind-fix="true">Bind a role to a group you are in</a>
+        }
+    </text>;
+}
