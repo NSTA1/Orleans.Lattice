@@ -5,7 +5,8 @@
 The companion **`Orleans.Lattice.Schema`** package adds two opt-in, composable
 capabilities on top of the opaque-`byte[]` core:
 
-- **Enforcement** - a per-tree policy validates every write. This sample installs
+- **Enforcement** - a per-tree policy validates the values written through the
+  tree's write operations. This sample installs
   a JSON policy on the `orders` tree, shows a well-formed write being accepted, a
   malformed write being rejected with `LatticeSchemaViolationException`, and
   confirms the rejected key was never persisted.
@@ -46,9 +47,11 @@ Done.
 
 ## When to use
 
-- You need the cluster (not just clients) to guarantee stored values are
-  well-formed - JSON, UTF-8, size-bounded, matching a regular expression, or
-  matching a structured predicate.
+- You need the cluster (not just clients) to reject writes of values that are
+  not well-formed - JSON, UTF-8, size-bounded, matching a regular expression, or
+  matching a structured predicate. (A plain, non-atomic last-writer-wins
+  replication apply, a backup restore and a tree merge are not checked; see
+  [strict-mode ingest](../../docs/lattice.schema/schema-enforcement.md#strict-mode-ingest).)
 - You are evolving a value schema over time and want old and new values to coexist,
   with readers always seeing the current shape.
 

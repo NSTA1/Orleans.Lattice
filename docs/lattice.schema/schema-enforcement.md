@@ -1,7 +1,9 @@
 # Schema enforcement
 
-Schema enforcement adds per-tree, server-side validation of every value written
-to an opted-in tree. It is provided by the `Orleans.Lattice.Schema` companion
+Schema enforcement adds per-tree, server-side validation of the values an
+opted-in tree's write operations carry (see
+[which writes are checked](#setting-a-policy-on-a-tree)). It is provided by the
+`Orleans.Lattice.Schema` companion
 package and is strictly opt-in: a tree with no policy behaves exactly like a
 plain lattice.
 
@@ -14,8 +16,8 @@ using Orleans.Lattice.Schema;
 
 siloBuilder.AddLatticeSchemaEnforcement(options =>
 {
-    // The global half of strict ingest: let the interceptor inspect replicated /
-    // restored writes. Each tree's policy must also opt in (see below).
+    // The global half of strict ingest: let the interceptor inspect system-origin
+    // (ingest) writes. Each tree's policy must also opt in (see below).
     options.StrictIngest = true;
 
     // Also validate the result of a CRDT merge (default off).
@@ -33,7 +35,7 @@ siloBuilder.AddLatticeSchemaEnforcement(options =>
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `StrictIngest` | `bool` | `false` | The global half of [strict-mode ingest](#strict-mode-ingest). While it is `false` the enforcement stage does not ask to see system-origin (replication apply / restore) writes, so trusted ingest pays nothing - but see the caveat there for a silo that also registers schema versioning. |
+| `StrictIngest` | `bool` | `false` | The global half of [strict-mode ingest](#strict-mode-ingest). While it is `false` the enforcement stage does not ask to see system-origin writes (that section says which ingest paths reach the stage at all), so trusted ingest pays nothing - but see the caveat there for a silo that also registers schema versioning. |
 | `ValidateCrdtMergeResults` | `bool` | `false` | Registers a post-merge observer that validates each merged value against the tree's policy. It never rejects or rewrites a merge: a violation becomes a non-mutating `LatticeMergeOutcome.AcceptWithEvent` annotation, which the core does not currently surface to any log, metric, or event sink. The flag is read only from the delegate passed to the first `AddLatticeSchemaEnforcement` call; setting it through `ConfigureLatticeSchemaEnforcement` or a repeat `AddLatticeSchemaEnforcement` call does not register the observer. |
 | `DeadLetterPreviewMaxBytes` | `int` | `4096` | The maximum number of leading value bytes copied into the `ValuePreview` of a dead-letter entry the enforcement stage writes, and into a remediation (or eager version migration) abort's `OffendingValuePreview`. A value below `1` is treated as `1`. |
 
@@ -64,6 +66,16 @@ Once a policy is installed, a local write of a non-compliant value throws a
 at write time only when the delta itself parses as JSON; an opaque delta is
 accepted, and only the opt-in merge-result observer (`ValidateCrdtMergeResults`)
 sees the merged value.
+
+The check runs on the tree's value-carrying write operations: `SetAsync`,
+`SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyWherePredicateAsync`,
+the atomic batches (`SetManyAtomicAsync`, `SetManyAtomicWhereAsync`, and the
+whole-value writes of a cross-tree atomic batch), the CRDT delta applies
+(`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync`) and the bulk loads
+(`BulkLoadAsync`, `BulkAppendChunkAsync`). A batch is checked before any of it is
+written, so one non-compliant value in a local batch fails the whole call. A tree
+merge (`MergeAsync`) folds the source tree's entries straight into the shards
+without passing through the check, so merged values are not validated.
 
 ## Rule kinds
 
@@ -112,11 +124,23 @@ violates the policy is diverted to the tree's [dead-letter
 queue](dead-letter-queue.md) instead of being applied, so a bad item is neither
 silently accepted nor allowed to stall the ingest stream.
 
+Strict mode only sees ingest that reaches the tree's write operations as a
+system-origin write, which in practice is two replication paths. One is the
+typed-CRDT path: a replicated CRDT delta (judged, like a local delta, only when
+it parses as JSON) or a full-state CRDT row during bootstrap. The other is the
+entries of a replicated atomic batch, which the receiver stages one at a time
+through the tree's write operations until the batch's commit arrives. A
+dead-lettered entry of such a batch is left out of what the receiver stages, and
+the receiver commits the batch's other entries when the commit arrives. A plain
+(non-atomic) last-writer-wins replication apply and a backup restore merge or
+bulk-load straight into the tree's shards, so even in strict mode their values
+are stored verbatim and never dead-lettered.
+
 Strict ingest requires **two** flags to line up, and takes effect only when both
 are set:
 
 - the **global** switch on the options (`StrictIngest = true`), which is what makes
-  the interceptor inspect system-origin (replication apply / restore) writes at
+  the interceptor inspect system-origin writes (the ingest described above) at
   all; and
 - the **per-tree** flag on that tree's policy, set via the
   `LatticeSchemaPolicy(rules, strictIngest: true)` constructor.
@@ -227,8 +251,18 @@ compliant form: on the write path the enforcement stage validates the plain valu
 before the versioning stage wraps it in the envelope. Advancing the target version
 and re-stamping existing values (`AdvanceAndMigrateAsync`) is a single shadow
 build: upcast each value, validate it against the tree's **existing** policy, cut
-over, aborting on the first offending key. The migration leaves the policy
-unchanged, so tightening the policy is the separate remediation above.
+over, aborting on the first value that violates it (a value that cannot be upcast
+throws instead - see
+[eager background migration](schema-versioning.md#eager-background-migration)).
+The migration leaves the policy unchanged, so tightening the policy is the
+separate remediation above.
+
+A remediation of a versioned tree reads each value through the read path, which
+strips its version envelope and upcasts it to the target, and writes the
+transformed value into the destination without an envelope. After cutover those
+values read back as unstamped (legacy) values: a read returns the transformed
+body, but a later target advance does not upcast it, and an eager version
+migration stamps it at its target without upcasting it.
 
 ## See also
 

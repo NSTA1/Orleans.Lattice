@@ -16,7 +16,8 @@ the Explorer's web head composes over.
   through their own credential-aware transport. The connection is configured with a
   `LatticeConnectionSettings` record: the endpoint `Address`, the
   `AllowUnencryptedHttp2` opt-in, the `Authentication` seam, non-secret
-  `TransportHeaders`, and the `DegradeAfter`, `HealthCheckInterval`,
+  `TransportHeaders`, the `ActiveTenantProvider` whose tenant every call
+  asserts, and the `DegradeAfter`, `HealthCheckInterval`,
   `TransientRetryBackoff`, and `MaxTransientRetries` timings. The Explorer
   documentation's configuration page lists every member with its type and
   default.

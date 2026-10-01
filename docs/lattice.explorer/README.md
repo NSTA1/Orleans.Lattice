@@ -166,6 +166,6 @@ for wiring sign-in.
 
 ## See also
 
-- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) - the optional Microsoft Entra ID interactive (desktop or device-code) sign-in provider.
+- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) - the optional Microsoft Entra ID interactive MSAL (browser or device-code) sign-in provider, for hosts that do not use the hosted-web OpenID Connect cookie flow.
 - [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md) - the optional hosted-web (OpenID Connect) Entra sign-in provider.
 - [Installable apps](../lattice.apps/README.md) - the Lattice Apps model the Apps area administers.

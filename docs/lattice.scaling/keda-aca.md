@@ -88,7 +88,8 @@ scale: {
 - `targetValue: '0.5'` - the per-replica pressure the rule holds the pool at.
   `scaleValue` is the dominant compute pressure (`0.0` to `1.0`) times the current
   replica count, so it never exceeds that count except at the `MinReplicas` floor
-  or while the scale-in gate holds an earlier value. An ACA custom scale rule
+  or while the scale-in gate holds - or the smoothing releases - an earlier,
+  higher value. An ACA custom scale rule
   exposes no metric type, so KEDA's default `AverageValue` applies and it computes
   `desiredReplicas = ceil(scaleValue / targetValue)`: the pool grows when the
   dominant pressure rises above `targetValue`, and shrinks - once the scale-in
@@ -101,7 +102,16 @@ scale: {
 - `activationTargetValue: '1'` - the threshold above which KEDA activates the app
   from zero (if you allow scale-to-zero). Keep it aligned with your `MinReplicas`.
 - `minReplicas` / `maxReplicas` - the ACA replica envelope. Set `minReplicas` to
-  your quorum floor and `maxReplicas` to your capacity ceiling.
+  your quorum floor and `maxReplicas` to your capacity ceiling. The rule divides
+  the signal's `MinReplicas` floor by `targetValue` like any other `scaleValue`,
+  so once the answering replica has taken its first sample it never asks for
+  fewer than `ceil(MinReplicas / targetValue)` replicas. With the host wiring
+  above (`MinReplicas = 2`) an idle pool's `scaleValue` sits at the floor, 2, and
+  the rule asks for `ceil(2 / 0.5)` = 4 replicas, so the pool rests at four
+  (capped at `maxReplicas`) rather than at `minReplicas: 2`. For the pool to rest
+  at `minReplicas`, keep `MinReplicas` at or below `minReplicas` times
+  `targetValue` - at most 1 here; its default of `0` leaves the floor entirely to
+  `minReplicas`.
 
 ## Polling and stabilization versus EWMA
 

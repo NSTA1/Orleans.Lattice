@@ -100,9 +100,13 @@ siloBuilder.ConfigureLatticeTenancy(options =>
   `t/{tenantId}/{name}`, and the gate enforces ownership with a cheap ordinal
   prefix check - the same shape as the existing `_lattice_` / `sys-` reserved
   namespaces. The tenant prefix is a third reserved namespace with its own
-  user-write guard: a user-origin write may name a `t/` id only when the id's
-  structural owner is the caller's own active tenant - which is exactly what the
-  facades compose - so a caller can never name another tenant's namespace. The app-tree prefix `a/` used by
+  user-write guard on the `ILattice` mutation surface: a user-origin write there
+  may name a `t/` id only when the id's structural owner is the caller's own active
+  tenant - which is exactly what the facades compose. Reads are not guarded: a read
+  naming another tenant's `t/` id reaches the access gate, which refuses the
+  crossing unless a cross-tenant grant (or a platform-operator scope) authorizes
+  it. A grant's scope is matched against that full `t/{owner}/...` id, so a grant
+  offered for an unqualified name such as `orders` is accepted but covers no tree. The app-tree prefix `a/` used by
   [installable apps](../lattice.apps/README.md) is deliberately **not** reserved or
   treated as qualified: an app tree `a/{app}/{tree}` is an ordinary unqualified name,
   so it composes to `t/{tenantId}/a/{app}/{tree}` and each tenant gets its own copy of
@@ -162,7 +166,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   asserts nothing, whereas the sentinel means the assertion was rejected.
 - **A denial is an authorization outcome, not a fault.** A call refused by
   fail-closed tenant resolution surfaces as `PermissionDenied` on every gRPC
-  binding, carrying the reason. It is deliberately not `Internal`: that is a
+  binding, carrying the reason (the apps bindings send a fixed message instead).
+  It is deliberately not `Internal`: that is a
   retryable status, so a client would back off and retry a decision that can never
   change, and the refusal would be counted against the server-fault rate operators
   alert on. A call that resolves cleanly but breaches the tenant's quota is a
@@ -208,7 +213,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   active-tenant requests and crossings against the registry (or denies) exactly as above, and the inbound
   replication isolation gate falls back to the registry for tenant existence and
   status in the same windows. The steady state pays only a few field reads and a
-  timestamp read. A restarted epoch holds each write open for one lease, or until
+  timestamp read. A restarted epoch holds each write open for about 1.1 times the
+  lease (one lease plus a tenth), or until
   every silo cluster membership does not report dead has leased from it, so no silo
   leased by its previous incarnation stays authoritative. One window is bounded
   rather than closed: a silo that crashes after committing a registry write but
@@ -262,10 +268,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   fast path) at their entry point and use that one
   effective id for **both** the authorization check and the operation, so a verb
   can never authorize one tree and act on
-  another. Without that, an external caller had no route into its own namespace at
-  all: an unqualified name stayed a shared default-tenant tree, and a directly
-  supplied `t/{tenant}/...` id is (correctly) refused by the reserved-namespace
-  guard, because composition is internal. A caller that asserts no tenant resolves
+  another. Without that, an unqualified name would stay a shared default-tenant
+  tree. A caller that asserts no tenant resolves
   the reserved `default` tenant and keeps its bare tree ids (non-destructive
   adoption); a caller asserting a tenant it may not act as resolves the
   uninitialised "no tenant" value, which fails closed with a
@@ -375,7 +379,11 @@ never suddenly throttles an existing workload.
   `TenantUsageAccountingOptions.MeterInterval` (default 30 seconds) that walks each
   tenant's own trees - a bounded range scan over the tenant's `t/{tenant}/` key
   range, not a read of the whole catalog - samples their footprint, and rolls the
-  result up into that tenant's per-cluster usage slot. The reserved `default`
+  result up into that tenant's per-cluster usage slot. Every id registered in that
+  range is sampled, including the physical copy that a resize, a shadow-cutover
+  restore or a schema remediation registers beside the tree it aliases; the
+  logical id's report resolves the alias to that same copy, so an aliased tree's
+  footprint, and its tree count, are counted twice. The reserved `default`
   tenant is skipped: it can carry no quotas, so it is never metered. Admission deliberately
   **fails open** for a tenant with no landed sample yet, so a cold silo never
   spuriously refuses; that means enforcement arms one cycle after a tenant first
@@ -434,7 +442,9 @@ never suddenly throttles an existing workload.
   additionally at the tenant-scoped facade above it: admission consumes a rate token,
   so evaluating it at both layers would bill a single create twice. The ceiling is
   checked against an authoritative count of the tenant's registered trees read at
-  the moment of the create, not against the metered sample, so it binds even for a
+  the moment of the create (every id registered under its `t/{tenant}/` prefix, so
+  the physical copy beside an aliased tree counts as a tree of its own), not
+  against the metered sample, so it binds even for a
   tenant that has never been metered; creates that read the count concurrently can
   each be admitted, so the cap can be overshot by at most the number of creates in
   flight. A tree the data plane registers implicitly on first use - for example the
@@ -505,11 +515,17 @@ per-`(tenant, cluster)` budget coordinator divides the cluster rate across the l
 silos at lease cadence (`O(silos)`, never `O(ops)`). `LatticeTenantRateLimiterOptions`
 tunes that coordinator; none of its knobs touch the per-op hot path, so a
 misconfiguration changes only how the cluster rate is split, never whether
-enforcement stays lock-free:
+enforcement stays lock-free. Only an active tenant with a positive
+`MaxOpsPerSecond` gets a bucket: a `MaxOpsPerSecond` of `0` leaves the tenant as
+unthrottled as `null` does. Each silo's share is floored at one operation per
+second, and `BurstPercent` applies here too: a bucket may run about `BurstPercent`
+percent of the silo's share (at least one operation when the percent is positive)
+ahead of the steady rate, while a burst of `0` admits operations no closer together
+than the share's steady spacing.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `LeaseInterval` | `TimeSpan` | `30s` | How often the coordinator re-apportions each tenant's cluster rate across the live silos. A longer interval lowers coordination cost but widens the transient overshoot bound (lease interval times cluster rate); the default is sized for work backed by a whole-tree registry scan. A non-positive value falls back to the default. |
+| `LeaseInterval` | `TimeSpan` | `30s` | How often the coordinator re-apportions each tenant's cluster rate across the live silos. A longer interval lowers coordination cost but widens the transient overshoot bound (lease interval times cluster rate); the default is sized for work backed by a whole-tree registry scan. A non-positive value falls back to the default, and the tick period is held to about 49.7 days (the longest period a timer accepts). |
 | `LeaseCycleTimeout` | `TimeSpan` | `20s` | The bound on a single lease cycle. A cycle that exceeds it is cancelled and retried on a later tick, so a stalled tenant-registry read can never occupy the loop for longer than one interval. Clamped down to `LeaseInterval` if set at or above it, so the duty cycle stays bounded, and held to about 49.7 days (the longest delay a timer accepts). A non-positive value falls back to the default. |
 | `MaxLeaseBackoff` | `TimeSpan` | `5m` | The ceiling the lease interval backs off to after consecutive cycle failures. The effective interval doubles per consecutive failure and resets to `LeaseInterval` on the first success, so a persistently unhealthy registry is probed at a decaying rate rather than hammered every tick. A value below `LeaseInterval` disables backoff; a non-positive value falls back to the default. |
 | `RateSnapshotTtl` | `TimeSpan` | `2m` | How long a read of the registry's configured rates stays usable before the next cycle re-reads it. Configured rates change at administrative cadence, so caching them decouples the frequent re-apportionment of token buckets from the expensive whole-tree registry scan. The snapshot is stale-if-error, so a failed refresh apportions from the previous snapshot rather than pruning every tenant's bucket. A non-positive value falls back to the default. |
@@ -745,6 +761,13 @@ registry. Set `PublishGauges = false` to publish none of them.
 | `orleans.lattice.tenancy.overage.memory_bytes` | `By` | Converged, durable metered resident-memory overage. |
 | `orleans.lattice.tenancy.overage.trees` | `{tree}` | Converged, durable metered owned-tree overage. |
 
+Each instrument name is also a public constant on `LatticeTenantMetrics`
+(`TenantsName`, `UsageBytesName`, `UsageKeysName`, `UsageMemoryBytesName`,
+`UsageTreesName`, `QuotaBytesName`, `QuotaKeysName`, `QuotaMemoryBytesName`,
+`QuotaTreesName`, `QuotaBurstPercentName`, `OverageBytesName`, `OverageKeysName`,
+`OverageMemoryBytesName`, and `OverageTreesName`), and the `LatticeTenantMetrics.Meter`
+instance is public, so a listener can subscribe by reference rather than by name.
+
 The four ceiling gauges (`quota.bytes`, `quota.keys`, `quota.memory_bytes`, and
 `quota.trees`) emit a measurement **only for a tenant whose corresponding dimension
 is bounded** - an unbounded (`null`) ceiling contributes no series at all, so "no
@@ -853,8 +876,9 @@ host registers (below); once registered, it keys its behaviour off whether tenan
 actually present rather than off a separate opt-in flag, so a deployment without
 tenancy keeps a byte-for-byte-unchanged UI and tool surface.
 
-- **Explorer.** When the host enables the Explorer's tenant view
-  (`AddExplorerTenantView()`), the active tenant becomes the root node of every
+- **Explorer.** The Explorer's web head (`AddLatticeExplorerWeb`) always registers
+  its tenant view (`AddExplorerTenantView()`). With tenancy on, the active tenant
+  becomes the root node of every
   tenant-scoped address (`/t/{tenant}/...`), typing `t/` in the address line
   re-roots the current address at another tenant the caller may reach, and the
   Tenancy area serves the operator's tenant directory and each tenant's own pages.
@@ -908,7 +932,7 @@ the service collection directly - for example
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view (`sys-tenant-registry-history`) over the `sys-tenant-registry` tree. |
 | `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
-| `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy, residency and placement snapshots as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, cross-tenant crossings, residency checks and inbound-replication tenant checks are confirmed against the registry or denied, and a tenant tree's registration waits a fifth of this for the lease to return before it is refused. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
+| `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy, residency and placement snapshots as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, every request that acts as an asserted active tenant (on its own trees or across a cross-tenant grant), residency checks and inbound-replication tenant checks are confirmed against the registry or denied, and a tenant tree's registration waits up to a fifth of this for the placement view to become authoritative before it is refused. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
 
 ### `TenantUsageAccountingOptions`
 
@@ -918,7 +942,7 @@ Governs usage metering and the quota-enforcement scope every tenant is admitted 
 |---|---|---|---|
 | `DefaultEnforcementScope` | `TenantEnforcementScope` | `GlobalConverged` | The [enforcement scope](#enforcement-scope-multi-cluster) every tenant's quota admission runs under, read live; there is no per-tenant override yet. |
 | `PublishMinAbsoluteDelta` | `long` | `65536` (`64 * 1024`) | Absolute movement, in the sampled unit, below which a usage republish is damped. A tenant's *first* non-empty publish is never damped. |
-| `PublishMinRelativeDelta` | `double` | `0.05` | Relative movement, as a fraction of the last published value, below which a usage republish is damped. Per dimension the effective threshold is the larger of this fraction and `PublishMinAbsoluteDelta`, and the slot republishes when any one dimension moves by at least its threshold. |
+| `PublishMinRelativeDelta` | `double` | `0.05` | Relative movement, as a fraction of the last published value, below which a usage republish is damped. Per dimension the effective threshold is the larger of `PublishMinAbsoluteDelta` and this fraction of that dimension's last published value, and the slot republishes when any one dimension moves by at least its threshold. A negative value of either knob is treated as zero. |
 | `MeterInterval` | `TimeSpan` | `30s` | The per-silo metering cycle that samples each tenant's footprint and rolls it into that tenant's per-cluster usage slot. Zero or a negative value disables metering entirely, which pins footprint admission in its documented fail-open branch so an authored footprint quota never binds (the request rate and the tree-count check at creation still apply). Re-read before every cycle, so a reload to zero or a negative value stops a running loop. A value above about 49.7 days (`0xFFFFFFFE` milliseconds, the longest delay a timer accepts) is clamped to it. |
 
 ### `TenantObservabilityOptions`
@@ -928,7 +952,7 @@ Governs the per-tenant gauges described under [Observability](#observability).
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `PublishGauges` | `bool` | `true` | Whether to publish the per-tenant observable gauges on the `orleans.lattice.tenancy` meter. `false` leaves the meter inert and skips the periodic overage scan. |
-| `PublishInterval` | `TimeSpan` | `30s` (`DefaultPublishInterval`) | How often the publisher re-samples the warm usage index and the overage billing seam. A non-positive value is treated as the default. |
+| `PublishInterval` | `TimeSpan` | `30s` (`DefaultPublishInterval`) | How often the publisher re-samples the warm usage index and the overage billing seam. A non-positive value is treated as the default, and a value above about 49.7 days (the longest period a timer accepts) is clamped to it. |
 
 ### `LatticeTenantRateLimiterOptions`
 
@@ -942,12 +966,14 @@ silos. See [Rate limiting](#rate-limiting) for the full table.
 - [`Orleans.Lattice.Api.TenantAdmin.Grpc`](../lattice.api.tenantadmin.grpc/README.md) -
   the code-first gRPC binding and remote client for the tenant-administration facade.
 - [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md) - the web UI whose
-  tenant view surfaces the signed-in tenant crumb and operator tenant selector.
+  tenant view roots each tenant-scoped address at the active tenant and offers a
+  platform operator a tenant switcher.
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server that
   contributes the read-only tenant self-awareness tools.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the authorization gate the
   tenant boundary is enforced at.
 - [`Orleans.Lattice.Membership`](../lattice.membership/README.md) - the identity layer
-  that supplies a subject's tenant memberships.
+  that resolves the caller subject a tenant's admin-subject set is matched against.
 - [MultiTenancy sample](../../samples/MultiTenancy/README.md) - a runnable end-to-end
-  walkthrough of opt-in wire-up, tenant lifecycle, isolation, and quota governance.
+  walkthrough of opt-in wire-up, tenant tree naming, the tenant lifecycle, and the
+  fail-closed control plane.

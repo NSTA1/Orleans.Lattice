@@ -7,12 +7,12 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Only the shell's <em>own</em> vocabulary is declared here. An area contributed
-/// by a plugin supplies its own slug (see
-/// <see cref="ExplorerRoute.WithArea(string)"/>), and a downstream surface adds
-/// its own query keys through <see cref="ExplorerRouteParameters"/>, so neither
-/// has to edit this type. What is reserved is <see cref="Explore"/>: the shell's
-/// built-in home area owns that slug, and a plugin must not claim it.
+/// Only the shell's <em>own</em> vocabulary is declared here. A native area
+/// supplies its own slug (see <see cref="ExplorerRoute.WithArea(string)"/>),
+/// and a downstream surface adds its own query keys through
+/// <see cref="ExplorerRouteParameters"/>, so neither has to edit this type. What
+/// is reserved is <see cref="Explore"/>: the shell's built-in home area owns that
+/// slug, and no other area must claim it.
 /// </para>
 /// <para>
 /// Every constant here is asserted lower case by the repository's route hygiene
@@ -23,7 +23,7 @@ public static class ExplorerRouteSegments
 {
     /// <summary>
     /// The area slug of the shell's built-in home surface, the catalog plus
-    /// detail pairing that <c>/</c> resolves to. Reserved: a plugin area must
+    /// detail pairing that <c>/</c> resolves to. Reserved: every other area must
     /// choose a different slug. It owns the literal route <c>/explore</c>.
     /// </summary>
     public const string Explore = "explore";
@@ -46,9 +46,9 @@ public static class ExplorerRouteSegments
     /// <para>
     /// So every declared route except the bare <c>/</c> begins with a literal
     /// segment. The home area owns <see cref="Explore"/> because it is the
-    /// shell's own surface; a contributed area cannot own a literal (its slug is
-    /// only known at run time), so it is namespaced here instead. The cost is one
-    /// segment in a plugin area's URL; the benefit is that no contributed slug,
+    /// shell's own surface; another area cannot own a top-level literal without
+    /// risking future asset collisions, so areas are namespaced here instead. The
+    /// cost is one segment in an area's URL; the benefit is that no area slug,
     /// present or future, can collide with an asset path.
     /// </para>
     /// </remarks>

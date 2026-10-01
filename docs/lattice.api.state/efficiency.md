@@ -26,7 +26,7 @@ A per-tree metrics sample assembles the tile aggregates (live keys, tombstones, 
 
 ## Metrics sampling steps aside for a saturated tree
 
-Metrics sampling is best-effort and yields to write pressure. When a tree is reporting WAL saturation, the sampler skips the fresh per-shard walk entirely for that tree and serves a degraded snapshot (`DetailPaused = true`) built only from a single fan-out-free routing read: shard count and any requested view lag remain, while live counts and hotness are paused. This keeps the metrics surface from adding read load to shard roots that are already contended, and the detail resumes automatically on the next sample once the tree settles - see [Surfaces](surfaces.md#detail-paused-under-saturation).
+Metrics sampling is best-effort and yields to write pressure. When a tree is reporting WAL saturation, the sampler skips the fresh per-shard walk entirely for that tree and serves a degraded snapshot (`DetailPaused = true`) built only from a single fan-out-free routing read: shard count and any requested view lag remain, while live counts and hotness are paused. This keeps the metrics surface from adding read load to shard roots that are already contended, and the detail resumes automatically on the next sample once the tree settles - see [Surfaces](surfaces.md#detail-paused-under-saturation). The check uses the id being sampled, while the signal is recorded per physical tree, so a tree whose name resolves to a different physical copy (an aliased tree after an online resize or a shadow-cutover restore, or a tenant-local name a request supplies under an asserted tenant) is still walked while its copy is saturated.
 
 ## What this means in practice
 
@@ -34,7 +34,7 @@ Metrics sampling is best-effort and yields to write pressure. When a tree is rep
 - A dashboard with many panels watching the same tree's metrics drives one sampler, not many.
 - Enabling per-shard hotness adds no extra fan-out over the base tile sample.
 - A slow or disconnected observer degrades only its own view, never the cluster or its peers.
-- A saturated tree's metrics pause their live detail rather than piling read load onto its shard roots.
+- A saturated tree's metrics pause their live detail rather than piling read load onto its shard roots (a tree reached through an alias, or by a tenant-local name, excepted - see above).
 
 ## Next
 

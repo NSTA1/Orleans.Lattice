@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Explorer.UI.Navigation;
 /// <para>
 /// The contract is <see langword="internal"/> on purpose, and nothing public lets
 /// another assembly register an area or a completion source: an area
-/// registration API is a plugin API by another name. An area registers itself
+/// registration API would be an external extension model by another name. An
+/// area registers itself
 /// from its own <c>ShellServiceCollectionExtensions.&lt;Area&gt;.cs</c> partial
 /// with <see cref="ExplorerAreaServiceCollectionExtensions.AddExplorerArea{TArea}"/>.
 /// </para>

@@ -43,6 +43,15 @@ var transform = LatticeValueTransform.Passthrough(
     LatticeValueTransform.DropMember("legacy"));
 ```
 
+`LatticeValueTransformEvaluation.Evaluate(value, transform)` applies a transform to
+one value in process - the same evaluation remediation and upcasting run - and
+throws `InvalidOperationException` for a null, empty or malformed JSON payload, a
+structurally invalid transform, or one nested more than 128 levels deep.
+`LatticeSchemaRemediation.DryRunAsync` runs that evaluation and a candidate
+policy's check over a stream of entries, stopping at the first value that fails,
+the way a remediation's dry-run gate does, without a cluster; it returns a
+`LatticeSchemaRemediationOutcome`.
+
 ## Lowering from a lambda
 
 For the common case you do not hand-build the IR: write an ordinary

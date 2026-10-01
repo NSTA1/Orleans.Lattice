@@ -673,7 +673,8 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// tombstone-delete and CRDT-delta entries pass through untouched. A leg whose
     /// values were transformed is rebuilt with the substituted values at their
     /// original positions; otherwise the caller's batch is preserved. Short-circuits
-    /// with no allocation under the default null interceptor or a system-origin turn.
+    /// with no allocation under the default null interceptor or a system-origin turn
+    /// the interceptor has not opted into.
     /// </summary>
     private async Task<List<LatticeTreeBatch>> EnforceCrossTreeSchemaAsync(List<LatticeTreeBatch> batches)
     {
@@ -700,8 +701,8 @@ internal sealed class LatticeCrossTreeTxGrain(
 
             // Collect the plain whole-value upserts (skip tombstone-deletes, which
             // carry no value, and CRDT-delta entries, which are a delta apply rather
-            // than a whole-value write - the single-tree path never routes CrdtApply
-            // through this interceptor either), remembering each one's original index.
+            // than a whole-value write; this cross-tree pass covers only whole-value
+            // upserts), remembering each one's original index.
             List<KeyValuePair<string, byte[]>>? writes = null;
             List<int>? writeIndices = null;
             for (var i = 0; i < batch.Entries.Count; i++)

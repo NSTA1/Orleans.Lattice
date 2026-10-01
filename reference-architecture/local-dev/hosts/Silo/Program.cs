@@ -508,7 +508,7 @@ builder.Host.UseOrleans(silo =>
 
         // Seed the identity model into the durable membership directory and the
         // authorization policy store at startup, so the group memberships are
-        // introspectable (Explorer Access tab) and every group's grant is enforced.
+        // introspectable (Explorer Access area) and every group's grant is enforced.
         silo.Services.AddHostedService<LocalDevIdentitySeeder>();
 
         // When tenancy is enabled, seed the demo tenants (and their tenant-admin
@@ -715,15 +715,12 @@ if (tenancyEnabled)
 // halves of the trust boundary: the compose Prometheus is unauthenticated (AuthMode
 // None, the default), and the caller's bearer is NEVER forwarded to it. The real
 // caller-side enforcement is the deny-by-default LatticeOperation.Telemetry check
-// the facade makes over the RESERVED AUTH-POLICY tree; a caller who fails it gets
-// an empty catalogue and no area, indistinguishable from a cluster serving no
+// the facade makes over the cluster-wide sentinel; a caller who fails it gets an
+// empty catalogue and no area, indistinguishable from a cluster serving no
 // telemetry at all, so it cannot probe its own entitlement. In this harness that
 // admits `platform-admin` (a bootstrap administrator, which the gate allows
-// outright) and nobody else - note that `auditor`, whose whole role is telemetry,
-// is NOT admitted here even though its MCP telemetry tools work, because its
-// seeded grant is cluster-wide over the all-trees sentinel rather than over the
-// reserved policy tree. That asymmetry is a product-level gap, not a harness
-// setting; see the note in README.md's telemetry demo. The coarse transport gate
+// outright) and `auditor`, whose seeded grant carries the scopeless Telemetry
+// capability over the same cluster-wide sentinel. The coarse transport gate
 // mirrors every other facade: opened only when a deployment turns
 // RequireAuthorization on.
 if (telemetryEnabled)

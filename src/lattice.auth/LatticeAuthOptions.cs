@@ -105,9 +105,10 @@ public sealed class LatticeAuthOptions
     /// </para>
     /// <para>
     /// The all-trees tier is <b>never</b> consulted for the reserved authorization
-    /// namespace (<c>sys-auth-*</c>, <c>sys-tenant-*</c>, and
-    /// <c>_lattice_tenant_admin_*</c>) nor for the
-    /// sentinel id <c>"*"</c> itself, so a wildcard data grant can never reach the
+    /// namespace (<c>sys-auth-*</c>), the tenant- and app-registry namespaces
+    /// (<c>sys-tenant-*</c> and <c>sys-app-*</c>), the tenant-administration
+    /// capability namespace (<c>_lattice_tenant_admin_*</c>), or the sentinel id
+    /// <c>"*"</c> itself, so a wildcard data grant can never reach the
     /// control plane and a literal telemetry request on <c>"*"</c> resolves exactly
     /// as before. The operation-bit separation guarantee still holds: a widened
     /// data-plane <c>Tree:*</c> grant never confers telemetry and a telemetry

@@ -103,9 +103,9 @@ public class LatticeOptions
     public long? MaxLiveKeys { get; set; } = DefaultMaxLiveKeys;
 
     /// <summary>
-    /// Optional enforcing cap, in bytes, on the estimated retained storage a
+    /// Optional enforcing cap, in bytes, on the estimated storage occupancy a
     /// single tree may occupy (the same figure the
-    /// <c>orleans.lattice.storage.total_bytes</c> gauge reports: WAL rows plus
+    /// <c>orleans.lattice.storage.total_bytes</c> gauge reports: WAL occupancy plus
     /// snapshot blobs plus leaf/shard-root state). When set and breached, a
     /// locally-authored write is rejected with a
     /// <see cref="LatticeQuotaExceededException"/> carrying the <c>bytes</c>
@@ -133,7 +133,7 @@ public class LatticeOptions
 
     /// <summary>
     /// Optional non-enforcing advisory ceiling, in bytes, on the estimated
-    /// retained storage, used to right-size <see cref="MaxEstimatedBytes"/>
+    /// storage occupancy, used to right-size <see cref="MaxEstimatedBytes"/>
     /// before turning enforcement on. Drives the same non-rejecting
     /// <c>orleans.lattice.admission.over_advisory</c> /
     /// <c>orleans.lattice.admission.would_reject</c> dry-run signals as
@@ -2602,9 +2602,10 @@ public class LatticeOptions
     /// ~50 ms to several seconds. The 16 default at the canonical
     /// <c>WalPartitions = 8</c> caches 128 concurrent flushes against
     /// a single storage account, which is at the edge of the per-
-    /// account budget. If you need more headroom, increase
-    /// <see cref="WalPartitions"/> (fan-out across accounts) before
-    /// lifting the per-partition cap further. Raising the cap above
+    /// account budget. If you need more headroom, add named WAL storage
+    /// providers and pin partitions to them before increasing
+    /// <see cref="WalPartitions"/>; more partitions alone do not spread
+    /// writes across storage accounts. Raising the cap above
     /// what the storage provider can usefully serve in parallel
     /// degrades latency without improving throughput.
     /// </para>
@@ -3037,7 +3038,7 @@ public class LatticeOptions
     /// </para>
     /// <para>
     /// When this is set and positive, a partition whose durable offset floor is
-    /// <b>absent</b> is not trimmed while the tree's retained WAL is below the
+    /// <b>absent</b> is not trimmed while the tree's WAL occupancy is below the
     /// ceiling. Absent means the collector could not establish that <i>any</i>
     /// leaf has durably applied <i>anything</i>, so it has no evidence that a
     /// single entry it is about to release has been written down anywhere. The
@@ -3079,7 +3080,7 @@ public class LatticeOptions
     /// </para>
     /// <para>
     /// <b>A hold that cannot be bounded does not engage.</b> The ceiling is
-    /// measured against the tree's retained bytes, so a provider that cannot
+    /// measured against the tree's WAL occupancy bytes, so a provider that cannot
     /// report bytes leaves the hold with nothing to bound it. On that shape the
     /// hold declines and the pass trims as it did before, reporting
     /// <see cref="WalGcTrimStopReason.DurabilityUnverified"/> so the condition
@@ -3149,8 +3150,8 @@ public class LatticeOptions
     /// Low-water fraction of <see cref="WalMaxRetainedBytes"/> that disarms the
     /// advisory byte-pressure policy, providing hysteresis so a tree hovering
     /// near the ceiling does not trigger a trim on every pass. The policy arms
-    /// when retained WAL crosses the full ceiling (high-water) and re-triggers
-    /// a byte-pressure trim on each pass until a trim drives retained bytes at
+    /// when WAL occupancy crosses the full ceiling (high-water) and re-triggers
+    /// a byte-pressure trim on each pass until a trim drives occupancy bytes at
     /// or below <c>WalMaxRetainedBytes x WalBytePressureReclaimTarget</c>
     /// (low-water), at which point it disarms; growth that then stays inside the
     /// <c>(low-water, ceiling]</c> band does not re-trigger until the ceiling is

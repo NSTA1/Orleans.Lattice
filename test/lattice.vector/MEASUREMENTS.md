@@ -131,7 +131,11 @@ in on demand touches roughly an eighth of the store rather than all of it.
 Bytes per vector is `dimensions * 4 + 12` plus the centroid block: 1,536 bytes of
 vector, 4 for the cached norm, 8 for the key. There is no per-vector object
 header and no posting-list indirection, so the figure barely moves with corpus
-size.
+size. The harness computes it with `VectorIndexMemory.Bytes`, which is exact for
+the index's contiguous blocks and deliberately excludes the key-to-location map
+and the per-cell array headers, so it is the index's own storage rather than the
+whole process's; the `resident MB` column of the restart table below is the same
+accounting.
 
 ### Recall and latency together, at 100,000 vectors
 
@@ -177,7 +181,7 @@ pass to the thread pool and a per-thread figure would under-count that work.
 | `Contains` / `TryGetVector`, 2,000 calls | **0 bytes** |
 | `Remove` of an absent key, 1,000 calls | **0 bytes** |
 | Inserting 4,000 vectors after `EnsureCapacity` | **0 bytes** |
-| Retraining 20,000 vectors | 1.01x the cells it must retain |
+| Retraining 20,000 vectors | 1.01x the cells it must retain (asserted under 1.5x) |
 
 The training figure is the meaningful one: at 1.01x the retained cell blocks,
 essentially every scratch buffer the k-means pass uses came from

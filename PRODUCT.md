@@ -107,8 +107,8 @@ Three positions, taken from the README's "Why it exists":
   four-element lattice drawn as a Hasse diagram
   (`docs-site/template/public/lattice-mark.svg`, described in DESIGN.md). It
   replaced the earlier mark - a B+ tree (root, two internal nodes, four leaves)
-  in white on .NET purple `#512BD4`, reused from the Explorer favicon, which
-  the Explorer still uses.
+  in white on .NET purple `#512BD4`, reused from the Explorer favicon - and the
+  Explorer now serves the site's own favicon, byte for byte.
 - Voice (inferred from the corpus; stated during init without objection):
   precise and engineering-rigorous, British English spelling ("centre",
   "behaviour"), plain ASCII hyphens, and claims backed by tests, specifications,

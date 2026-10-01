@@ -32,6 +32,10 @@ of pressure have different remedies:
 | `ThroughputBound` | A single hot account has topped out its backend write rate (its per-tree `WalSaturationState` is `Throttled` or `Saturated`, in practice around 22-24 thousand entries per second for one storage account) continuously for `AccountSaturationWindow`. | Spread the account's hot partitions across more accounts (a WAL move). Adding retention headroom does not help. |
 | `CapacityBound` | Retained WAL bytes have grown past `RetainedBytesAdvisoryRatio` of the account's budget - the sum of the effective per-tree `WalMaxRetainedBytes` ceilings of the trees holding partitions there. | Reclaim retained bytes or provision more retention. Spreading throughput does not help. |
 
+An account that is both saturated for the window and over its retained-bytes
+threshold is classified `ThroughputBound`; its `OverThreshold` flag still reads
+`true`.
+
 `WalAccountPressure.OverThreshold` is the capacity-bound trigger specifically -
 `true` when that account's budgeted retained bytes crossed the advisory fraction
 of its budget. The budget is the sum of the effective per-tree ceilings

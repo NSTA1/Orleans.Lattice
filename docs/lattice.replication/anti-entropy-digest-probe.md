@@ -6,7 +6,7 @@ The probe **detects** divergence; it does not repair it. Localisation and repair
 
 ## What it compares
 
-Every shard maintains a `LeafProjectionDigest` - a hash that folds the shard's content, entry count, and highest checkpoint offset, carried alongside that entry count, that checkpoint offset, and a contribution-function `Version` - read through the core library's `ILattice.GetLeafProjectionDigestAsync(shardIndex)`. Each pass walks shard indices `0` through the tree's pinned shard count minus one, so a shard an adaptive split has added above the pinned count is never probed. The probe asks each peer for the same shard's digest over a dedicated read-only RPC and classifies the pair:
+Every shard maintains a `LeafProjectionDigest` - a hash that folds the shard's content, entry count, and highest checkpoint offset, carried alongside that entry count, that checkpoint offset, and a contribution-function `Version` - read through the core library's `ILattice.GetLeafProjectionDigestAsync(shardIndex)`. Each pass walks shard indices `0` through the tree's pinned shard count minus one, and that range is not the tree's live shard set: a shard an adaptive split has added above the pinned count is never probed, and neither is a surviving shard whose index is at or above the count an online shrink re-pins (a shrink retires the lighter shard of each folded pair, which can be the lower index), while an index a shrink has retired fails the local digest read and is skipped, with a warning, on every pass. The probe asks each peer for the same shard's digest over a dedicated read-only RPC and classifies the pair:
 
 | Outcome | Meaning | Mismatch counted? |
 |---|---|---|

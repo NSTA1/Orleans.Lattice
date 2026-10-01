@@ -29,8 +29,8 @@ A **fleet** is that simulated population. **Fleet size**
 one independent source of per-tick writes, so doubling the fleet size
 roughly doubles the offered write load. The `fleetStats` block in every
 `results.json` (see [Interpreting results](#interpreting-results) below)
-reports the fleet's final state - `total`, `driving`, `idle`, and any
-errored vehicles.
+reports the fleet's final state - the `total`, `driving`, `refuelling`,
+`idle` and `routeCompleted` vehicle counts.
 
 The `microbench` scenario does **not** drive a fleet. It bypasses the
 simulator and the Orleans cluster entirely and exercises the `ILattice`
@@ -220,6 +220,9 @@ Two CLI knobs scope each run:
 
 Both knobs also accept env-var equivalents (`BENCH_MICROBENCH_WORKLOADS`,
 `BENCH_MICROBENCH_FIDELITY`); the CLI flag wins when both are set. The
+environment variable also accepts `quick-oop` - the `quick` iteration shape
+on the forking toolchain, for configurations BenchmarkDotNet refuses to run
+in process - which the `-Fidelity` flag does not. The
 committed defaults are `BENCH_MICROBENCH_FIDELITY=quick` and an empty
 workload filter (full suite), in `benchmark/scenarios/microbench.env`.
 
@@ -270,6 +273,8 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `authdecision` | The warm authorization decision path (`PolicyEvaluator.Evaluate`). |
 | `hotpath` | Three steady-state allocation trims on grain hot paths: the shard root's batch-write guard, the batched CRDT receiver fold's ambient scope, and the atomic-write saga prepare's touched-shard set. |
 | `hashalloc` | View-maintenance UTF-8 hashing allocation trims (`AggregationRowCodec.Slot`, `AggregationApplier.OperationId`, `ViewMaintainerGrain.ComputeTreeDigestAsync`). |
+| `identitydigestalloc` | Three SHA-256 identity-digest allocation trims: the credential-cache key's metadata digest, the Explorer cookie credential's revocation identity, and the content hash of every backup artifact. |
+| `repocontexthashstaging` | Four repository-context hash-staging allocation trims: the per-source identifier a vector membership or coverage probe derives, the per-file content hash the context bundler computes, the per-unit reuse receipt and possession tokens, and the declaration digest taken for every symbol extracted during ingest. |
 | `ordedup` | Observed-remove reconcile paths - OR-Set live-dot counting and remove de-duplication, OR-Map live-entry counting, and the flag family's disable/enable de-duplication - plus the cost of `BoundedRegister`'s deep-copy clone and candidate measurements for dot-equality order, set construction and the byte-sequence tie-breaker comparison. |
 | `mergefold` | The CRDT merge fold: folding an incoming dot delta into an accumulated dot list. |
 | `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
@@ -281,6 +286,13 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `alloctrims` | Three steady-state allocation trims on warm dictionary and set maintenance paths. |
 | `viewdrain` | The view-maintenance drain-classification trims: classifying a drained batch without extra passes over its buffer. |
 | `aggiter` | The aggregation applier's direct iteration over freshly materialised dictionaries. |
+| `aggfold` | Three trims on the aggregation view's per-contribution fold path: materialising the min / max / set-union inverse rows and the custom-fold rows without building a per-shard dictionary, and composing the operation id straight into UTF-8. |
+| `aggsplice` | Three trims on the aggregation view's per-contribution read-modify-write path: splicing one entry into an inverse or fold shard row in place rather than decoding and re-encoding the whole row, and reading a membership row's head without decoding its member. |
+| `aggfused` | Three view-maintainer drain-path trims: fusing a same-group inverse or fold re-contribution into one shard-row splice, and keeping a durable-history row's original bytes when reshaping it changes nothing. |
+| `aggblock` | The block-copy fast path in the aggregation row splices: the entries either side of the spliced key are copied in at most two blocks instead of re-walked entry by entry, swept over shard sizes with a duplicate-key control. |
+| `aggkey` | Source-key handling in the aggregation row splices: sizing and writing an added entry from the already-transcoded key bytes instead of scanning and re-encoding the key again. |
+| `aggfoldwrite` | The membership write a custom-fold contribution now skips when the stored row is already byte-identical, counted per contribution as well as timed. |
+| `aggshardgather` | The aggregation applier's unsharded gather: reading a group's single slot row directly at the default fanout of 1 instead of through a one-key batched read. |
 | `viewmaint` | Three allocation trims on the materialised-view maintainer's warm cross-tree and batch-coalesce paths. |
 | `queryproj` | Three allocation trims in the grain-index query executor and the state API's metrics observer. |
 | `readpathtrims` | Three steady-state read-path allocation trims (view listing, live-entry reads, snapshot reads). |
@@ -338,6 +350,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `ormapkeyorderfoldbox` | The CRDT decode and delta-fold trims: the OR-Map state decoder sorting its distinct keys instead of every event, with and without a pooled per-key scratch, and the boxed enumerators the delta coalescing fold paid per member per delta. |
 | `rowtranscodecopytrims` | Three trims on the aggregation row encoder and the CRDT provenance decoders: the row writer transcoding a short string once instead of twice, the multi-value register's current-value projection without an intermediate list, and the flag provenance's constant UTF-8 conversion replaced by a literal. |
 | `leafsnapshotframetrims` | Three trims on the leaf snapshot frame codec that every bounded hydration reads through, each removing a repeated re-validation of the 24-byte frame header: hydration admission reading the header once instead of once per question and once per row, a lower-bound seek reading it once instead of once per binary-search probe, and a block hydration reading it once per block instead of once per row. Every group carries a control lane where the trim can buy little. |
+| `vvpresize` | The vector-clock presize in the leaf snapshot row decoder: filling a version vector sized to the row's already-bounded replica count instead of growing it entry by entry. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'

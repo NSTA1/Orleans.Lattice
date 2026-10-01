@@ -160,8 +160,8 @@ public sealed class LatticeApiMcpOptions
     /// <b>mutating</b> schema-management tools (set / clear policy, set / clear
     /// version config, advance / migrate version, remediate) in addition to the
     /// read-only schema-inspection tools. Defaults to <see langword="false"/> so a
-    /// registered tree-administration module is schema-inspect-only until the host
-    /// explicitly opts schema control in - either by setting this flag or by
+    /// registered tree-administration module contributes only read-only schema tools
+    /// until the host explicitly opts schema control in - either by setting this flag or by
     /// passing <c>enableSchemaControl: true</c> to <c>AddTreeAdminTools(...)</c>.
     /// Every mutating tool it then contributes is annotated destructive and
     /// non-read-only, and remains subject to the same fail-closed schema access

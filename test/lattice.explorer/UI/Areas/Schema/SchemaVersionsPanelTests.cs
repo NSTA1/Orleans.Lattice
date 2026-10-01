@@ -51,7 +51,7 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
         {
             var terms = cut.FindAll("[role=tabpanel] dl.lt-dl dd").Select(value => value.TextContent.Trim()).ToArray();
             Assert.That(terms[..2], Is.EqualTo(new[] { "7", "3" }));
-            Assert.That(terms[2], Does.StartWith("On: a replicated or restored value"));
+            Assert.That(terms[2], Does.StartWith("On: a replicated CRDT or atomic-batch entry"));
             Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("cannot show what differs between two versions"));
             Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("Advancing the target cannot be undone"));
             Assert.That(cut.FindAll("[role=tabpanel] button").Select(button => button.TextContent.Trim()), Is.EqualTo(new[]

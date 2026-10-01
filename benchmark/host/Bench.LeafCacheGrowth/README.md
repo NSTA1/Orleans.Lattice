@@ -70,7 +70,7 @@ two-silo deployment pays.
   `silos_fronting_leaf x cache_value_bytes`.
 - **`working_set_*` / `gc_total_*`** are whole-process context signals only; they
   understate the deployed footprint because of the in-process aliasing.
-- **`read_p50/p99`** are steady-state cache-hit latencies - the baseline the
+- **`read_p50_micros` / `read_p99_micros`** are steady-state cache-hit latencies - the baseline the
   value-payload-only LRU candidate would regress on the evicted fraction.
 
 ## Running

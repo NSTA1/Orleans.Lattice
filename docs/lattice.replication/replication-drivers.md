@@ -4,9 +4,11 @@ This document describes the **production drivers** that turn the dormant
 replication primitives - the tree's partitioned write-ahead log, the WAL storage provider, the
 WAL garbage collector, and the fall-off-the-log detector - into a running
 end-to-end pipeline. Without these drivers, calling `AddLatticeReplication`
-yields the seam set but emits nothing on the wire and trims nothing from
-disk: every metric on `LatticeReplicationMetrics` other than
-`dead_letter.*` stays at zero.
+yields the seam set but emits nothing on the wire, and the WAL is trimmed
+only by the core library's own per-silo garbage-collection scheduler
+(see [`WalGcInterval`](../lattice/configuration.md#walgcinterval)): every
+metric on `LatticeReplicationMetrics` other than `dead_letter.*` stays at
+zero.
 
 The drivers are wired automatically when the host calls
 `siloBuilder.AddLatticeReplication(...)`. There is no separate registration
@@ -150,9 +152,10 @@ reads it.
 These are the four drivers whose behaviour depends on which peers
 are currently reachable. Every one of them reads
 `IReplicationTopology` and nothing else (other membership-sensitive
-paths - the anti-entropy digest probe, the source-identity rebind, and
-the coordinated-restore saga's dispatcher and write fence - also read
-`CurrentPeers` live on each pass):
+paths - the anti-entropy digest probe, the source-identity rebind, the
+coordinated-restore saga's dispatcher and write fence, and the
+cross-cluster backup sink-sharing probe - also read `CurrentPeers` live
+on each pass):
 
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
@@ -843,7 +846,12 @@ only.
 Receiver-side WAL back-pressure is on by default: `AddLatticeReplication`
 installs `WalSaturationReceiverFlowControlPolicy`, which translates the local
 WAL's saturation state into the sender backoff hints carried on each
-`ReplicationAck`. The mapping is tuned with the separate
+`ReplicationAck`. The policy looks that state up under the replicated tree's
+name, while the signal records it under the id the tree's WAL is written
+under, so on a tree that is aliased on the receiving cluster the lookup
+reads `Healthy` and the ack carries no hint - see
+[Resolution and scope](../lattice/wal-saturation-signal.md#resolution-and-scope).
+The mapping is tuned with the separate
 `WalSaturationReceiverFlowControlOptions` (`ThrottledBatchRatio`,
 `ThrottledPauseMs`, `SaturatedBatchSize`, `SaturatedPauseMs`) via
 `ISiloBuilder.AddWalSaturationReceiverFlowControl(...)`. Hosts opt out by
@@ -854,13 +862,14 @@ pre-registering `NoOpReceiverFlowControlPolicy`. See
 
 ## Metric activation
 
-These instruments stay at zero until the drivers light them up; the table
-shows which driver is the source of each.
+These instruments stay at zero until the drivers light them up - except
+`wal.entries_trimmed`, which the core garbage-collection scheduler also
+emits; the table shows which driver is the source of each.
 
 | Metric | Source | When it fires |
 |---|---|---|
 | `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
-| `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass | GC trim removed at least one entry. |
+| `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass, and the core library's per-silo WAL garbage-collection scheduler, which runs without the drivers | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest retained entry that peer authored in the local WAL. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |

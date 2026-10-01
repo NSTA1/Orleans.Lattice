@@ -4,9 +4,9 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// The host-specific persistence seam behind <see cref="IUiPreferenceStore"/>.
 /// The store keeps all preferences in a single serialized document under one
 /// fixed key, so a backing store only needs string get / set / remove by key.
-/// Implementations target per-origin browser storage on the web head
-/// (<c>localStorage</c> via protected browser storage) and the platform
-/// preference store on the desktop head.
+/// The web head targets per-origin browser storage (<c>localStorage</c> via
+/// protected browser storage); another host can supply an equivalent durable
+/// backing store.
 /// </summary>
 public interface IUiPreferenceBackingStore
 {

@@ -37,8 +37,8 @@ public static class ExplorerTenantServiceCollectionExtensions
     /// <para>
     /// The operator gate is registered with <c>TryAdd</c> and defaults to the
     /// fail-closed <see cref="DeniedExplorerTenantOperatorGate"/>, because a real
-    /// platform-operator signal is a probed decision owned by the plugin that
-    /// performs the probe rather than by the navigation core. Call this
+    /// platform-operator signal is a probed decision owned by the administrative
+    /// surface that performs the probe rather than by the navigation core. Call this
     /// <em>after</em> the administrative surface that supplies one (the Access
     /// feature registers a gate backed by its own administrator decision), so the
     /// real gate wins the <c>TryAdd</c>.

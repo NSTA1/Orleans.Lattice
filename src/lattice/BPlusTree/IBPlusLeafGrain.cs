@@ -163,7 +163,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     /// <param name="key">The key to apply the delta against.</param>
     /// <param name="mode">The CRDT merge mode declaring the delta's typed shape.</param>
-    /// <param name="deltaBytes">The Orleans-serialised typed delta DTO bytes.</param>
+    /// <param name="deltaBytes">The JSON-serialised typed delta DTO bytes.</param>
     /// <param name="expiresAtTicks">
     /// Absolute UTC expiry tick to fold onto the merged row, or <c>0</c> to
     /// leave any existing expiry unchanged.

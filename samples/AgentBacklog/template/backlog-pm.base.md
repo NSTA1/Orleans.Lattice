@@ -600,8 +600,9 @@ Concretely:
    radius by design and requires an exclusive claim with the others quiesced. This
    is the one deliberate exception to disjointness.
 6. **Never deploy onto an item carrying `needs-specification`, a parked item, or an
-   item whose `homeRegion` is not the region the claim would be taken in.** The
-   last fails closed anyway; do not spend a session discovering that.
+   item whose `homeRegion` is not the region the claim would be taken in.** A
+   worker skips the last at claim time anyway (its Phase 3); do not spend a
+   session discovering that.
 7. **Do not deploy into a ready set whose only candidates are live-held.** A
    worker self-selects (rule 4), so it takes whatever the ready set offers - and
    under the current lease clamp a live, productive worker's item still presents

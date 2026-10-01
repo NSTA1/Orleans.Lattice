@@ -130,7 +130,12 @@ loads its tokens from `docs-site/template/public/tokens.css` and composes its
 pages in `main.css` beside it, which sets a few values of its own, such as the
 42rem prose measure and the home page's display size. The frontmatter above
 mirrors both, and they change together. Other surfaces that must match the
-site, such as the video series, read `tokens.css`.
+site, such as the video series, read `tokens.css`. The Explorer draws in the
+same system: the `Orleans.Lattice.Explorer.UI` and
+`Orleans.Lattice.Explorer.AppKit` packages serve byte-identical copies of
+`tokens.css` and the fonts, which a test fails the build on the moment they
+drift from the site's, and tests hold the Explorer UI's stylesheets to this
+document's marker, hairline, single-accent and no-card rules.
 
 ## Overview
 

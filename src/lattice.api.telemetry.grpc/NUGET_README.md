@@ -35,7 +35,7 @@ so the rule is enforced by the contract's shape rather than by a sanitiser.
 The binding is **transport only**. It forwards the visibility the caller
 *requested* and returns whatever scope the facade *pinned*; it never derives,
 infers, or asserts a tenant of its own. The facade remains the single
-enforcement point, so a desktop head cannot widen its own scope by editing a
+enforcement point, so a client head cannot widen its own scope by editing a
 request. What was actually applied is always reported on the response's `Scope`.
 
 ## Default-deny
@@ -49,13 +49,14 @@ cluster running the `Orleans.Lattice.Auth` add-on the surface still fails closed
 for an unauthenticated caller even when the transport gate is disabled. Without
 that add-on the core no-op access gate admits every caller - as a platform
 operator too, so a request for an all-tenant or single-tenant view is honoured -
-and a query that asks only for the caller's own scope is pinned to the reserved
-default tenant.
+and a query that asks only for the caller's own scope is pinned to the caller's
+resolved active tenant - the reserved default tenant when tenancy is off or the
+call asserts none.
 
 ## Client-safe by construction
 
 The package references the shared `Orleans.Lattice.Api.Abstractions` contract
-alone. A client head - including the MAUI desktop Explorer - can consume
+alone. A client head - the Explorer included - can consume
 telemetry over this binding without taking the MCP server surface or the
 facade's PromQL machinery. A reference-closure test asserts it, because a
 transitive re-coupling compiles perfectly well and nothing else in the build

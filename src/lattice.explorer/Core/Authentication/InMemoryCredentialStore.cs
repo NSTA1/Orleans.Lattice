@@ -10,8 +10,8 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// <see cref="ExplorerAuthServiceCollectionExtensions.AddExplorerAuth"/>
 /// therefore registers it <b>scoped</b>, so the default is per-circuit and one
 /// operator's credential can never be served to another. A head that registers it
-/// itself must keep that lifetime, or register a per-user platform store (DPAPI on
-/// desktop, the encrypted server cookie on web) instead.
+/// itself must keep that lifetime, or register a per-user encrypted store (such
+/// as the web head's encrypted server cookie) instead.
 /// </para>
 /// </summary>
 public sealed class InMemoryCredentialStore : ICredentialStore

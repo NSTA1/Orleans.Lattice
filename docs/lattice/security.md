@@ -138,8 +138,9 @@ runs an extensible login challenge against an auth-enabled State API endpoint,
 and its sign-in mechanisms are a
 [provider model](../lattice.explorer/adding-a-custom-auth-method.md) a host can
 extend. Microsoft Entra ID sign-in ships as two such providers:
-[`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) for
-desktop and CLI hosts, and
+[`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md), an
+interactive MSAL sign-in for hosts that do not use the hosted-web OpenID Connect
+cookie flow, and
 [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)
 for the hosted web console.
 
