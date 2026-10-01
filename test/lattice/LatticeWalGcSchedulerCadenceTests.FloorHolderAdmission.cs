@@ -367,4 +367,100 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     /// admit.
     /// </summary>
     private const long NoUsableOffset = -1;
+
+    [Test]
+    public async Task A_never_checkpointed_holder_reads_blocked_only_when_its_pin_carries_a_real_offset()
+    {
+        // The issue #3258 discriminator, and the fixture that exists because the
+        // premise it pins is the one a reader keeps getting wrong.
+        //
+        // "NeverCheckpointed" is derived from the PERSISTED checkpoint alone and
+        // constrains the published pin offset not at all, so ONE leaf state
+        // backs two readings that mean opposite things - and the leaf state is
+        // held identical across both halves below precisely so that the pin
+        // offset is the only variable.
+        //
+        //   sentinel  (offset -1): the benign case this state's summary
+        //                          describes. It constrains no offset floor, so
+        //                          there is no holder to admit or refuse, and
+        //                          the tree drains as soon as the leaf
+        //                          checkpoints.
+        //   divergent (offset >=0): the leaf published from
+        //                          max(persisted, pending) while activated and
+        //                          then deactivated without persisting, so the
+        //                          durable pin store kept a real offset above a
+        //                          persisted checkpoint of -1. That pin can HOLD
+        //                          the floor, where it is refused - correctly,
+        //                          since the leaf has no proven durable
+        //                          checkpoint - and the refusal is terminal,
+        //                          because every other candidate is strictly
+        //                          above the floor, the issue #3310 prefetch is
+        //                          gated on the floor's own holder, and the pin
+        //                          store merges monotonic-max.
+        //
+        // This is repo-context-vector-payload: 26 stranded passes, zero
+        // reclaimed, zero on every reactivation arm. The refusal is not the
+        // defect and must not be relaxed here - the fixtures in
+        // OffsetFloorLiveness redden if it ever is, and that change is silent
+        // data loss. What this fixture insists on is that the two readings stay
+        // SEPARABLE in the signal, so a permanently unreclaimable tree cannot be
+        // mistaken for a benign block that will clear on its own.
+        long sentinelBlocked;
+        int sentinelAdmittedMeasurements;
+        int sentinelBlockedMeasurements;
+
+        var sentinelStorage = new LeafStateBook();
+        sentinelStorage.PutNeverCheckpointed(LivenessLeafGrainId(0), OrphanSweepTree);
+
+        var sentinelPins = new FakePinStore();
+        sentinelPins.Seed(OrphanSweepTree, LivenessConsumerId(0), UnusablePin, NoUsableOffset);
+
+        using (var sentinel = new AdmissionRecorder(OrphanSweepTree))
+        {
+            await DriveAsync(sentinelPins, sentinelStorage);
+            sentinelBlocked = sentinel.Blocked;
+            sentinelAdmittedMeasurements = sentinel.AdmittedMeasurements;
+            sentinelBlockedMeasurements = sentinel.BlockedMeasurements;
+        }
+
+        var divergentStorage = new LeafStateBook();
+        divergentStorage.PutNeverCheckpointed(LivenessLeafGrainId(0), OrphanSweepTree);
+
+        var divergentPins = new FakePinStore();
+        divergentPins.Seed(OrphanSweepTree, LivenessConsumerId(0), UsablePin, FloorOffset);
+
+        using var divergent = new AdmissionRecorder(OrphanSweepTree);
+
+        var divergentLeaves = await DriveAsync(divergentPins, divergentStorage);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sentinelAdmittedMeasurements, Is.GreaterThan(0),
+                "both arms must be PUBLISHED on the sentinel half, or its two zeros cannot be told from a "
+                    + "silo where the floor-holder classifier never ran - which would make the comparison "
+                    + "below vacuous rather than discriminating.");
+            Assert.That(sentinelBlockedMeasurements, Is.GreaterThan(0),
+                "and the blocked arm likewise. Measurement COUNT is asserted rather than value because "
+                    + "Add(0) is idempotent, so a value of zero alone cannot separate 'primed' from "
+                    + "'never published'.");
+            Assert.That(sentinelBlocked, Is.Zero,
+                "the sentinel reading must NOT be charged blocked. Its pin constrains no offset floor, so "
+                    + "there is no holder to refuse, and charging a wedge here would report every "
+                    + "ordinary never-checkpointed leaf in the estate as permanently unreclaimable.");
+
+            Assert.That(divergent.Blocked, Is.GreaterThan(0),
+                "the divergent reading MUST be charged blocked. Identical leaf state, identical gate - the "
+                    + "pin's real offset is the whole difference, and it is what turns a benign block into "
+                    + "a tree whose WAL no code path can ever release. THIS IS THE ARM THAT REDDENS if "
+                    + "NeverCheckpointed is ever treated as implying a sentinel pin, which is the "
+                    + "misreading that left repo-context-vector-payload's wedge unexplained.");
+            Assert.That(divergent.Admitted, Is.Zero,
+                "and nothing may be charged admitted: the floor's own holder was refused, so no candidate "
+                    + "on the tree can be admitted on that sweep.");
+            Assert.That(divergentLeaves.Touched, Is.Empty,
+                "and the refusal itself stays in force. This fixture documents the wedge; it does not "
+                    + "licence driving a leaf with no proven durable checkpoint, which is silent data loss "
+                    + "and is guarded in OffsetFloorLiveness.");
+        });
+    }
 }
