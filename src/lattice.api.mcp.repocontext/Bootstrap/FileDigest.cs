@@ -39,6 +39,22 @@ internal static class FileDigest
     /// <summary>The explicit algorithm tag for a SHA-256 digest.</summary>
     private const string Sha256Prefix = "sha256:";
 
+    /// <summary>The raw byte width of an XxHash128 fingerprint.</summary>
+    private const int XxHash128Bytes = 16;
+
+    /// <summary>
+    /// The widest digest string any shape here produces: the <c>"sha256:"</c> tag
+    /// plus 64 hex characters. Every other shape is shorter, so one buffer of this
+    /// width formats all of them without a per-shape size calculation.
+    /// </summary>
+    private const int MaxDigestChars = 7 + (SHA256.HashSizeInBytes * 2);
+
+    /// <summary>
+    /// The exact UTF-8 byte width of a modern tagged digest: the six-character
+    /// <c>"xx128:"</c> tag plus 32 hex characters, all ASCII.
+    /// </summary>
+    internal const int Utf8DigestBytes = 6 + (XxHash128Bytes * 2);
+
     /// <summary>
     /// Computes the default modern content digest of <paramref name="content"/>:
     /// the tagged, lower-case hex XxHash128 fingerprint (<c>"xx128:"</c> followed by
@@ -48,9 +64,47 @@ internal static class FileDigest
     /// <returns>The modern tagged digest string.</returns>
     internal static string Compute(ReadOnlySpan<byte> content)
     {
-        Span<byte> hash = stackalloc byte[16];
+        Span<char> text = stackalloc char[MaxDigestChars];
+        return new string(text[..ComputeModern(content, text)]);
+    }
+
+    /// <summary>
+    /// Writes the modern tagged digest of <paramref name="content"/> into
+    /// <paramref name="destination"/> as ASCII bytes, returning the count written
+    /// (always <see cref="Utf8DigestBytes"/>). This is what lets a caller that is
+    /// feeding a hash fold the digest straight in without materialising it as a
+    /// string first.
+    /// </summary>
+    /// <param name="content">The bytes to digest.</param>
+    /// <param name="destination">Receives the tagged digest. Must hold at least
+    /// <see cref="Utf8DigestBytes"/> bytes.</param>
+    /// <returns>The number of bytes written.</returns>
+    internal static int ComputeUtf8(ReadOnlySpan<byte> content, Span<byte> destination)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(destination.Length, Utf8DigestBytes);
+        Span<char> text = stackalloc char[Utf8DigestBytes];
+        var length = ComputeModern(content, text);
+        for (var i = 0; i < length; i++)
+        {
+            // Every character of a tagged digest is ASCII, so the narrowing is
+            // exact and no transcoder is needed.
+            destination[i] = (byte)text[i];
+        }
+
+        return length;
+    }
+
+    /// <summary>
+    /// Formats the modern tagged digest of <paramref name="content"/> into
+    /// <paramref name="destination"/>, returning the character count written.
+    /// </summary>
+    private static int ComputeModern(ReadOnlySpan<byte> content, Span<char> destination)
+    {
+        Span<byte> hash = stackalloc byte[XxHash128Bytes];
         XxHash128.Hash(content, hash);
-        return XxHash128Prefix + Convert.ToHexStringLower(hash);
+        XxHash128Prefix.CopyTo(destination);
+        Convert.TryToHexStringLower(hash, destination[XxHash128Prefix.Length..], out var hexChars);
+        return XxHash128Prefix.Length + hexChars;
     }
 
     /// <summary>
@@ -107,27 +161,43 @@ internal static class FileDigest
     internal static bool Matches(string storedDigest, ReadOnlySpan<byte> content)
     {
         ArgumentNullException.ThrowIfNull(storedDigest);
-        return string.Equals(ComputeUnder(storedDigest, content), storedDigest, StringComparison.Ordinal);
+        if (storedDigest.Length > MaxDigestChars)
+        {
+            return false;
+        }
+
+        Span<char> recomputed = stackalloc char[MaxDigestChars];
+        var length = ComputeUnder(storedDigest, content, recomputed);
+        return storedDigest.AsSpan().SequenceEqual(recomputed[..length]);
     }
 
     /// <summary>
     /// Recomputes <paramref name="content"/>'s digest in the exact string shape the
-    /// stored digest uses, so a byte-for-byte string comparison decides equality.
+    /// stored digest uses, so a byte-for-byte comparison decides equality. The
+    /// result is formatted into <paramref name="destination"/> rather than returned
+    /// as a string: a reconcile pass calls this once per file on every walk and the
+    /// recomputed digest is discarded the moment the comparison is made, so
+    /// materialising it would allocate a string per file for nothing.
     /// </summary>
-    private static string ComputeUnder(string storedDigest, ReadOnlySpan<byte> content)
+    private static int ComputeUnder(string storedDigest, ReadOnlySpan<byte> content, Span<char> destination)
     {
         if (storedDigest.StartsWith(XxHash128Prefix, StringComparison.Ordinal))
         {
-            return Compute(content);
+            return ComputeModern(content, destination);
         }
 
         // Legacy: an explicit "sha256:" prefix, or a bare hex string (which the
         // original implementation wrote unprefixed) - both are SHA-256.
         Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
         SHA256.HashData(content, hash);
-        var hex = Convert.ToHexStringLower(hash);
-        return storedDigest.StartsWith(Sha256Prefix, StringComparison.Ordinal)
-            ? Sha256Prefix + hex
-            : hex;
+        var offset = 0;
+        if (storedDigest.StartsWith(Sha256Prefix, StringComparison.Ordinal))
+        {
+            Sha256Prefix.CopyTo(destination);
+            offset = Sha256Prefix.Length;
+        }
+
+        Convert.TryToHexStringLower(hash, destination[offset..], out var hexChars);
+        return offset + hexChars;
     }
 }

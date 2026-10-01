@@ -327,9 +327,10 @@ public sealed class CookieCredentialStore : ICredentialStore
         var buffer = maxBytes <= StackCookieBytes
             ? stackalloc byte[StackCookieBytes]
             : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        var written = 0;
         try
         {
-            var written = Encoding.UTF8.GetBytes(cookieValue, buffer);
+            written = Encoding.UTF8.GetBytes(cookieValue, buffer);
             Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
             SHA256.HashData(buffer[..written], digest);
             return Convert.ToHexString(digest);
@@ -338,7 +339,12 @@ public sealed class CookieCredentialStore : ICredentialStore
         {
             if (rented is not null)
             {
-                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+                // Clear only the prefix this call wrote. clearArray: true memsets
+                // the whole rounded-up rental, which for an ASCII cookie is up to
+                // six times the bytes written (GetMaxByteCount is 3n+3 and Rent
+                // rounds to a power of two), so the memset outweighs the SHA-256.
+                rented.AsSpan(0, written).Clear();
+                ArrayPool<byte>.Shared.Return(rented);
             }
         }
     }

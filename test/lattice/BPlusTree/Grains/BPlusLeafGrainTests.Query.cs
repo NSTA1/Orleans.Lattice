@@ -77,8 +77,22 @@ public partial class BPlusLeafGrainTests
         Assert.That(keys, Is.EqualTo(new[] { "b", "c" }));
     }
 
+    /// <summary>
+    /// Issue #3918, inverted from the assertion this replaced. It used to
+    /// require the clip, on the stated premise that the right half "has already
+    /// been wired onto the new sibling". The source contradicts that premise:
+    /// <c>CompleteSplitAsync</c> drops each batch from the donor with
+    /// <c>RemoveTransferredRows</c>, which is synchronous and immediately
+    /// follows the await on the sibling's <c>MergeEntriesAsync</c>, so a row the
+    /// donor still holds at or above <c>SplitKey</c> is one the sibling has NOT
+    /// been confirmed to hold. The state this test builds - the donor holding
+    /// "m" and "z" with the division still in flight - is therefore exactly the
+    /// state in which the clip hid rows that lived on no leaf at all.
+    /// <see cref="Orleans.Lattice.Tests.BPlusTree.LeafSplitRangeReadGapIntegrationTests"/>
+    /// shows the consequence end to end against a real tree.
+    /// </summary>
     [Test]
-    public async Task GetKeys_excludes_keys_at_or_above_split_key_when_split_in_progress()
+    public async Task GetKeys_still_reports_keys_at_or_above_split_key_while_a_division_is_in_flight()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
@@ -92,7 +106,9 @@ public partial class BPlusLeafGrainTests
         state.State.SplitKey = "m";
 
         var keys = await grain.GetKeysAsync();
-        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b", "m", "z" }),
+            "the donor still holds 'm' and 'z', so the sibling has not taken them; hiding them reports "
+            + "rows that exist nowhere else as absent.");
     }
 
     [Test]
@@ -378,8 +394,13 @@ public partial class BPlusLeafGrainTests
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c" }));
     }
 
+    /// <summary>
+    /// Issue #3918. See
+    /// <see cref="GetKeys_still_reports_keys_at_or_above_split_key_while_a_division_is_in_flight"/>
+    /// for why the clip this replaced was wrong.
+    /// </summary>
     [Test]
-    public async Task GetEntries_excludes_keys_at_or_above_split_key_when_split_in_progress()
+    public async Task GetEntries_still_reports_keys_at_or_above_split_key_while_a_division_is_in_flight()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
@@ -393,7 +414,9 @@ public partial class BPlusLeafGrainTests
         state.State.SplitKey = "m";
 
         var entries = await grain.GetEntriesAsync();
-        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b", "m", "z" }),
+            "a range read must return every row the leaf still holds, or throw; it must never complete "
+            + "short.");
     }
 
     [Test]
@@ -645,8 +668,15 @@ public partial class BPlusLeafGrainTests
         Assert.That(count, Is.EqualTo(0));
     }
 
+    /// <summary>
+    /// Issue #3918. See
+    /// <see cref="GetKeys_still_reports_keys_at_or_above_split_key_while_a_division_is_in_flight"/>
+    /// for why the clip this replaced was wrong. The old assertion was the
+    /// unit-level twin of the production symptom: a count of 2 over a leaf
+    /// holding 4 live rows, returned without an exception.
+    /// </summary>
     [Test]
-    public async Task Count_excludes_keys_at_or_above_split_key_while_split_in_progress()
+    public async Task Count_still_counts_keys_at_or_above_split_key_while_a_division_is_in_flight()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
@@ -655,15 +685,17 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
 
-        // Simulate a donor stuck mid-split (e.g. interrupted by a silo
-        // restart): the right half (>= "m") still lives in this leaf's
-        // cache while it has already been wired onto the new sibling.
-        // CountAsync must report only the keys this leaf still owns.
+        // A donor stuck mid-division (a silo restart, or a WAL replay refused
+        // under permit saturation). The right half is still in THIS leaf's
+        // cache, which is precisely the evidence that the sibling never took
+        // it: the transfer removes each batch from the donor in the same turn
+        // the sibling acknowledges it.
         state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
         state.State.SplitKey = "m";
 
         var count = await grain.CountAsync();
-        Assert.That(count, Is.EqualTo(2));
+        Assert.That(count, Is.EqualTo(4),
+            "the leaf holds four live rows, so a count that completed without throwing must report four.");
     }
 
     [Test]
@@ -762,8 +794,14 @@ public partial class BPlusLeafGrainTests
         Assert.That(count, Is.EqualTo(2));
     }
 
+    /// <summary>
+    /// Issue #3918: the ranged twin of
+    /// <see cref="Count_still_counts_keys_at_or_above_split_key_while_a_division_is_in_flight"/>.
+    /// The caller's own bounds are still honoured; only the implicit split-key
+    /// bound is gone.
+    /// </summary>
     [Test]
-    public async Task Count_range_honours_split_boundary_within_bounds()
+    public async Task Count_range_still_counts_keys_at_or_above_split_key_within_bounds()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
@@ -772,17 +810,23 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
 
-        // Donor stuck mid-split: keys >= "m" are not owned. A ranged count
-        // over [a, z) must still respect the split boundary and exclude them.
         state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
         state.State.SplitKey = "m";
 
         var count = await grain.CountAsync("a", "z");
-        Assert.That(count, Is.EqualTo(2));
+        Assert.That(count, Is.EqualTo(3),
+            "[a, z) excludes 'z' by the caller's own bound and admits 'm'; the in-flight division adds "
+            + "no bound of its own.");
     }
 
+    /// <summary>
+    /// Issue #3918. See
+    /// <see cref="GetKeys_still_reports_keys_at_or_above_split_key_while_a_division_is_in_flight"/>.
+    /// Stats feed shard diagnostics and healing, so under-reporting a stuck
+    /// donor's live rows hid the very leaves an operator would look for.
+    /// </summary>
     [Test]
-    public async Task Stats_excludes_keys_at_or_above_split_key_while_split_in_progress()
+    public async Task Stats_still_count_keys_at_or_above_split_key_while_a_division_is_in_flight()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
@@ -795,7 +839,8 @@ public partial class BPlusLeafGrainTests
         state.State.SplitKey = "m";
 
         var stats = await grain.GetStatsAsync();
-        Assert.That(stats.LiveKeys, Is.EqualTo(2));
+        Assert.That(stats.LiveKeys, Is.EqualTo(4),
+            "the leaf holds four live rows and the sibling has taken none of them.");
     }
 
     [Test]

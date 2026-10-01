@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -55,7 +54,7 @@ internal sealed class GitRemoteSource(
 
         // "xx128:" prefix stripped, then eight hex characters: enough to separate
         // ids that sanitise identically without producing an unreadable directory.
-        var digest = FileDigest.Compute(Encoding.UTF8.GetBytes(repoId));
+        var digest = FileDigest.Compute(repoId.AsSpan());
         var suffix = digest[(digest.IndexOf(':') + 1)..][..8];
         return Path.Combine(stagingRoot, new string(sanitised) + "-" + suffix);
     }
