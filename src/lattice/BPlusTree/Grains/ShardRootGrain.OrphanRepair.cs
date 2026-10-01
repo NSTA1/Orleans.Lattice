@@ -672,6 +672,40 @@ internal sealed partial class ShardRootGrain
             return Finding(OrphanedLeafDisposition.RefusedBlockingState, 0, 0);
         }
 
+        // The predecessor is dividing INTO this leaf, which is the one case
+        // neither the blocking-state check above nor the latch below can see.
+        // See issue #2160 and ShardRootGrain.TryReclaimLeafAsync, where the
+        // same declination carries the full derivation.
+        //
+        // This path needs it MORE than the empty-leaf fold does, not less, and
+        // the reason is the deliberate absence in TryBeginOrphanRetirementAsync:
+        // it carries no emptiness check, because an orphan is characteristically
+        // not empty and gating on emptiness would refuse exactly the leaves that
+        // need retiring. The safety argument is the caller's instead - every key
+        // this leaf holds must be provably readable elsewhere. On a freshly
+        // seeded split sibling that proof is VACUOUS: it holds no keys yet, so
+        // the loop above verifies nothing and concludes the leaf is disposable.
+        // It is not. It is about to receive rows.
+        //
+        // The transient unreachability is real, too, rather than a
+        // misdiagnosis: the sibling genuinely is not routed until the division
+        // publishes its separator, so the descent probe that classified it an
+        // orphan was correct about what it measured and wrong about what it
+        // meant.
+        if (prevProbe.SplitTargetSiblingId == currentId)
+        {
+            logger.LogInformation(
+                "Shard {ShardIndex} of tree '{TreeId}' declined to unsplice leaf {LeafId}: its predecessor "
+                + "{PrevLeaf} is mid-division into it, so it is unrouted only because the division has not "
+                + "published its separator yet. It is not an orphan.",
+                MyShardIndex,
+                TreeId,
+                currentId,
+                prevId);
+
+            return Finding(OrphanedLeafDisposition.RefusedBlockingState, 0, 0);
+        }
+
         var keys = await leaf.GetKeysAsync();
 
         if (keys.Count > MaxOrphanKeysVerified)
@@ -803,19 +837,21 @@ internal sealed partial class ShardRootGrain
             // Reading a possibly-stale prevProbe is safe: the same call's
             // compare-and-swap on NextSibling declines the whole unsplice if
             // the predecessor changed underneath the walk.
-            var unlinked = await ResolveLeafGrain(prevId).TryUnlinkSuccessorAsync(
+            var outcome = await ResolveLeafGrain(prevId).TryUnlinkSuccessorAsync(
                 currentId,
                 currentProbe.NextSibling,
                 prevProbe.HighKeyExclusive);
 
-            if (!unlinked)
+            if (outcome != LeafUnlinkOutcome.Unlinked)
             {
                 logger.LogDebug(
-                    "Shard {ShardIndex} of tree '{TreeId}' declined to unsplice orphaned leaf {LeafId}: its predecessor {PrevLeaf} no longer points at it.",
+                    "Shard {ShardIndex} of tree '{TreeId}' declined to unsplice orphaned leaf {LeafId}: its "
+                    + "predecessor {PrevLeaf} refused the unlink ({Outcome}).",
                     MyShardIndex,
                     TreeId,
                     currentId,
-                    prevId);
+                    prevId,
+                    outcome);
 
                 await leaf.AbandonRetirementAsync();
                 return Finding(OrphanedLeafDisposition.RefusedChainRace, keys.Count, verified);

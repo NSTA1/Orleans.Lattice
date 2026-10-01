@@ -16,7 +16,7 @@ It covers:
 - **Discovery.** Enumerate the registered trees, materialised views, and tag indexes as deterministic, paged catalogs, with optional per-view stats, and browse a tag index's values, covered trees, and live members.
 - **Structure.** Walk a tree's shard-root node graph - per-shard roots, child fan-out, live-key subtree counts, and depth.
 - **Entries.** Scan a key-ordered page of entries (snapshot-isolated by default, or through a cheaper baseline-free live cursor; forward or reverse, predicate-filtered, with a value-preview budget) or fetch one key's full record.
-- **Change history.** Page a single key's revision timeline - sets, deletes, CRDT deltas, and range tombstones - bounded by the tree's durable-history retention.
+- **Change history.** Page a single key's revision timeline - sets, deletes, CRDT deltas, and range tombstones - bounded by the tree's durable-history retention, or by the retained write-ahead-log window when the tree has no history view.
 - **Change observation.** Subscribe to a tree's live mutation stream - point writes, deletes, and range deletes - as a server-streamed feed.
 - **Metrics.** Read a one-shot metrics snapshot per tree, or subscribe to a delta-coalesced live metric feed (live keys, shard count, optional shard hotness and view lag).
 - **Dead letters.** Count and page strict-mode schema-enforcement dead-letter queues without replaying or requeueing diverted items.

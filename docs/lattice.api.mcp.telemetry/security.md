@@ -37,7 +37,7 @@ var rule = new LatticeAuthorizationRule(
     LatticeEffect.Allow);
 ```
 
-Because the capability is a distinct bit, a Telemetry grant never widens a caller's data-plane reach, and a data-plane grant never confers telemetry access. A `Telemetry` bit carried on a tree-scoped rule confers nothing either: discovery counts the capability only from a rule written at cluster-wide scope, and the call-time check authorizes over the cluster-wide sentinel, which a rule scoped to a real tree never matches.
+Because the capability is a distinct bit, a Telemetry grant never widens a caller's data-plane reach, and a data-plane grant never confers telemetry access. A `Telemetry` bit carried on a tree-scoped rule confers nothing either: discovery counts the capability only from a rule written at cluster-wide tree scope - a key- or prefix-scoped rule on the all-trees sentinel is not counted - and the call-time check authorizes over the cluster-wide sentinel, which a rule scoped to a real tree never matches.
 
 ## Metric-access allow-list
 
@@ -45,6 +45,8 @@ Beyond the yes/no capability, the host can restrict *which* metrics a granted ca
 
 - **`ReadAll`** (default) - any metric the backend exposes is readable.
 - **`DenyAllExceptAllowed`** - only the exact names and `*`-wildcard patterns in `AllowedMetrics` are readable; everything else is denied.
+
+Matching is whole-name and case-sensitive. A wildcard entry is anchored at both ends, its `*` never matches a newline, and it is matched without backtracking, so a caller-supplied name - the metadata tool's `metric` argument, or a name lifted out of a query - cannot carry a trailing newline past an entry, and the check stays linear in the name's length.
 
 The allow-list is enforced consistently across all four tools:
 

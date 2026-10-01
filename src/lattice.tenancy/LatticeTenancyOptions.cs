@@ -50,19 +50,26 @@ public sealed class LatticeTenancyOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A silo renews every third of this duration. While its lease is live the
-    /// silo answers cross-tenant grant decisions and inbound-replication tenant
-    /// checks from its in-memory snapshot; once it lapses (the epoch grain is
-    /// unreachable) those decisions are confirmed against the tenant registry, or
-    /// denied, until a renewal succeeds.
+    /// A silo renews every third of this duration. The cluster-wide tenant-policy
+    /// epoch pushes each registry change to every leased silo; the live per-silo
+    /// lease then lets the compiled policy, residency, and placement snapshots
+    /// answer from memory only while they have been rebuilt for the latest epoch.
+    /// Once the lease lapses (the epoch grain is unreachable), policy and residency
+    /// checks confirm against the tenant registry or deny, and placement resolution
+    /// refuses a tenant-tree registration rather than seed a WAL placement from a
+    /// stale snapshot, until a renewal succeeds.
     /// </para>
     /// <para>
-    /// It is also the worst case a tenant-registry write can be delayed by: the
-    /// write completes only once every silo has acknowledged the change or its
-    /// lease has lapsed, so a silo that cannot be reached costs a registry write up
-    /// to about 1.1 times this duration. Keep it well below the Orleans response
-    /// timeout. Shorter values bound that delay more tightly at the cost of more
-    /// frequent renewals (one small grain call per silo per third of a lease).
+    /// It is also the worst case a tenant-registry write can be delayed by after a
+    /// steady-state advance has started: the write completes only once every leased
+    /// silo has acknowledged the change or its lease has lapsed, so a silo that
+    /// cannot be reached costs a registry write up to about 1.1 times this duration
+    /// (the lease plus the ledger's clock-rate margin). A freshly restarted epoch
+    /// grain may also wait the same grace for leases granted by the previous
+    /// incarnation, unless cluster membership proves every live silo has leased from
+    /// the new one. Keep the duration well below the Orleans response timeout.
+    /// Shorter values bound that delay more tightly at the cost of more frequent
+    /// renewals (one small grain call per silo per third of a lease).
     /// </para>
     /// </remarks>
     public TimeSpan PolicySnapshotLeaseDuration { get; set; } = TimeSpan.FromSeconds(10);

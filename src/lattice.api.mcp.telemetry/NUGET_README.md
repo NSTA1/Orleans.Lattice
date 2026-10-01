@@ -23,6 +23,6 @@ var app = builder.Build();
 app.MapLatticeMcp();
 ```
 
-`AddTelemetryTools(...)` is idempotent and registers exactly one telemetry tool group. The group is advertised only to a caller whose effective permissions grant the `Telemetry` operation cluster-wide, so an ungranted caller is offered no telemetry tools at all, and each tool re-checks that capability at call time before it queries the backend.
+`AddTelemetryTools(...)` is idempotent and registers exactly one telemetry tool group. The group is advertised only to a caller that the registered `ILatticeApiMcpAuthorizer` admits (the default `DenyAllMcpAuthorizer` admits none, so register a permissive or custom one) and whose effective permissions grant the `Telemetry` operation cluster-wide, so an ungranted caller is offered no telemetry tools at all, and each tool re-checks that capability at call time before it queries the backend.
 
 See the [MCP API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp/README.md) for the binding's security and discovery model.

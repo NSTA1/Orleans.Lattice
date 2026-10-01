@@ -23,6 +23,7 @@ dotnet test --filter "TestCategory!=Chaos"
 | Backend | Real Azurite emulator via `AzureTableWalStorageProvider` |
 | Shards | 6 |
 | Workload | 10 batches per shard, 4 entries per batch |
+| Compression | Off (`Compression = LatticeCompression.None`), so payloads are stored verbatim and the default Zstandard path is not exercised |
 | Total entries | 240 |
 | Writers | One writer per shard, all shards active concurrently |
 | Validation | Full readback, duplicate detection, gap detection, monotone offset assertion, highest-offset assertion |

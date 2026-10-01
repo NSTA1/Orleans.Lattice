@@ -53,7 +53,9 @@ Done: soft-delete blocked access and was reversible; purge was permanent.
 
 - When you must reclaim storage immediately and are certain recovery will never
   be needed: `PurgeTreeAsync` (shown at the end) bypasses the grace window and
-  destroys the data now. It is irreversible - recovery after purge is refused.
+  destroys the data now - the call waits a bounded time, and a tree too large to
+  purge in that time finishes purging in the background. It is irreversible -
+  recovery after purge is refused, as it is while a purge is still running.
 - Per-key removal - use `DeleteAsync` / `DeleteRangeAsync`; tree deletion is for
   disposing of an entire tree.
 

@@ -4,6 +4,7 @@ using Orleans.Concurrency;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Serialization.Invocation;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -20,7 +21,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// The behavioural tests park one point write inside its leaf call with an
-/// incoming grain call filter and assert that a second point write on the same
+/// outgoing grain call filter - before the call is sent, so no response timeout
+/// ends the parked turn - and assert that a second point write on the same
 /// shard root completes while the first is still parked. The attribute is
 /// honoured by the Orleans scheduler, which a unit-level harness does not run,
 /// so only a real activation can observe it. The reflection test is the
@@ -83,7 +85,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
 
         var expiry = DateTime.UtcNow.AddHours(1).Ticks;
         GatingLeafSetFilter.Arm("parked");
-        Task? blocker = null;
+        Task blocker;
         try
         {
             blocker = withExpiry
@@ -96,20 +98,19 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
             var probe = withExpiry
                 ? shard.SetAsync("probe", Encoding.UTF8.GetBytes("probe"), expiry)
                 : shard.SetAsync("probe", Encoding.UTF8.GetBytes("probe"));
-            var winner = await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(10)));
+            await InterleaveProbe.AnswersWhileHeldAsync(probe, GatingLeafSetFilter.Gate!.Task,
+                "A point write issued while another point write is parked on the same shard root");
 
-            Assert.That(winner, Is.SameAs(probe),
-                "A point write must not queue behind another point write parked on the same shard root.");
             Assert.That(blocker.IsCompleted, Is.False, "The parked write must still be parked when the probe completes.");
         }
         finally
         {
             GatingLeafSetFilter.Release();
-            if (blocker is not null)
-            {
-                await blocker.WaitAsync(TimeSpan.FromSeconds(30));
-            }
         }
+
+        // Drained only once the probe has passed, so the blocker's own response
+        // timeout can never mask the probe's verdict.
+        await blocker.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Multiple(async () =>
         {
@@ -163,7 +164,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
-            siloBuilder.AddIncomingGrainCallFilter<GatingLeafSetFilter>();
+            siloBuilder.AddOutgoingGrainCallFilter<GatingLeafSetFilter>();
         }
     }
 
@@ -174,7 +175,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
     /// TestingHost silo runs in-process, and it matches a single key so it
     /// cannot park any other write.
     /// </summary>
-    private sealed class GatingLeafSetFilter : IIncomingGrainCallFilter
+    private sealed class GatingLeafSetFilter : IOutgoingGrainCallFilter
     {
         internal static volatile TaskCompletionSource? Gate;
         internal static volatile TaskCompletionSource? Entered;
@@ -197,7 +198,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
             Entered = null;
         }
 
-        public async Task Invoke(IIncomingGrainCallContext context)
+        public async Task Invoke(IOutgoingGrainCallContext context)
         {
             ArgumentNullException.ThrowIfNull(context);
 

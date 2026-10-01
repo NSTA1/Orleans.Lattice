@@ -182,7 +182,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
                         NextSibling = ci.ArgAt<GrainId?>(1),
                         HighKeyExclusive = ci.ArgAt<string?>(2),
                     };
-                    return Task.FromResult(true);
+                    return Task.FromResult(LeafUnlinkOutcome.Unlinked);
                 });
 
             harness.Leaves[id] = leaf;
@@ -249,7 +249,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         // leaf stays frozen and refuses writes for the rest of its life.
         var h = CreateHarness();
         h.A.TryUnlinkSuccessorAsync(Arg.Any<GrainId>(), Arg.Any<GrainId?>(), Arg.Any<string?>())
-            .Returns(Task.FromResult(false));
+            .Returns(Task.FromResult(LeafUnlinkOutcome.DeclinedPredecessorMoved));
 
         var reclaimed = await h.Grain.ReclaimEmptyLeavesAsync(4);
 
@@ -268,7 +268,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         // decline.
         var h = CreateHarness();
         h.A.TryUnlinkSuccessorAsync(Arg.Any<GrainId>(), Arg.Any<GrainId?>(), Arg.Any<string?>())
-            .Returns<bool>(_ => throw new InvalidOperationException("predecessor unavailable"));
+            .Returns<LeafUnlinkOutcome>(_ => throw new InvalidOperationException("predecessor unavailable"));
 
         Assert.That(async () => await h.Grain.ReclaimEmptyLeavesAsync(4),
             Throws.InstanceOf<InvalidOperationException>());

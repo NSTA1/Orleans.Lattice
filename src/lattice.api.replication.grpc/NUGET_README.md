@@ -10,7 +10,11 @@ control surface over the wire: enabling replication for a tree (fixing its wire
 merge mode), disabling it, and inspecting the effective replicated-tree set
 (runtime and static enrollment reconciled). Every
 wire message rides the Orleans serializer, so the contract stays versioned and
-additive-only.
+additive-only. A second service, added with `AddLatticeReplicationStatusApiGrpc()`
+after `AddLatticeReplicationApiGrpc()` and mapped with
+`MapLatticeReplicationStatusApiGrpc()`, serves the read-only replication peer-status
+facade; `LatticeReplicationStatusGrpcClient` implements `ILatticeReplicationStatus`
+over it, behind the same authorization gate.
 
 Wiring is two calls on the co-hosting silo:
 

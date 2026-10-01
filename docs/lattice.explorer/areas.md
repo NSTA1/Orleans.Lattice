@@ -379,6 +379,8 @@ If diagnostics or admin authority allow it, the page checks the tree
 configuration and sends not-found when the tree does not exist. Its tabs show:
 summary statistics and operation status; configuration and history retention;
 shard map, diagnostics and hotness; storage and WAL placement; and lifecycle.
+The open tab is carried in `?tab=`: `configuration`, `shards`, `storage` or
+`lifecycle`, and no key for the default `summary` tab.
 Denied probes become an all-deny answer, so controls stay hidden even though
 the cluster still authorises every real operation when attempted.
 

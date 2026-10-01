@@ -70,9 +70,9 @@ public static class LatticeReplicationSharedSecret
     }
 
     /// <summary>
-    /// Constant-time string comparison. Used by the authenticator to
-    /// compare the presented credential against every accepted secret
-    /// without leaking which prefix matched. Returns
+    /// Constant-time string comparison. Used by authenticators to compare the
+    /// presented credential against accepted-set entries or an origin-bound
+    /// expected secret without leaking which prefix matched. Returns
     /// <see langword="false"/> when either input is null.
     /// </summary>
     /// <remarks>

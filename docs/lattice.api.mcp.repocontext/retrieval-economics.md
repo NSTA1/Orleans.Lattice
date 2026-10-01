@@ -84,7 +84,8 @@ level** under a hard token ceiling:
 
 - `paths` - the path only.
 - `outline` - the declared-symbol skeleton, reusing the outline projection.
-- `slices` - bounded body text.
+- `slices` - bounded body text: the file's content projection, which holds at
+  most its first 65,536 characters.
 - `auto` (the default) - the richest level that still yields a non-empty bundle,
   with the concrete level reported back in `detail`.
 
@@ -165,9 +166,12 @@ reads 3600) it returns only summed token figures:
   signed figure; see below).
 - `windowSeconds` - the length of the reporting window.
 
-Crediting is deliberately conservative so the figure is never inflated: reused or
-suppressed content is structurally excluded, and only `slices` deliveries earn
-read-replacement credit. Because crediting is this conservative, `netSavedTokens` is
+Crediting is deliberately conservative: reused or suppressed content is structurally
+excluded, and only `slices` deliveries earn read-replacement credit. It is not a strict
+floor, though: each `slices` entry is credited at the file's stored whole-file token
+count, so a file longer than the 65,536-character content projection a `slices` body
+carries is credited in full for the prefix it delivered. Because crediting is this
+conservative, `netSavedTokens` is
 **signed** and routinely negative for discovery-heavy or reuse-light usage - that is
 correct, not a defect. It turns positive as a task delivers real bodies (`slices`) and
 reuses a `session` so repeated context is suppressed and never re-charged, and it is
@@ -211,7 +215,7 @@ does not match it.
 |---|---|---|---|---|
 | `repocontext.calls` | `Counter<long>` | `{call}` | `command` | Answered repocontext calls, tagged by tool name. Only the context bundle records usage, so `command` reads `repocontext_context` on every series these three counters carry. |
 | `repocontext.response_tokens` | `Counter<long>` | `{token}` | `command` | The response tokens those calls spent, charged at each bundle's conservative `responseTokens` wire-cost estimate rather than a BPE count. |
-| `repocontext.reads_replaced_tokens` | `Counter<long>` | `{token}` | `command` | The whole-file read tokens they conservatively replaced. Credited only for delivered whole-file-equivalent content, so it is a floor rather than an estimate. |
+| `repocontext.reads_replaced_tokens` | `Counter<long>` | `{token}` | `command` | The whole-file read tokens they conservatively replaced. Credited only for `slices`-detail deliveries, at each file's stored whole-file token count, so it is a floor except for a file longer than the 65,536-character content projection a `slices` body carries, which is credited in full for the prefix it delivered. |
 | `repocontext.retrieval.ready_seconds` | `Histogram<double>` | `s` | `phase` | Seconds from host start to the retrieval plane first reporting ready, tagged by the phase it reached. Recorded once per process, so it is the cold-start time-to-retrieval-ready figure. |
 | `repocontext.retrieval.unavailable` | `Counter<long>` | `{event}` | `cause` | Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by cause: `keyword.vector_plane_unavailable`, `keyword.index_degraded`, `keyword.exact_fallback_suppressed`, `probe` (a readiness probe rather than a query observed it), `saturated` (the vector plane's open was refused by an admission gate past its declared bound, so the plane is not expected to arm at the present capacity - issue #3286), or `unknown`. A non-zero rate is what distinguishes a keyword answer caused by a real capability loss from an intended keyword-only deployment. All six arms are pre-minted at zero when the readiness state is constructed, so each exists from process start and 'retrieval has never degraded on this process' is a measured absence rather than an absent measurement; before this the counter published no series at all until the first fault, so the healthy reading and an unwired instrument were identical. If an arm is *absent* rather than zero, read `lattice_metrics_series` against the collector ceiling and `lattice_metrics_dropped_measurements_by_family_total` before concluding anything, because a series whose first occurrence falls after a ceiling is reached is refused at creation. |
 | `repocontext.retrieval.ann.search` | `Counter<long>` | `{query}` | `state` | Semantic searches partitioned by the approximate-plane state that answered them: `bootstrapping` (the plane could not answer, so the fallback ladder ran), `exhaustive` (answered by scanning the vectors it holds), or `approximate` (answered from its trained partitioning). Because **every** answered query is counted, the total is a denominator: `approximate` pinned at zero beside a rising total is a measured absence of trained serving, not an absent measurement. All three arms are pre-minted at zero when the reporter is constructed, so each exists from process start; if an arm is *absent* rather than zero, read `lattice_metrics_series` against the collector ceiling and `lattice_metrics_dropped_measurements_by_family_total` before concluding anything, because a series whose first occurrence falls after a ceiling is reached is refused at creation. |

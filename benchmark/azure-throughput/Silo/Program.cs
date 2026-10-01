@@ -501,8 +501,8 @@ var leafStorageNumGrains = ReadIntAllowZero("BENCH_LEAF_STORAGE_NUM_GRAINS", 0);
 // (fan-out point write), `ILattice.GetAsync` (fan-out point read), and
 // `ILattice.GetManyAsync` so a single rung can produce headline numbers
 // for every public ILattice op against the c2-iii operating point. The
-// `get-*` modes pre-seed the keyspace via `ILattice.BulkLoadAsync` at
-// silo startup before the TCP listener opens (step 5 wires this).
+// `get-*` modes pre-seed the keyspace via `ILattice.SetManyAsync` at
+// silo startup before the TCP listener opens.
 // The fixed-shape atomic modes (`set-many-atomic-2`, `cross-tree-atomic-2`,
 // `cross-tree-atomic-64`) let one rung compare single-tree against
 // multi-tree (cross-tree) atomic-write throughput at matched batch sizes;
@@ -511,9 +511,8 @@ var leafStorageNumGrains = ReadIntAllowZero("BENCH_LEAF_STORAGE_NUM_GRAINS", 0);
 var workloadMode = BenchWorkloadMetadata.ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
 // Per-saga batch size used only when `workloadMode == SetManyAtomic`.
 // A 4096-key atomic saga is not a realistic shape; 64 reflects audience-
-// relevant atomic-write usage. Falls back to `batchSize` (4096) when the
-// env-var is unset, which is the legacy bench shape so the operator can
-// opt back to it.
+// relevant atomic-write usage. Defaults to 64 when the env-var is unset;
+// set BENCH_ATOMIC_BATCH_SIZE explicitly to test a larger saga shape.
 var atomicBatchSize = ReadInt("BENCH_ATOMIC_BATCH_SIZE", 64);
 // Read-mode pre-seed size. The producer's BENCH_VEHICLE_COUNT env-var
 // determines the keyspace the producer's events touch; the silo

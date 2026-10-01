@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -118,19 +119,19 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
     {
         var blockedWhenExclusive = await ReaderBlocksWhileAppendParkedAsync(
             tree: "single-entry-exclusive", batchedSingleEntryAppends: false);
-        var blockedWhenBatched = await ReaderBlocksWhileAppendParkedAsync(
-            tree: "single-entry-batched", batchedSingleEntryAppends: true);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(blockedWhenExclusive, Is.True,
-                "With the option off a one-entry bulk append takes the exclusive overload, so a " +
-                "reader must queue behind the parked provider round trip. If this stops being " +
-                "true the option no longer has a control arm and the A/B is meaningless.");
-            Assert.That(blockedWhenBatched, Is.False,
-                "With the option on the append interleaves, so the reader must complete while the " +
-                "provider round trip is still parked.");
-        });
+        // With the option on the append interleaves, so the reader must answer
+        // while the provider round trip is still parked. Proven without a clock:
+        // the append is released only after the reader has answered.
+        await WhileAppendParkedAsync("single-entry-batched", batchedSingleEntryAppends: true,
+            (grain, released) => InterleaveProbe.AnswersWhileHeldAsync(
+                grain.GetNextSequenceAsync(CancellationToken.None).AsTask(), released,
+                "With the option on, the reader"));
+
+        Assert.That(blockedWhenExclusive, Is.True,
+            "With the option off a one-entry bulk append takes the exclusive overload, so a " +
+            "reader must queue behind the parked provider round trip. If this stops being " +
+            "true the option no longer has a control arm and the A/B is meaningless.");
     }
 
     /// <summary>
@@ -170,10 +171,14 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             await GatingAppendWalStorageProvider.AppendEntered!.Task
                 .WaitAsync(TimeSpan.FromSeconds(15));
 
-            var during = await grain.GetNextSequenceAsync(CancellationToken.None)
-                .AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-            var page = await grain.ReadAsync(0, 100, CancellationToken.None)
-                .AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            var during = await InterleaveProbe.AnswersWhileHeldAsync(
+                grain.GetNextSequenceAsync(CancellationToken.None).AsTask(),
+                GatingAppendWalStorageProvider.AppendLeft!.Task,
+                "GetNextSequenceAsync, issued while a batched append is parked in the provider,");
+            var page = await InterleaveProbe.AnswersWhileHeldAsync(
+                grain.ReadAsync(0, 100, CancellationToken.None).AsTask(),
+                GatingAppendWalStorageProvider.AppendLeft!.Task,
+                "ReadAsync, issued while a batched append is parked in the provider,");
 
             Assert.Multiple(() =>
             {
@@ -263,8 +268,8 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
     [Test]
     public async Task Writer_point_appends_pipeline_on_one_partition_only_when_batched()
     {
-        var enteredWhenBatched = await ProviderCallsWhileFirstPointAppendParkedAsync(BatchedPointTree);
-        var enteredWhenExclusive = await ProviderCallsWhileFirstPointAppendParkedAsync(ExclusivePointTree);
+        var enteredWhenBatched = await ProviderCallsWhileFirstPointAppendParkedAsync(BatchedPointTree, expectPipelined: true);
+        var enteredWhenExclusive = await ProviderCallsWhileFirstPointAppendParkedAsync(ExclusivePointTree, expectPipelined: false);
 
         Assert.Multiple(() =>
         {
@@ -279,7 +284,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
         });
     }
 
-    private async Task<int> ProviderCallsWhileFirstPointAppendParkedAsync(string tree)
+    private async Task<int> ProviderCallsWhileFirstPointAppendParkedAsync(string tree, bool expectPipelined)
     {
         var writer = _cluster.Silos
             .OfType<InProcessSiloHandle>()
@@ -292,8 +297,9 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
         await writer.AppendAsync(MakeEntry(tree, "seed")).WaitAsync(TimeSpan.FromSeconds(15));
 
         GatingAppendWalStorageProvider.Arm(tree);
-        Task<long>? first = null;
-        Task<long>? second = null;
+        Task<long> first;
+        Task<long> second;
+        int entered;
         try
         {
             first = writer.AppendAsync(MakeEntry(tree, "first"));
@@ -302,34 +308,57 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
 
             second = writer.AppendAsync(MakeEntry(tree, "second"));
 
-            // Bounded wait for the second provider call. The batched route
-            // gets there almost immediately; the exclusive route never does
-            // while the first is parked, so the deadline is the verdict.
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
-            while (GatingAppendWalStorageProvider.EnteredCount < 2 && DateTime.UtcNow < deadline)
+            if (expectPipelined)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(20));
+                // The batched route reaches the provider while the first append
+                // is still parked; the first is released only after it has, so
+                // the verdict is not a race against a clock.
+                await InterleaveProbe.AnswersWhileHeldAsync(
+                    GatingAppendWalStorageProvider.SecondEntered!.Task,
+                    GatingAppendWalStorageProvider.AppendLeft!.Task,
+                    "With the option on, the second point append reaching the provider");
+            }
+            else
+            {
+                // The exclusive route never gets there while the first is
+                // parked. A window can only let a regression through on a slow
+                // runner, never fail a correct exclusive route.
+                await TestPoll.TryUntilAsync(
+                    () => GatingAppendWalStorageProvider.EnteredCount >= 2, TimeSpan.FromSeconds(3));
             }
 
-            return GatingAppendWalStorageProvider.EnteredCount;
+            entered = GatingAppendWalStorageProvider.EnteredCount;
         }
         finally
         {
             GatingAppendWalStorageProvider.Release();
-            if (first is not null)
-            {
-                await first.WaitAsync(TimeSpan.FromSeconds(15));
-            }
-            if (second is not null)
-            {
-                await second.WaitAsync(TimeSpan.FromSeconds(15));
-            }
-            GatingAppendWalStorageProvider.Reset();
         }
+
+        // Drained only once the probe has passed, so a parked append's own flush
+        // deadline can never mask the probe's verdict.
+        await first.WaitAsync(TimeSpan.FromSeconds(15));
+        await second.WaitAsync(TimeSpan.FromSeconds(15));
+        GatingAppendWalStorageProvider.Reset();
+        return entered;
     }
 
     private async Task<bool> ReaderBlocksWhileAppendParkedAsync(
         string tree, bool batchedSingleEntryAppends)
+    {
+        var blocked = false;
+        await WhileAppendParkedAsync(tree, batchedSingleEntryAppends, async (grain, _) =>
+        {
+            // A negative window: it can only let a regression through on a slow
+            // runner, never fail a reader that is correctly held behind the turn.
+            var readerTask = grain.GetNextSequenceAsync(CancellationToken.None).AsTask();
+            var winner = await Task.WhenAny(readerTask, Task.Delay(TimeSpan.FromSeconds(3)));
+            blocked = winner != readerTask;
+        });
+        return blocked;
+    }
+
+    private async Task WhileAppendParkedAsync(
+        string tree, bool batchedSingleEntryAppends, Func<IWalShardGrain, Task, Task> whileParked)
     {
         var grain = _cluster.Client.GetGrain<IWalShardGrain>($"{tree}/0");
 
@@ -338,16 +367,13 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
         await grain.AppendBatchAsync(new[] { MakeEntry(tree, "seed") }, CancellationToken.None);
 
         GatingAppendWalStorageProvider.Arm(tree);
-        Task appendTask;
         try
         {
-            appendTask = AppendOneAsync(grain, tree, "parked", batchedSingleEntryAppends);
+            _ = AppendOneAsync(grain, tree, "parked", batchedSingleEntryAppends);
             await GatingAppendWalStorageProvider.AppendEntered!.Task
                 .WaitAsync(TimeSpan.FromSeconds(15));
 
-            var readerTask = grain.GetNextSequenceAsync(CancellationToken.None).AsTask();
-            var winner = await Task.WhenAny(readerTask, Task.Delay(TimeSpan.FromSeconds(3)));
-            return winner != readerTask;
+            await whileParked(grain, GatingAppendWalStorageProvider.AppendLeft!.Task);
         }
         finally
         {
@@ -403,6 +429,16 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
 
         internal static volatile TaskCompletionSource? AppendGate;
         internal static volatile TaskCompletionSource? AppendEntered;
+        internal static volatile TaskCompletionSource? SecondEntered;
+
+        /// <summary>
+        /// Completes when a parked append leaves the gate, whether the test
+        /// released it or the shard's own flush deadline cancelled it. That is
+        /// the end of the hold a probe must answer inside: a cancelled append
+        /// ends the turn just as a release does, and a reader queued behind it
+        /// would otherwise answer afterwards and pass for an interleaved one.
+        /// </summary>
+        internal static volatile TaskCompletionSource? AppendLeft;
         private static volatile string? _gatedTree;
         private static int _enteredCount;
 
@@ -414,6 +450,8 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             _gatedTree = tree;
             Interlocked.Exchange(ref _enteredCount, 0);
             AppendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            SecondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            AppendLeft = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             AppendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
@@ -424,6 +462,8 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             _gatedTree = null;
             AppendGate = null;
             AppendEntered = null;
+            SecondEntered = null;
+            AppendLeft = null;
             Interlocked.Exchange(ref _enteredCount, 0);
         }
 
@@ -432,9 +472,17 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             var gate = AppendGate;
             if (gate is not null && string.Equals(treeId, _gatedTree, StringComparison.Ordinal))
             {
-                Interlocked.Increment(ref _enteredCount);
+                if (Interlocked.Increment(ref _enteredCount) == 2) SecondEntered?.TrySetResult();
                 AppendEntered?.TrySetResult();
-                await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                var left = AppendLeft;
+                try
+                {
+                    await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    left?.TrySetResult();
+                }
             }
         }
 

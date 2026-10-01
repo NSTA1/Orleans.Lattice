@@ -38,6 +38,7 @@ registers only the `orleans.lattice` family exports no runtime telemetry at all.
 | `orleans.lattice.scaling` | the scaling package, only when registered on the silo | `Scaling` |
 | `orleans.lattice.tenancy` | the tenancy package, only when registered on the silo | `Tenancy` |
 | `Orleans.Lattice.Api.Mcp.RepoContext` | the repository-context MCP package, only where it is hosted | the three exact-KNN panels on `Overview` |
+| `orleans.lattice.api.mcp` | the MCP server host package, only where it is hosted | none of the bundled dashboards; deliberately left uncharted (see [its metric-to-panel map section](metrics-to-panel-map.md#orleanslatticeapimcp-meter)) |
 | `Microsoft.Orleans` | the Orleans runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 | `System.Runtime` | the .NET runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 

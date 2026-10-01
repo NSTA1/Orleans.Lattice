@@ -57,7 +57,7 @@ public partial class TombstoneCompactionGrainTests
         // called - which is what would make a leaked list self-propagating.
         grainFactory.GetGrain<IBPlusLeafGrain>(wedged)
             .CompactTombstonesAsync(Arg.Any<TimeSpan>())
-            .Returns<int>(_ => throw new TimeoutException("leaf activation exceeded the request timeout"));
+            .Returns<LeafCompactionResult>(_ => throw new TimeoutException("leaf activation exceeded the request timeout"));
 
         // ... and whose mark cannot be lifted above the pass watermark either,
         // so the walk refuses to advance past it rather than letting the drain

@@ -50,6 +50,7 @@ internal sealed class TreeReshardState
     /// </summary>
     [Id(6)] public List<int> ConsolidationDonorShardIndices { get; set; } = [];
 
+    /// <summary>
     /// The number of distinct physical shards the tree's <see cref="ShardMap"/>
     /// named when the current or most recent reshard started, so its progress can
     /// be measured from where it began rather than from zero. Legacy persisted

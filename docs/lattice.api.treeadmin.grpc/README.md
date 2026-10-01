@@ -43,7 +43,7 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | Tag indexes | `ListTagIndexesAsync`, `GetTagIndexStatusAsync`, `ReconcileTagIndexAsync` |
 | Compaction and retention | `TriggerShardCompactionAsync`, `GetHistoryRetentionAsync`, `SetHistoryRetentionAsync` |
 
-The reshard, resize and snapshot RPCs return the facade's status records unchanged, so their [operation progress](../lattice.api.treeadmin/README.md#operation-progress) members travel over the wire as well: `TreeResizeStatus.Phase`, `CompletedUnits` and `TotalUnits`; `TreeSnapshotStatus.Phase`, `CopiedShardCount` and `ShardCount`; and `TreeReshardStatus.TargetShardCount` and `StartPhysicalShardCount`, with the `TreeResizePhase` and `TreeSnapshotPhase` enums. They are appended `[Id]` members, so a client built before them reads the same records and ignores them, and a server built before them leaves them null.
+The reshard, resize and snapshot RPCs return the facade's status records unchanged, so their [operation progress](../lattice.api.treeadmin/README.md#operation-progress) members travel over the wire as well: `TreeResizeStatus.Phase`, `CompletedUnits` and `TotalUnits`; `TreeSnapshotStatus.Phase`, `CopiedShardCount` and `ShardCount`; and `TreeReshardStatus.TargetShardCount` and `StartPhysicalShardCount`, with the `TreeResizePhase` and `TreeSnapshotPhase` enums. They are appended `[Id]` members, so a client built before them reads the same records and ignores them, and a server built before them leaves them null (0 for `CompletedUnits` and `CopiedShardCount`).
 
 ### Client method signatures
 
@@ -170,7 +170,7 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | `TreeNotEmptyException` | `FailedPrecondition` | A bulk-load session was opened against a tree that already holds data. |
 | `BulkLoadOrderException` | `InvalidArgument` | A bulk-load chunk's keys were not strictly ascending. |
 | `InvalidOperationException` | `FailedPrecondition` | A precondition refused on a well-formed request - for example no backup engine or view subsystem registered, a reshard or resize already in flight, a tree that still sources a materialised view, a tenant quota breach, or a saturation refusal (`LatticeQuotaExceededException` and `LatticeSaturatedException` both derive from it, so neither surfaces as `ResourceExhausted` here). |
-| `ArgumentException` | `InvalidArgument` | A malformed or out-of-range argument, a reserved tree id, or an unconfirmed purge. |
+| `ArgumentException` | `InvalidArgument` | A malformed or out-of-range argument (including an undefined `TreeSnapshotMode` or `TreeHistoryRetentionMode`, refused with `ArgumentOutOfRangeException`), a reserved tree id, or an unconfirmed purge. |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 

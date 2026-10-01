@@ -82,7 +82,7 @@ public sealed record ExplorerRoute
 
     /// <summary>
     /// The area slug, for example <see cref="ExplorerRouteSegments.Explore"/> or
-    /// a plugin's own slug. Empty only on <see cref="Root"/>.
+    /// another native area's slug. Empty only on <see cref="Root"/>.
     /// </summary>
     public string Area { get; }
 
@@ -102,8 +102,9 @@ public sealed record ExplorerRoute
 
     /// <summary>
     /// The detail-surface slug the selection is open on, for example <c>data</c>.
-    /// Derive it from a plugin id with <see cref="ExplorerRouteSlug.FromIdentifier"/>.
-    /// Empty when the selection is on its default surface.
+    /// Derive it from an area or surface id with
+    /// <see cref="ExplorerRouteSlug.FromIdentifier"/>. Empty when the selection is
+    /// on its default surface.
     /// </summary>
     public string Surface { get; }
 

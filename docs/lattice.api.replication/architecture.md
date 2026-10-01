@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Replication architecture
 
-This facade is a thin, fail-closed control layer over the replication config authority. It owns three responsibilities and nothing else: resolve the tree name and authorize the caller, delegate to the engine, and scope discovery to the caller's grant.
+This facade is a thin, fail-closed control layer over the replication config authority. It owns three responsibilities and nothing else: resolve the tree name and authorize the caller, delegate to the engine, and scope discovery to the caller's grant. The package's separate, read-only peer-status facade is described in [The peer-status read path](#the-peer-status-read-path).
 
 ## The single narrowest seam
 
@@ -27,6 +27,15 @@ The merge mode is stored in an `MvRegister`, so two clusters that concurrently e
 ## Ordering guard
 
 `AddLatticeReplicationApi()` checks at registration that `ILatticeReplicationConfigAuthority` has been registered and throws with an actionable message if it has not, so a host that forgot `enableRuntimeConfig: true` on `AddLatticeReplication(...)` fails fast rather than at first call.
+
+## The peer-status read path
+
+`ILatticeReplicationStatus` is a separate, read-only facade with its own registration, `AddLatticeReplicationStatusApi()`. It reads the replication engine's per-link telemetry rather than the config authority, so it needs `AddLatticeReplication(...)` registered first - it checks this at registration and throws `InvalidOperationException` otherwise - but neither `enableRuntimeConfig: true` nor `AddLatticeReplicationApi()`.
+
+- **Where the numbers come from.** Each silo keeps the per-link counters of the shippers and appliers it hosts in memory. Each read fans out to every active silo through a per-silo grain service, each silo answers with a bounded number of rows after the cursor, and the answers are merged. When more than one silo reports the same link - a shipper rebalanced to another silo leaves a stale copy behind, and an inbound link exists on every silo that applied a batch from that peer - the copy with the most recent successful contact is kept whole, so its backlog, error streak, and in-flight count are never mixed across silos; when no copy has made contact, the one with the longest error streak, then the larger backlog, is kept. A silo that fails to answer fails the whole read, because a partial answer would present that silo's links as absent rather than unknown. The read path holds no state, schedules nothing, and never touches the ship or apply path.
+- **Tenant and authorization.** Every call confirms that the caller's tenant resolves and fails closed with `LatticeTenantAccessDeniedException` otherwise. A tree filter is resolved to its effective, tenant-scoped id and authorized for `LatticeOperation.Replication` over the whole tree before any telemetry is read; a denied filter returns an empty page. Without a filter, each tree's verdict is computed once per call and the rows of a tree the caller may not manage are skipped, so the report never reveals that tree.
+- **Paging.** Rows are ordered by effective tree id, then peer region id, then direction. Each read asks for up to one row more than the page size, so a full page learns whether anything follows without another round trip, and rows the caller may not see are skipped by reading further rather than by ending the page early. The continuation token is opaque and versioned and encodes only the key of the last row the caller was shown. It is treated as a position to validate, never as authority: every row after it is authorized again. A malformed token, a token longer than 4,096 characters, or a token of an earlier format version is rejected with `ArgumentException`.
+- **Health.** Each row's `ReplicationLinkHealth` is derived from that row alone against the `LatticeReplicationStatusOptions` thresholds, without reading a clock: the time since last contact is measured when the row is read. See [Configuration](configuration.md#latticereplicationstatusoptions).
 
 ## See also
 

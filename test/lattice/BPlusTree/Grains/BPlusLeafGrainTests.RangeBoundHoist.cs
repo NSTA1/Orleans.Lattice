@@ -13,12 +13,15 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// The first replaced up to five per-row ordinal comparisons with at most one.
 /// <c>CountAsync</c>, <c>GetKeysAsync</c> and <c>GetEntriesAsync</c> fold every
 /// bound into a half-open window before enumerating, so re-testing
-/// <c>startInclusive</c>, <c>endExclusive</c>, <c>beforeExclusive</c> and the
-/// in-progress split key per row could not change an answer. Only
+/// <c>startInclusive</c>, <c>endExclusive</c> and <c>beforeExclusive</c> per row
+/// could not change an answer. Only
 /// <c>afterExclusive</c> survives, because a lower bound is inclusive and the
 /// one row equal to it is admitted by the window. These tests pin every bound
 /// combination against an independent oracle so a future edit cannot quietly
 /// drop the surviving guard or re-introduce a redundant one that disagrees.
+/// (The in-flight split key used to be folded in here too; issue #3918 removed
+/// that bound outright, because a row the donor still holds is one the sibling
+/// has not taken.)
 /// </para>
 /// <para>
 /// The second made the terminal re-sort conditional. The windowed scan emits in

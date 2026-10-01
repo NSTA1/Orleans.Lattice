@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Apps.Grpc</PackageId>
     <Version>9.6.0</Version>
-    <Description>Code-first gRPC transport and strongly typed client for app lifecycle and consent management, with default-deny authorization, credential bridging, and public auth-scheme discovery.</Description>
+    <Description>Code-first gRPC transport and strongly typed clients for app lifecycle, consent, catalogue, workspace, role-binding, and bridge facades, with default-deny authorization, credential bridging, and public auth-scheme discovery.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>

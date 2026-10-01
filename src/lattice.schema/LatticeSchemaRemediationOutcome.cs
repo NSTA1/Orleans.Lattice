@@ -10,10 +10,10 @@ namespace Orleans.Lattice.Schema;
 /// over.
 /// </summary>
 /// <remarks>
-/// This is a plain in-process result (not an Orleans-serialized type). Persisting
-/// the remediation transform as durable coordinator state and performing the
-/// physical shadow-build cutover are the deferred follow-up; see
-/// <see cref="LatticeSchemaRemediation"/>.
+/// This is a plain in-process result (not an Orleans-serialized type). It reports
+/// only the dry-run verdict; the background remediation flow persists the
+/// transform as durable coordinator state and performs the physical shadow-build
+/// cutover. See <see cref="LatticeSchemaRemediation"/>.
 /// </remarks>
 public readonly record struct LatticeSchemaRemediationOutcome
 {

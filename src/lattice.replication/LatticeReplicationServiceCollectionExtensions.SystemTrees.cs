@@ -9,7 +9,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// Enrols the reserved <c>Orleans.Lattice.Membership</c> and
     /// <c>Orleans.Lattice.Auth</c> system trees into replication so a
     /// multi-cluster deployment converges on a single identity and authorization
-    /// surface across sites. The membership users/groups/edges trees and the
+    /// surface across sites. The membership groups and edges trees and the
     /// authorization policy tree are enrolled last-writer-wins; the append-only
     /// audit tree is enrolled as an observed-remove set only when
     /// <paramref name="includeAudit"/> is <c>true</c> (see

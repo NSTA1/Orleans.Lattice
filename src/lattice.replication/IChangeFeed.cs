@@ -28,21 +28,21 @@ namespace Orleans.Lattice.Replication;
 /// (<see cref="IReplicationApplier"/> / <c>IReplicationApplyGrain</c>)
 /// are captured by the per-shard WAL on the destination cluster -
 /// the WAL is the sole durability boundary - but they are filtered
-/// out at the feed boundary by the foreign-origin guard so the
-/// outbound ship loop and bootstrap consumers never observe them.
+/// out at the feed boundary by the foreign-origin guard so consumers of this
+/// locally-authored feed never observe them.
 /// An apply-installed entry stamps <see cref="WalRecord.OriginClusterId"/>
 /// with the *source* cluster id (set by <c>LatticeOriginContext.With</c>
 /// inside the apply seam), so an entry whose origin is set and does
 /// not match the local <see cref="LatticeReplicationOptions.ClusterId"/>
 /// is by construction apply-installed and is dropped before any
-/// downstream consumer sees it. Re-emitting them would cause the
-/// producer-side ship loop to re-ship a peer's writes back across
-/// the wire and loop the cluster. The
+/// downstream consumer sees it. A custom bridge that shipped this feed and
+/// re-emitted remote applies would ship a peer's writes back across the wire and
+/// loop the cluster. The
 /// <c>includeLocalOrigin=false</c> filter on <see cref="Subscribe"/>
-/// is an *additional* cycle-break that suppresses local-origin
-/// observer entries for the remote shipper; it is orthogonal to the
-/// foreign-origin guard. The <see cref="IMutationObserver"/> hook in
-/// the core library has the same scope by design - its "Coverage
+/// is an *additional* filter for consumers that explicitly want to suppress
+/// local-origin observer entries; it is orthogonal to the foreign-origin guard.
+/// The <see cref="IMutationObserver"/> hook in the core library has the same
+/// scope by design - its "Coverage
 /// gaps" remarks describe the same boundary.
 /// </para>
 /// <para>
@@ -58,8 +58,8 @@ namespace Orleans.Lattice.Replication;
 /// the canonical applier, sees every receiver-side install, and is
 /// invoked on the same thread that performs the merge so it has the
 /// full <see cref="WalRecord"/> in hand. The change feed remains
-/// the right surface for "ship this cluster's authored writes
-/// elsewhere"; the apply-decorator is the right surface for "react to
+/// the right surface for custom bridges or tests that read this cluster's
+/// authored writes; the apply-decorator is the right surface for "react to
 /// every byte that lands in this cluster's state".
 /// </para>
 /// </summary>
@@ -105,8 +105,7 @@ public interface IChangeFeed
     /// <see langword="false"/>, entries whose
     /// <see cref="WalRecord.OriginClusterId"/> matches the configured
     /// local <see cref="LatticeReplicationOptions.ClusterId"/> are
-    /// filtered out - the cursor-driven cycle-break used by remote
-    /// shippers. Defaults to <see langword="true"/> because in-process
+    /// filtered out. Defaults to <see langword="true"/> because in-process
     /// projections and background materialisers need to observe
     /// local-origin mutations. Note that this flag filters
     /// <i>within</i> the locally-authored feed; it does not surface

@@ -22,10 +22,13 @@ public sealed class LatticeSchemaPolicy
     /// </summary>
     /// <param name="rules">The rules a value must satisfy. Must not be <c>null</c>; may be empty.</param>
     /// <param name="strictIngest">
-    /// When <c>true</c>, trusted ingest (replication apply and backup restore) is
-    /// re-validated against the rules and a non-compliant item is dead-lettered
-    /// rather than applied. When <c>false</c> (the default), ingest is trusted and
-    /// bypasses validation.
+    /// When <c>true</c>, intercepted system-origin writes are re-validated against
+    /// the rules and a non-compliant item is dead-lettered rather than applied.
+    /// Replicated typed-CRDT deltas and replicated atomic-batch entries are
+    /// intercepted; a plain last-writer-wins replication apply, a backup restore and
+    /// a tree merge bypass write interception and are not governed by this flag.
+    /// When <c>false</c>
+    /// (the default), intercepted system-origin writes are trusted.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="rules"/> is <c>null</c>.</exception>
     public LatticeSchemaPolicy(IReadOnlyList<LatticeSchemaRule> rules, bool strictIngest = false)
@@ -42,8 +45,9 @@ public sealed class LatticeSchemaPolicy
     public IReadOnlyList<LatticeSchemaRule> Rules { get; }
 
     /// <summary>
-    /// Whether trusted ingest is re-validated (strict mode). A non-compliant
-    /// ingested item is dead-lettered rather than applied, so ingest never blocks.
+    /// Whether intercepted system-origin writes are re-validated (strict mode). A
+    /// non-compliant intercepted item is dead-lettered rather than applied, so the
+    /// intercepted system-origin write never blocks.
     /// </summary>
     [Id(1)]
     public bool StrictIngest { get; }

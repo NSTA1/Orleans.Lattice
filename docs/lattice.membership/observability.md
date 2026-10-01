@@ -24,7 +24,7 @@ Every instrument on this meter carries a single tag, `tenant` (`LatticeTenantLab
 | Directory search hits | `orleans.lattice.membership.directory.search.hits` | Counter | `{search}` | One per directory search that returned at least one matching principal. |
 | Directory search misses | `orleans.lattice.membership.directory.search.misses` | Counter | `{search}` | One per directory search that returned no matching principal. |
 
-Each instrument name is also a public constant on `LatticeMembershipMetrics` (`ResolutionCacheHitsName`, `ResolutionCacheMissesName`, `DirectorySearchDurationName`, `DirectorySearchHitsName`, `DirectorySearchMissesName`), and the `LatticeMembershipMetrics.Meter` instance is public so a listener can subscribe by reference rather than by name.
+Each instrument name is also a public constant on `LatticeMembershipMetrics` (`ResolutionCacheHitsName`, `ResolutionCacheMissesName`, `DirectorySearchDurationName`, `DirectorySearchHitsName`, `DirectorySearchMissesName`), and the `LatticeMembershipMetrics.Meter` instance is public so a listener can subscribe by reference rather than by name. The instruments themselves are public static fields (`ResolutionCacheHits`, `ResolutionCacheMisses`, `DirectorySearchDuration`, `DirectorySearchHits`, `DirectorySearchMisses`), and so are the helpers that record them - `RecordResolutionCacheHit()`, `RecordResolutionCacheMiss()`, and `RecordDirectorySearch(elapsedMilliseconds, matched)`, which records the latency plus a hit when `matched` is `true` or a miss otherwise. Each helper stamps the `_platform_` tag and does nothing for an instrument no listener has enabled.
 
 ### What the hit / miss counters measure
 
