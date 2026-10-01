@@ -33,6 +33,9 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// <summary>Each key's revisions, oldest first.</summary>
     public Dictionary<(string Tree, string Key), List<EntryRevisionRecord>> History { get; } = [];
 
+    /// <summary>Each key's history bound and earliest retained revision, when not <see cref="EntryHistoryBound.Complete"/>.</summary>
+    public Dictionary<(string Tree, string Key), (EntryHistoryBound Bound, HybridLogicalClock Earliest)> HistoryBounds { get; } = [];
+
     /// <summary>Each tree's dead letters.</summary>
     public Dictionary<string, List<DeadLetterEntryRecord>> DeadLetters { get; } = new(StringComparer.Ordinal);
 
@@ -233,6 +236,7 @@ internal sealed class FakeStateClient : ILatticeStateClient
         }
 
         var (items, next) = Page(ordered.ToList(), request.ContinuationToken, request.Limit);
+        var bound = HistoryBounds.TryGetValue((request.TreeId, request.Key), out var b) ? b : default;
         return Task.FromResult(new EntryHistoryResponse
         {
             TreeId = request.TreeId,
@@ -240,6 +244,8 @@ internal sealed class FakeStateClient : ILatticeStateClient
             Status = revisions.Count == 0 ? StateQueryStatus.KeyNotFound : StateQueryStatus.Found,
             Revisions = items,
             ContinuationToken = next,
+            Bound = bound.Bound,
+            EarliestAvailable = bound.Earliest,
         });
     }
 
