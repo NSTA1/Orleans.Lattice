@@ -22,7 +22,7 @@ namespace Orleans.Lattice;
 [Immutable]
 public readonly record struct WalSaturationStateChange
 {
-    /// <summary>The logical tree id whose saturation state changed.</summary>
+    /// <summary>The WAL tree id whose saturation state changed.</summary>
     [Id(0)]
     public string TreeId { get; init; }
 

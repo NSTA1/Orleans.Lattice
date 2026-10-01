@@ -7,9 +7,9 @@ namespace Orleans.Lattice.Api.Telemetry.Grpc;
 /// a gRPC <see cref="CallInvoker"/> and the code-first method definitions,
 /// re-exposing the transport-agnostic <see cref="ILatticeTelemetry"/> facade
 /// surface over the wire - curated catalogue discovery and curated query
-/// evaluation - plus the unauthenticated auth-scheme discovery probe. A client
-/// head (the desktop Explorer, a dashboard, a CLI) consumes telemetry through this
-/// client rather than hand-rolling channel calls.
+/// evaluation - plus the unauthenticated auth-scheme discovery probe. The web
+/// Explorer head, dashboards, CLIs, and other clients consume telemetry through
+/// this client rather than hand-rolling channel calls.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Api.Telemetry.Grpc;
 /// visibility (and, for an operator, the tenant) the caller <em>requests</em>, and
 /// returns whatever scope the facade <em>pinned</em> on
 /// <see cref="TelemetryQueryResponse.Scope"/>. It derives, infers, and asserts no
-/// tenant of its own. Editing a request on a desktop head therefore cannot widen
+/// tenant of its own. Editing a request in a client head therefore cannot widen
 /// what the caller sees: an unvalidated widening comes back degraded, and
 /// <see cref="TelemetryTenantScope.WasDowngraded"/> reports it. Render the scope
 /// the response carries, never the one that was asked for.

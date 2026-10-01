@@ -7,9 +7,8 @@ namespace Orleans.Lattice.Explorer.Core.Configuration;
 /// <summary>
 /// Registration helper for the launcher-friendly environment bootstrap, which
 /// seeds the explorer's first-run endpoint (and optionally a sign-in credential)
-/// from process environment variables. Opted into by both heads so a launcher
-/// can point a fresh explorer at a cluster without hand-editing per-user
-/// app-data.
+/// from process environment variables. Opted into by the web head so a launcher
+/// can point a fresh explorer at a cluster without hand-editing app data.
 /// </summary>
 public static class ExplorerBootstrapServiceCollectionExtensions
 {
@@ -18,8 +17,8 @@ public static class ExplorerBootstrapServiceCollectionExtensions
     /// <see cref="IExplorerConfigurationSeed"/> and the
     /// <see cref="IExplorerCredentialSeed"/>, backed by the live process
     /// environment. Idempotent: a repeated call leaves the first registration in
-    /// place. Manual cog-based configuration is unaffected; the seed only fills
-    /// in the first-run endpoint when nothing is persisted yet.
+    /// place. Interactive configuration is unaffected; the seed only fills in the
+    /// first-run endpoint when nothing is persisted yet.
     /// </summary>
     /// <param name="services">The head's service collection.</param>
     /// <returns>The same <paramref name="services"/> for chaining.</returns>

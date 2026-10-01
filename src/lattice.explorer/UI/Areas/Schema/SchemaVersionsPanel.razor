@@ -127,7 +127,7 @@
         <LtDefinitionList>
             <LtDefinition Term="Schema family" Mono="true">@config.SchemaId</LtDefinition>
             <LtDefinition Term="Target version" Mono="true">@config.TargetVersion</LtDefinition>
-            <LtDefinition Term="Strict ingest">@(config.StrictIngest ? "On: a replicated or restored value whose version cannot be upgraded to the target goes to the dead letters" : "Off: replicated and restored values are stored with whatever version they carry")</LtDefinition>
+            <LtDefinition Term="Strict ingest">@(config.StrictIngest ? "On: a replicated CRDT or atomic-batch entry whose version cannot be upgraded to the target goes to the dead letters; plain last-writer-wins replication, restore and merge are never checked" : "Off: replicated and restored values are stored with whatever version they carry")</LtDefinition>
         </LtDefinitionList>
 
         @if (Workspace!.Grants.ManageVersion)
@@ -154,7 +154,7 @@
             <LtTextInput Label="Target version" Mono="true" Value="@_versionText" ValueChanged="value => _versionText = value" inputmode="numeric"
                          Hint="1 or more. New writes are stamped with it." />
             <LtSwitch Label="Strict ingest" Checked="@_strict" CheckedChanged="value => _strict = value"
-                      Hint="On: a replicated or restored value whose version cannot be upgraded goes to the dead letters." />
+                      Hint="On: a replicated CRDT or atomic-batch entry whose version cannot be upgraded goes to the dead letters; plain last-writer-wins replication, restore and merge are never checked." />
             @if (_formError is not null)
             {
                 <p class="lt-schema-error" role="alert">@_formError</p>

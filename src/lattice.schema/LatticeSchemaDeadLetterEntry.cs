@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Schema;
 /// A serializable dead-letter record retained when strict-mode ingest diverts a
 /// non-compliant item instead of applying it. Entries are stored per tree in the
 /// reserved <c>sys-schema-dlq</c> tree and surfaced (list / count) through
-/// <see cref="ILatticeSchemaDeadLetterStore"/> for inspection and replay.
+/// <see cref="ILatticeSchemaDeadLetterStore"/> for inspection.
 /// </summary>
 /// <remarks>
 /// <see cref="ValuePreview"/> is a bounded copy of the offending value's leading

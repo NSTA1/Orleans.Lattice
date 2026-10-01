@@ -33,7 +33,7 @@ Alongside `mode`, every `repocontext_search` and `repocontext_context` result ca
 
 The last three are real capability losses, and readiness folds them the same way.
 
-Both producers of `keyword.index_degraded` log a `Warning` from `RepoContextSearchService`: a thrown fault logs the exception, and the hydration-drift case logs the repository id, the number of ranked matches and distinct candidate sources, and a bounded sample (at most five, in rank order) of the candidate keys that no longer hydrate - enough to tell an operator which records the index has drifted from.
+Both producers of `keyword.index_degraded` log a `Warning` from the search service: a thrown fault logs the exception, and the hydration-drift case logs the repository id, the number of ranked matches and distinct candidate sources, and a bounded sample (at most five, in rank order) of the candidate keys that no longer hydrate - enough to tell an operator which records the index has drifted from.
 
 ## Keyword search over file content
 
@@ -76,7 +76,7 @@ services.AddOnyxEmbeddingProvider(o =>
 });
 ```
 
-The optional callback populates `OnyxEmbeddingOptions`. Every default matches the model and endpoint baked into the shipped `apps/embedding` image, so an unconfigured host targets the companion container as-is:
+The optional callback populates `OnyxEmbeddingOptions`. Every default matches the model and endpoint both shipped companion images serve - the ONNX Runtime `apps/embedding-onnx` image the sample composes by default, and the Onyx-derived `apps/embedding` image it can fall back to - so an unconfigured host targets the companion container as-is:
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
@@ -110,7 +110,7 @@ Because a single file now contributes several passage vectors, `repocontext_sear
 
 Whether a source has a live embedding is tracked independently of its content, as add-wins **membership** of stable source identifiers - one presence flag per source, not the embeddings themselves - on the vector-membership tree. Membership covers all three embedded sources: files, symbols, and memory entries. This matters because content-digest change detection and embedding presence answer different questions: a file whose digest is unchanged is structurally skipped on re-index, but digest equality says nothing about whether its vector was ever written. A vector can be missing for reasons unrelated to content - the embedder was unavailable at first onboarding, an earlier run failed part-way, or the model space changed - and the presence set is what catches exactly those gaps.
 
-The embedding pass is therefore an idempotent **back-fill**: it embeds every source the membership reports as missing and skips the rest, so re-running it converges to zero new embeds once every source is present. The per-repository [self-index grain](tools.md#staying-fully-indexed-the-self-index-grain) drives the file back-fill continuously - a cheap keys-only structural scan probes membership for the first unembedded file and re-drives the index to close the gap - so embeddings heal on their own once an unavailable embedder returns, without a client call and without re-hashing unchanged content.
+The embedding pass is therefore an idempotent **back-fill**: it embeds every source the membership reports as missing and skips the rest, so re-running it converges to zero new embeds once every source is present. The per-repository [self-index grain](tools.md#staying-fully-indexed-the-self-index-grain) drives the file back-fill continuously - a cheap keys-only structural scan checks every file against the per-page vector-coverage digest (or, before that digest is built, probes membership one page at a time for the first unembedded file) and re-drives the index to close the gap - so embeddings heal on their own once an unavailable embedder returns, without a client call and without re-hashing unchanged content.
 
 A file that is genuinely empty - zero bytes, whitespace only, or content that chunks to no passage - would otherwise never gain a membership flag, because there is nothing to embed. That would leave it permanently "missing" to the back-fill, so the gap scan would re-select and re-read it on every reconcile and never converge. To close that, a considered-but-contentless file is recorded with a distinct **contentless marker** in the same membership tree (a reserved-prefix flag that carries no vector). A file is treated as covered when it has either a real embedding or a contentless marker, so an empty file is considered exactly once and then left alone. The marker is deliberately excluded from `embeddedVectorCount`, which stays an honest tally of sources that carry a real vector; it is cleared automatically when the file later gains embeddable content (its real embedding takes over) or when the file is deleted.
 

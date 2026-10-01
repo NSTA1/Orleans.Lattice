@@ -23,10 +23,11 @@ guard refuses to start when any of them is violated:
 | Host image tags | `repocontext-mcp:local` | `repocontext-mcp:coldstart-rig` |
 | Host port | 8080 | 18080 |
 
-The live model-cache name is a legacy one: the current live sample's ONNX
-embedder bakes its weights into its image and mounts no volume, so a host that
-never ran the earlier HuggingFace-cache sample has no such volume. The rig still
-refuses the name, and still keeps its own `lattice-coldstart-hf` cache.
+Only the sample's opt-in Onyx embedder override
+(`samples/RepoContextContainer/docker-compose.onyx.yml`) mounts the live model
+cache: the default ONNX embedder bakes its weights into its image and mounts no
+volume, so a host that has never run that override has no such volume. The rig
+still refuses the name, and still keeps its own `lattice-coldstart-hf` cache.
 
 On top of the naming, five structural properties:
 
@@ -352,7 +353,8 @@ Useful flags:
   semantic retrieval no longer claims to be ready - but a rig that gates on it
   measures "readiness plus a query" on one image and "a query" on the other, and
   would report the improvement as a cold-start regression. `readySeconds` is
-  still recorded either way, by probing for readiness alongside the query.
+  still recorded, by probing for readiness alongside the query, but not as the
+  first ready answer (see `readySeconds` below).
 - `-KeepUp` leaves the stack running afterwards.
 - `-CohortId <id>` names the output directory (default `cohort-<UTC timestamp>`).
 - `-WarmQueryCount <n>` overrides how many warm samples follow the first
@@ -427,7 +429,7 @@ Per scenario (`runs[].scenarios[]`):
 | `scenario`, `runIndex` | Which scenario, which run. |
 | `containerStartedAtUtc` | The zero point every elapsed time below is measured from. |
 | `liveSeconds` | Seconds from start to the first 200 on `/health/live`. |
-| `readySeconds` | Seconds from start to the first 200 on `/health/ready`. |
+| `readySeconds` | Seconds from start to the first 200 on `/health/ready`. Under `-QueryFromLive` readiness is probed only between queries, and every probe that answers 200 overwrites the value, so it holds the last such probe (normally the one taken at the end of the scenario) rather than the first. |
 | **`firstQuerySeconds`** | **Headline 1.** Seconds from start until the first semantic query returned *successfully, in any retrieval mode*. It is the first tool call issued against the activation, so nothing else has warmed the retrieval path. |
 | **`firstSemanticQuerySeconds`** | **Headline 2.** Seconds until a query first answered with `mode: semantic`. `null` when the box never answered semantically within the budget. |
 | `semanticAchieved` | Whether the semantic path ever answered in this scenario. |

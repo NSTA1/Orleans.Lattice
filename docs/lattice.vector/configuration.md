@@ -64,7 +64,7 @@ These shape persistence and maintenance.
 | `KeyPrefix` | `vidx/` | The key prefix every durable record lives under. |
 | `MaxItemsPerChunk` | `1024` | A ceiling on the centroids or vectors one persisted chunk carries. A chunk is actually written at the largest item count that keeps the record within a fixed 64 KiB byte ceiling, capped by this value, so at typical embedding widths the byte ceiling decides (about 42 vectors per chunk at dimension 384, 21 at 768) and this knob binds only for very narrow vectors (13 dimensions or fewer at the default). Either way, no record grows with the corpus. |
 | `IngestBatchSize` | `4096` | How many source vectors one background build step ingests before returning. Bounds the work a single `BuildStepAsync` does. |
-| `IngestSliceBudget` | 5 seconds (`DefaultIngestSliceBudget`) | Wall-clock ceiling on one build step: the step checkpoints and returns at the first source item that finds the budget spent, and the budget is also a deadline raced against each source read, so a slow or stalled source cannot hold the step. A non-positive value removes the bound, leaving `IngestBatchSize` as the only one. |
+| `IngestSliceBudget` | 5 seconds (`DefaultIngestSliceBudget`) | Wall-clock ceiling on one build step: the step checkpoints and returns at the first source item that finds the budget spent, and the budget is also a deadline raced against each source read, so a slow or stalled source cannot hold the step. A non-positive value removes the bound, leaving `IngestBatchSize` as the only one. A budget longer than the system timer's ceiling (`0xFFFFFFFE` milliseconds, about 49.7 days) arms that deadline at the ceiling rather than faulting the slice. |
 | `TimeProvider` | `TimeProvider.System` | The clock `IngestSliceBudget` is measured against; a test substitutes a fake. Must not be `null`. |
 | `KeyReservationBlock` | `1024` | How many identifiers the key dictionary reserves per durable watermark write. A crash burns the remainder of a block rather than reissuing. |
 | `BuildObserver` | `null` | An `IVectorIndexBuildObserver` the build calls once per ingest slice, after the slice has checkpointed (a slice that faults reports nothing), with a `VectorIndexBuildSliceTimings`: the time the slice spent waiting on the source, assigning identifiers to keys, inserting into the in-memory index, and writing its batched identifier-mapping records, plus how many items it consumed. The package declares no meter or instruments of its own, so this is the seam a host publishes build-stage timings through on its own meter; the repository-context host binds one (see [Retrieval economics](../lattice.api.mcp.repocontext/retrieval-economics.md)). While it is `null` the build takes no stage samples at all, because each sample is a read of the same clock `IngestSliceBudget` is measured against. |
@@ -144,12 +144,18 @@ the registration for its own index tree; see
   you pay for the distinct chunks and cells you touched rather than for the
   updates you applied.
 - **`EnsureCapacity` before a bulk load** makes the insert run allocate nothing.
-- **Memory is `dimensions * 4 + 12` bytes per vector, plus the centroid block** -
-  about 1,549 bytes per vector measured at dimension 384 and 1,000,000 vectors
-  (the centroid block amortises away as the corpus grows, so a smaller corpus
-  measures slightly higher: 1,563 bytes at 10,000). That is roughly 1.5 GB at
-  1,000,000 vectors. Persisted size tracks resident size closely, because a chunk
-  stores the vector and its key and nothing else.
+- **The index's own storage is `dimensions * 4 + 12` bytes per vector, plus the
+  centroid block** - about 1,549 bytes per vector measured at dimension 384 and
+  1,000,000 vectors (the centroid block amortises away as the corpus grows, so a
+  smaller corpus measures slightly higher: 1,563 bytes at 10,000). That is roughly
+  1.5 GB at 1,000,000 vectors. This is the accounting `VectorIndexMemory` and
+  `VectorIndexStatus.BytesPerVector` report: exact for the contiguous blocks
+  (counted over reserved slots, so capacity reserved by `EnsureCapacity` counts
+  too), it deliberately excludes the key-to-location map and the per-cell array
+  headers, and a durable index also keeps its identifier mapping resident in both
+  directions, so a process holds somewhat more than this figure. Persisted size
+  tracks resident size closely, because a chunk stores the vector and its key and
+  nothing else.
 
 ## When to retrain
 

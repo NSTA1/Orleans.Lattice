@@ -137,7 +137,7 @@ internal static class TreeAdminSchemaToolHandlers
         uint schemaId,
         [Description("The target schema version new writes are stamped at. Must be at least 1; the target is monotonic and only ever advances.")]
         uint targetVersion,
-        [Description("When true, strict-mode ingest dead-letters a replicated / restored item whose version cannot be upcast to the target instead of applying it. Defaults to false (trusted ingest).")]
+        [Description("When true (and strict ingest is also enabled host-wide), a replicated entry that reaches the core write path - a typed-CRDT delta or an atomic-batch entry - whose version is newer than the target or cannot be upcast to it is dead-lettered instead of applied. Local writes are never dead-lettered; a plain last-writer-wins replication apply, a backup restore and a tree merge never reach this check. Defaults to false (trusted ingest).")]
         bool strictIngest = false,
         CancellationToken cancellationToken = default)
     {

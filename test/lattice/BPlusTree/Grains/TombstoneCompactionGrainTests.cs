@@ -108,7 +108,7 @@ public partial class TombstoneCompactionGrainTests
         {
             var leafMock = Substitute.For<IBPlusLeafGrain>();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
-            leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
+            leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             leafMock.GetTreeIdAsync().Returns(Task.FromResult<string?>(TreeId));
 
             // Leaf i owns [k{i}, k{i+1}); the last leaf has no high bound, which

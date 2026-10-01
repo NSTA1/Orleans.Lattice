@@ -629,6 +629,11 @@ removed - not a live figure you must keep above zero.
   is rejected), `tags`, `author`, `provenance`, and `ttlSeconds`. To relate one
   entry to another, pass `addLinks` / `removeLinks` (see
   [Knowledge linking](#knowledge-linking---typed-edges-between-memory-entries)).
+- `remember` refuses, before anything is written, a `body` that ends in leaked
+  tool-call framing (the sign of a malformed call whose remaining arguments were
+  silently dropped) and any `body`, `title`, `author`, or `provenance` that carries
+  a URL with a password-bearing userinfo component. Both are client errors raised
+  pre-write, so fix the call and retry.
 - **TTL - when to set it.** Default to **no `ttlSeconds`** (durable, or the repo
   default): decisions, gotchas, conventions, and glossary are meant to outlive
   the session, and when one goes wrong you `update` or `forget` it rather than

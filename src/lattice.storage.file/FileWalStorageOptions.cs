@@ -80,7 +80,9 @@ public sealed class FileWalStorageOptions
     /// <see cref="IWalStorageProvider.TrimAsync"/> call rewrites the segment file to reclaim
     /// the space. A value greater than <c>1.0</c> disables this ratio trigger;
     /// at exactly <c>1.0</c> it still fires, but only on a shard whose payload
-    /// is entirely dead. Space is still reclaimed by the
+    /// is entirely dead. WAL garbage collection reaches this provider through
+    /// <see cref="IWalStorageProvider.TrimAsync"/>, so it also drives this
+    /// compaction check. Space is still reclaimed by the
     /// <see cref="CompactionMaximumDeadBytes"/> ceiling when that is set, and on
     /// the next activation-time <see cref="IWalStorageProvider.ReconcileAsync"/>.
     /// Defaults to <see cref="DefaultCompactionThreshold"/>.

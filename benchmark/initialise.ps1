@@ -16,8 +16,10 @@
     500, 1000, 2000, 4000, 8000, 16000) against the cheapest scenario
     (current-state-no-replication) and watches three signals after each rung:
 
-      1. Sink drops    -- if the LatticeSink dropped events, the rung is past
-                          the producer-side knee. (hard signal)
+      1. Sink drops    -- if the LatticeSink observed a failed enqueue, the rung
+                          is past the producer-side knee. With the default
+                          drop-oldest channel, replacements are not counted, so
+                          zero drops is not a hard proof that nothing was evicted.
       2. Throughput plateau -- if commits/s grew less than 10% from the
                           previous rung despite the fleet roughly doubling,
                           the silo is past the commit-path knee (adding

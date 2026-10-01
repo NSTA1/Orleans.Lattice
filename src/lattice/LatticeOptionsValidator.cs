@@ -535,6 +535,15 @@ if (options.SetManyFanOutBudget <= TimeSpan.Zero
         + "infinite is the default and awaits the slowest branch however long it takes, while zero would refuse every "
         + "fan-out immediately and is never a useful configuration).");
 }
+if (options.SetManyEnvelopeBudget <= TimeSpan.Zero
+    && options.SetManyEnvelopeBudget != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.SetManyEnvelopeBudget)} must be greater than zero or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(how long a whole batch write may run - gate, route, bucket and fan-out together - before it is refused with "
+        + "LatticeSaturatedException; infinite is the default and leaves the envelope unbounded, while zero would refuse "
+        + "every batch write immediately and is never a useful configuration).");
+}
 
 if (options.WalThrottledAdmissionPace < TimeSpan.Zero)
 {
@@ -613,6 +622,7 @@ return ValidateOptionsResult.Success;
         (nameof(LatticeOptions.EmptyTreeProbeBudget), options.EmptyTreeProbeBudget),
         (nameof(LatticeOptions.StarvationDriveBudget), options.StarvationDriveBudget),
         (nameof(LatticeOptions.SetManyFanOutBudget), options.SetManyFanOutBudget),
+        (nameof(LatticeOptions.SetManyEnvelopeBudget), options.SetManyEnvelopeBudget),
         (nameof(LatticeOptions.WalSaturationSampleInterval), options.WalSaturationSampleInterval),
         (nameof(LatticeOptions.WalAdmissionSaturationWaitBudget), options.WalAdmissionSaturationWaitBudget),
         (nameof(LatticeOptions.WalAdmissionSaturationCallBudget), options.WalAdmissionSaturationCallBudget),

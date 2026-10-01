@@ -26,13 +26,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <item><description>The tree is younger than <see cref="LatticeOptions.AutoSplitMinTreeAge"/> (since this monitor activated) - entire pass returns.</description></item>
 /// <item><description>A resize, merge, or snapshot is in progress (<see cref="ILattice.IsResizeCompleteAsync"/> etc.) - entire pass returns.</description></item>
 /// <item><description>Any physical shard has a pending bulk graft (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.HasPendingBulkOperationAsync"/>) - entire pass returns.</description></item>
-/// <item><description>A shard is already splitting - that shard is skipped and counts toward the in-flight cap.</description></item>
+/// <item><description>A shard is already donating slots through a split or consolidation fold - that shard is skipped and counts toward the in-flight cap.</description></item>
 /// <item><description>The shard is in the per-shard cooldown window after a recent split - that shard is skipped.</description></item>
 /// <item><description>The shard owns fewer than two virtual slots - that shard is skipped (nothing to subdivide).</description></item>
 /// <item><description>The tree's load is uniform rather than skewed (<see cref="LatticeOptions.HotShardMinSkewRatio"/>) - no shard is a candidate, because splitting a uniformly loaded tree relieves nothing and only multiplies activations.</description></item>
 /// <item><description>The shard holds fewer than <see cref="LatticeOptions.HotShardMinShardEntries"/> live entries - that shard is skipped (too little data to redistribute).</description></item>
 /// <item><description>The tree has reached <see cref="LatticeOptions.MaxPhysicalShardsPerTree"/> physical shards - no further autonomic growth.</description></item>
-/// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight splits already running - no further splits this tick.</description></item>
+/// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight shard migrations already running - no further splits this tick.</description></item>
 /// <item><description><see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/> is set and the cluster-wide admission gate has no free slot (the aggregate in-flight ceiling across all trees is reached) - the affected candidates are deferred to a later tick.</description></item>
 /// </list>
 /// Key format: <c>{treeId}</c>.
@@ -112,7 +112,7 @@ internal sealed class HotShardMonitorGrain(
     /// <summary>
     /// Publishes this tree's in-flight footprint to the cluster gate on the
     /// no-ceiling path, where the gate makes no admission decision and exists
-    /// only as the cluster's readable split-activity source.
+    /// only as the cluster's readable migration-activity source.
     /// <para>
     /// Never throws. The heartbeat is pure observability, but it sits upstream of
     /// the split triggers, so letting a transient gate failure escape would abort
@@ -137,16 +137,16 @@ internal sealed class HotShardMonitorGrain(
 
     /// <summary>
     /// Keeps an already-published footprint alive when a pass aborts before it
-    /// can recompute the authoritative in-flight count.
+    /// can recompute the authoritative in-flight migration count.
     /// <para>
     /// Four suppressors end a pass early - auto-split disabled, the min-tree-age
     /// grace period, a resize/reshard/merge/snapshot in progress, and a pending
-    /// bulk graft - but none of them stop splits that are already draining, since
-    /// those run on their own coordinators. Without this refresh the footprint
-    /// would lapse after its time-to-live and the split-activity source would
-    /// report an idle cluster while splits were genuinely in flight, which is the
+    /// bulk graft - but none of them stop migrations that are already draining,
+    /// since those run on their own coordinators. Without this refresh the footprint
+    /// would lapse after its time-to-live and the migration-activity source would
+    /// report an idle cluster while migrations were genuinely in flight, which is the
     /// precise failure the scale-in gate exists to prevent. Re-reporting the last
-    /// known count can only over-report for one pass if those splits have since
+    /// known count can only over-report for one pass if those migrations have since
     /// finished, which holds scale-in marginally longer - the safe direction -
     /// and self-corrects on the next unsuppressed pass.
     /// </para>
@@ -458,15 +458,16 @@ internal sealed class HotShardMonitorGrain(
             await Task.WhenAll(pendingBulkTasks);
             await Task.WhenAll(splittingTasks);
 
-            // Count splits already in flight from the splitting-status results.
-            // A shard reports IsSplitting==true while it is the source of an
-            // unfinished split; this is our authoritative cluster-wide concurrency
+            // Count shard migrations already in flight from the splitting-status
+            // results. A shard reports IsSplitting==true while it is the
+            // source of an unfinished split or the donor of a consolidation
+            // fold; this is our authoritative cluster-wide concurrency
             // counter, surviving silo restarts and monitor reactivation.
             var inFlight = 0;
             for (int i = 0; i < shardCount; i++)
                 if (splittingTasks[i].Result) inFlight++;
 
-            // Emit the per-tree in-flight split count every pass, regardless of
+            // Emit the per-tree in-flight migration count every pass, regardless of
             // whether the cluster gate is enabled, so operators can compute the
             // cluster aggregate as a sum across the tree tag and decide whether they
             // need MaxClusterConcurrentAutoSplits at all.
@@ -580,15 +581,15 @@ internal sealed class HotShardMonitorGrain(
             var desiredNew = Math.Min(slotsAvailable, candidates.Count);
 
             // Cluster-wide admission gate. When a ceiling is configured, report this
-            // tree's authoritative in-flight count every pass - even when it wants no
+            // tree's authoritative in-flight migration count every pass - even when it wants no
             // new splits - so other trees see this tree's drain footprint, and
             // receive a grant of new slots against the remaining cluster headroom.
             //
             // With no ceiling configured the gate makes no admission decision, but it
-            // is still the cluster's readable split-activity source (surfaced by
+            // is still the cluster's readable migration-activity source (surfaced by
             // ILatticeAdmin.GetSplitActivityAsync and consumed by the scaling
             // package's scale-in safety gate), so the footprint is published anyway.
-            // That publication is edge-triggered - only while splits are actually in
+            // That publication is edge-triggered - only while migrations are actually in
             // flight, plus one final call to clear a footprint we previously reported
             // - so an idle tree issues no extra RPC at all and the disabled path
             // behaves exactly as before in steady state.

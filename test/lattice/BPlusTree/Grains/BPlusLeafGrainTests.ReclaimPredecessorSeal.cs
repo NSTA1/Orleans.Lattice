@@ -105,7 +105,7 @@ public partial class BPlusLeafGrainTests
             SealBeyondVictim,
             "z");
 
-        Assert.That(unlinked, Is.False,
+        Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.DeclinedWidenSealed),
             "A leaf carrying a moved-away seal must refuse to widen over a successor's "
             + "range. Neither declination above this one can catch it: the successor pointer "
             + "matches the reclaim's plan exactly, and no split is in flight. The evidence is "
@@ -159,7 +159,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(unlinked, Is.True,
+            Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.Unlinked),
                 "The new declination must be narrow. Empty-leaf reclaim is the whole point of "
                 + "this seam, so a guard that quietly refused every fold would leave the "
                 + "feature inert while every other reclaim test still passed - the fold would "
@@ -201,7 +201,7 @@ public partial class BPlusLeafGrainTests
             SealVictim,
             SealBeyondVictim,
             "z");
-        Assert.That(declinedWhileSealed, Is.False,
+        Assert.That(declinedWhileSealed, Is.EqualTo(LeafUnlinkOutcome.DeclinedWidenSealed),
             "precondition: while the seal is up the fold is declined");
 
         // The real lift, through the real consolidation entrypoint, rather than
@@ -225,7 +225,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(unlinked, Is.True,
+            Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.Unlinked),
                 "The declination must be TEMPORARY. Once consolidation has drained the slots "
                 + "back this leaf is authoritative for them again, the hazard is gone, and the "
                 + "leaf must fold once more with no operator action. A guard that outlived the "

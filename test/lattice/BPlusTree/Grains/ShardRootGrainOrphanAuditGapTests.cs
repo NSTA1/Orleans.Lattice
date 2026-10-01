@@ -198,10 +198,11 @@ public sealed class ShardRootGrainOrphanAuditGapTests
                 .Returns(ci =>
                 {
                     var probe = probes[self];
-                    if (probe.NextSibling != ci.ArgAt<GrainId>(0)) return Task.FromResult(false);
+                    if (probe.NextSibling != ci.ArgAt<GrainId>(0))
+                        return Task.FromResult(LeafUnlinkOutcome.DeclinedPredecessorMoved);
 
                     probes[self] = probe with { NextSibling = ci.ArgAt<GrainId?>(1) };
-                    return Task.FromResult(true);
+                    return Task.FromResult(LeafUnlinkOutcome.Unlinked);
                 });
 
             harness.Leaves[self] = leaf;

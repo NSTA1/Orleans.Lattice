@@ -2,11 +2,11 @@ namespace Orleans.Lattice.Schema;
 
 /// <summary>
 /// The durable per-tree store of strict-mode dead-letter entries. When strict
-/// ingest diverts a non-compliant replicated / restored item, the enforcement
+/// ingest diverts a non-compliant intercepted system-origin item, the enforcement
 /// interceptor appends a <see cref="LatticeSchemaDeadLetterEntry"/> here; the
-/// entries are retained for inspection and replay. The list / count read surface
-/// is public and resolvable so a state API (the DLQ-surfacing feature) can read
-/// it without taking a dependency on the interceptor.
+/// entries are retained for inspection through the list / count read surface,
+/// which is public and resolvable so a state API (the DLQ-surfacing feature) can
+/// read it without taking a dependency on the interceptor.
 /// </summary>
 public interface ILatticeSchemaDeadLetterStore
 {

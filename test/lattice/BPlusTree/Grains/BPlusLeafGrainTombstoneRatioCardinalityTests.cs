@@ -160,7 +160,7 @@ public sealed class BPlusLeafGrainTombstoneRatioCardinalityTests
             foreach (var grain in grains)
             {
                 var reaped = await grain.CompactTombstonesAsync(ReapNothing);
-                Assert.That(reaped, Is.Zero, "the grace period must hold every tombstone back");
+                Assert.That(reaped.EntriesRemoved, Is.Zero, "the grace period must hold every tombstone back");
             }
         }
 

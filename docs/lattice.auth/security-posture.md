@@ -133,7 +133,8 @@ Two mechanisms harden this boundary:
    and is refused. The same assertion guards the other internal surfaces that
    skip the gate: the atomic-write saga, the cross-tree receiver, the structural
    lifecycle coordinators (tree deletion, merge, reshard, resize, snapshot, and
-   shard split and consolidation), and the facade grain's internal-only
+   shard split and consolidation), the schema-remediation coordinator that
+   `Orleans.Lattice.Schema` adds, and the facade grain's internal-only
    system-tree and replication-apply interfaces. The assertion is keyed on the
    presence of the filter (a sentinel the authorization layer registers beside
    it), so it activates exactly when the filter that establishes the marker is

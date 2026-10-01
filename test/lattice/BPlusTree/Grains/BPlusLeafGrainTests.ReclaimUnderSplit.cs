@@ -81,7 +81,7 @@ public partial class BPlusLeafGrainTests
             ReclaimBeyondSibling,
             "z");
 
-        Assert.That(unlinked, Is.False,
+        Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.DeclinedSplitInFlight),
             "The leaf must refuse to unlink the sibling its own in-flight split is about "
             + "to merge rows into. The compare-and-swap above this check CANNOT catch this "
             + "ordering: the reclaim plan names the split sibling itself, so the expected "
@@ -141,7 +141,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(unlinked, Is.True,
+            Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.Unlinked),
                 "The new declination must be narrow. Empty-leaf reclaim is the entire point "
                 + "of this epic, so a guard that quietly refused every fold would leave the "
                 + "feature inert while every reclaim test still passed - the fold would "
@@ -169,7 +169,7 @@ public partial class BPlusLeafGrainTests
             ReclaimBeyondSibling,
             "z");
 
-        Assert.That(unlinked, Is.True,
+        Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.Unlinked),
             "The guard must key on the sibling's IDENTITY, not on the presence of a split. "
             + "Declining whenever any split is in flight would suppress reclaim far beyond "
             + "the hazard and make the epic's feature effectively unreachable on a busy tree.");

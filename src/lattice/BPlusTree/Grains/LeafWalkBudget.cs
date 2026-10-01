@@ -215,6 +215,52 @@ internal struct LeafWalkBudget
     }
 
     /// <summary>
+    /// Builds the budget one <c>BPlusLeafGrain.CompactTombstonesAsync</c> turn
+    /// runs under, so a tombstone-heavy leaf yields rather than overrunning the
+    /// Orleans request timeout (issue 4135).
+    /// <para>
+    /// <b>It deliberately carries no work cap, only the shared wall-clock
+    /// net.</b> There were already two budgets on this path - the storage busy
+    /// window and the request timeout - and a third independent one summing
+    /// past a limit with no component breaching alone is the defect shape issue
+    /// 2685 records. So this reuses
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/>, the same net
+    /// every other background pass spends, applied one level further down
+    /// rather than added alongside. The arithmetic it has to satisfy is
+    /// therefore explicit: at the 10-second default a turn stops issuing new
+    /// appends after 10 seconds, and the one append already in flight can block
+    /// for the whole 15-second storage busy window, so the worst case for a
+    /// single call is 25 seconds against a 30-second request timeout. Raising
+    /// this knob past roughly 15 seconds, or raising the storage busy window,
+    /// spends that remaining margin.
+    /// </para>
+    /// <para>
+    /// An entry cap would bound a proxy rather than the quantity that actually
+    /// overruns, and the removal loop's cost per entry is a WAL append whose
+    /// latency is the variable the clock already measures directly. Consistent
+    /// with every other factory here, a non-positive duration disables the
+    /// deadline and restores the pre-4135 unbounded turn, so a misconfigured
+    /// option degrades to the old behaviour rather than to a leaf that reaps
+    /// one entry per pass forever.
+    /// </para>
+    /// <para>
+    /// Pass a stamp from <see cref="StartClock"/> taken as the first statement
+    /// of the grain call. The turn's replay barrier runs before the scan and on
+    /// a cold activation is itself a WAL replay, so a deadline measured from
+    /// the scan loop would exclude it and let a call that had already held the
+    /// leaf for seconds spend a further full budget - the same residual hole
+    /// issue 1992 closed for the page fills. The barrier is satisfied once per
+    /// activation, so in the worst case it consumes one pass's budget and every
+    /// later pass on that activation gets the whole net.
+    /// </para>
+    /// </summary>
+    internal static LeafWalkBudget ForLeafCompactionTurn(LatticeOptions options, long startTimestamp = 0L)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new LeafWalkBudget(0, options.BackgroundDrainMaxDuration, startTimestamp);
+    }
+
+    /// <summary>
     /// A budget that never yields, for a walk whose whole-walk atomicity is
     /// load-bearing and which therefore runs to the end of the chain in one
     /// turn. Expressing that as an explicit unbounded budget - rather than as a

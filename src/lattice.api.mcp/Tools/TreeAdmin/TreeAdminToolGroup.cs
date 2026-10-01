@@ -142,9 +142,10 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "Read-only."),
             Read(services, TreeAdminDiagnosticsToolHandlers.GetTreeStatsAsync, "lattice_treeadmin_tree_stats",
                 "Read a tree's rolled-up statistics",
-                "Reads a rolled-up statistics snapshot for a tree: shard and virtual-shard counts, live-key and "
-                + "tombstone totals, and the storage byte breakdown (leaf state, snapshots, retained write-ahead "
-                + "log, and total), in one call. Requires whole-tree read authority. Read-only."),
+                "Reads a rolled-up statistics snapshot for a tree: shard and virtual-shard counts, the live-key "
+                + "count, a tombstone field that the cheap diagnostics path reports as 0, and the storage byte "
+                + "breakdown (leaf state, snapshots, retained write-ahead log, and total), in one call. Requires "
+                + "whole-tree read authority. Read-only."),
             Read(services, TreeAdminDiagnosticsToolHandlers.GetStorageUsageAsync, "lattice_treeadmin_storage_usage",
                 "Read cluster-wide storage accounting",
                 "Reads a cluster-wide storage accounting summary across every tree, split by surface (write-ahead "
@@ -166,8 +167,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Read a tree's registry configuration",
                 "Reads a tree's registry-backed configuration: its structural sizing pins (shard count, node "
                 + "fan-out), alias target, and per-tree runtime overrides (publish-events, projection-digest "
-                + "maintenance, durable-history retention). An unregistered tree reports exists=false. Requires "
-                + "whole-tree read authority. Read-only."),
+                + "maintenance, durable-history retention, WAL retained-byte ceiling). An unregistered tree "
+                + "reports exists=false. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetShardMapAsync, "lattice_treeadmin_tree_get_shard_map",
                 "Read a tree's persisted shard map",
                 "Reads the registry-persisted shard map for a tree: whether a custom map has been persisted (versus "
@@ -188,16 +189,18 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetReshardStatusAsync, "lattice_treeadmin_tree_reshard_status",
                 "Read a tree's online-reshard status",
-                "Reads a tree's online-reshard status: whether a reshard is currently in flight, and the tree's "
+                "Reads a tree's online-reshard status: whether a reshard is currently in flight, the tree's "
                 + "current physical shard fan-out and virtual-slot space as observed from its shard map (with the map "
-                + "version). Poll this after triggering tree_reshard to watch the fan-out grow to the target. A pure "
-                + "read with no side effects. Requires whole-tree read authority. Read-only."),
+                + "version), and, while one runs, targetShardCount and startPhysicalShardCount progress anchors. "
+                + "Poll this after triggering tree_reshard to watch the fan-out move toward the target. A pure read "
+                + "with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetResizeStatusAsync, "lattice_treeadmin_tree_resize_status",
                 "Read a tree's online-resize status",
                 "Reads a tree's online-resize status: whether a resize is currently in flight, whether an "
                 + "accepted undo is still unwinding (undoRequested), and the tree's "
                 + "current effective B+ node capacity (maximum keys per leaf node and maximum children per internal "
-                + "node) as recorded in the registry. undoRequested=true means an undo was accepted and is still "
+                + "node) as recorded in the registry, plus phase and completedUnits/totalUnits progress when "
+                + "available. undoRequested=true means an undo was accepted and is still "
                 + "unwinding (whatever inProgress says); otherwise inProgress=true means a resize is running and "
                 + "inProgress=false means none is in flight. Poll this after triggering tree_resize to watch the rebuild complete, or after "
                 + "tree_resize_undo to watch the unwind. Answers without waiting for an in-flight resize phase. A "
@@ -205,8 +208,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             Read(services, TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync, "lattice_treeadmin_tree_snapshot_status",
                 "Read a tree's snapshot status",
                 "Reads a tree's snapshot status: whether a point-in-time snapshot capture is currently in flight for "
-                + "the source tree. Poll this after triggering tree_snapshot to watch the capture complete. A pure "
-                + "read with no side effects. Requires whole-tree read authority. Read-only."),
+                + "the source tree, plus phase and copiedShardCount/shardCount progress when available. Poll this "
+                + "after triggering tree_snapshot to watch the capture complete. A pure read with no side effects. "
+                + "Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetWalPlacementAsync, "lattice_treeadmin_wal_placement_inspect",
                 "Inspect a tree's WAL placement",
                 "Inspects a tree's durable write-ahead-log placement: which storage provider key backs each WAL "
@@ -389,7 +393,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SetTreeConfigAsync, "lattice_treeadmin_tree_set_config",
                 "Update a tree's registry configuration",
                 "Applies a partial update to a tree's per-tree runtime configuration (publish-events, "
-                + "projection-digest maintenance, durable-history retention), returning the resulting config. Each "
+                + "projection-digest maintenance, durable-history retention, WAL retained-byte ceiling), returning "
+                + "the resulting config. Each "
                 + "dimension is written only when its apply flag is set; a null value on an applied dimension clears "
                 + "that override. Rejected for a reserved system tree id. Admin-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.DeleteTreeAsync, "lattice_treeadmin_tree_delete",
@@ -475,7 +480,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "shrink completes only once the retired shards' storage has been released. Returns once the "
                 + "coordinator accepts the intent; poll tree_reshard_status for completion. A target equal to the "
                 + "current physical shard count is a no-op (an empty tree is re-pinned directly to any count); the "
-                + "target must be at least 2 and at most 4096. Idempotent for a matching in-flight target. Rejected "
+                + "target must be at least 2 and at most the smaller of the tree's virtual-slot count and 4096. "
+                + "Idempotent for a matching in-flight target. Rejected "
                 + "for a reserved system tree id, when a reshard with a different target is already in flight, or "
                 + "when a resize is in flight. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ResizeTreeAsync, "lattice_treeadmin_tree_resize",

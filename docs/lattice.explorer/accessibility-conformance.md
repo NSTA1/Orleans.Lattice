@@ -123,11 +123,15 @@ Three disciplines make those results mean something:
   whether a heading outline is navigable or whether a change was announced.
   Those are asserted explicitly, but explicit assertions are still written by the
   same people who wrote the code.
-- **Coverage depends on what the test cluster serves.** It runs no metrics
-  backend and no tenancy add-on, so Telemetry and Tenancy are hidden from its
-  administrator. Their addresses render the not-found page, which is swept,
-  reflowed and deep-linked like every other page, but the areas' own pages are
-  not swept in the browser.
+- **Coverage depends on what the test cluster serves.** The cluster behind the
+  axe sweep and the structure, keyboard and reflow tests runs no metrics backend
+  and no tenancy add-on, so Telemetry and Tenancy are hidden from its
+  administrator there. Their addresses render the not-found page, which is swept,
+  reflowed and deep-linked like every other page. A second test cluster serves
+  tenancy for the tenancy journeys: there an open tenant switcher, and the
+  Tenancy directory with its **New tenant** dialog open, are swept in all eight
+  appearances, but the rest of the Tenancy area's pages are not swept or
+  reflow-tested, and no Telemetry page is swept in the browser.
 - **Most of the lane runs in one engine.** Only the app frame's isolation, AppKit
   boot and task-board pilot tests run in Firefox and WebKit as well as Chromium; the accessibility
   sweep, structure, keyboard and reflow tests run in Chromium.

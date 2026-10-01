@@ -9,9 +9,10 @@ internal enum RepoContextMemoryArchiveRestoreMode
     Off,
 
     /// <summary>
-    /// Restore only when the memory tree holds no records at all - the state a store
-    /// is left in by a volume wipe. A store with any memory in it is left alone, so an
-    /// ordinary restart never re-imports.
+    /// Restore when the memory tree holds no records at all - the state a store is left
+    /// in by a volume wipe - or when the tree carries a durable marker for a previous
+    /// partial restore. A store with memory and no partial marker is left alone, so
+    /// an ordinary restart never re-imports.
     /// </summary>
     Auto,
 

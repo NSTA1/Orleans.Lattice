@@ -145,8 +145,10 @@ does not decide.
 
 Any other clause over an indexed property is still answerable: it falls back to
 scanning that property's whole range with the clause retained as a residual
-predicate. Such a clause is slower, not rejected. Only the constructs below are
-refused outright - and note that on a `DateTime` or `DateTimeOffset` property
+predicate. Such a clause is slower, not rejected. Beyond what the core dialect
+itself rejects (see
+[Supported expressions](../lattice/predicated-operations.md#supported-expressions)),
+only the constructs below are refused outright - and note that on a `DateTime` or `DateTimeOffset` property
 only the exact forms survive, because any clause over a temporal property that
 cannot be served as an exact range is rejected rather than scanned.
 
@@ -160,7 +162,7 @@ offending sub-expression:
 | A clause over more than one projected property, for example `u => u.Age > u.Limit` | An index entry carries exactly one property, so no entry can satisfy a clause spanning two. | Compare each property to a constant and combine with `&&`. |
 | Nested member access, for example `u => u.Address.City == "York"` | An index projects top-level state properties. | Project the nested value into a top-level property and `Include` it. |
 | A comparison between two state members | An entry stores a projected value against a constant bound. | Make one side a constant or a captured local. |
-| A date/time clause that cannot be served as an exact range, for example `u => u.CreatedAt.ToString().StartsWith("2024")` | A date is stored in the entry payload in round-trip form but captured from a lambda through `ToString()`, so the two never compare equal and the clause can only be served from the key range. | Use a direct comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`) against a date constant, which is exact and is supported. |
+| A date/time clause that cannot be served as an exact range (a method call on the property, such as `u => u.CreatedAt.ToString().StartsWith("2024")`, never gets this far: the core dialect admits only direct member access as an operand and rejects it first) | A date is stored in the entry payload in round-trip form but captured from a lambda through `ToString()`, so the two never compare equal and the clause can only be served from the key range. | Use a direct comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`) against a date constant, which is exact and is supported. |
 | A non-boolean expression in boolean position | The predicate must be a boolean expression tree. | Rewrite as an explicit comparison. |
 | A predicate expanding to more than 64 disjunctions once `&&` is distributed over `\|\|` | The plan would fan out into an unbounded number of scans. | Split it into several queries. |
 

@@ -53,7 +53,7 @@ public readonly record struct ShardDiagnosticReport
     /// <summary>Wall-clock duration over which <see cref="Reads"/> and <see cref="Writes"/> accumulated.</summary>
     [Id(9)] public TimeSpan HotnessWindow { get; init; }
 
-    /// <summary>Whether the shard is currently participating in an adaptive split as the source.</summary>
+    /// <summary>Whether the shard is currently donating slots through an adaptive split or consolidation fold.</summary>
     [Id(10)] public bool SplitInProgress { get; init; }
 
     /// <summary>Whether a bulk-load graft is pending on this shard.</summary>

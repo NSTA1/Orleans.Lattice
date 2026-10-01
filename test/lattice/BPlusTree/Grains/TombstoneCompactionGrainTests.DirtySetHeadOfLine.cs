@@ -83,7 +83,7 @@ public partial class TombstoneCompactionGrainTests
             }
             else
             {
-                leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
+                leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             }
 
             leafMock.GetNextSiblingAsync()

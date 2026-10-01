@@ -26,7 +26,8 @@ namespace Orleans.Lattice.Explorer.UI;
 /// </para>
 /// <para>
 /// There is deliberately no public registration surface here (epic decision E2):
-/// an area registration API is a plugin API by another name. The web head calls
+/// an area registration API would be an external extension model by another name.
+/// The web head calls
 /// <see cref="AddLatticeExplorerShell"/> through its <c>InternalsVisibleTo</c>
 /// grant.
 /// </para>

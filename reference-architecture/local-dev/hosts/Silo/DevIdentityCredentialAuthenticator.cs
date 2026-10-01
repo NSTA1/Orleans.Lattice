@@ -30,7 +30,7 @@ namespace Orleans.Lattice.ReferenceArchitecture.Silo;
 /// before the <see cref="LocalDevIdentitySeeder"/> has necessarily finished seeding
 /// the directory. The seeder additionally writes the same groups and memberships
 /// into the directory so they are introspectable through the ordinary read / scan
-/// surface (and the Explorer Access tab).
+/// surface (and the Explorer Access area).
 /// </para>
 /// </remarks>
 internal sealed class DevIdentityCredentialAuthenticator : ILatticeCredentialAuthenticator

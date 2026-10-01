@@ -82,8 +82,8 @@ internal sealed class LatticeStorageUsageGrain(
         // Publish the per-tree admission aggregate so the observable admission
         // gauges reflect it on the next scrape and so the LatticeGrain write
         // guard can read the current live-key / estimated-byte figure in O(1)
-        // without fanning out. Estimated bytes aliases the total retained-byte
-        // figure; a byte surface that reported "unsupported" (Partial) is passed
+        // without fanning out. Estimated bytes aliases the report's total-byte
+        // figure (physical WAL bytes plus snapshot and leaf state); a byte surface that reported "unsupported" (Partial) is passed
         // through unchanged (best-effort). The resolved caps ride along so the
         // sink can compute the over-advisory and utilisation gauges at scrape
         // time from a single published record.

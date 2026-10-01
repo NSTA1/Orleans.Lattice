@@ -2416,6 +2416,18 @@ internal sealed partial class LatticeGrain(
         var setManyStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
+            // (#2685) The envelope budget is armed here, before the gate, and
+            // measures from the same stamp as SetManyDuration below - so the
+            // budget bounds exactly the span an operator sizes it from. Arming
+            // it after the gate would be the defect in miniature: the gate is
+            // one of the stages that consumes the envelope (4,108.96 ms in the
+            // incident, 12,085x its healthy baseline), so a clock started after
+            // it cannot see the contribution that pushed the total past the
+            // deadline. Null when the budget is unbounded, which is the
+            // default, so an existing deployment allocates nothing and behaves
+            // exactly as before.
+            var envelope = WriteEnvelopeBudget.Start(Options.SetManyEnvelopeBudget, setManyStartTicks);
+
             var gateStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
@@ -2424,15 +2436,18 @@ internal sealed partial class LatticeGrain(
             }
             finally
             {
+                var gateMilliseconds =
+                    System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds;
+                envelope?.RecordGate(gateMilliseconds);
                 LatticeMetrics.SetManyStageDuration.Record(
-                    System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
+                    gateMilliseconds,
                     stageTagTree, LatticeMetrics.StageGateTag,
                     StageTagTenant);
             }
             cancellationToken.ThrowIfCancellationRequested();
             await RetryOnStaleRoutingAsync(
-                (self: this, entries, stageTagTree),
-                static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree),
+                (self: this, entries, stageTagTree, envelope),
+                static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree, args.envelope),
                 cancellationToken);
 
             // Publish one Set event per entry. Emitted only after all shard writes
@@ -2468,7 +2483,10 @@ internal sealed partial class LatticeGrain(
         }
     }
 
-    private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries, KeyValuePair<string, object?> stageTagTree)
+    private async Task SetManyAsyncCore(
+        List<KeyValuePair<string, byte[]>> entries,
+        KeyValuePair<string, object?> stageTagTree,
+        WriteEnvelopeBudget? envelope)
     {
         var routeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         string physicalTreeId;
@@ -2479,8 +2497,11 @@ internal sealed partial class LatticeGrain(
         }
         finally
         {
+            var routeMilliseconds =
+                System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds;
+            envelope?.RecordRoute(routeMilliseconds);
             LatticeMetrics.SetManyStageDuration.Record(
-                System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds,
+                routeMilliseconds,
                 stageTagTree, LatticeMetrics.StageRouteTag,
                 StageTagTenant);
         }
@@ -2525,13 +2546,23 @@ internal sealed partial class LatticeGrain(
         }
         finally
         {
+            var bucketMilliseconds =
+                System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds;
+            envelope?.RecordBucket(bucketMilliseconds);
             LatticeMetrics.SetManyStageDuration.Record(
-                System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds,
+                bucketMilliseconds,
                 stageTagTree, LatticeMetrics.StageBucketTag,
                 StageTagTenant);
         }
 
         // Fan out writes in parallel per shard.
+        //
+        // (#2685) Each branch resolves its own wait below. They differ
+        // deliberately: SetManyFanOutBudget bounds the slowest of SEVERAL
+        // branches and is documented as not consulted by a single-shard batch,
+        // whereas the envelope bounds the whole call and so applies to every
+        // shape of batch write - a single-shard tree has an envelope even
+        // though it has no slowest branch.
         var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -2541,9 +2572,45 @@ internal sealed partial class LatticeGrain(
                 // no Task.WhenAll wrapper. Mirrors the bucketing skip above.
                 // There is no sibling branch to fail fast against, so this path
                 // takes the unwrapped call and allocates no fault signal.
+                //
+                // (#2685) It is bounded by the ENVELOPE budget only. Before that
+                // budget existed this path had no bound of any kind, so a
+                // single-shard tree - the dominant shape, and the one this skip
+                // exists for - could not have its batch writes bounded at all.
+                // That is where the 26,709.17 ms fan-out in the incident ran.
+                // SetManyFanOutBudget is deliberately still not consulted here:
+                // it bounds branch dispersion, which a one-branch write does not
+                // have, and that carve-out is its documented contract.
+                var singleWait = WriteEnvelopeBudget.ResolveFanOutWait(
+                    envelope, Timeout.InfiniteTimeSpan);
                 var shard = GetShardGrainByIndex(physicalTreeId, singleShardIdx);
-                await ShardActivationRetry.RunAsync(
+                var single = ShardActivationRetry.RunAsync(
                     () => shard.SetManyAsync(singleShardEntries));
+
+                if (!singleWait.IsArmed)
+                {
+                    await single;
+                }
+                else
+                {
+                    try
+                    {
+                        await single.WaitAsync(singleWait.Duration);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Same abandonment contract as the multi-shard branch:
+                        // the write is deliberately NOT cancelled, so a branch
+                        // that would have committed still commits and the
+                        // durable outcome is the one the unbounded wait
+                        // produced. Only the caller's wait is shortened. The
+                        // fault is observed so an abandoned write cannot
+                        // resurface as an unobserved task exception and tear
+                        // down the silo.
+                        ObserveInBackground(single);
+                        throw CreateFanOutRefusal(envelope, singleWait, shardCount: 1);
+                    }
+                }
             }
             else
             {
@@ -2576,11 +2643,13 @@ internal sealed partial class LatticeGrain(
                 // limit on a batch write was its slowest branch, and that is
                 // unbounded. Bounding it is what stops a rare 94 s branch
                 // becoming the cost of every batch.
-                var budget = Options.SetManyFanOutBudget;
+                var fanOutWait = WriteEnvelopeBudget.ResolveFanOutWait(
+                    envelope, Options.SetManyFanOutBudget);
+                var budget = fanOutWait.Duration;
                 var race = Task.WhenAny(all, firstFault.Task);
 
                 Task settled;
-                if (budget == Timeout.InfiniteTimeSpan)
+                if (!fanOutWait.IsArmed)
                 {
                     settled = await race;
                 }
@@ -2612,15 +2681,7 @@ internal sealed partial class LatticeGrain(
                         // write-path retry filter leaves it alone rather than
                         // re-fanning the whole batch into a tree that is already
                         // failing to settle.
-                        LatticeMetrics.RecordSaturationRefusal(TreeId, LatticeSaturationSource.SetManyFanOut);
-                        throw new LatticeSaturatedException(
-                            $"Batch write to tree '{TreeId}' refused: the per-shard fan-out across "
-                            + $"{shardBuckets.Count} shards did not settle within the configured "
-                            + $"LatticeOptions.SetManyFanOutBudget ({budget}); at least one branch is "
-                            + "still outstanding. Already-committed shards are retained (a batch write "
-                            + "is not atomic across shards). Retry after a backoff.",
-                            TreeId,
-                            LatticeSaturationSource.SetManyFanOut);
+                        throw CreateFanOutRefusal(envelope, fanOutWait, shardBuckets.Count);
                     }
                 }
 
@@ -2651,8 +2712,11 @@ internal sealed partial class LatticeGrain(
         }
         finally
         {
+            var fanOutMilliseconds =
+                System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds;
+            envelope?.RecordFanOut(fanOutMilliseconds);
             LatticeMetrics.SetManyStageDuration.Record(
-                System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
+                fanOutMilliseconds,
                 stageTagTree, LatticeMetrics.StageFanOutTag,
                 StageTagTenant);
         }
@@ -2676,6 +2740,49 @@ internal sealed partial class LatticeGrain(
                 throw;
             }
         }
+    }
+
+    /// <summary>
+    /// Builds the back-pressure refusal for a batch write whose fan-out did not
+    /// settle inside the bound that applied to it, attributed to whichever bound
+    /// actually fired.
+    /// <para>
+    /// The attribution is the point (#2685). A fan-out refused because the
+    /// <em>envelope</em> ran out is not a slow fan-out, and reporting it as one
+    /// sends the investigation to the wrong stage: the incident behind that
+    /// issue had a healthy-looking 26,709.17 ms fan-out and a
+    /// <c>gate</c> that had degraded 12,085x to 4,108.96 ms, summing to
+    /// 30,818 ms against a 30,000 ms response timeout with neither stage
+    /// breaching alone. An envelope refusal therefore carries its own saturation
+    /// source and the per-stage breakdown, so the next occurrence names the
+    /// stage that moved instead of the stage that is merely largest.
+    /// </para>
+    /// </summary>
+    private LatticeSaturatedException CreateFanOutRefusal(
+        WriteEnvelopeBudget? envelope,
+        FanOutWait fanOutWait,
+        int shardCount)
+    {
+        var source = fanOutWait.BoundByEnvelope && envelope is not null
+            ? LatticeSaturationSource.SetManyEnvelope
+            : LatticeSaturationSource.SetManyFanOut;
+        LatticeMetrics.RecordSaturationRefusal(TreeId, source);
+
+        var message = source == LatticeSaturationSource.SetManyEnvelope
+            ? $"Batch write to tree '{TreeId}' refused: the whole write did not complete within the "
+                + $"configured LatticeOptions.SetManyEnvelopeBudget ({envelope!.Budget}); the per-shard "
+                + $"fan-out across {shardCount} shard(s) was still outstanding with "
+                + $"{fanOutWait.Duration} of the envelope left for it. Stage breakdown: "
+                + $"{envelope.Describe()}. No single stage need have breached the budget on its own - "
+                + "the stages sum against it. Already-committed shards are retained (a batch write is "
+                + "not atomic across shards). Retry after a backoff."
+            : $"Batch write to tree '{TreeId}' refused: the per-shard fan-out across "
+                + $"{shardCount} shard(s) did not settle within the configured "
+                + $"LatticeOptions.SetManyFanOutBudget ({fanOutWait.Duration}); at least one branch is "
+                + "still outstanding. Already-committed shards are retained (a batch write "
+                + "is not atomic across shards). Retry after a backoff.";
+
+        return new LatticeSaturatedException(message, TreeId, source);
     }
 
     /// <summary>

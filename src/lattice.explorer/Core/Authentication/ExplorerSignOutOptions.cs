@@ -16,9 +16,9 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// <see cref="FederatedSignOutPath"/> at that endpoint. When
 /// <see cref="FederatedSignOutPath"/> is <see langword="null"/> (the default) the
 /// UI falls back to its in-process sign-out
-/// (<c>IExplorerAuthSession.LogoutAsync</c>) or, on the cookie web head, a plain
-/// form post to <c>ExplorerAuthUiOptions.LogoutPath</c>. That local-only sign-out
-/// is correct for a head with no separate browser session, but on a hosted-web
+/// (<c>IExplorerAuthSession.LogoutAsync</c>) or, on the cookie web head, the
+/// built-in local sign-out form endpoint. That local-only sign-out is correct
+/// for a head with no separate browser session, but on a hosted-web
 /// OpenID Connect head it would leave the still-valid session cookie in place and
 /// the fallback authorization policy would silently re-authenticate the circuit -
 /// which is exactly what the federated path prevents.

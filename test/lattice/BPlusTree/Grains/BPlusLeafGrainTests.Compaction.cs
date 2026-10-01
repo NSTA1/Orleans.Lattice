@@ -22,7 +22,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(1));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(1));
         Assert.That(grain.EntriesForTest.ContainsKey("dead"), Is.False);
     }
 
@@ -42,7 +42,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(0));
         Assert.That(grain.EntriesForTest.ContainsKey("recent"), Is.True);
     }
 
@@ -58,7 +58,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(0));
         Assert.That(grain.EntriesForTest.ContainsKey("alive"), Is.True);
     }
 
@@ -87,11 +87,11 @@ public partial class BPlusLeafGrainTests
 
         // First compaction removes the tombstone.
         var removed1 = await grain.CompactTombstonesAsync(TimeSpan.Zero);
-        Assert.That(removed1, Is.EqualTo(1));
+        Assert.That(removed1.EntriesRemoved, Is.EqualTo(1));
 
         // Second compaction should be a no-op (version hasn't changed).
         var removed2 = await grain.CompactTombstonesAsync(TimeSpan.Zero);
-        Assert.That(removed2, Is.EqualTo(0));
+        Assert.That(removed2.EntriesRemoved, Is.EqualTo(0));
     }
 
     // --- TTL-expiry metric ---
@@ -130,7 +130,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(removed, Is.EqualTo(1));
+            Assert.That(removed.EntriesRemoved, Is.EqualTo(1));
             Assert.That(records, Has.Count.EqualTo(1));
             Assert.That(records[0].Any(t =>
                 t.Key == LatticeMetrics.TagTree && (t.Value as string) == "ttl-metric-tree"), Is.True);
@@ -172,7 +172,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(removed, Is.EqualTo(2));
+            Assert.That(removed.EntriesRemoved, Is.EqualTo(2));
             Assert.That(reaped, Is.EqualTo(1), "explicit tombstone should count on reaped");
             Assert.That(expired, Is.EqualTo(1), "TTL-expired live entry should count on expired");
         });
@@ -198,7 +198,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(3));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(3));
         Assert.That(commitLog.AppendCount, Is.EqualTo(3),
             "every reaped entry must emit a tombstone-reap WAL envelope so a reactivated leaf "
             + "observes the compacted state after replay returns.");
@@ -246,7 +246,7 @@ public partial class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(removed.EntriesRemoved, Is.EqualTo(0));
         Assert.That(commitLog.AppendCount, Is.EqualTo(0),
             "a compaction pass that reaps nothing must not append a stray WAL envelope");
     }
