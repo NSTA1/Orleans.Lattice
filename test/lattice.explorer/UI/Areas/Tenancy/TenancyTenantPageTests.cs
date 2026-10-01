@@ -75,6 +75,23 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
     }
 
     [Test]
+    public void A_tenant_whose_regions_have_all_left_its_residency_is_said_to_be_served_nowhere_with_the_reason()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions[0] = Cluster.Tenants["acme"].Regions[0] with { Status = TenantRegionLifecycleStatus.Offline };
+
+        var cut = RenderAt<TenancyTenantPage>("tenancy/acme");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Is.EqualTo("This tenant is not served anywhere: " + TenancyFormat.ServedNowhereReason(Cluster.Tenants["acme"].Regions)));
+            Assert.That(cut.Find(".lt-tenancy-warning").TextContent, Does.Contain("every region has left it").And.Not.Contain("Online yet"));
+            Assert.That(cut.FindAll(".lt-dl__row").Single(row => row.QuerySelector("dt")!.TextContent == "Resident in").QuerySelector("dd")!.TextContent.Trim(),
+                Is.EqualTo(TenancyFormat.NoResidentRegion));
+        });
+    }
+
+    [Test]
     public void Suspend_is_confirmed_and_resume_is_immediate()
     {
         UseTenancyAs(isOperator: true);

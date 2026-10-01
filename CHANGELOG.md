@@ -58,6 +58,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Agents - Delegated sessions run targeted tests only.** The agent playbooks and the testing master now bind a sub-session to a named fixture or method filter, never a whole test project reflexively. The scope rule is a host-capacity rule, not only a wall-clock one: concurrent sessions contend superlinearly, a contended run presents as a hang, and an unscoped run can perturb a co-located rig somebody is measuring. ([#4130](https://github.com/NSTA1/Orleans.Lattice/pull/4130)) (`repository-wide`)
+
 - **Performance - Repository-context hash staging.** Three SHA-256 paths staged their input through throwaway arrays, one also re-materialising each declaration as a string. They hash spans in place now: 46-99% less allocated and 14-58% faster across source ids, reuse tokens and symbol digests. ([#4107](https://github.com/NSTA1/Orleans.Lattice/pull/4107)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Performance - Identity digest allocations.** Three SHA-256 identity paths staged input or digest bytes through throwaway arrays. They hash from stack or pooled buffers now: 72-88% less allocated on the credential metadata digest, 69-91% on the Explorer cookie digest, 16-27% on backup artifacts. ([#4094](https://github.com/NSTA1/Orleans.Lattice/pull/4094)) (`Orleans.Lattice.Membership`, `Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Backup`)
@@ -100,9 +102,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Schema - Remediation status answers while a run is in progress.** Reading a tree's remediation or migration status no longer waits for a running remediate or migrate to finish, so the Explorer's Schema operation page shows the live phase and count instead of timing out. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
+
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tenant residency reads as served, and a change is previewed.** Each region says whether it serves the tenant; no residency means every region. A change is previewed per region, and one leaving the tenant served nowhere turns Apply off, passing only on an explicit, confirmed path. ([#4078](https://github.com/NSTA1/Orleans.Lattice/issues/4078)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Region lifecycle is accurate and followed live.** A region being added or removed shows its step of three and who takes the next, and the page follows a drain to Removed without a refresh. A tenant whose regions have all left its residency reads as served nowhere. ([#4114](https://github.com/NSTA1/Orleans.Lattice/issues/4114)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A late app-page load no longer pulls you back.** The bare `/apps/{slug}` shows the overview in place, and a sign-in or token renewal still running when the circuit ends no longer ends it. ([#4093](https://github.com/NSTA1/Orleans.Lattice/issues/4093)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 

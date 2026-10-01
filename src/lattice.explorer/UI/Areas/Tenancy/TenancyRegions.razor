@@ -2,15 +2,19 @@
     One tenant's regions, in two labelled parts: the allowed set, which only a
     platform operator sets, and the residency, which the tenant's admins choose
     within it. Each region shows its residency lifecycle, what that means for the
-    tenant and whether it serves the tenant. A changed residency is previewed
-    region by region; one that would leave the tenant with no Online region turns
-    Apply off and is applied only through an explicit, confirmed secondary path.
+    tenant and whether it serves the tenant; a region part-way along its add or
+    remove path shows the step it has reached, and the section follows it, with
+    each stage change announced politely, until every region is steady. A changed
+    residency is previewed region by region; one that would stop serving the
+    tenant turns Apply off and is applied only through an explicit, confirmed
+    secondary path.
 *@
 <section class="lt-tenancy-section" aria-labelledby="@HeadingId">
     <div class="lt-tenancy-section__head">
         <h2 class="lt-tenancy-section__title" id="@HeadingId">Regions</h2>
         <LtButton Variant="LtButtonVariant.Quiet" OnClick="LoadAsync" Disabled="_busy">Refresh</LtButton>
     </div>
+    <span class="lt-visually-hidden" aria-live="polite">@_stageAnnouncement</span>
 
     @if (_failure is { } failure)
     {
@@ -33,9 +37,8 @@
         @if (TenancyFormat.IsServedNowhere(_regions))
         {
             <p class="lt-tenancy-warning" role="status">
-                <strong>Tenant <span class="lt-tenancy-mono">@TenantId</span> is not served anywhere.</strong>
-                It has residency set, and none of its regions is Online yet. It is served again once a platform operator of the
-                hosting deployment promotes one of them to Online.
+                <strong>Tenant <span class="lt-tenancy-mono">@TenantId</span> is not served anywhere:</strong>
+                @TenancyFormat.ServedNowhereReason(_regions)
             </p>
         }
 
@@ -83,6 +86,7 @@
                     <LtColumn TItem="TenancyRegionRow" Title="Region" RowHeader="true" Mono="true" SortBy="@(row => row.RegionId)" Value="@(row => row.RegionId)" />
                     <LtColumn TItem="TenancyRegionRow" Title="Lifecycle">
                         <LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status, _plan.HasResidency)" />
+                        @StepProgress(context)
                         <span class="lt-tenancy-meaning">@TenancyFormat.RegionStatusMeaning(context.Status, _plan.HasResidency)</span>
                     </LtColumn>
                     <LtColumn TItem="TenancyRegionRow" Title="Served here" Value="@(row => ServedText(row))" />
@@ -95,15 +99,21 @@
                 <CompactRow>
                     <LtCompactRow Mono="true">
                         <Primary>@context.RegionId</Primary>
-                        <Secondary>@ServedText(context), @(context.IsAllowed ? "allowed" : "not allowed")@(context.IsPlanned != context.IsResident ? (context.IsPlanned ? ", to be added" : ", to be removed") : string.Empty)</Secondary>
+                        <Secondary>@CompactSecondary(context)</Secondary>
                         <State><LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status, _plan.HasResidency)" /></State>
                     </LtCompactRow>
                 </CompactRow>
                 <DetailActions>
+                    @StepProgress(context)
                     <p class="lt-tenancy-meaning">@TenancyFormat.RegionStatusMeaning(context.Status, _plan.HasResidency)</p>
                     @ResidencyControl(context)
                 </DetailActions>
             </LtTable>
+
+            @if (_following)
+            {
+                <p class="lt-tenancy-quiet lt-tenancy-following">Updating on its own while a region is part-way through a change.</p>
+            }
 
             @if (_plan.IsChanged)
             {
@@ -115,7 +125,7 @@
                             <li>@line</li>
                         }
                     </ul>
-                    @if (_plan.LeavesNoOnlineRegion)
+                    @if (_plan.StopsServing)
                     {
                         <div class="lt-tenancy-warning lt-tenancy-served-nowhere" role="status">
                             <p class="lt-tenancy-consequence">Applying this leaves tenant <span class="lt-tenancy-mono">@TenantId</span> served nowhere, so Apply is off.</p>
@@ -132,13 +142,21 @@
                             </p>
                         </div>
                     }
+                    else if (_plan.LeavesNoOnlineRegion)
+                    {
+                        <p class="lt-tenancy-note lt-tenancy-still-unserved">
+                            Tenant <span class="lt-tenancy-mono">@TenantId</span> is served nowhere now, so this change stops nothing. It stays unserved
+                            until a platform operator of the hosting deployment promotes one of <span class="lt-tenancy-mono">@TenancyFormat.RegionList(_plan.Planned)</span> to Online.
+                            <a href="@TenancyFormat.PromotionHelpUrl" target="_blank" rel="noopener noreferrer">How a platform operator promotes a region (opens the documentation in a new tab)</a>
+                        </p>
+                    }
                 </section>
             }
 
             <div class="lt-tenancy-actions">
-                <LtButton OnClick="ApplyResidency" Disabled="@(_busy || !_plan.IsChanged || _plan.LeavesNoOnlineRegion)">Apply residency</LtButton>
+                <LtButton OnClick="ApplyResidency" Disabled="@(_busy || !_plan.IsChanged || _plan.StopsServing)">Apply residency</LtButton>
                 <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _plan.Revert())" Disabled="@(_busy || !_plan.IsChanged)">Reset</LtButton>
-                @if (_plan.IsChanged && _plan.LeavesNoOnlineRegion)
+                @if (_plan.IsChanged && _plan.StopsServing)
                 {
                     <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _confirmResidency = true)" Disabled="_busy">@StopServingOpenText</LtButton>
                 }
@@ -156,10 +174,10 @@
     {
         <p>
             Tenant <code class="lt-tenancy-mono">@TenantId</code> will start draining <code class="lt-tenancy-mono">@TenancyFormat.RegionList(removed)</code>.
-            Its data there is removed once draining completes.
+            Once draining starts it does not serve the tenant there, and the region's own silos then step it to Offline and Removed on their own.
         </p>
     }
-    @if (_plan.LeavesNoOnlineRegion)
+    @if (_plan.StopsServing)
     {
         <p class="lt-tenancy-consequence">
             After this change none of tenant <code class="lt-tenancy-mono">@TenantId</code>'s resident regions is Online. A tenant with residency is
@@ -192,6 +210,17 @@
 </LtDialog>
 
 @code {
+    private RenderFragment StepProgress(TenancyRegionRow row) => __builder =>
+    {
+        @if (TenancyRegionStep.For(row.Status) is { } step)
+        {
+            <div class="lt-tenancy-step">
+                <LtProgress Label="@TenancyRegionStep.Label(row.RegionId)" Phase="@step.Phase" Value="step.Step" Maximum="TenancyRegionStep.Steps"
+                            Stepped="true" AnnouncePhase="false" Detail="@step.Next" />
+            </div>
+        }
+    };
+
     private RenderFragment ResidencyControl(TenancyRegionRow row) => __builder =>
     {
         <LtCheckbox Label="@($"Resident in {row.RegionId}")"
