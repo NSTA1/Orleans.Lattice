@@ -112,3 +112,15 @@ These override or extend the base for Orleans.Lattice only.
    - **You keep the bucket current with `main`, and review happens on the member
      pull requests** - deferring review to the bucket turns N reviewable pull
      requests into one unreviewable one.
+
+7. **Every worker you deploy runs targeted tests only. State it in the kickoff
+   prompt; do not assume it is inherited.** A worker runs a named fixture or
+   method filter for the code it changed - never a whole test project
+   reflexively, and never a solution-wide run with no project argument. You
+   routinely have a dozen sessions in flight on one host, and that host often
+   also carries a container or rig whose telemetry somebody is reading, so an
+   unfiltered run from one worker slows every sibling and can manufacture a
+   false escalation in an unrelated monitoring channel. The one exemption is the
+   repository-wide gates, which a scoped run cannot reach at all. See
+   "Concurrency" under Running Tests in
+   [`.github/instructions/testing.instructions.md`](../instructions/testing.instructions.md).
