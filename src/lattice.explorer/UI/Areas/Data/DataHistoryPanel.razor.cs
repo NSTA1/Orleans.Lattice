@@ -61,13 +61,21 @@ public partial class DataHistoryPanel : IDisposable
 
     private string? BoundNote => _bound switch
     {
-        EntryHistoryBound.Truncated => $"Older revisions were trimmed; history is available from {DataFormat.Time(_earliest)}.",
+        EntryHistoryBound.Truncated => DataFormat.HasTime(_earliest)
+            ? $"Older revisions were trimmed; history is available from {DataFormat.Time(_earliest)}."
+            : TrimmedWithNoEarliestText,
         EntryHistoryBound.WalWindowFallback => "This tree keeps no durable history, so only changes still in the write-ahead log are shown.",
         _ => null,
     };
 
     /// <summary>The As-of field's hint: how to choose a time, and what an empty field means.</summary>
     internal const string AtHint = "Pick a time, or type one as yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
+
+    /// <summary>The history bound note when older revisions were trimmed and no earliest retained revision is known.</summary>
+    internal const string TrimmedWithNoEarliestText = "Older revisions were trimmed; no earlier revision is retained.";
+
+    /// <summary>What a range deletion whose marker names no end key says, in place of the end key.</summary>
+    internal const string RangeDeletedWithNoEndText = "A range of keys that included this one was deleted.";
 
     /// <summary>What a revision whose value bytes were not kept is called on the timeline.</summary>
     internal const string ValueNotKeptKindText = "Set - value not kept";
