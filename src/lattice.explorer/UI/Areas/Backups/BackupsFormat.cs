@@ -109,28 +109,10 @@ internal static class BackupsFormat
     };
 
     /// <summary>
-    /// Reads an interval typed as whole hours and minutes; either may be blank
-    /// for zero. False unless both are whole numbers and the total is positive.
+    /// The shortest interval a schedule or a health monitor is given: one minute, which is
+    /// also what the backup engine raises a shorter one to.
     /// </summary>
-    /// <param name="hours">The typed hours.</param>
-    /// <param name="minutes">The typed minutes.</param>
-    /// <param name="interval">The interval read.</param>
-    public static bool TryParseInterval(string? hours, string? minutes, out TimeSpan interval)
-    {
-        interval = TimeSpan.Zero;
-        var hourText = string.IsNullOrWhiteSpace(hours) ? "0" : hours.Trim();
-        var minuteText = string.IsNullOrWhiteSpace(minutes) ? "0" : minutes.Trim();
-        if (!int.TryParse(hourText, NumberStyles.None, CultureInfo.InvariantCulture, out var h)
-            || !int.TryParse(minuteText, NumberStyles.None, CultureInfo.InvariantCulture, out var m)
-            || h > 100_000
-            || m > 100_000)
-        {
-            return false;
-        }
-
-        interval = TimeSpan.FromHours(h) + TimeSpan.FromMinutes(m);
-        return interval > TimeSpan.Zero;
-    }
+    public static readonly TimeSpan ShortestInterval = TimeSpan.FromMinutes(1);
 
     /// <summary>An operation's status as a word.</summary>
     /// <param name="status">The status.</param>

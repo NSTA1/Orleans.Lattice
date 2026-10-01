@@ -58,9 +58,11 @@ at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
 boundary notes and a live tail. A revision that kept only the value's size and
 hash is marked "metadata only", and the timeline explains what that means once,
-rather than under each such revision. The **As of (UTC)** field starts empty,
-with a hint giving its form (`yyyy-MM-ddTHH:mm:ssZ`, empty for the latest).
-`?at=` marks the revision that was in effect at the chosen UTC instant, and
+rather than under each such revision. The **As of** field is a
+[date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
+It starts empty, which means the latest, and refuses a time in the future;
+pick a day and a time, use a quick pick (now, an hour, a day or a week ago), or
+type an instant as `yyyy-MM-ddTHH:mm:ssZ`, then choose **Show as of**. `?at=` marks the revision that was in effect at the chosen UTC instant, and
 disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
@@ -379,6 +381,10 @@ summary statistics and operation status; configuration and history retention;
 shard map, diagnostics and hotness; storage and WAL placement; and lifecycle.
 Denied probes become an all-deny answer, so controls stay hidden even though
 the cluster still authorises every real operation when attempted.
+
+The retention **Window** is a
+[duration field](theming-and-density.md#dates-times-and-durations) in days,
+hours, minutes and seconds; leave it empty for no age bound.
 
 Configuration and history-retention saves are forward-only configuration
 changes, so they do not ask for destructive confirmation. Lifecycle operations

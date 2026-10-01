@@ -89,11 +89,7 @@ else
         {
             <form class="lt-backups-form" @onsubmit="ScheduleAsync">
                 <LtSelect Label="Kind" Options="@ScheduleKindOptions" Value="@_kind" ValueChanged="value => _kind = value" />
-                <div class="lt-backups-form__row">
-                    <LtTextInput Label="Hours" Value="@_hours" ValueChanged="value => _hours = value" inputmode="numeric" />
-                    <LtTextInput Label="Minutes" Value="@_minutes" ValueChanged="value => _minutes = value" inputmode="numeric" Error="@_intervalError" />
-                </div>
-                <p class="lt-backups-note">An interval under one minute is raised to one minute.</p>
+                <LtDurationInput @ref="_intervalField" Label="Every" Value="@_interval" ValueChanged="value => _interval = value" Min="@BackupsFormat.ShortestInterval" />
                 @if (_scheduleMessage is { } scheduleMessage)
                 {
                     <p class="lt-backups-status" role="status">@scheduleMessage</p>
