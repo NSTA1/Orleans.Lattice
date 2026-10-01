@@ -13,12 +13,32 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 [Category("UI")]
 public sealed class AppRoleHoldingJourneyTests : UiTestBase
 {
+    private const string Tenant = "globex";
+
     [Test]
     public async Task An_installer_bound_to_a_group_they_are_not_in_is_warned_joins_it_and_can_then_open_the_app()
     {
         var world = await UiHosts.TenantWorldAsync();
+
+        // The tenancy world is shared, so the journey starts from no globex install and
+        // leaves the world as it found it: the install's role rules would otherwise show
+        // in globex's Access listing, and the administrator would stay in operators.
+        await world.RemoveTaskBoardAsync(Tenant);
         await world.RemoveMemberAsync(WorldIdentities.OperatorsGroup, WorldIdentities.Admin);
-        var page = await OpenAsync(world.Head, "/t/globex/apps/catalogue/in-image/task-board", WorldIdentities.Admin);
+        try
+        {
+            await InstallJoinAndOpenAsync(world);
+        }
+        finally
+        {
+            await world.RemoveTaskBoardAsync(Tenant);
+            await world.RemoveMemberAsync(WorldIdentities.OperatorsGroup, WorldIdentities.Admin);
+        }
+    }
+
+    private async Task InstallJoinAndOpenAsync(ExplorerWorld world)
+    {
+        var page = await OpenAsync(world.Head, $"/t/{Tenant}/apps/catalogue/in-image/task-board", WorldIdentities.Admin);
         var content = Shell.Content(page);
         await Expect(Shell.Heading(page)).ToHaveTextAsync("Task board");
 
