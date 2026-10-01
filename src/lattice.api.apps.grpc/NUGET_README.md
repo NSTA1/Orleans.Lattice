@@ -5,7 +5,10 @@ slug and exposes install, enable, disable, uninstall, list, describe, consent,
 role re-binding, and capability operations. Role re-binding is served by a
 registered `ILatticeAppRoleBindings` (or an `ILatticeAppsControl` that also
 implements it) and answers `Unimplemented` on a host that serves neither. It references the abstractions package, not the
-facade implementation.
+facade implementation. Three further services bind the app catalogue, workspace
+and UI bridge contracts (`AddLatticeAppCatalogApiGrpc`,
+`AddLatticeAppWorkspaceApiGrpc` and `AddLatticeAppBridgeApiGrpc`, each with its
+`Map*` counterpart and its own client), behind the same default-deny interceptor.
 
 Register Orleans serialization and an `ILatticeAppsControl` implementation in
 the host, call `services.AddLatticeAppsApiGrpc()`, then

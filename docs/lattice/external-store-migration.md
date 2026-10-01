@@ -230,11 +230,12 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
   [`MaxValueSizeBytes`](configuration.md#maxvaluesizebytes).
 - **It does not enforce the admission caps.** `LatticeOptions.MaxLiveKeys` and
   `LatticeOptions.MaxEstimatedBytes` are checked once per call by the same
-  calls, the single-tree atomic batches included (a batch carrying only
-  deletes is exempt, as `DeleteAsync` is), and by nothing else - a cross-tree
-  atomic batch never is - so a bulk load can carry a tree past them; those
-  calls are then refused with `LatticeQuotaExceededException` until the
-  tree's cached live-key count or estimated footprint is back under the cap. See
+  calls, the atomic batches included (a single-tree batch carrying only
+  deletes is exempt, as `DeleteAsync` is, and a cross-tree batch checks only
+  the trees it writes a value to), and by nothing else, so a bulk load can
+  carry a tree past them; those calls are then refused with
+  `LatticeQuotaExceededException` until the tree's cached live-key count or
+  estimated footprint is back under the cap. See
   [`MaxLiveKeys`](configuration.md#maxlivekeys) and
   [`MaxEstimatedBytes`](configuration.md#maxestimatedbytes).
 - **It does not merge.** `DataEntry` carries a `MergeMode` and a `Raw` flag, but

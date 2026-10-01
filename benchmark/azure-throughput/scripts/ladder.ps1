@@ -5,10 +5,11 @@
 
 .DESCRIPTION
 	For each (Vehicles, TickHz) rung, runs one cohort via run-cohort.ps1,
-	then parses the saved silo log for the FINAL line and appends a row to
-	.ladder-results.csv in this folder. Optionally trips an early-exit
-	when active throughput drops more than -DegradeThresholdPct from the
-	best observed so far (handy for "find the peak" sweeps).
+	captures the script's success stream with 2>&1, parses summary fields from
+	that captured text, and appends a row to .ladder-results.csv in this folder.
+	Because run-cohort.ps1 prints its summary with Write-Host, the captured text
+	can contain no summary fields; in that case the row falls back to zero / UNKNOWN
+	values and -DegradeThresholdPct has no nonzero throughput to stop on.
 
 	The harness pins BENCH_RESPONSE_TIMEOUT_SEC=180 by default so a saturated
 	rung does NOT collapse into the silo's own 30s grain-RPC deadline (see

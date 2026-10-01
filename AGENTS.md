@@ -56,7 +56,8 @@ closes.
 ## Repository layout
 
 - `src/lattice/` - the core `Orleans.Lattice` library. Grains are `internal`
-  under `BPlusTree/Grains/`; persistent state POCOs under `BPlusTree/State/`;
+  under `BPlusTree/Grains/`; persistent state POCOs under `BPlusTree/State/`
+  (the materialised-view grains and their states sit in `Views/`);
   CRDT and low-level types under `Primitives/`.
 - The optional add-on packages (for example replication, the API facade family
   and their gRPC and MCP bindings, auth and membership, backup, storage
@@ -170,7 +171,7 @@ several `Orleans.Lattice.Explorer.*` assemblies.
 
 These run as ordinary tests in the non-chaos suite, so a violation breaks the
 required `build-and-test` check. The ones prose and documentation edits most
-often trip are below; the complete gate list lives in
+often trip are below; the principal gates, and how to run them, are described in
 `.github/instructions/testing.instructions.md`:
 
 - No em-dash (U+2014) in any tracked text file - use a plain ASCII hyphen `-`.

@@ -155,8 +155,8 @@ always-resident metrics collector, is described under [Observability](#observabi
 | Head | Image | Min | Max | Rationale |
 |---|---|---|---|---|
 | Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on compute pressure (see [Autoscaling](#autoscaling-via-the-latticescaling-keda-bridge)). |
-| MCP | built (MCP host) | 0 | N | Stateless remote MCP server; cold-starts on demand, idle at zero. |
-| Explorer | built (Explorer host) | 0 | N | Operator console (Blazor Server): per-user circuit state only, pinned by sticky sessions, nothing durable; a small admin tool, idle at zero. |
+| MCP | built (MCP host) | 0 | 3 | Stateless remote MCP server; cold-starts on demand, idle at zero. |
+| Explorer | built (Explorer host) | 0 | 3 | Operator console (Blazor Server): per-user circuit state only, pinned by sticky sessions, nothing durable; a small admin tool, idle at zero. |
 | Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or volume. |
 
 The silo is the only always-on head and the only one that must never reach zero.
@@ -178,9 +178,12 @@ each other two ways working together:
 Scaling the silo to a single replica per region is **not** an acceptable fallback:
 the design requires genuine intra-region multi-silo clustering so a single replica
 loss does not take the region's data plane offline. The replica floor defaults to
-one, so a region at rest runs a single replica until compute pressure scales it
-out; set the deployer's `-SiloMinReplicas` to 2 or more to keep that cluster at
-all times. The Orleans membership and
+one, but once the deployer's second pass activates the scale rule an idle region
+does not sit at the floor: the scale value never reads below the signal's own
+floor (the same `-SiloMinReplicas` value) and the `0.5` threshold doubles it, so
+an idle region holds twice the floor, capped at the ceiling - two replicas at the
+defaults (see [Autoscaling](#autoscaling-via-the-latticescaling-keda-bridge)).
+The Orleans membership and
 endpoint configuration on ACA (advertised address, silo port, gateway port) must
 be validated against this replica-to-replica model rather than assumed.
 
@@ -308,7 +311,10 @@ default threshold is `0.5`. The threshold must be below 1: KEDA asks for
 `ceil(scaleValue / threshold)` replicas, and `scaleValue` is the dominant
 utilisation (at most 1) times the replicas already running, so it never exceeds
 the running count and a threshold of `1` could only hold or shrink the pool; `0.5`
-asks for twice the current count at full saturation. See
+asks for twice the current count at full saturation. The same division applies at
+rest: the scale value never reads below `Scaling:MinReplicas`, which the kit sets
+from `-SiloMinReplicas`, so an idle region asks for twice that floor, capped at the
+ceiling - two replicas per region at the defaults. See
 [Scaling behaviour](reference-architecture/README.md#scaling-behaviour) in the
 kit's guide.
 
@@ -624,10 +630,11 @@ The three built images use the **most compact base that is practical**:
 
 ## Cost
 
-The baseline is designed to be cheap at rest: only the silo (min 1) and the small
+The baseline is designed to be cheap at rest: only the silo and the small
 per-region metrics collector (one resident replica) are always-on, and the MCP,
 Explorer, and Grafana heads sit at zero when idle. The dominant fixed costs are
-the always-on silo replica per region, the single AFD Standard profile (public
+the always-on silo replicas per region (two at rest with the default scale rule;
+see [Autoscaling](#autoscaling-via-the-latticescaling-keda-bridge)), the single AFD Standard profile (public
 option), the container registry, and the managed Prometheus / Log Analytics (the
 latter capped at 1 GB/day). Self-hosting Grafana instead of Azure Managed Grafana
 removes a material fixed monthly cost. A concrete, validated cost note for a

@@ -73,8 +73,10 @@ These override or extend the base for Orleans.Lattice only.
 
 4. **Commits carry no trailers**, and branch names are
    `<type>/<kebab-case-description>` and never contain a username. A fail-fast
-   CI guard enforces both: it checks the branch name, and it rejects the
-   attribution trailers it names (`Co-authored-by`, `Copilot-Session`). See
+   CI guard enforces both: it checks the branch name, it rejects the
+   attribution trailers it names (`Co-authored-by`, `Copilot-Session`), and it
+   fails a pull request whose commits carry more than one author email,
+   because a squash merge would then compose a `Co-authored-by:` trailer. See
    `{conventionsDoc}` for the allowed branch types and the epic-branch convention.
 
 5. **Test scope, and it is binding rather than advisory.** Run the smallest

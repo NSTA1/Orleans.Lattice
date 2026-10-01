@@ -536,9 +536,12 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     `Closes #N` in a pull request based on a bucket is silently inert - it
     merges, it looks right, and the issue stays open. Verify with
     `gh pr view <n> --json closingIssuesReferences`, never by reading the body.
-    This is the single most likely way bucketing goes wrong, and the cost of
-    forgetting is a set of completed items left open with no signal anywhere
-    that they were meant to close.
+    This is the single most likely way bucketing goes wrong. Left unchecked,
+    forgetting it leaves completed items open with no signal anywhere that they
+    were meant to close; the `Guard - bucket closing list` step described below
+    now fails the bucket's pull request instead, for every open issue a merged
+    member recorded with `Refs #N` that the bucket neither closes nor explicitly
+    holds open. An issue no member recorded is still invisible to it.
     - **Both halves are now enforced, by two separate steps in
       `.github/workflows/ci.yml`.** They are described separately because they
       read different artefacts at different moments, and because for a long

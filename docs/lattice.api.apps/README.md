@@ -186,7 +186,7 @@ siloBuilder.AddLatticeAppBridgeApi(options => options.RateLimitPermitLimit = 200
 
 | Contract | Who may call it | What it serves |
 |---|---|---|
-| `ILatticeAppCatalog` | Callers holding `AppInstall` over `LatticeScope.ClusterWide()`, the same gate as the control facade | The configured app sources (`ListSourcesAsync`); what each source offers, joined with the active tenant's installs (`ListAvailableAsync`, filtered by source key, text, and `All`, `Installed`, `Available` or `Updates`); a pre-install description of an exact source version (`DescribeFromSourceAsync`); the pre-install icon (`GetIconAsync`). |
+| `ILatticeAppCatalog` | Callers holding `AppInstall` over `LatticeScope.ClusterWide()`, the same gate as the control facade | The configured app sources (`ListSourcesAsync`); what each source offers, joined with the active tenant's installs (`ListAvailableAsync`, filtered by source key, text, and `All`, `Installed`, `Available` or `Updates`); a pre-install description of an exact source version (`DescribeFromSourceAsync`); the pre-install icon (`GetIconAsync`); and an advisory probe (`GetCapabilitiesAsync`) that answers whether the caller may use the catalogue rather than refusing it. |
 | `ILatticeAppWorkspace` | Any caller who holds at least one role of an enabled install in the active tenant: a group it belongs to is bound to the role, and no deny takes the role away | "Your apps" (`ListMyAppsAsync`), a sanitised description of one of them (`DescribeMyAppAsync`), its icon, and the digest-verified assets of the **installed** version's UI bundle (`GetUiAssetAsync`). |
 | `ILatticeAppBridge` | Per operation (see below) | Get, scan, set and delete on an app's own logical trees, on behalf of that app's UI. |
 
@@ -234,11 +234,30 @@ closed:
    ordinary data-plane authorization also applies.
 
 Before these steps, the request is validated and the caller is resolved and rate
-limited. Values are bounded (64 KiB each, and a scan page of at most 200 entries
-whose encoded response is at most 1 MiB), and each caller and slug pair is rate
-limited (`LatticeAppBridgeOptions`: 100 permits per second by default). Failures are the closed `AppBridgeFailure` set: `Denied`,
+limited. Values are bounded (64 KiB each, keys at most 1024 characters, and a scan
+page of at most 200 entries whose encoded response is at most 1 MiB). Each caller,
+active tenant and app slug is rate limited in a fixed window - by default 100
+requests per second, set through `LatticeAppBridgeOptions` (see
+[Configuration reference](#configuration-reference)) - and a request over the limit
+is refused as `Unavailable` before any authorization or data access, so a retry in a
+later window can succeed. Failures are the closed `AppBridgeFailure` set: `Denied`,
 `NotFound`, `Invalid`, `TooLarge`, `Conflict` and `Unavailable`. They are carried by
 `AppBridgeException` with a fixed, sanitised message.
+
+## Configuration reference
+
+### `LatticeAppBridgeOptions`
+
+Configured through the `AddLatticeAppBridgeApi(options => ...)` delegate.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `RateLimitPermitLimit` | 100 (`DefaultRateLimitPermitLimit`) | The requests each caller, active tenant and app slug may make in one window. Must be at least 1. |
+| `RateLimitWindow` | 1 second (`DefaultRateLimitWindow`) | The length of one fixed window, which starts at that partition's first request. Must be positive. |
+
+An invalid value fails when the bridge is first resolved, not at registration. The
+limiter tracks at most 10,000 partitions at once; when the table is full and holds no
+expired window, a request from a new partition is refused as `Unavailable`.
 
 ## See also
 

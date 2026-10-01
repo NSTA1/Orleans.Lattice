@@ -10,15 +10,15 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The tenant lifecycle is all-mutating (create, suspend, resume, delete), so the
-/// module contributes tools only when tenant-admin control is opted in - either by
-/// passing <c>enableControl: true</c> here or by setting
+/// The tenant lifecycle and residency tools are contributed only when
+/// tenant-admin control is opted in - either by passing <c>enableControl: true</c>
+/// here or by setting
 /// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/>. Registering
-/// the group advertises the <c>tenantadmin</c> capability to a caller granted
+/// the group makes the tenant-admin group discoverable to a caller granted
 /// <see cref="LatticeOperation.Admin"/>; a cluster that never calls this method
 /// exposes no tenant-admin capability and no tenant-admin tools at all
-/// (fail-closed, byte-for-byte unchanged versus before). Every tool is annotated
-/// destructive and non-read-only.
+/// (fail-closed, byte-for-byte unchanged versus before). Mutating tools are
+/// annotated destructive and non-read-only; the region-status read is read-only.
 /// </para>
 /// <para>
 /// The module adds no authorization path. Each tool stamps the caller credential
@@ -38,17 +38,16 @@ public static class LatticeMcpTenantAdminServiceCollectionExtensions
     /// <summary>
     /// Registers the tenant-admin tool module as a
     /// <see cref="LatticeApiMcpGroup.TenantAdmin"/> tool group. Sets
-    /// <see cref="LatticeApiMcpOptions.EnableTenantAdminTools"/> so the capability
-    /// is advertised, and when <paramref name="enableControl"/> is
-    /// <see langword="true"/> also sets
+    /// <see cref="LatticeApiMcpOptions.EnableTenantAdminTools"/> for host diagnostics,
+    /// and when <paramref name="enableControl"/> is <see langword="true"/> also sets
     /// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> so the
-    /// mutating lifecycle tools are contributed.
+    /// tenant lifecycle and region-residency tools are contributed.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="enableControl">
-    /// When <see langword="true"/>, the mutating lifecycle tools (create, suspend,
-    /// resume, delete) are contributed. Defaults to <see langword="false"/>, in
-    /// which case the capability is advertised but the group contributes no tools.
+    /// When <see langword="true"/>, the tenant lifecycle and region-residency tools
+    /// are contributed. Defaults to <see langword="false"/>, in which case the
+    /// group is registered for discovery but contributes no tools.
     /// </param>
     /// <returns>The service collection for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <c>null</c>.</exception>

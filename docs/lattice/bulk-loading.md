@@ -23,12 +23,16 @@ maintains that tree as it grows, whereas `BulkLoadAsync` computes the final
 tree shape up front and writes it once. The [efficiency
 comparison](#efficiency-compared-with-setmanyasync) below makes that concrete.
 
-Neither bulk path applies the write limits `SetManyAsync` enforces:
+Neither bulk path applies the per-tree write limits `SetManyAsync` enforces:
 `BulkLoadAsync` (both forms) and `BulkAppendChunkAsync` check no entry against
 the optional write-size bounds (`LatticeOptions.MaxKeyLength`,
 `LatticeOptions.MaxValueSizeBytes`), and the per-tree admission caps
 (`LatticeOptions.MaxLiveKeys`, `LatticeOptions.MaxEstimatedBytes`) never refuse
-them. Validate sizes in the loader when those bounds matter.
+them. Validate sizes in the loader when those bounds matter. The one-shot
+`BulkLoadAsync` and `BulkAppendChunkAsync` do still pass a registered
+`ITenantAdmissionController` (the tenancy package's per-tenant write admission),
+as every user-origin write does; the streaming extension, which bypasses the
+`ILattice` facade (see below), does not.
 
 ## `SetManyAsync` - batched writes into a live tree
 
@@ -167,8 +171,8 @@ For a loader that runs out of process, the tree-administration facade wraps
 this primitive in a `BeginBulkLoadAsync` / `AppendBulkLoadAsync` /
 `CommitBulkLoadAsync` session that adds an emptiness probe counting tombstones
 as well as live keys (sampled fresh from the shards, never answered from the
-diagnostics cache), within-chunk order validation, and a server-acknowledged
-chunk index; see
+diagnostics cache, and refusing to begin while any shard could not be sampled),
+within-chunk order validation, and a server-acknowledged chunk index; see
 [Migrating from an External Store](external-store-migration.md#choosing-an-ingest-path).
 
 ## Efficiency compared with `SetManyAsync`

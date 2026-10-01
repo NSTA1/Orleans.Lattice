@@ -175,8 +175,12 @@ a plain HTML fragment, stylesheets and self-contained scripts. The bootstrap def
 The operations match the manifest's bridge vocabulary:
 
 - `context.read` returns the app, theme, contrast, density, reduced motion, tenant
-  display name, and the caller's app `roles`.
-- `context.user` returns the display name only.
+  display name, and the caller's app `roles`. The web head currently sends the
+  default appearance (Paper, standard contrast, comfortable density, full motion)
+  whatever the console's own appearance is, and no tenant display name (`null`).
+- `context.user` returns the display name only. The web head currently has no
+  display name to give a frame, so even a consented `context.user` is answered
+  `unavailable`.
 - `data.read` takes `action` `get` or `scan`, `data.write` takes `set`, and
   `data.delete` takes `delete`. Each names a **logical** tree from your manifest.
   Values are base64, each at most 64 KiB, with scan pages of at most 200 entries.
@@ -206,8 +210,9 @@ Guidance:
   `lattice-app.css`, so your UI starts with the Explorer's Paper and Board materials,
   type and controls without linking anything. The kit sets the theme, contrast,
   density and reduced-motion attributes on `<html>` and updates them on
-  `context.changed`. Keep layouts fluid: the frame fills the content area at every
-  width, down to a phone.
+  `context.changed`, although the web head does not yet send `context.changed`, so
+  a frame keeps the appearance it started with. Keep layouts fluid: the frame
+  fills the content area at every width, down to a phone.
 - **Digests.** Pin every asset's digest and the bundle digest in the manifest. The
   [task-board sample](../../samples/Explorer/Apps/TaskBoard/README.md) computes them
   in a test that fails with the correct values whenever a file changes.

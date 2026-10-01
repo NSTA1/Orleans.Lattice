@@ -5,9 +5,9 @@ namespace Orleans.Lattice.Explorer.Core.Vocabulary;
 /// "where to read more" is declared once rather than re-typed at each call site.
 /// </summary>
 /// <remarks>
-/// These are repository-relative paths, not URLs, because the Explorer is hosted
-/// in several heads (web, MAUI, embedded) whose documentation base differs. A
-/// head resolves a path against whatever base it publishes documentation under.
+/// These are repository-relative paths, not URLs, because the Explorer can be
+/// hosted by the standalone web head or embedded in another ASP.NET application.
+/// The host resolves a path against whatever base it publishes documentation under.
 /// </remarks>
 public static class ExplorerDocsLinks
 {

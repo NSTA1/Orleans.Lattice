@@ -10,8 +10,8 @@ public interface ILatticeSchemaVersionProvider
 {
     /// <summary>
     /// Whether strict-mode ingest is globally enabled. When <c>false</c>, the write
-    /// interceptor never inspects system-origin (replication apply / restore)
-    /// writes, so trusted ingest pays zero overhead.
+    /// interceptor skips system-origin writes that reach it, so those writes pay
+    /// zero overhead.
     /// </summary>
     bool StrictIngestEnabled { get; }
 

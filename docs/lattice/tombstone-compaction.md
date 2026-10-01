@@ -202,16 +202,16 @@ var accepted = await lattice.CompactShardAsync(3, cancellationToken);
 
 ## Telemetry
 
-Every compaction pass emits the following instruments, each also tagged with the tree's derived `tenant`. On the per-leaf instruments the `trigger` tag (`reminder`, `ratio`, `size`, or `operator`) appears only when `MinTombstoneRatioForCompaction` or `MaxLeafEntriesBeforeForcedCompaction` is non-zero, so a reminder-only deployment emits them without it. See [Metrics](metrics.md) for the full schema:
+Compaction records the following instruments. Each carries the tree's derived `tenant` tag as well as the tags listed. The `trigger` tag (`reminder`, `ratio`, `size`, or `operator`) is always present on `orleans.lattice.compaction.pass.duration`. On the per-leaf instruments that list it, it is recorded only when `MinTombstoneRatioForCompaction` or `MaxLeafEntriesBeforeForcedCompaction` is set above zero, so a deployment that leaves both at their defaults emits them without it, on operator-requested passes as well as reminder-driven ones. See [Metrics](metrics.md) for the full schema:
 
-- `orleans.lattice.compaction.pass.duration` (histogram, ms) - tagged `tree`, `trigger`.
-- `orleans.lattice.compaction.leaves.visited` (counter) - tagged `tree`, `outcome` (`reaped` / `noop` / `skipped`), `trigger`, and `path` (`walk` / `dirty-set`) per the active fast path. `skipped` is a leaf that threw; on the dirty-leaves fast path it is the only signal that a specific leaf is wedged, and it repeats once per pass for as long as the leaf keeps failing.
-- `orleans.lattice.compaction.shard.retries` (counter) - tagged `tree`.
-- `orleans.lattice.compaction.shard.skipped` (counter) - tagged `tree`. **Any non-zero rate is alert-worthy.**
-- `orleans.lattice.compaction.shard.dirty_leaves` (histogram) - tagged `tree`. Records the per-shard dirty-leaf snapshot size at the moment the coordinator enters a shard. Use it to capacity-plan the dirty-leaves fast path.
-- `orleans.lattice.leaf.compaction.duration` (histogram, ms) - tagged `tree`, `trigger`. One sample per leaf the pass scans; a leaf that short-circuits because nothing changed since its last compaction records none.
-- `orleans.lattice.leaf.tombstones.reaped` and `orleans.lattice.leaf.tombstones.expired` (counters) - tagged `tree`, `trigger`. Tombstones, and TTL-expired live entries, that a pass physically removed.
-- `orleans.lattice.leaf.tombstone.ratio` (histogram) - tagged `tree` and `tenant`, sampled at the entry of each compaction pass over a leaf. The leaf's identity is not a tag, so the family holds at most one series per tree however many leaves the tree has (issue #2518).
+- `orleans.lattice.compaction.pass.duration` (histogram, ms) - tagged `tree`, `trigger`, and `tenant`.
+- `orleans.lattice.compaction.leaves.visited` (counter) - tagged `tree`, `outcome` (`reaped` / `noop` / `skipped`), `path` (`walk` / `dirty-set`) per the active fast path, and `tenant`, plus `trigger` when either policy knob is above zero. `skipped` is a leaf that threw; on the dirty-leaves fast path it is the only signal that a specific leaf is wedged, and it repeats once per pass for as long as the leaf keeps failing.
+- `orleans.lattice.compaction.shard.retries` (counter) - tagged `tree` and `tenant`.
+- `orleans.lattice.compaction.shard.skipped` (counter) - tagged `tree` and `tenant`. **Any non-zero rate is alert-worthy.**
+- `orleans.lattice.compaction.shard.dirty_leaves` (histogram) - tagged `tree` and `tenant`. Records the per-shard dirty-leaf snapshot size at the moment the coordinator enters a shard. Use it to capacity-plan the dirty-leaves fast path.
+- `orleans.lattice.leaf.compaction.duration` (histogram, ms) - tagged `tree` and `tenant`, plus `trigger` when either policy knob is above zero. One sample per leaf the pass scans; a leaf that short-circuits because nothing changed since its last compaction records none.
+- `orleans.lattice.leaf.tombstones.reaped` and `orleans.lattice.leaf.tombstones.expired` (counters) - tagged `tree` and `tenant`, plus `trigger` when either policy knob is above zero. Tombstones, and TTL-expired live entries, that a pass physically removed.
+- `orleans.lattice.leaf.tombstone.ratio` (histogram) - tagged `tree` and `tenant` only, never `trigger`, sampled at the entry of each compaction pass over a leaf that holds any entries. The leaf's identity is not a tag, so the family holds at most one series per tree however many leaves the tree has (issue #2518).
 
 The bundled Grafana **Overview** dashboard ships compaction-focused panels for each of these (pass duration p95 by trigger, leaves visited by outcome, shard retries / skips, dirty leaves per pass, per-leaf compaction duration p95, tombstone churn, and tombstone-ratio p95).
 

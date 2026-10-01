@@ -61,7 +61,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Runtime per-tree replication config** | Enable or disable replication for a tree at runtime under a fixed merge mode, distributed as the converging `sys-replication-config` system tree. Flip it once on any cluster and every peer converges; concurrent divergent modes are detected rather than one silently overwriting the other, and the tree resolves to no mode until an operator settles it. | [Runtime Replication Config](runtime-config.md) |
 | **Snapshot bootstrap** | New or re-seeded peers receive a point-in-time snapshot, then switch to incremental shipping at the snapshot's HLC. | [Snapshot Bootstrap](snapshot-bootstrap.md) |
 | **System-tree replication** | Enrol the reserved membership + auth-policy trees so identity and authorization converge across sites. Replication-applied writes bypass the access gate under a system-origin scope; an optional strict policy-epoch fence closes the revoke window per tree. | [System-Tree Replication](system-tree-replication.md) |
-| **Transport security** | Shared-secret authentication between clusters, required by default, with the secret sourced from environment variables, configuration, or a custom `ILatticeReplicationSecretSource`; the gRPC binding refuses plaintext peer endpoints unless explicitly allowed. | [Transport Security](transport-security.md) |
+| **Transport security** | Shared-secret authentication between clusters, required by default, with the secret sourced from environment variables, configuration, or a custom `ILatticeReplicationSecretSource`; by default a caller must also present the secret configured for the cluster it claims to be, and the gRPC binding refuses plaintext peer endpoints unless explicitly allowed. | [Transport Security](transport-security.md) |
 | **Typed CRDT deltas** | The wire carries typed deltas for OR-Set, PN-Counter, VersionVector, MV-Register, OR-Map, RGA sequence, OR / RW flags, G-Counter, G-Set, RW-Set, and max / min bounded registers; last-writer-wins trees ship the opaque value bytes. A receiver merges a CRDT-mode tree by mode, not by opaque-byte LWW. | [Deltas](deltas.md) |
 
 ## Quick Start
@@ -104,6 +104,8 @@ builder.Services.AddLatticeReplicationGrpc();
 var app = builder.Build();
 app.MapLatticeReplicationGrpc();
 ```
+
+Both clusters also need a shared secret, because the receiver refuses unauthenticated calls by default. Set `LATTICE_REPLICATION_SECRET` on every silo of both clusters; with the default origin binding a single cluster-wide secret must be the same value on both. See [Transport Security](transport-security.md) for per-peer secrets, custom secret sources, and rotation.
 
 For a working multi-cluster example exercising HLC-ordered facts, typed OR-Set replication, and gRPC push, see the `MultiSiteManufacturing` project under [`samples/`](../../samples).
 

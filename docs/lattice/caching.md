@@ -79,8 +79,9 @@ flowchart LR
 
 ## Value-payload eviction
 
-By default the cache mirror is **unbounded**: `_cache` holds one
-`LwwValue<byte[]>` per live key on the primary leaf, so per-silo per-tree memory
+By default the cache mirror is **unbounded**: it holds one row - the value and
+its last-writer-wins metadata - for every entry of the primary leaf, tombstoned
+entries included, so per-silo per-tree memory
 scales linearly with the touched-leaf entry count. This is the lowest-latency
 configuration - every read is served from the local dictionary - but it has no
 operator-side cap.

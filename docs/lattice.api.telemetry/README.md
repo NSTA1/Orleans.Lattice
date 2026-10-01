@@ -5,9 +5,9 @@ curated set of named queries over a Prometheus-compatible metrics backend, scope
 every answer to the caller's tenant on the server, and refuses anything outside
 the curated set.
 
-It exists because the Explorer's desktop head cannot enforce tenant scoping
-locally - a head that derived its own tenant filter would be asking the client to
-police its own access. So the facade derives the scope, the head renders whatever
+It exists because a client head - the Explorer among them - cannot be trusted to
+enforce tenant scoping itself - a head that derived its own tenant filter would be
+asking the client to police its own access. So the facade derives the scope, the head renders whatever
 the server pinned, and the backend is never reachable directly.
 
 ## What it is not
@@ -58,7 +58,7 @@ transport binding layered on top neither repeats nor reconfigures it.
 | `MaxRange` | `TimeSpan` | 24 hours | The widest window a range query may evaluate. |
 | `MaxStep` | `TimeSpan` | 1 hour | The coarsest step a range query may request. |
 | `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll`, or `DenyAllExceptAllowed` to serve only `AllowedMetrics`. |
-| `AllowedMetrics` | `IList<string>` | empty | The allow-list consulted under `DenyAllExceptAllowed`. Each entry is an exact metric name or a `*` wildcard pattern (for example `orleans_lattice_wal_*`). Ignored under `ReadAll`. |
+| `AllowedMetrics` | `IList<string>` | empty | The allow-list consulted under `DenyAllExceptAllowed`. Each entry is an exact metric name or a `*` wildcard pattern (for example `orleans_lattice_wal_*`). Matching is whole-name and case-sensitive: a wildcard entry is anchored at both ends, its `*` never matches a newline (so a trailing newline cannot ride past the check), and it is matched without backtracking, in time linear in the name's length. Ignored under `ReadAll`. |
 
 The proxy stamps the configured backend credential on every backend request and
 **never** forwards the caller's Lattice credential to it: the caller-side grant
@@ -68,9 +68,10 @@ and the backend-side credential are two independent halves of the trust boundary
 and validating the options. Register `LatticeTelemetryOptionsValidator` as an
 `IValidateOptions<LatticeTelemetryOptions>` to enforce the rules above (a supplied,
 absolute backend address, defined `AuthMode` and `MetricAccess` values, the
-credential member each static auth mode needs, strictly positive timeout and
-guardrails, and a non-empty allow-list with no blank entry under
-`DenyAllExceptAllowed`) when the options are first resolved. Under the validator an
+credential member each static auth mode needs, a strictly positive timeout no
+longer than `int.MaxValue` milliseconds, strictly positive guardrails, and a
+non-empty allow-list with no blank entry under `DenyAllExceptAllowed`) when the
+options are first resolved. Under the validator an
 unset `BackendAddress` fails that resolution rather than degrading to the empty
 catalogue.
 
@@ -187,12 +188,17 @@ meter; on a cluster without it they evaluate cleanly and return no series. Every
 `Range` entry accepts a time range, a step, and a tree filter;
 `tree.storage.bytes`, `tree.admission.utilization`, and
 `tree.wal.saturation_state` accept a tree filter; the `tenant.*` entries take no
-parameters. The tree filter matches the metrics' `tree` dimension, which is the
-logical tree id and stays the same across a resize, a shadow-cutover restore or a
-schema remediation (see [The `tree` dimension across
-aliasing](../lattice/metrics.md#the-tree-dimension-across-aliasing)), so a query
-filtered on a tree keeps returning that tree's series after its data moves to a
-new physical copy. The filter is matched verbatim: the facade does not compose an
+parameters. The tree filter matches the metrics' `tree` dimension. For most of
+the series these entries read that is the logical tree id, which stays the same
+across a resize, a shadow-cutover restore or a schema remediation (see [The `tree`
+dimension across aliasing](../lattice/metrics.md#the-tree-dimension-across-aliasing)),
+so a query filtered on a tree keeps returning that tree's series after its data
+moves to a new physical copy. The storage-usage and admission gauges behind
+`tree.storage.bytes`, `tree.storage.bytes_trend` and `tree.admission.utilization`
+are the exception: they are keyed by the id their aggregator was addressed by, so
+while the logical id keeps reporting the live copy, a cluster storage roll-up (or
+the optional deep poll) also reports them under the physical copy's id, and an
+unfiltered answer can list that copy as a further tree. The filter is matched verbatim: the facade does not compose an
 unqualified name into the caller's tenant namespace, so on a tenancy cluster a
 tenant's tree is filtered by its full `t/{tenant}/{name}` id, the value its `tree`
 label carries. Each entry also declares `TelemetryQueryBounds`: a requested step is
@@ -214,9 +220,9 @@ first.
 
 Discovery **never surfaces a backend fault**. An unconfigured backend, and a caller entitled to no query, both receive `TelemetryQueryCatalog.Empty` rather than an exception, so a client renders no panels instead of erroring - and the two cases stay indistinguishable, so a refusal leaks nothing about the deployment.
 
-**This is load-bearing for callers, and changing it would break them silently.** A client may therefore treat a transport-level `Unavailable` from `GetCatalog` as *the surface is unreachable*, because a mere metrics-store outage cannot produce one. The Explorer's telemetry client relies on exactly that to tell "the telemetry add-on is not installed" apart from "the metrics backend is having a bad minute" - the first hides the surface, the second shows a retryable error on it.
+**This is load-bearing for callers, and changing it would break them silently.** A client may therefore treat a transport-level `Unavailable` from `GetCatalog` as *the surface is unreachable*, because a mere metrics-store outage cannot produce one. The Explorer relies on exactly that: its Telemetry area hides itself whenever the catalogue read fails - a refused caller, a cluster that does not serve telemetry, or one it cannot reach - while a metrics-backend outage reaches it only through a query, as a retryable error on the chart that asked.
 
-If this method were ever changed so that a backend fault could escape it, that client would begin hiding the telemetry surface during ordinary metrics outages, telling an operator to install something they already have. No test in the client would catch it, because the client's tests exercise its own classification rather than this contract. Treat the degradation as part of the published behaviour of `ILatticeTelemetry`, not as an implementation detail of the current backend.
+If this method were ever changed so that a backend fault could escape it, the Explorer would begin hiding its Telemetry area during ordinary metrics outages. No test in the client would catch it, because the client's tests exercise its own classification rather than this contract. Treat the degradation as part of the published behaviour of `ILatticeTelemetry`, not as an implementation detail of the current backend.
 
 ## Tenant scope is derived, never accepted
 
@@ -249,7 +255,7 @@ transport binding can name them without referencing this package:
 | Exception | Means |
 |---|---|
 | `TelemetryQueryNotFoundException` | The query id is unknown **or** not offered by this deployment. The two are deliberately indistinguishable, so a caller learns nothing about the deployment from a refusal. |
-| `TelemetryQueryBoundsException` | A well-formed request whose window the entry's declared bounds or the deployment-wide `MaxRange` / `MaxStep` guardrails refuse - descending, too long, starting too far back, yielding too many points, or with a step above `MaxStep`. Its `Violation` carries the typed `TelemetryBoundsViolation` reason. |
+| `TelemetryQueryBoundsException` | A well-formed request whose window the entry's declared bounds or the deployment-wide `MaxRange` / `MaxStep` guardrails refuse - descending, too long, starting too far back, yielding too many points, or with a step above `MaxStep` (on an entry that declares no step ceiling, a step too large for the window arithmetic saturates and is refused by the `MaxStep` guardrail rather than overflowing). Its `Violation` carries the typed `TelemetryBoundsViolation` reason. |
 | `TelemetryBackendException` | The backend was unreachable, timed out, or answered unusably. Not the caller's fault. |
 
 `QueryAsync` can also refuse the caller. Before anything else it throws
@@ -258,7 +264,8 @@ the caller lacks the cluster-wide `Telemetry` capability, checked by the public
 `TelemetryAccessAuthorizer` (discovery instead degrades to the empty catalogue);
 once the query id and the entry's bounds pass, it throws `LatticeTenantAccessDeniedException`
 when the caller cannot be attributed to any tenant, and `ArgumentException` when
-the tree filter of an entry that accepts one contains a control character. Both refusals are core `Orleans.Lattice`
+the tree filter of an entry that accepts one contains a control character. The two Lattice refusals
+(`LatticeAuthorizationDeniedException` and `LatticeTenantAccessDeniedException`) are core `Orleans.Lattice`
 types, so a binding can name them too.
 
 **A binding must not forward `TelemetryBackendException.Message` to a remote

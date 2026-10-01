@@ -8,11 +8,16 @@ stop a caller writing a malformed value or tell a v1 value from a v2 one.
 The companion **`Orleans.Lattice.Schema`** package closes that gap with two
 independent, composable, strictly opt-in capabilities:
 
-- **Schema enforcement** - per-tree, server-side validation of every write
-  against a declarative policy (JSON well-formedness, UTF-8, a maximum byte
-  length, a regex, or a structured predicate over a JSON document). A rejected
-  local write fails fast; a rejected *ingested* item (replication apply or backup
-  restore) is dead-lettered rather than dropped, so ingest never blocks. Existing
+- **Schema enforcement** - per-tree, server-side validation of the values a
+  tree's write operations carry, against a declarative policy (JSON
+  well-formedness, UTF-8, a maximum byte length, a regex, or a structured
+  predicate over a JSON document). A rejected local write fails fast; in strict
+  mode a rejected *ingested* item that reaches the check (a replicated
+  typed-CRDT entry, or an entry of a replicated atomic batch) is dead-lettered
+  rather than dropped, so ingest never blocks. A plain (non-atomic)
+  last-writer-wins replication apply, a backup restore and a tree merge write
+  below the check, so their values are not validated (see
+  [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). Existing
   data can be brought into compliance by a background, crash-safe
   shadow-build-and-cutover remediation.
 - **Schema versioning** - a self-describing, per-value version tag (schema id +
@@ -79,11 +84,13 @@ To layer further option delegates after registration, use
 `LatticeSchemaPolicyValidator` checks values against a `LatticeSchemaPolicy`
 exactly as enforcement does, without writing anything. It compiles the rules once,
 with the same checks setting the policy runs, so a rule that could not be set (a
-structurally invalid rule, or a pattern that does not compile) throws
-`ArgumentException` from its constructor. `Validate` then judges a value against
-every rule in order and returns `null` when it complies, or the first failing
-rule's reason. `ValidateRule` judges it against one rule by its zero-based
-position. A console or a tool uses it to preview a draft policy against sample
+structurally invalid rule, a negative maximum byte length, or a pattern that does
+not compile) throws `ArgumentException` from its constructor. `Validate` then
+judges a value against every rule in order and returns `null` when it complies, or
+the first failing rule's reason. `ValidateRule` judges it against one rule by its
+zero-based position, and throws `ArgumentOutOfRangeException` for a position
+outside the policy; `RuleCount` and `Policy` report what the validator was built
+from. A console or a tool uses it to preview a draft policy against sample
 values before setting it; the Explorer's schema rule builder does exactly that.
 
 ```csharp verify
@@ -107,8 +114,10 @@ string? idRule = validator.ValidateRule(1, Encoding.UTF8.GetBytes("""{"id":"a1"}
 ```
 
 The validator judges the bytes it is given. For a tree that also uses schema
-versioning, strip the version envelope from a stored value first
-(`LatticeSchemaEnvelope.StripToBody`), because a policy judges the body.
+versioning, strip the version envelope from a stored value that carries one first
+(`LatticeSchemaEnvelope.IsEnveloped`, then `LatticeSchemaEnvelope.StripToBody`,
+which removes the header length without checking for it), because a policy judges
+the body.
 
 ## Documents
 
@@ -127,7 +136,10 @@ The in-process admin services this package registers (`ILatticeSchemaAdmin`,
 host-side surfaces: they perform no authorization of their own, and they read
 and write the package's reserved `sys-schema-*` trees (and, for a remediation or
 a migration, the governed tree itself) as system origin, so any code holding the
-service can change a tree's schema. The `LatticeOperation.SchemaAdmin` capability
+service can change a tree's schema. `LatticeSchemaReservedTrees` names those trees
+(`PolicyTreeId`, `DeadLetterTreeId`, `VersionConfigTreeId`) and their `Prefix`,
+and lets an application check its own tree ids against the reserved namespace
+(`IsReserved`, `ThrowIfReserved`). The `LatticeOperation.SchemaAdmin` capability
 is enforced by the remote schema control facade,
 [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md), which authorizes
 every call fail-closed before it touches these services: SchemaAdmin for

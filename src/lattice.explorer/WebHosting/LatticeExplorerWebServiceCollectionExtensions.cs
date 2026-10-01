@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Explorer.Web;
 /// call wires up everything the standalone head registers, so a consumer can
 /// co-host the Explorer inside their own ASP.NET application. Every area is
 /// compiled in and decides its own visibility from its facade's capability probe,
-/// failing closed; there is no plugin or area registration API.
+/// failing closed; there is no external area registration API.
 /// </summary>
 public static class LatticeExplorerWebServiceCollectionExtensions
 {
@@ -32,8 +32,8 @@ public static class LatticeExplorerWebServiceCollectionExtensions
     /// <see cref="LatticeExplorerWebEndpointRouteBuilderExtensions.MapLatticeExplorer"/>.
     /// </summary>
     /// <remarks>
-    /// The web head is multi-user, so two seams the single-operator desktop head
-    /// leaves open are closed by default here: the environment <b>credential</b>
+    /// The web head is multi-user, so two seams a single-operator local host can
+    /// leave open are closed by default here: the environment <b>credential</b>
     /// seed is withheld (see
     /// <see cref="LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed"/>), and
     /// the shared configuration store refuses browser-driven writes (see

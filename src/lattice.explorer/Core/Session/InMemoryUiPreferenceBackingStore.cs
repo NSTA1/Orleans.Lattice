@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// in process memory. Registered as the fallback so the preference store always
 /// resolves (and so tests can exercise it without a browser); a host overrides it
 /// with a genuinely durable backing store (browser <c>localStorage</c> on the web
-/// head, the platform preference store on the desktop head).
+/// head, or an equivalent host-supplied store).
 /// </summary>
 public sealed class InMemoryUiPreferenceBackingStore : IUiPreferenceBackingStore
 {

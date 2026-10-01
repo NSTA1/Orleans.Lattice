@@ -55,9 +55,9 @@ internal sealed class GrpcPushTransportOptions
     /// The local cluster id stamped on every outbound batch as the
     /// <c>x-lattice-replication-origin</c> metadata header, for diagnostics
     /// and peer attribution; the receiver compares it with a body-declared
-    /// origin where one is present. The receiver-side interceptor does not use
-    /// it to choose a secret: it validates the presented secret against the
-    /// whole accepted set. When unset, the transport reads
+    /// origin where one is present. With origin binding on, the receiver-side
+    /// interceptor also uses the stamped origin to resolve the outbound secret it
+    /// expects this cluster to use for that peer. When unset, the transport reads
     /// <see cref="LatticeReplicationOptions.ClusterId"/> from
     /// <c>IOptionsMonitor&lt;LatticeReplicationOptions&gt;</c> at
     /// channel-construction time.

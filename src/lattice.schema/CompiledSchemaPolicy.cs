@@ -16,7 +16,7 @@ internal sealed class CompiledSchemaPolicy
         StrictIngest = strictIngest;
     }
 
-    /// <summary>Whether trusted ingest is re-validated (strict mode) for this tree.</summary>
+    /// <summary>Whether intercepted system-origin writes are re-validated (strict mode) for this tree.</summary>
     public bool StrictIngest { get; }
 
     /// <summary>The number of compiled rules.</summary>

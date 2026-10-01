@@ -18,19 +18,20 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// read-only tools (<c>repocontext_health</c>, <c>repocontext_recall</c>,
 /// <c>repocontext_scan</c>, <c>repocontext_list_topics</c>,
 /// <c>repocontext_search</c>, <c>repocontext_index_status</c>,
-/// <c>repocontext_neighbors</c>, and the structural-graph trio
-/// <c>repocontext_outline</c>, <c>repocontext_changed</c>, and
-/// <c>repocontext_related</c>, plus the read-only
-/// <c>repocontext_claim_status</c>) and - when the
-/// host opts writes in - the mutating onboarding tool <c>repocontext_bootstrap</c>
-/// together with <c>repocontext_remember</c>, <c>repocontext_update</c>,
+/// <c>repocontext_neighbors</c>, <c>repocontext_outline</c>,
+/// <c>repocontext_related</c>, <c>repocontext_context</c>,
+/// <c>repocontext_stats</c>, and <c>repocontext_claim_status</c>. The read-only
+/// path-drift tool <c>repocontext_changed</c> is also contributed when an
+/// enforcing workspace guard is registered. When the host opts writes in, the
+/// mutating onboarding tool <c>repocontext_bootstrap</c> is added together with
+/// <c>repocontext_remember</c>, <c>repocontext_update</c>,
 /// <c>repocontext_forget</c>, and the claim trio <c>repocontext_claim</c>,
 /// <c>repocontext_renew_claim</c>, and <c>repocontext_release_claim</c>. In
-/// workspace mode the read-only
-/// <c>repocontext_list_repos</c> is added and the single-repository
-/// <c>repocontext_bootstrap</c> is replaced by the mutating
+/// workspace mode the read-only <c>repocontext_list_repos</c> is added and the
+/// single-repository <c>repocontext_bootstrap</c> is replaced by the mutating
 /// <c>repocontext_add_repo</c>, <c>repocontext_reset_index</c>, and
-/// <c>repocontext_remove_repo</c>.
+/// <c>repocontext_remove_repo</c>; <c>repocontext_add_repo</c> is withheld when
+/// the workspace guard is not enforcing.
 /// </para>
 /// <para>
 /// The tool list is built <b>once</b> in the constructor, so the per-session
@@ -369,7 +370,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "entries, hydrated from the store of record, as a bounded breadth-first traversal. Follows "
                     + "each entry's link relations (for example 'broader', 'narrower', 'related', 'partOf') up to "
                     + "'depth' hops - optionally restricted to a single 'relation' - and stops once 'maxNodes' "
-                    + "distinct neighbors have been collected, reporting 'truncated' when the cap was hit. A seed "
+                    + "distinct neighbors have been collected; 'truncated' is reported only when another unvisited "
+                    + "link remained after that cap was reached. A seed "
                     + "key with no live entry returns 'exists=false'; a dangling edge whose target has no live "
                     + "value is still returned with its own 'exists=false' so it is observable. Each walked memory "
                     + "entry has its link staleness evaluated ('stale' / 'staleLinks' / 'danglingLinks'), as "

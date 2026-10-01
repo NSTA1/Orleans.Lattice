@@ -92,6 +92,8 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
+A typed counter advance (`CounterIncrement`, `CounterDecrement` or `GCounterIncrement`) that would take a replica's component past `long.MaxValue` throws `OverflowException` before anything is written. The service has no arm for it, so it falls through to `Internal` like an unexpected fault; a negative `Amount` is an `ArgumentOutOfRangeException` and so surfaces as `InvalidArgument`.
+
 ## Options
 
 `LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, has four properties: `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics are in the [data API configuration reference](../lattice.api.data/configuration.md#latticedataapigrpcoptions).

@@ -27,7 +27,7 @@ fixture that shells out to it rather than by building anything here - see the
 | [`AtomicCommit.tla`](AtomicCommit.tla) | The specification: state, actions, safety invariants, liveness properties. |
 | [`AtomicCommit.cfg`](AtomicCommit.cfg) | The TLC model: the bounded instance and the invariant / property list to check. |
 | [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
-| [`Refinement.md`](Refinement.md) | The refinement note: each spec variable / action mapped to its protocol counterpart in the code cores. |
+| [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
 | `README.md` | This file. |
 
 ## What is modelled
@@ -251,6 +251,12 @@ quoted without their type, and parameter names, so checking them would produce
 false alarms; a staleness gate that cries wolf gets suppressed and is then
 worse than no gate. The honest cost is that a rename of a symbol the note
 mentions only in bare form is not caught.
+
+A second toolchain-free gate, `RefinementPropertyCoverageTests`, checks the
+note from the model's side: every property `AtomicCommit.cfg` checks must have
+a row in the note's property-mapping table or, with a stated reason, in its
+excluded-properties table, and a prose mention alone does not count. Like the
+staleness gate, it checks coverage, not the truth of a mapping.
 
 ## Last checked
 

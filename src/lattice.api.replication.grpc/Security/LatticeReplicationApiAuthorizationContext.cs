@@ -40,10 +40,11 @@ public enum LatticeReplicationApiOperation
 /// Describes an inbound replication control-API gRPC call to
 /// <see cref="ILatticeReplicationApiAuthorizer.IsAuthorizedAsync"/>. Carries the
 /// <see cref="Operation"/> being invoked, an optional <see cref="TargetId"/>
-/// (the target tree id for a tree-scoped enable / disable call;
-/// <see langword="null"/> for the whole-estate config read or an unrecognised
-/// replication-control call), and the underlying gRPC <see cref="ServerCallContext"/> for
-/// header / identity / peer inspection.
+/// (the target tree id for a tree-scoped enable / disable call or a
+/// <c>GetPeerStatus</c> tree filter; <see langword="null"/> for a whole-estate
+/// config or peer-status read or an unrecognised replication-control call), and
+/// the underlying gRPC <see cref="ServerCallContext"/> for header / identity /
+/// peer inspection.
 /// </summary>
 public readonly struct LatticeReplicationApiAuthorizationContext
 {
@@ -51,8 +52,9 @@ public readonly struct LatticeReplicationApiAuthorizationContext
     /// <param name="call">The underlying gRPC server call context.</param>
     /// <param name="operation">The replication control-API operation being invoked.</param>
     /// <param name="targetId">
-    /// The target tree id the call targets, or <see langword="null"/> for
-    /// operations that are not scoped to a single tree.
+    /// The target tree id the call targets (including a <c>GetPeerStatus</c> tree
+    /// filter), or <see langword="null"/> for operations that are not scoped to a
+    /// single tree.
     /// </param>
     public LatticeReplicationApiAuthorizationContext(
         ServerCallContext call,
@@ -72,8 +74,9 @@ public readonly struct LatticeReplicationApiAuthorizationContext
     public LatticeReplicationApiOperation Operation { get; }
 
     /// <summary>
-    /// The target tree id the call targets, or <see langword="null"/> for
-    /// operations that are not scoped to a single tree.
+    /// The target tree id the call targets (including a <c>GetPeerStatus</c> tree
+    /// filter), or <see langword="null"/> for operations that are not scoped to a
+    /// single tree.
     /// </summary>
     public string? TargetId { get; }
 }

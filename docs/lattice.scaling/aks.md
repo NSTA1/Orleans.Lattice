@@ -46,7 +46,12 @@ spec:
   [ACA rule](keda-aca.md#the-custom-scale-rule): with the trigger's default
   `AverageValue` metric type KEDA asks for `ceil(scaleValue / targetValue)` pods,
   and because `scaleValue` never exceeds the current pod count (apart from the
-  `MinReplicas` floor), a `targetValue` of `1` could never add a pod.
+  `MinReplicas` floor and an earlier, higher value the scale-in gate holds or the
+  smoothing is still releasing), a `targetValue` of `1` could never add a pod.
+  The floor is divided too: with the ACA host wiring (`MinReplicas = 2`) an idle
+  cluster asks for `ceil(2 / 0.5)` = 4 pods and rests at four rather than at
+  `minReplicaCount: 2` - see the `minReplicas` note under
+  [the ACA rule](keda-aca.md#the-custom-scale-rule) for choosing the two floors.
 - `pollingInterval` should stay above `LatticeScalingSignalOptions.SampleInterval`
   so KEDA never reads a stale sample. Scale-in between `minReplicaCount` and
   `maxReplicaCount` is paced by the managed HPA's scale-down stabilization window
@@ -93,7 +98,9 @@ Use an `External` metric, not a `Pods` one. The value is a cluster-wide demand
 in replica-units that every silo exports, so an `External` metric with an
 `AverageValue` target of `0.5` makes the HPA divide it by the current pod count
 and settle on `ceil(scaleValue / 0.5)` replicas - the same arithmetic as the KEDA
-rule, including its inability to add a pod at a target of `1`.
+rule, including its inability to add a pod at a target of `1` and its rest at
+twice the signal's `MinReplicas` floor (the exported gauge carries the floored
+value).
 A `Pods` metric would instead average the near-identical per-pod values and
 multiply by the current pod count, overshooting by roughly that factor. For the
 same reason, have the adapter's external-metric query aggregate the per-pod

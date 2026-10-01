@@ -306,9 +306,11 @@ completed within the specified time"), with a handful of
 after it had in fact landed, so those keys are durable. A point workload books a failure per key; a batched
 workload books the whole 4,096-key batch the timeout hit, which is why the
 batched failure counts are much larger. Most cells report zero; the non-zero
-ones are called out below. The harness grades a cohort only on whether it
-produced a productive measurement window, and carries the failure count
-through rather than discarding the cell.
+ones are called out below. The harness grades a cohort a wedge, and leaves
+it out of the cell, only when its producer never finished, no measurement
+window was productive, or completions stopped for a minute with work still
+in flight; otherwise it carries the failure count through rather than
+discarding the cell.
 
 ## Workload by workload
 
@@ -522,7 +524,9 @@ whose absolute numbers are correspondingly conservative; it does not affect
 the scaling shape.
 
 **There is a residual per-call latency cost against Layer 2.** The Layer 2
-producer runs *inside* the silo process, so its calls never leave the host.
+producer streams its events to the silo over a local TCP socket and the silo
+issues the `ILattice` calls from inside its own process, so those calls
+never leave the host.
 The Layer 3 producer is a separate container reaching silo gateways over the
 container environment's network, so every call pays a real network hop that
 Layer 2 does not. Compare Layer 3 latencies to each other across silo

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Mcp.Telemetry.Azure
 
-Azure managed-identity backend-token provider for [`Orleans.Lattice.Api.Mcp.Telemetry`](../lattice.api.mcp.telemetry/README.md). It satisfies the telemetry proxy's `DynamicBearer` backend-auth mode with a rotating Entra (Azure AD) access token, so the MCP cluster-telemetry tools can query an **Azure Monitor workspace (managed Prometheus)** endpoint - which authenticates callers with a short-lived AAD bearer token rather than a static credential.
+Azure managed-identity backend-token provider for the telemetry proxy in [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md), most often used with [`Orleans.Lattice.Api.Mcp.Telemetry`](../lattice.api.mcp.telemetry/README.md). It satisfies the proxy's `DynamicBearer` backend-auth mode with a rotating Entra (Azure AD) access token, so any telemetry binding - the MCP cluster-telemetry tools, or a host running the curated facade directly - can query an **Azure Monitor workspace (managed Prometheus)** endpoint - which authenticates callers with a short-lived AAD bearer token rather than a static credential.
 
 ## When to use it
 
@@ -8,7 +8,7 @@ The core telemetry package's static auth modes (`None`, `Bearer`, `Basic`, `Mutu
 
 ## How it works
 
-- The host selects `LatticeTelemetryBackendAuthMode.DynamicBearer` on `AddTelemetryTools(...)` and registers this provider with `AddAzureTelemetryBackendToken(...)`.
+- The host selects `LatticeTelemetryBackendAuthMode.DynamicBearer` on `AddTelemetryTools(...)` (or on the `LatticeTelemetryOptions` a host running the curated facade binds) and registers this provider with `AddAzureTelemetryBackendToken(...)`. The package references only `Orleans.Lattice.Api.Telemetry`, so it does not pull in the MCP server surface. A second call rebinds the options but registers exactly one provider, and a host that registered its own `ITelemetryBackendTokenProvider` first keeps it.
 - Before each backend query the proxy asks the provider for a token. The provider serves a cached token and only calls the Azure credential when the cache is empty or within `RefreshSkew` of expiry.
 - Concurrent queries during a rotation share a single in-flight acquisition, so a refresh never fans out into a burst of credential calls.
 - The host supplies the credential (a workload or managed identity); only the minted bearer token reaches the backend, and the caller's Lattice credential is never forwarded.

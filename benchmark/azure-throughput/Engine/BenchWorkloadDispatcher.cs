@@ -4,12 +4,11 @@ using Orleans.Lattice;
 namespace VehicleFleetSimulator.AzureThroughput.Engine;
 
 /// <summary>
-/// Workload-mode dispatcher used by <c>TcpIngestService.FlushAsync</c> to
-/// route each producer batch through the <c>ILattice</c> operation
-/// selected by <see cref="BenchWorkloadMode"/>. Extracted as a static
-/// helper so the per-mode dispatch logic is independently testable
-/// (see throughput-capture-plan.md step 7) without exposing the
-/// <c>TcpIngestService</c> internals via <c>[InternalsVisibleTo]</c>.
+/// Workload-mode dispatcher used by <see cref="BenchIngestEngine"/> to route
+/// each producer batch through the <c>ILattice</c> operation selected by
+/// <see cref="BenchWorkloadMode"/>. Extracted as a static helper so the
+/// per-mode dispatch logic is independently testable without exposing the
+/// ingest engine internals via <c>[InternalsVisibleTo]</c>.
 /// </summary>
 public static class BenchWorkloadDispatcher
 {
@@ -18,8 +17,8 @@ public static class BenchWorkloadDispatcher
     /// operation selected by <paramref name="mode"/>. Returns the number
     /// of <c>ILattice</c>-visible entries the silo has issued
     /// (always <c>batch.Count</c>; the count is mode-independent so the
-    /// existing per-second "Entries written per second" counter remains
-    /// directly comparable across modes when the offered load is held
+    /// existing committed-entry rate remains directly comparable across modes
+    /// when the offered load is held
     /// constant).
     /// </summary>
     /// <param name="mode">Workload selector resolved from the

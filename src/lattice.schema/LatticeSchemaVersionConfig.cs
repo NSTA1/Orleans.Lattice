@@ -28,9 +28,9 @@ public readonly record struct LatticeSchemaVersionConfig
     /// <param name="schemaId">The schema-family id stamped into every value's envelope.</param>
     /// <param name="targetVersion">The current target schema version. Must be at least <c>1</c>.</param>
     /// <param name="strictIngest">
-    /// When <c>true</c>, strict-mode ingest re-validates replicated / restored items
-    /// against this tree's registered versions and dead-letters an item whose
-    /// version cannot be upcast to the target instead of applying it.
+    /// When <c>true</c>, strict-mode ingest re-validates intercepted system-origin
+    /// writes against this tree's registered versions and dead-letters an item
+    /// whose version cannot be upcast to the target instead of applying it.
     /// </param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetVersion"/> is <c>0</c>.</exception>
     public LatticeSchemaVersionConfig(uint schemaId, uint targetVersion, bool strictIngest = false)
@@ -50,9 +50,10 @@ public readonly record struct LatticeSchemaVersionConfig
     public uint TargetVersion { get; init; }
 
     /// <summary>
-    /// Whether strict-mode ingest dead-letters an ingested item whose version
-    /// cannot be upcast to <see cref="TargetVersion"/>. Off by default: ingest is
-    /// trusted and stored with whatever tag it carries.
+    /// Whether strict-mode ingest dead-letters an intercepted system-origin item whose
+    /// version cannot be upcast to <see cref="TargetVersion"/>. Off by default:
+    /// intercepted system-origin values are trusted and stored with whatever tag
+    /// they carry.
     /// </summary>
     [Id(2)]
     public bool StrictIngest { get; init; }

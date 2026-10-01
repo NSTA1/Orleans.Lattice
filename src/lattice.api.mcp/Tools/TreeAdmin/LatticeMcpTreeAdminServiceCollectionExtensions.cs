@@ -11,12 +11,11 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The module is schema-inspect-only by default: it always contributes the
-/// read-only schema-inspection tools (policy / version-config / dead-letter /
-/// remediation-status / compliance / capability reads), and adds the mutating
-/// schema-management tools (set / clear policy, set / clear version config, advance
-/// / migrate version, remediate) only when schema control is opted in - either by
-/// passing <c>enableSchemaControl: true</c> here or by setting
+/// The module always contributes the read-only tree-admin tools, including
+/// schema inspection and lifecycle/status reads. It adds mutating schema-management
+/// tools (set / clear policy, set / clear version config, advance / migrate version,
+/// remediate) only when schema control is opted in - either by passing
+/// <c>enableSchemaControl: true</c> here or by setting
 /// <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/>. Every
 /// mutating tool is annotated destructive and non-read-only.
 /// </para>
@@ -55,7 +54,7 @@ public static class LatticeMcpTreeAdminServiceCollectionExtensions
     /// When <see langword="true"/>, the mutating schema-management tools (set /
     /// clear policy, set / clear version config, advance / migrate version,
     /// remediate) are contributed in addition to the read-only schema-inspection
-    /// tools. Defaults to <see langword="false"/> (schema-inspect-only).
+    /// tools. Defaults to <see langword="false"/> (schema-control disabled).
     /// </param>
     /// <param name="enableLifecycle">
     /// When <see langword="true"/>, the mutating tree-lifecycle tools are contributed

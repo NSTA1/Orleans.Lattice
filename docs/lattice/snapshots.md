@@ -116,6 +116,13 @@ compaction.
 Bulk-load operations into the destination shards use a deterministic operation
 ID derived from the snapshot's unique operation ID, making retries idempotent.
 
+`ILattice.IsSnapshotCompleteAsync` returns `true` once no snapshot of the tree is
+in flight. The tree-admin snapshot status (`ILatticeTreeAdmin.GetSnapshotStatusAsync`,
+the `tree_snapshot_status` tool) also reports the step a running snapshot has
+reached - `LockSource` (offline) or `BeginForwarding` (online) before the copy,
+then `Copy`, and `UnlockSource` while an offline copy returns a shard to
+service - and how many of the shards it covers have been copied.
+
 ## Sizing Overrides
 
 Only the shard count is taken from the source tree. The destination's leaf and

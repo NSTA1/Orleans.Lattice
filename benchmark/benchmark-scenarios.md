@@ -59,16 +59,37 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   uniform and the split monitor never engages.
 
 - [x] **replication-backpressure: Replication backpressure and catch-up.**
-  Building on `current-state-single-peer`, pause the receiving cluster for a
-  controlled interval while the simulator keeps writing, then resume.
-  Measure WAL growth during the pause, time-to-converge after resume, and
-  that the per-peer cursor advances strictly on ack. Exercises cursor
-  durability and the WAL garbage collector's trim predicate, which may only trim what every consumer cursor - each peer's included - has acknowledged.
+  Building on `current-state-single-peer`, the scenario is designed to pause
+  the receiving silo (`silo-replica`) for a controlled interval while the
+  simulator keeps writing, then resume it, so as to measure WAL growth during
+  the pause, time-to-converge after resume, and that the per-peer cursor
+  advances strictly on ack, exercising cursor durability and the WAL garbage
+  collector's trim predicate, which may only trim what every consumer
+  cursor - each peer's included - has acknowledged. As shipped, a run
+  measures only the pause. `BENCH_CHAOS_AFTER_SECONDS` (60) is longer than
+  the measurement window (`BENCH_DURATION_SECONDS`, 30), so the 30 s pause
+  begins after the window has closed. When the window closes, `benchmark.ps1`
+  waits at most 60 s for the chaos step and then stops it. The 60 s delay and
+  the 30 s pause together last as long as the window and that wait, and the
+  step's own start-up and `docker compose pause` call add to that, so the
+  step is stopped before its `unpause` runs and the receiver stays paused for
+  the rest of the run. The scalars captured next cover the last 30 s before
+  the capture, which is essentially the pause, and Prometheus cannot scrape
+  the paused receiver. Nothing in the run observes catch-up, time-to-converge
+  or the cursor advancing on ack.
 
 - [x] **receiver-crash: Receiver crash mid-stream.**
-  Building on `current-state-single-peer`, hard-kill the receiver silo
-  during steady-state replication. Verifies idempotent replay from the
-  durable HLC cursor and that no WAL entries are lost or double-applied.
+  Building on `current-state-single-peer`, the scenario is designed to
+  hard-kill the receiving silo (`silo-replica`) during steady-state
+  replication and then restart it, so as to verify idempotent replay from
+  the durable HLC cursor and that no WAL entries are lost or double-applied.
+  As shipped, a run measures only the outage, on the same timings as
+  `replication-backpressure`: the kill lands after the measurement window
+  has closed, the chaos step is stopped before its restart
+  (`docker compose up -d`) runs, and the captured scalars cover essentially
+  the 30 s after the kill, while Prometheus cannot scrape the killed
+  receiver. No replay happens within the run, and nothing in it checks for
+  lost or double-applied entries.
 
 - [x] **bidirectional-replication: Two-cluster bidirectional replication.**
   Split the fleet across two clusters, each replicating to the other.
@@ -208,7 +229,9 @@ These apply to every benchmark above and should be verified before kicking off a
   `atomic_saga_driver` meters for the three drivers).
 - Warm-up window excluded from measurement: `AddVehicleBatch` fan-out at
   full fleet size takes meaningful time; capture steady state only.
-  Configured via `BENCH_WARMUP_SECONDS` in each `.env`.
+  Configured via `BENCH_WARMUP_SECONDS` in each `.env`. The two chaos
+  scenarios, `replication-backpressure` and `receiver-crash`, do not meet
+  this as shipped: their capture covers the disruption (see their entries).
 - Telemetry sink writes happen **off** the `VehicleGrain` turn, so
   grain-tick latency is attributable to the simulator and not to Lattice
   (see section 4 below).

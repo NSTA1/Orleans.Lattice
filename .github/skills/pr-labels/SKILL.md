@@ -34,7 +34,7 @@ queries slice history by component.
   | --- | --- | --- |
   | `shared` | `test/` | the shared testing library |
   | `microbench` | `test/` | microbenchmarks |
-  | `azure-throughput-silo` | `test/` | the throughput rig's silo |
+  | `azure-throughput-silo` | `test/` | tests for the throughput rig's silo and engine |
   | `lattice.integration` | `test/` | cross-package integration tests |
   | `lattice.explorer.uitests` | `test/` | Explorer UI tests |
   | `crdt` | `docs/` | a docs-only conceptual topic, no `src/` counterpart |

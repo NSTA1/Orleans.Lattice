@@ -49,12 +49,13 @@
 //     same Bicep and COLD-RESTORES the latest backup chain (full + incremental,
 //     with its causal fence) from the global blob sink, then re-enrolls into
 //     replication and converges with the live peers.
-//   - Restore vs live peers. A restored value NEVER overwrites a causally newer
-//     live value: convergence is by the same per-key HLC / LWW rule the live
-//     replication path uses, so replaying an older backup onto a live active
-//     estate is safe. The single backup-PRIMARY designation is what prevents two
-//     regions racing to write (and fork) the shared chain - exactly why standby
-//     identities get reader-only access to the sink.
+//   - Restore vs live peers. Restoring into a replicated tree is a coordinated
+//     cutover: every current peer prepares the same backup, a bounded fence pauses
+//     writes and shipping for the cutover, and the saga commits or compensates the
+//     whole peer set together. Do not treat it as an older backup replay that is
+//     merely merged behind newer live writes. The single backup-PRIMARY designation
+//     is what prevents two regions racing to write (and fork) the shared chain -
+//     exactly why standby identities get reader-only access to the sink.
 //
 // =============================================================================
 // WIRING RECIPE (the coordinator applies this glue; this module does not edit
