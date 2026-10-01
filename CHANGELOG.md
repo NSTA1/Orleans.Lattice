@@ -100,6 +100,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
+
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tenant residency reads as served, and a change is previewed.** Each region says whether it serves the tenant; no residency means every region. A change is previewed per region, and one leaving the tenant served nowhere turns Apply off, passing only on an explicit, confirmed path. ([#4078](https://github.com/NSTA1/Orleans.Lattice/issues/4078)) (`Orleans.Lattice.Explorer.UI`)
