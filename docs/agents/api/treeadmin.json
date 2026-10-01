@@ -375,6 +375,11 @@
           "name": "PhysicalShardIndices",
           "type": "ImmutableArray<int>",
           "required": false
+        },
+        {
+          "name": "SlotCounts",
+          "type": "ImmutableArray<int>",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/ShardMapInspection.cs#ShardMapInspection"

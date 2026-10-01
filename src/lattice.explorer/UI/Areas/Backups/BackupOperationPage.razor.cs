@@ -1,13 +1,21 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Operations;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
 /// <summary>
-/// A staged backup operation's status page at <c>/backups/operations/{id}</c>:
-/// its stages, outcome, figures and links, redrawn as it moves. It can be left
-/// and resumed for as long as the circuit lasts; an unknown id is not found.
+/// A backup operation's status page at <c>/backups/operations/{id}</c>. A capture
+/// or restore is the cluster's tracked operation (#4122): the page reads its status
+/// and real progress from the cluster and follows it on the circuit's clock until
+/// it finishes, so it survives a closed tab or a reload, and offers to cancel it
+/// while it runs. A revert or catalogue maintenance is staged in the session and
+/// redrawn as it moves. A session-staged start that the cluster has accepted hands
+/// the page over to the cluster's operation. An unknown id is not found.
 /// </summary>
 public partial class BackupOperationPage : IDisposable
 {
@@ -17,11 +25,19 @@ public partial class BackupOperationPage : IDisposable
     private const string StageStopped = "Stopped";
     private const string StagePending = "Waiting";
 
+    private readonly ComponentLifetime _disposed = new();
     private BackupOperation? _operation;
+    private OperationFollower? _follower;
+    private string? _followedId;
     private bool _confirmRevert;
+    private bool _cancelling;
+    private string? _cancelError;
 
     [Inject]
     internal BackupOperations Operations { get; set; } = default!;
+
+    [Inject(Key = ShellFacades.Key)]
+    internal ILatticeBackupOperations ClusterOperations { get; set; } = default!;
 
     [Inject]
     internal BackupActions Actions { get; set; } = default!;
@@ -29,31 +45,109 @@ public partial class BackupOperationPage : IDisposable
     [Inject]
     internal NavigationManager Navigation { get; set; } = default!;
 
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
+
+    private string PageTitleText => _operation?.Title
+        ?? (_follower?.Status is { } status ? BackupClusterOperation.Title(status) : "Operation");
+
     /// <inheritdoc />
     public void Dispose()
     {
+        _disposed.Leave();
         Detach();
         GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc />
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         var id = Address.Path.Count == 2 ? Address.Path[1] : null;
-        if (_operation is { } current && string.Equals(current.Id, id, StringComparison.Ordinal))
+        if ((_operation is { } current && string.Equals(current.Id, id, StringComparison.Ordinal))
+            || (_follower is not null && string.Equals(_followedId, id, StringComparison.Ordinal)))
         {
             return;
         }
 
         Detach();
-        _operation = Operations.Find(id);
-        if (_operation is null)
+        if (string.IsNullOrEmpty(id))
         {
             Navigation.NotFound();
             return;
         }
 
-        _operation.Changed += OnChanged;
+        if (Operations.Find(id) is { } staged)
+        {
+            if (staged.ClusterOperationId is { } handedOff)
+            {
+                Navigator.NavigateTo(BackupsAddresses.Operation(handedOff), replace: true);
+                return;
+            }
+
+            _operation = staged;
+            _operation.Changed += OnStagedChanged;
+            return;
+        }
+
+        await FollowAsync(id);
+    }
+
+    private async Task FollowAsync(string id)
+    {
+        var follower = new OperationFollower(Time);
+        _follower = follower;
+        _followedId = id;
+        follower.Changed += OnFollowedChanged;
+        await follower.StartAsync(ct => ClusterOperations.GetOperationStatusAsync(id, ct), _disposed.Token);
+        if (ReferenceEquals(_follower, follower) && follower.NotFound)
+        {
+            Navigation.NotFound();
+        }
+    }
+
+    private Task RetryAsync() =>
+        _followedId is { } id ? FollowAsync(id) : Task.CompletedTask;
+
+    private async Task CancelAsync()
+    {
+        if (_follower?.Status is not { } status)
+        {
+            return;
+        }
+
+        _cancelling = true;
+        _cancelError = null;
+        try
+        {
+            var cancelled = await ClusterOperations.CancelOperationAsync(status.OperationId, _disposed.Token);
+            if (cancelled is null)
+            {
+                _cancelError = "The operation is no longer there to cancel.";
+            }
+
+            await _follower.RefreshAsync(_disposed.Token);
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _disposed.Token))
+        {
+            _cancelError = BackupsFaults.Describe(exception);
+        }
+        finally
+        {
+            _cancelling = false;
+        }
+    }
+
+    private Task RevertAsync()
+    {
+        if (_follower?.Status is not { } status || BackupClusterOperation.RestoreResult(status) is not { } restore
+            || !BackupClusterOperation.CanRevert(status) || Operations.RevertOf(status.OperationId) is not null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var revert = Actions.Revert(status.OperationId, restore);
+        Navigator.NavigateTo(BackupsAddresses.Operation(revert.Id));
+        return Task.CompletedTask;
     }
 
     private static string StageState(BackupOperation operation, int stage)
@@ -85,25 +179,36 @@ public partial class BackupOperationPage : IDisposable
 
     private static string StatusText(BackupOperationStatus status) => BackupsFormat.OperationStatus(status);
 
-    private Task RevertAsync()
+    private void OnStagedChanged()
     {
-        if (_operation is not { CanRevert: true } restore)
+        if (_operation is { ClusterOperationId: { } handedOff })
         {
-            return Task.CompletedTask;
+            _ = InvokeAsync(() => Navigator.NavigateTo(BackupsAddresses.Operation(handedOff), replace: true));
+            return;
         }
 
-        var revert = Actions.Revert(restore);
-        Navigator.NavigateTo(BackupsAddresses.Operation(revert.Id));
-        return Task.CompletedTask;
+        _ = InvokeAsync(StateHasChanged);
     }
 
-    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+    private void OnFollowedChanged() => _ = InvokeAsync(StateHasChanged);
 
     private void Detach()
     {
         if (_operation is { } operation)
         {
-            operation.Changed -= OnChanged;
+            operation.Changed -= OnStagedChanged;
+            _operation = null;
         }
+
+        if (_follower is { } follower)
+        {
+            follower.Changed -= OnFollowedChanged;
+            follower.Dispose();
+            _follower = null;
+            _followedId = null;
+        }
+
+        _confirmRevert = false;
+        _cancelError = null;
     }
 }

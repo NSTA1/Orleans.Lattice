@@ -171,7 +171,7 @@ public sealed partial class AppPageTests : AppPageTestContext
             Assert.That(TabLabels(cut), Is.EqualTo(new[] { "Overview", "Trees", "Roles", "Tools", "Subscriptions", "Replication", "Consent" }));
             Assert.That(Definition(cut, "Your roles"), Is.EqualTo("You hold no role in this app."));
             Assert.That(Definition(cut, "Provenance"), Is.EqualTo("in-image / Contoso / Contoso.Crm/2.1.0"));
-            Assert.That(cut.FindAll("a.lt-btn"), Is.Empty, "there is no Open control without a role");
+            Assert.That(cut.FindAll("a.lt-btn").Select(link => link.TextContent), Has.None.StartsWith("Open"), "there is no Open control without a role; issue #4150 explains why instead");
             Assert.That(cut.FindAll("img"), Is.Empty, "the workspace icon needs a role");
             Assert.That(cut.Markup, Does.Not.Contain(AdoptedTreeId));
         });

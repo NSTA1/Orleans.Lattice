@@ -18,6 +18,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<BackupsCompletionSource>();
         services.TryAddScoped<BackupAppTrees>();
         services.TryAddScoped<BackupOperations>();
+        services.TryAddScoped<BackupOperationList>();
         services.TryAddScoped<BackupActions>();
         services.TryAddScoped<BackupsInterop>();
         services.AddExplorerArea<BackupsArea>();

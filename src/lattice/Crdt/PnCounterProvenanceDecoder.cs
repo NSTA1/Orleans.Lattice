@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -72,7 +73,7 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
             var start = result.Count;
             Emit(result, delta.Increments, CrdtMemberChangeKind.Added, entry.WallClock);
             Emit(result, delta.Decrements, CrdtMemberChangeKind.Removed, entry.WallClock);
-            result.Sort(start, result.Count - start, CrdtMemberChangeCausalComparer.Instance);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeCausalComparer.Comparison);
         }
         return result;
     }
@@ -100,7 +101,7 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
         var result = new List<CrdtMemberChange>(total);
         Emit(result, counter.Increments, CrdtMemberChangeKind.Added, null);
         Emit(result, counter.Decrements, CrdtMemberChangeKind.Removed, null);
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 

@@ -553,7 +553,7 @@ internal sealed partial class ShardRootGrain
 
         var orderedKeys = new string[union.Count];
         union.Keys.CopyTo(orderedKeys, 0);
-        Array.Sort(orderedKeys, StringComparer.Ordinal);
+        Array.Sort(orderedKeys, OrdinalStringOrder.Comparison);
 
         var materialised = new List<LeafSnapshotRow>(orderedKeys.Length);
         long rowBytes = 0;

@@ -130,8 +130,12 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     /// state a test is not itself exercising.
     /// </summary>
     /// <param name="user">The caller, <see cref="WorldIdentities.Admin"/> by default.</param>
-    public ILatticeAppsControl AppsControl(string user = WorldIdentities.Admin) =>
-        LatticeAppsApiGrpcClient.Create(Invoker(user), Head.Services);
+    /// <param name="tenant">
+    /// The tenant the calls assert, as the Explorer asserts a circuit's tenant, or
+    /// <see langword="null"/> (the default) to assert none - the reserved default tenant.
+    /// </param>
+    public ILatticeAppsControl AppsControl(string user = WorldIdentities.Admin, string? tenant = null) =>
+        LatticeAppsApiGrpcClient.Create(Invoker(user, tenant), Head.Services);
 
     /// <summary>
     /// Installs the task-board app from the in-image source with the walkthrough's
@@ -167,10 +171,14 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         }
     }
 
-    /// <summary>Uninstalls the task-board app if it is installed, so a test starts from nothing.</summary>
-    public async Task RemoveTaskBoardAsync()
+    /// <summary>
+    /// Uninstalls the task-board app if it is installed, so a test starts from nothing.
+    /// An install is per tenant, and uninstalling it withdraws the role rules it wrote there.
+    /// </summary>
+    /// <param name="tenant">The tenant to uninstall it from, or <see langword="null"/> (the default) for the reserved default tenant.</param>
+    public async Task RemoveTaskBoardAsync(string? tenant = null)
     {
-        var control = AppsControl();
+        var control = AppsControl(tenant: tenant);
         var installed = await control.ListAsync();
         if (installed.Apps.Any(app => app.Slug == TaskBoardApp.Slug))
         {
@@ -185,11 +193,17 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     /// </summary>
     /// <param name="treeId">The tree to create; it must not exist yet.</param>
     /// <param name="entries">How many keys it holds.</param>
-    public async Task SeedTreeAsync(string treeId, int entries)
+    /// <param name="shardCount">The physical shard count to create it with, or <see langword="null"/> for the default.</param>
+    public async Task SeedTreeAsync(string treeId, int entries, int? shardCount = null)
     {
         var grains = Head.Services.GetRequiredService<IGrainFactory>();
         using (LatticeSystemOrigin.Enter())
         {
+            if (shardCount is { } shards)
+            {
+                await Head.Services.GetRequiredService<ILatticeTreeAdmin>().CreateTreeAsync(treeId, shardCount: shards);
+            }
+
             var tree = grains.GetGrain<ILattice>(treeId);
             for (var i = 0; i < entries; i++)
             {
@@ -208,6 +222,20 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         using (LatticeSystemOrigin.Enter())
         {
             await Head.Services.GetRequiredService<ILatticeMembershipDirectory>().RemoveGroupAsync(groupId);
+        }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="memberId"/> from <paramref name="groupId"/> if it is a member,
+    /// so a journey that joins it starts from the same state however often the world has run it.
+    /// </summary>
+    /// <param name="groupId">The group id.</param>
+    /// <param name="memberId">The member id.</param>
+    public async Task RemoveMemberAsync(string groupId, string memberId)
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Head.Services.GetRequiredService<ILatticeMembershipDirectory>().RemoveMemberAsync(groupId, memberId);
         }
     }
 
@@ -261,12 +289,17 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         await Head.DisposeAsync();
     }
 
-    private CallInvoker Invoker(string user)
+    private CallInvoker Invoker(string user, string? tenant = null)
     {
         var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + WorldIdentities.Password));
         return _adminChannel.Intercept(metadata =>
         {
             metadata.Add("authorization", header);
+            if (!string.IsNullOrEmpty(tenant))
+            {
+                metadata.Add(LatticeActiveTenantAssertion.DefaultHeaderName, tenant);
+            }
+
             return metadata;
         });
     }

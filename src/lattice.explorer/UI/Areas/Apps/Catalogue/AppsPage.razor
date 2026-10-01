@@ -25,6 +25,15 @@
 }
 else
 {
+    @foreach (var flow in OtherTenantInstalls)
+    {
+        var href = Href(AppsRoutes.App(flow.Key.Tenant, flow.Key.Slug));
+        <p class="lt-apps-hint" role="status" data-lt-other-tenant="@flow.Key.Tenant" @key="flow.Key">
+            You installed @flow.DisplayName in tenant @flow.Key.Tenant, not in @(Address.Tenant is { } current ? "tenant " + current : "this tenant"). It is listed there:
+            <a class="lt-apps-link" href="@href">/@href.TrimStart('/')</a>
+        </p>
+    }
+
     @if (_snapshot.Control.CanList && _failed.Count > 0)
     {
         <section class="lt-apps-attention" aria-labelledby="lt-apps-attention-title">
@@ -135,6 +144,12 @@ else
                                 @if (InstalledPresentation(context)?.Summary is { Length: > 0 } summary)
                                 {
                                     <span class="lt-apps-app__summary">@summary</span>
+                                }
+                                @if (InstalledHolding(context) is { } holding)
+                                {
+                                    <CascadingValue Value="holding">
+                                        <AppRoleHoldingNotice AppName="@InstalledName(context)" Compact="true" RebindHref="@(_snapshot?.CanInstall == true && HasSource(context) ? ManageHref(context) : null)" />
+                                    </CascadingValue>
                                 }
                             </span>
                         </div>
