@@ -1,17 +1,21 @@
-using Orleans.Lattice.Backup;
-
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
 /// <summary>
-/// One staged backup operation (epic decision E15): a named sequence of stages
-/// the status page draws, advanced as the work proceeds, so an operation reads
-/// the same whether today's contract answers at once or a later one answers in
-/// stages. It lives for the circuit, so its status page can be left and resumed.
+/// One staged backup operation the circuit runs (epic decision E15): a named
+/// sequence of stages the status page draws, advanced as the work proceeds. It
+/// lives for the circuit, so its status page can be left and resumed.
 /// </summary>
 /// <remarks>
+/// A capture or restore uses one only to check access and start the work on the
+/// cluster (#4122): once the cluster accepts it, the operation is handed off to
+/// the cluster's tracked operation (<see cref="ClusterOperationId"/>), whose status
+/// outlives the circuit, and the status page follows that instead. Revert and
+/// catalogue maintenance run here end to end.
+/// <para>
 /// Written from the operation's own flow and read from the renderer, so every
 /// member is guarded. <see cref="Changed"/> is raised off the renderer; a
 /// subscriber marshals onto it.
+/// </para>
 /// </remarks>
 internal sealed class BackupOperation
 {
@@ -25,8 +29,7 @@ internal sealed class BackupOperation
     private IReadOnlyList<BackupOperationLink> _links = [];
     private IReadOnlyList<KeyValuePair<string, string>> _facts = [];
     private IReadOnlyList<string> _items = [];
-    private LatticeRestoreResult? _restore;
-    private string? _revertedBy;
+    private string? _clusterOperationId;
 
     /// <summary>Creates a running operation at its first stage.</summary>
     /// <param name="id">The operation's id within the circuit.</param>
@@ -34,7 +37,8 @@ internal sealed class BackupOperation
     /// <param name="title">Its title, such as "Capture a full backup of orders".</param>
     /// <param name="stages">Its stages, in order; at least one.</param>
     /// <param name="time">The clock its times are read from.</param>
-    public BackupOperation(string id, BackupOperationKind kind, string title, IReadOnlyList<string> stages, TimeProvider time)
+    /// <param name="reverts">For a revert, the cluster operation id of the restore it reverts.</param>
+    public BackupOperation(string id, BackupOperationKind kind, string title, IReadOnlyList<string> stages, TimeProvider time, string? reverts = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -50,6 +54,7 @@ internal sealed class BackupOperation
         Title = title;
         Stages = stages;
         _time = time;
+        Reverts = reverts;
         StartedAt = time.GetUtcNow();
     }
 
@@ -158,47 +163,23 @@ internal sealed class BackupOperation
         }
     }
 
-    /// <summary>The id of the operation that reverted this restore, once one has.</summary>
-    public string? RevertedBy
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _revertedBy;
-            }
-        }
-    }
-
-    /// <summary>Whether this is a finished point-in-time restore that has not been reverted.</summary>
-    public bool CanRevert
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _status == BackupOperationStatus.Succeeded
-                    && _restore is { Mode: LatticeRestoreMode.ShadowCutover }
-                    && _revertedBy is null;
-            }
-        }
-    }
+    /// <summary>For a revert, the cluster operation id of the restore it reverts; otherwise <see langword="null"/>.</summary>
+    public string? Reverts { get; }
 
     /// <summary>
-    /// The restore's result, kept only to revert it. It carries the physical tree
-    /// ids of the cut-over, which are never shown.
+    /// The id of the cluster's tracked operation this one started and handed off
+    /// to, or <see langword="null"/> while it has not (or never will).
     /// </summary>
-    internal LatticeRestoreResult? RestoreResult
+    public string? ClusterOperationId
     {
         get
         {
             lock (_gate)
             {
-                return _restore;
+                return _clusterOperationId;
             }
         }
     }
-
     /// <summary>Moves to the stage at <paramref name="stage"/>.</summary>
     /// <param name="stage">The stage index.</param>
     public void Advance(int stage)
@@ -237,30 +218,22 @@ internal sealed class BackupOperation
         Changed?.Invoke();
     }
 
-    /// <summary>Keeps a restore's result so it can be reverted.</summary>
-    /// <param name="result">The restore's result.</param>
-    internal void KeepRestore(LatticeRestoreResult result)
+    /// <summary>
+    /// Records that the cluster accepted the work as tracked operation
+    /// <paramref name="clusterOperationId"/>. The status page follows the cluster's
+    /// operation from here on.
+    /// </summary>
+    /// <param name="clusterOperationId">The cluster's operation id.</param>
+    public void HandOff(string clusterOperationId)
     {
-        ArgumentNullException.ThrowIfNull(result);
+        ArgumentException.ThrowIfNullOrEmpty(clusterOperationId);
         lock (_gate)
         {
-            _restore = result;
-        }
-    }
-
-    /// <summary>Marks this restore reverted by <paramref name="operationId"/>.</summary>
-    /// <param name="operationId">The reverting operation's id.</param>
-    internal void MarkReverted(string operationId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(operationId);
-        lock (_gate)
-        {
-            _revertedBy = operationId;
+            _clusterOperationId = clusterOperationId;
         }
 
         Changed?.Invoke();
     }
-
     /// <summary>Finishes successfully at the last stage.</summary>
     /// <param name="message">The outcome in one sentence.</param>
     public void Succeed(string message) => Finish(BackupOperationStatus.Succeeded, message, Stages.Count - 1);

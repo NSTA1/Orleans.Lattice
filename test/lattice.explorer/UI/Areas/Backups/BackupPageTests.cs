@@ -146,7 +146,7 @@ public sealed class BackupPageTests : BackupsTestContext
         Assert.Multiple(() =>
         {
             Assert.That(operation.Kind, Is.EqualTo(BackupOperationKind.Restore));
-            var request = Backups.LastOf<LatticeRestoreRequest>(nameof(ILatticeBackupControl.RestoreBackupAsync));
+            var request = Backups.LastOf<LatticeRestoreRequest>(nameof(ILatticeBackupOperations.StartRestoreAsync));
             Assert.That(request.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
             Assert.That(request.TargetTreeId, Is.EqualTo("orders"));
             Assert.That(request.BackupId, Is.EqualTo("b1"));
@@ -180,8 +180,8 @@ public sealed class BackupPageTests : BackupsTestContext
         cut.Find("[role=alertdialog] input").Input("orders-copy");
         cut.Find("[role=alertdialog] form").Submit();
 
-        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RestoreBackupAsync)), Is.EqualTo(1)));
-        var request = Backups.LastOf<LatticeRestoreRequest>(nameof(ILatticeBackupControl.RestoreBackupAsync));
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartRestoreAsync)), Is.EqualTo(1)));
+        var request = Backups.LastOf<LatticeRestoreRequest>(nameof(ILatticeBackupOperations.StartRestoreAsync));
         Assert.Multiple(() =>
         {
             Assert.That(request.BackupId, Is.EqualTo("base1"));
@@ -239,7 +239,6 @@ public sealed class BackupPageTests : BackupsTestContext
     {
         Seed(FakeBackupControl.Manifest("b1", "nightly", "orders"));
         Backups.Inventory = () => Task.FromResult(new BackupInventoryReport(1, 1, 1, 0, null, null, 0, 0, 0));
-        Backups.ColdRestore = request => Task.FromResult(FakeBackupControl.RestoreResult(request));
         var cut = RenderAt<BackupPage>("backups/b1");
         cut.WaitUntil(() => Assert.That(cut.FindAll("input[type=checkbox]"), Has.Count.EqualTo(1)));
 
@@ -248,7 +247,7 @@ public sealed class BackupPageTests : BackupsTestContext
         cut.Find("[role=alertdialog] input").Input("orders");
         cut.Find("[role=alertdialog] form").Submit();
 
-        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.ColdRestoreAsync)), Is.EqualTo(1)));
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartColdRestoreAsync)), Is.EqualTo(1)));
         Assert.That(Operations.Find("1")!.Kind, Is.EqualTo(BackupOperationKind.ColdRestore));
     }
 

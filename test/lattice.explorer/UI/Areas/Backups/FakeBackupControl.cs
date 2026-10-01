@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 /// <see cref="TaskCompletionSource"/> or make it throw), and a record of every
 /// call made.
 /// </summary>
-internal sealed class FakeBackupControl : ILatticeBackupControl
+internal sealed partial class FakeBackupControl : ILatticeBackupControl
 {
     /// <summary>The catalogue, in capture order.</summary>
     public List<BackupManifest> Catalogue { get; } = [];
