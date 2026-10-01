@@ -158,8 +158,10 @@ plus `counters-<cohort>.csv` when `-CaptureCounters` is set.
 - `-ResponseTimeoutSec <N>` -- `BENCH_RESPONSE_TIMEOUT_SEC` for every rung (default
   180; 30 reproduces the grain-RPC-deadline failure mode).
 - `-ExtraSiloEnv @{...}` -- extra silo env merged into every cohort.
-- `-DegradeThresholdPct <N>` -- stop the sweep once a rung's throughput falls below
-  `(1 - N/100)` of the best rung so far (default 0: never stop early).
+- `-DegradeThresholdPct <N>` -- meant to stop the sweep once a rung's throughput falls
+  below `(1 - N/100)` of the best rung so far (default 0: never stop early). As the
+  scripts stand it never fires, because the throughput it compares parses as `0`
+  (see the CSV note under [Reading the results](#reading-the-results)).
 - `-ResultsCsv <path>` -- output CSV (default `scripts/.ladder-results.csv`).
 - `-NamePrefix <name>`, `-ParametersFile <path>` -- as for `run-cohort.ps1`.
 
@@ -301,7 +303,11 @@ line (failures that come with that line are the harness's own RPC deadline, not 
 written, failed, active seconds, steady mean, active-avg, drain-tail samples, total
 elapsed, silo CPU peak and average, system CPU peak, silo RSS, verdict, and a UTC
 timestamp. Default location:
-`scripts/.ladder-results.csv` (gitignored).
+`scripts/.ladder-results.csv` (gitignored). It parses the measured columns out of the
+output it captures from `run-cohort.ps1`, but `run-cohort.ps1` prints the summary above
+with `Write-Host`, which that capture does not receive, so as the scripts stand every
+measured column reads `0` and `verdict` reads `UNKNOWN`. Read each rung's numbers from
+the summary on the console or from its `silo-<cohort>.log` instead.
 
 ## Saturation knobs
 
@@ -408,13 +414,20 @@ than nine characters, and `-ReuseAca` looks the rig's run context up under that 
 name, so deploy a rig you mean to reuse under a prefix already in that form.
 
 Layer 3 publishes completed-work throughput, not offered load. A cell whose first
-cohort completes at least `-SaturationRatio` (default 0.9) of the load it offered is
-re-run at double the per-silo rung, at most `-MaxRungEscalations` (default 3) times,
+cohort is graded `HEALTHY`, is not producer-bound and completes at least
+`-SaturationRatio` (default 0.9) of the load it offered is re-run at double the
+per-silo rung, at most `-MaxRungEscalations` (default 3) times,
 and a cell still keeping up with its offer after that is published as a `>= X` lower
 bound; `-SaturationRatio 0` turns escalation off. A read cohort whose log has no
 `[producer] preseed ... entries=N` line read an empty keyspace: it is graded
 `UNSEEDED`, re-run at the same rung up to twice, and left out of the aggregate.
-`-Layer3ClientsPerSilo` (default 4) sets the producer's Orleans clients per silo.
+`-Layer3ClientsPerSilo` (default 4) sets the producer's Orleans clients per silo. The
+sweep also forwards `-SetManyFanOutBudgetSec` and `-WalAdmissionCallBudgetSec`
+(defaults `30` and `15`), and `-WalAppendCoalescingInFlightThreshold` and
+`-WalSaturationRecoveryReleaseBatch` (default `-1`), to every cohort, with the meanings
+of the matching `run-cohort-aca.ps1` parameters below; the `run-cohort-aca.ps1`
+parameters it does not set, `-ResponseTimeoutSec`, `-TxRegistryShards` and
+`-ResetStorage` among them, run at their defaults.
 
 `scripts/deploy-aca.ps1` provisions resource group `rg-<prefix>`, tagged with the prefix
 so teardown can prove it owns the group: a container registry (images built remotely

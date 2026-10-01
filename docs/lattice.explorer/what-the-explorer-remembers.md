@@ -19,12 +19,12 @@ The stored name is the current scope token plus the declared key name. Shell nav
 | `appearance.contrast` | Per-user contrast choice. Values are `system`, `standard`, and `more`. |
 | `appearance.density` | Per-user density choice. Values are `comfortable` and `compact`. Legacy `cosy` and `layout` values read as `comfortable`. |
 | `appearance.theme` | Per-user theme choice. Values are `system`, `light` for Paper, and `dark` for Board. |
-| `shell.all-tenants` | Per-user, per-cluster all-tenants request remembered after an admitted tenant-scope change. |
+| `shell.all-tenants` | Per-user, per-cluster request to see every tenant's items. Core writes it when its tenant switcher admits a platform operator's all-tenants request (`IExplorerTenantSwitcher.SetVisibilityAsync`) and when a route is remembered (`IExplorerShellPreferences.RememberRouteAsync`); the rewritten console calls neither and does not restore it. |
 | `shell.area` | Per-user, per-cluster route area. Declared by the Core session service for route restore; the rewritten console neither writes nor restores it. |
 | `shell.catalog-kind` | Per-user, per-cluster catalogue kind. Declared for route restore; the rewritten console neither writes nor restores it. |
 | `shell.selection` | Per-user, per-cluster selected catalogue item. Declared for route restore; the rewritten console neither writes nor restores it. |
 | `shell.surface` | Per-user, per-cluster detail surface. Declared for route restore; the rewritten console neither writes nor restores it. |
-| `shell.tenant` | Per-user, per-cluster tenant last established or switched to, revalidated against reachable tenants on restore. |
+| `shell.tenant` | Per-user, per-cluster tenant last switched to, through the tenant switcher, `t/` in the address line or a tenant-rooted address. It is revalidated against reachable tenants on restore; the tenant a sign-in falls back to when nothing usable is remembered is not written. |
 
 These rows intentionally use the documented key names in backticks. The hygiene test parses this table and requires it to match the keys declared in the Explorer assemblies.
 
@@ -42,10 +42,12 @@ now, and forgets it when it no longer resolves. It is read from the browser's
 preference store before the tenant is resolved, so the server prerender, which
 cannot read that store, never renders a page under a guessed tenant: for a caller
 who can reach more than one tenant it shows **Resolving your tenant** until the
-page is interactive. The tenant switcher records
-`shell.all-tenants` when an operator's all-tenants request is admitted. An explicit `/t/{tenant}` address still goes
+page is interactive. An explicit `/t/{tenant}` address still goes
 through the operator-gated switch and wins only if admitted; a successful switch
-updates `shell.tenant`.
+updates `shell.tenant`. The rewritten console neither writes nor restores
+`shell.all-tenants`: Core writes it only from an admitted operator request
+through `IExplorerTenantSwitcher.SetVisibilityAsync` or from
+`IExplorerShellPreferences.RememberRouteAsync`, and the console calls neither.
 
 ## Resetting remembered state
 

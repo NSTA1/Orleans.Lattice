@@ -60,7 +60,7 @@ tree's `LatticeSchemaVersionConfig`.
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `StrictIngest` | `bool` | `false` | The global half of strict-mode ingest (see [Ingest trust model](#ingest-trust-model)). While it is `false` the versioning stage does not ask to see system-origin (replication apply / restore) writes. |
+| `StrictIngest` | `bool` | `false` | The global half of strict-mode ingest (see [Ingest trust model](#ingest-trust-model), which also says which ingest paths reach the stage at all). While it is `false` the versioning stage does not ask to see system-origin writes. |
 | `DeadLetterPreviewMaxBytes` | `int` | `4096` | The maximum number of leading value bytes copied into the `ValuePreview` of a dead-letter entry the versioning stage writes. A value below `1` is treated as `1`. An eager migration's abort preview is bounded by `LatticeSchemaEnforcementOptions.DeadLetterPreviewMaxBytes` instead. |
 
 ## Opting a tree in
@@ -90,10 +90,14 @@ read but returned at its stored version, because no target remains to upcast it 
 ## Declaring upcasters
 
 An upcaster is a per-hop [value transform](value-transforms.md) from one version to
-the next. Register each hop on the registry builder; the decoder chains them to
-lift a value from its stored version up to the target. An upcaster can be given
-inline as a `LatticeValueTransform`, or by a DI `transformId` for logic the IR
-cannot express:
+a later one (usually the next). Register each hop on the `LatticeSchemaRegistryBuilder`
+the registration delegate receives; the decoder chains them to lift a value from its
+stored version up to the target. An upcaster can be given inline as a
+`LatticeValueTransform`, by a DI `transformId` for logic the IR cannot express, or as
+a prebuilt `LatticeSchemaUpcaster` (`LatticeSchemaUpcaster.FromTransform` /
+`FromTransformId`). The builder fails fast with `ArgumentException` on a second
+descriptor for the same schema id and version, a second upcaster from the same
+version, or a hop whose target version is not greater than its source:
 
 ```csharp verify
 using Orleans.Lattice.Schema;
@@ -114,7 +118,8 @@ siloBuilder.AddLatticeSchemaVersioning(registry =>
 A value stamped at a version **newer** than the reader's target - or one whose
 version cannot be upcast to the target - surfaces `NotSupportedException` on read,
 mirroring the unknown-compressor case. Upgrade the reader's registry / target
-version to read it.
+version to read it. A hop whose DI `transformId` has no registered transform throws
+`InvalidOperationException` on read instead.
 
 ## Advancing the target version
 
@@ -167,15 +172,23 @@ the registered upcaster chain, then re-envelopes it at the target; a legacy valu
 written before the tree opted in carries no envelope and is stamped at the target
 with its body unchanged, matching what the lazy read path returns for it. It reuses the
 crash-safe [shadow-build-and-cutover](schema-enforcement.md#bringing-existing-data-into-compliance)
-mechanism: it is all-or-nothing (a value that cannot be upcast aborts the whole
-migration and leaves the tree untouched), idempotent (a value already at the target
+mechanism: it is all-or-nothing (nothing is cut over unless every value re-stamps,
+and otherwise the tree is left untouched), idempotent (a value already at the target
 is passed through unchanged), and failover-resumable (the target is persisted before
 any side effect). Like a remediation, it holds the tree's alias reservation while it
 is in flight, so the tree cannot be deleted mid-migration and a migration of a
 deleted tree, or of one with a delete pending, is refused, and its cutover's alias
-swap is put to the same ownership check. `AdvanceAndMigrateAsync` advances the
-target before it starts the migration, so if the migration is refused or aborts, the
-new target stays in place and read-time upcasting serves the existing values. Like
+swap is put to the same ownership check. The build reads the tree through the read
+path, which upcasts each value as it is read, so a value that cannot be upcast to
+the target (no registered hop, or a version newer than the target) fails that read
+rather than aborting the migration: the call throws `NotSupportedException` instead
+of returning an aborted report, and the migration stays in flight - still holding
+the alias reservation - so every re-issue throws again until the registry can
+upcast the value. A value that upcasts but violates the tree's enforcement policy
+aborts the migration with a report naming it. `AdvanceAndMigrateAsync` advances the
+target before it starts the migration, so if the migration is refused, aborts or
+throws, the new target stays in place and read-time upcasting serves the existing
+values. Like
 enforcement remediation, the data migration copies at the
 logical level and does not shadow-forward concurrent writes, so it should run when the
 tree is write-quiescent; the lazy read path keeps concurrent readers correct until it
@@ -208,14 +221,24 @@ the target when it is later read. Opt into `StrictIngest` to re-validate ingest:
 item whose version is newer than the target, or which cannot be upcast, is
 [dead-lettered](dead-letter-queue.md) rather than applied, so ingest never blocks.
 
+Strict mode only sees ingest that reaches the tree's write operations as a
+system-origin write, which in practice is the typed-CRDT replication path (a
+replicated delta, or a full-state row during bootstrap) and the entries of a
+replicated atomic batch, which the receiver stages through the tree's write
+operations until the batch's commit arrives; a dead-lettered entry is left out of
+its batch and the receiver commits the rest. A plain (non-atomic) last-writer-wins
+replication apply and a backup restore merge or bulk-load straight into the tree's
+shards, so even in strict mode their items are stored with whatever tag they carry
+and are never stamped or dead-lettered.
+
 As with enforcement, strict ingest takes **two** flags: the global
 `LatticeSchemaVersioningOptions.StrictIngest` switch, which makes the versioning
 stage see system-origin writes at all, and the per-tree flag on the tree's version
 config (`new LatticeSchemaVersionConfig(schemaId, targetVersion, strictIngest: true)`),
 which makes that tree dead-letter a non-upcastable ingested item. While the global
-switch is on, an ingested value or CRDT delta that carries no envelope is stamped
-at its tree's target version, as a local write is, whatever that tree's per-tree
-flag. When the silo also registers enforcement, both add-ons share one composed
+switch is on, an ingested value or CRDT delta that reaches the versioning stage
+carrying no envelope is stamped at its tree's target version, as a local write is,
+whatever that tree's per-tree flag. When the silo also registers enforcement, both add-ons share one composed
 write interceptor that is consulted for system-origin writes when *either* global
 switch is on (see the caveat under
 [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)).
@@ -227,9 +250,11 @@ are validated against the **target (post-upcast) shape**: a write is validated a
 plain document before its envelope is applied. Advancing the target version and
 re-stamping existing values (`AdvanceAndMigrateAsync`) is a single shadow build:
 upcast each value, validate it against the tree's **existing** policy, cut over,
-aborting on the first offending key. The migration never changes the policy;
-tightening it is the separate enforcement
-[remediation](schema-enforcement.md#bringing-existing-data-into-compliance).
+aborting on the first value that violates it. The migration never changes the
+policy; tightening it is the separate enforcement
+[remediation](schema-enforcement.md#bringing-existing-data-into-compliance), which
+writes the values it remediates without an envelope (see
+[composition with versioning](schema-enforcement.md#composition-with-versioning)).
 
 ## Current scope
 

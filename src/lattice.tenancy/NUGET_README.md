@@ -32,9 +32,11 @@ Isolation is achieved by filling in seams that core declares as inert no-ops:
   separately); a caller asserting no tenant is confined instead by the per-entry
   authorization check, so a catalog read can never disclose another tenant's tree
   names - or the tenant roster itself.
-- `ITenantRegionVisibilityResolver` scopes region discovery to the regions a
-  tenant is actually authorized into or resident in, so a tenant caller is not
-  handed the cluster's whole routing topology.
+- `ITenantRegionVisibilityResolver` reports the regions a tenant is authorized
+  into or resident in, so region discovery never hands a tenant caller the
+  cluster's whole routing topology (in the shipped registrations discovery cannot
+  validate a tenant assertion, so a tenant-asserting caller is shown only the
+  serving region).
 
 Each seam keeps its no-op default until the add-on replaces it, which is what
 makes a host that never calls `AddLatticeTenancy()` unchanged.
@@ -54,9 +56,11 @@ is accrued as billable overage on every metering tick.
 
 An optional per-tenant residency policy confines a tenant's data to a residency
 set within an operator-authorized set of regions, refusing a replicated write in any
-region where the tenant is not `Online`. No shipped component advances a region past
-the first status a residency change gives it, so read the region-residency guide
-before configuring one. A separate placement binding on the tenant record can pin its
+region where the tenant is not `Online`. With the tenant-admin control API
+registered, a region dropped from residency completes its drain on its own, but no
+shipped component advances an added region past `Provisioning`, so read the
+region-residency guide before configuring one. A separate placement binding on the
+tenant record can pin its
 trees to a dedicated WAL provider. Every
 tenant is observable through the `orleans.lattice.tenancy` OpenTelemetry meter,
 which publishes per-tenant usage, quota, and overage gauges tagged by tenant.

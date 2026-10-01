@@ -65,7 +65,7 @@ benchmark/
 |   `-- dashboards/                  # Every embedded Orleans.Lattice dashboard, synced at
 |                                    # run time from src/lattice.dashboards/Grafana/.
 |-- history/                         # Long-lived run-over-run history stack.
-|   |-- docker-compose.history.yml   # VictoriaMetrics + Grafana on :3001 / :8428.
+|   |-- docker-compose.history.yml   # VictoriaMetrics + Grafana on :8428 / :3001.
 |   |-- Generate-Dashboards.ps1      # Regenerates the overview + seven persona-trend
 |   |                                # dashboards.
 |   |-- README.md                    # Data model, label schema, ad-hoc query path.
@@ -149,8 +149,8 @@ lattice-usage profiles below plus a micro-benchmark control.
 | replication         | `current-state-single-peer`       | Current-state tree, single-peer replication              | on          | none  |
 | replication         | `bidirectional-replication`       | Two-cluster bidirectional replication                    | on (both)   | none  |
 | replication         | `replication-key-filter`          | Per-key replication filter cost                          | on          | none  |
-| replication         | `replication-backpressure`        | Backpressure / catch-up under receiver pause             | on          | pause |
-| replication         | `receiver-crash`                  | Receiver crash mid-stream, recovery cost                 | on          | kill  |
+| replication         | `replication-backpressure`        | Receiver pause under replication load; designed for backpressure / catch-up, but a run captures only the pause | on          | pause |
+| replication         | `receiver-crash`                  | Receiver crash mid-stream; designed for recovery cost, but a run captures only the outage | on          | kill  |
 | replication control | `observer-no-peer`                | Replication on with no peer: commit-observer cost without shipping (pairs with `current-state-single-peer`) | on (no peer) | none |
 | write-heavy random  | `current-state-no-replication-azuretable` | `current-state-no-replication` with the WAL on Azure Tables (Azurite) | off | none |
 | write-heavy random  | `current-state-no-replication-azuretable-no-crow` | Azure Table WAL variant with the hot-path candidate row eliminated | off | none |
@@ -163,6 +163,14 @@ The read:write ratios in the read-heavy and read/write-mix rows are the design
 intent: each scenario pins the read driver's rate while writes follow the fleet
 (one sample per vehicle per 200 ms simulator tick), so the offered ratio moves
 with the calibrated fleet size - see
+[`benchmark-scenarios.md`](./benchmark-scenarios.md).
+
+The two chaos rows likewise describe what the scenarios were designed to
+measure. As shipped, a run starts the pause or kill after its measurement
+window has closed and stops the chaos step before its `unpause` or restart, so
+the receiver stays paused or down until teardown and the captured scalars cover
+the disruption, not catch-up or recovery - see step 7 of
+[Running a scenario](#running-a-scenario) and
 [`benchmark-scenarios.md`](./benchmark-scenarios.md).
 
 Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a file omits the ones its scenario does not use):
@@ -180,8 +188,8 @@ Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a f
 | `BENCH_DURATION_SECONDS`       | Measurement window                                        |
 | `BENCH_CHAOS`                  | `none` \| `pause` \| `kill` (`replication-backpressure`, `receiver-crash`) |
 | `BENCH_CHAOS_TARGET`           | Compose service name to apply chaos to                    |
-| `BENCH_CHAOS_AFTER_SECONDS`    | Delay before chaos action                                 |
-| `BENCH_CHAOS_DURATION_SECONDS` | How long the disruption lasts                             |
+| `BENCH_CHAOS_AFTER_SECONDS`    | Delay before the chaos action, counted from the start of the measurement window |
+| `BENCH_CHAOS_DURATION_SECONDS` | Intended disruption length: how long the chaos step waits before its `unpause` / restart (`up -d`). The run stops the step at most 60 s after the window closes; in both shipped chaos scenarios that stop comes first, so the disruption lasts until teardown (see step 7) |
 | `BENCH_DESCRIPTION`            | One-line scenario description (documentary; the runner only records it in `results.json`'s `config` block) |
 | `BENCH_KIND`                   | `microbench` routes the scenario to the BenchmarkDotNet harness instead of the docker stack |
 | `BENCH_MICROBENCH_*`           | Microbench fidelity, workload filter, key / value / batch sizes, and profiling knobs (`microbench` only) |
@@ -345,7 +353,14 @@ The script:
 6. Seeds the configured fleet size via `/api/vehicles/batch` and starts every vehicle.
 7. Waits `BENCH_WARMUP_SECONDS`, then runs the `BENCH_DURATION_SECONDS` measurement
    window, applying any chaos (`pause` / `kill`) in parallel,
-   `BENCH_CHAOS_AFTER_SECONDS` after the window opens.
+   `BENCH_CHAOS_AFTER_SECONDS` after the window opens. When the window closes it
+   waits up to 60 s more for a chaos action still running and then stops it, and
+   the capture in step 8 queries the last `BENCH_DURATION_SECONDS` seconds before
+   it runs. Both shipped chaos scenarios start a 30 s disruption 60 s after a 30 s
+   window opens: it begins after the window has closed, the 60 s wait expires
+   before its unpause or restart step runs (the delay and the disruption alone
+   fill it), so the receiver stays paused or down until teardown, and the captured
+   range covers the disruption rather than the steady state before it.
 8. **Captures an auto-discovered panel of summary scalars** while the stack is
    still up, by listing every
    meter under the configured prefixes (`orleans.lattice` - covers both the
@@ -360,9 +375,9 @@ The script:
 9. `stop-all`s the fleet and prints fleet stats.
 10. Writes the scalars to `.run/<scenario>/<run_id>/results.json` and
     **opportunistically pushes** them into the long-lived
-    [history stack](./history/README.md) if it's reachable on `:8428`. If the
-    history stack is down, the run completes normally and the local JSON is the
-    durable record.
+    [history stack](./history/README.md) if it's reachable on `:8428`
+    (`-NoHistoryPush` skips the push). If the history stack is down, the run
+    completes normally and the local JSON is the durable record.
 11. Unless `-KeepRunning` was passed, tears the stack down (`docker compose ... down -v`).
 
 ## Cross-run comparison
@@ -488,19 +503,22 @@ matching persona dashboard for trend strips and per-run barcharts.
 Each persona dashboard has the same **3-band** layout, top-to-bottom:
 
 1. **Headline KPIs** - three or four stat tiles with threshold-coloured
-   backgrounds binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
-   `bench_replication_ship_p95_ms`). The stable-alias layer is curated in
+   backgrounds, most binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
+   `bench_replication_ship_p95_ms`) and the read-driver, leaf-write and microbench
+   tiles to auto-discovered or harness keys. The stable-alias layer is curated in
    `benchmark.ps1`'s `$ScalarPanelExtra` and `$ScalarAliases`. KPI metric names are
    validated at dashboard-generation time against the `$ScalarPanelExtra` keys and
-   the auto-discovery key shapes (not the `$ScalarAliases` keys), so a typo or
-   rename fails fast. As committed, the Replication and WAL Performance dashboards
+   the auto-discovery and microbench key shapes (not the `$ScalarAliases` keys), so
+   a name that fits none of them fails fast, while a misspelt name that still fits a
+   key shape passes. As committed, the Replication and WAL Performance dashboards
    show this band as bar charts instead, as do the Overview's Replication, WAL
    Performance and Atomic Writes rows: those files were edited by hand after
    generation, and regenerating restores the stat tiles.
 2. **Trends across runs** - one timeseries per metric family (commit, cache,
-   sink, replication, read, wal, process, microbench), points-mode with one line per
-   `{__name__, scenario, git_sha}` so a regression appears as a visible step
-   between commits.
+   sink, replication, read, wal, process, microbench), points-mode, with one series
+   per metric per run (every pushed sample carries `scenario`, `run_id` and `git_sha`
+   labels) and the legend `{{__name__}} | {{scenario}} | {{git_sha}}`, so a
+   regression appears as a visible step between commits.
 3. **Per-run history** - barchart per KPI, one bar per run, hover shows
    `{{scenario}} {{run_id}} @ {{git_sha}}` so the offending commit is one
    click away.
@@ -513,8 +531,11 @@ anything: the Replication persona's two headline KPIs
 (`bench_replication_ship_p95_ms`, `bench_replication_apply_lag_p95_ms`) are
 `$ScalarAliases` keys, which that check does not read. When it does run, it
 rewrites every `BenchmarkHistory*.json`: it deletes the hand-maintained
-atomic-writes dashboard and regenerates the Overview without its hand-added
-Atomic Writes row, so restore both files from git afterwards.
+atomic-writes dashboard, regenerates the Overview without its hand-added
+Atomic Writes row, and points the Microbench persona's and the Overview's
+mixed-workload panels at `bench_microbench_mixed_70r_30w_p99_ns`, a series no run
+pushes (the harness writes that key as `microbench_mixed_70_r_30_w_p99_ns`), so
+restore those files from git afterwards.
 
 See [`history/README.md`](./history/README.md) for the full data model, label
 schema, and ad-hoc query path.

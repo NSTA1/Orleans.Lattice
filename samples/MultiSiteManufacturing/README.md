@@ -223,19 +223,14 @@ sticky Blazor `/` router that pins each browser tab's
 SignalR circuit is untouched; the state-API router just has a higher-priority,
 more-specific prefix.
 
-`run-explorer.ps1` launches the explorer pointed at a cluster. It seeds the
-endpoint (and, optionally, a sign-in credential) through the explorer's
-launcher-friendly environment bootstrap, so nothing in your per-user explorer
-config is hand-edited. Only the Windows desktop head applies a seeded
-credential: the Blazor web head honours the endpoint seed alone (its
-environment credential seed is off by default), so in the web explorer you
-sign in from the explorer itself.
-
-> **Known issue** - the script's default Blazor web head launch currently fails
-> with "Web explorer project not found": it still points at
-> `src/lattice.explorer/Web/Orleans.Lattice.Explorer.Web.csproj`, but the web
-> head project is now `src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj`.
-> The `-Client windows` head is unaffected.
+`run-explorer.ps1` launches the Blazor web explorer
+(`src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj`) pointed at a
+cluster. It seeds the endpoint through the explorer's launcher-friendly
+environment bootstrap, so nothing in your per-user explorer config is
+hand-edited. The script also exports any `-Username` / `-Password` it is given,
+but the web explorer honours the endpoint seed alone (its environment credential
+seed is off by default, and this head does not turn it on), so you sign in from
+the explorer itself.
 
 ### Anonymous (default)
 
@@ -257,11 +252,12 @@ container as `LATTICE_STATE_USER_<username>` through a git-ignored `.env` file;
 the plaintext password never reaches a container env, a command line, or the
 compose file. The host then enables `RequireAuthorization = true` with the
 reference `EnvVarCredentialAuthorizer`, so an anonymous explorer is rejected and
-a signed-in one succeeds.
+a signed-in one succeeds: sign in at the explorer's sign-in dialog with the same
+username and password.
 
 ```powershell
 ./run.ps1 -Username alice -Password 'Sup3rSecret'
-./run-explorer.ps1 -Username alice -Password 'Sup3rSecret'
+./run-explorer.ps1        # then sign in as alice in the explorer
 ```
 
 `./run.ps1 -Down` deletes the generated `.env`; every run that brings the stack
@@ -292,14 +288,14 @@ out of the box (see [`docs/lattice/change-history.md`](../../docs/lattice/change
 - `mfg-part-labels` (process-label OR-Set) gets interleaved label adds and removes on
   the same part's key, so the History view renders element-level member changes.
 
-Both are seeded for part `HPT-BLD-S1-2028-00002`. The History view is not a tab of its
-own: it opens from the **History** button in a selected row's detail panel on the
-**Data** tab. To see it:
+Both are seeded for part `HPT-BLD-S1-2028-00002`. The History view is the **History**
+tab of a tree's workspace in the Explorer's **Data** area, and an entry's detail panel
+links to it for that key. To see it:
 
 1. Start the cluster and explorer: `./run.ps1` then `./run-explorer.ps1`.
-2. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`) on the
-   **Data** tab, select key `HPT-BLD-S1-2028-00002`, and press **History** in that
-   row's detail panel.
+2. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`) in the
+   **Data** area, select key `HPT-BLD-S1-2028-00002` on the **Keys** tab, and follow
+   **History of this key** in its entry panel.
 3. The timeline follows live changes by itself once it has loaded. On that part's
    detail page in the `us` cluster's sample UI (the cluster `./run-explorer.ps1` opens
    by default), add a process label (for `mfg-part-labels`) or assign an operator (for

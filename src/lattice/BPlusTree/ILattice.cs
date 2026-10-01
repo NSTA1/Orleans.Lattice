@@ -106,7 +106,8 @@ public interface ILattice : IGrainWithStringKey
     /// The TTL is converted to an absolute UTC expiry at write time on the silo
     /// handling the call, so clock skew between clients does not shift individual
     /// entries' lifetimes. Throws <see cref="ArgumentOutOfRangeException"/> when
-    /// <paramref name="ttl"/> is negative or zero.
+    /// <paramref name="ttl"/> is negative, zero, or large enough that the
+    /// absolute expiry would exceed <see cref="DateTimeOffset.MaxValue"/>.
     /// </para>
     /// </summary>
     /// <param name="key">The key to write.</param>
@@ -147,7 +148,7 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="key">The key to apply the delta against.</param>
     /// <param name="mode">The CRDT merge mode declaring the delta's typed shape.</param>
-    /// <param name="deltaBytes">The Orleans-serialised typed delta DTO bytes.</param>
+    /// <param name="deltaBytes">The JSON-serialised typed delta DTO bytes.</param>
     /// <param name="cancellationToken">Cancels the per-key dispatch.</param>
     Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default);
 
@@ -175,7 +176,7 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="key">The key to apply the delta against.</param>
     /// <param name="mode">The CRDT merge mode declaring the delta's typed shape.</param>
-    /// <param name="deltaBytes">The Orleans-serialised typed delta DTO bytes.</param>
+    /// <param name="deltaBytes">The JSON-serialised typed delta DTO bytes.</param>
     /// <param name="ttl">
     /// The positive time-to-live after which the entry expires. Must be greater
     /// than <see cref="System.TimeSpan.Zero"/>.
@@ -235,7 +236,7 @@ public interface ILattice : IGrainWithStringKey
     /// </para>
     /// </summary>
     /// <param name="deltas">
-    /// The key / Orleans-serialised typed delta DTO byte pairs to apply. Must not
+    /// The key / JSON-serialised typed delta DTO byte pairs to apply. Must not
     /// be <see langword="null"/>.
     /// </param>
     /// <param name="mode">
@@ -671,8 +672,9 @@ public interface ILattice : IGrainWithStringKey
     /// throw <see cref="InvalidOperationException"/>, and a grain reminder is
     /// registered to permanently purge them after the configured
     /// <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed. A call on an id
-    /// already recorded as deleted is a no-op, including a tree created again
-    /// under the id of a purged one.
+    /// already recorded as deleted is a no-op. If a purged tree id has been
+    /// registered again, the retained purge record is cleared first and the
+    /// delete acts on the live tree the id now names.
     /// <para>
     /// The delete acts on the logical tree. On a tree a resize, a shadow-cutover
     /// restore or a schema remediation has aliased to a physical copy, it marks the
@@ -979,10 +981,11 @@ public interface ILattice : IGrainWithStringKey
     /// declared virtual shard count); a value outside that range throws
     /// <see cref="ArgumentOutOfRangeException"/>. A request for the count the
     /// tree already has is a no-op. A shrink completes only once every fold it
-    /// started has finished, including releasing the retired shards' storage:
-    /// their leaves, internal nodes and write-ahead-log retention pins are
-    /// cleared, and each retired shard keeps only a routing tombstone that
-    /// redirects callers still holding an older shard map.
+    /// started has finished. A committed fold attempts to release each retired
+    /// donor shard's leaves, internal nodes and write-ahead-log retention pins,
+    /// leaving only a routing tombstone that redirects callers still holding an
+    /// older shard map, but falls back to a routing-only retirement when the live
+    /// map still routes a slot to the donor or the donor refuses retirement.
     /// An observably empty tree is instead re-pinned directly to any count in
     /// range, smaller or larger, without running a migration; its shard map is
     /// rebuilt over the same virtual slot count. Throws
@@ -1050,8 +1053,10 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Returns a <see cref="TreeDiagnosticReport"/> aggregating per-shard
-    /// health - depth, live-key count, hotness, split/bulk state - plus a
-    /// bounded ring buffer of recent adaptive-split events. Repeated calls
+    /// health - depth, live-key count, hotness, migration/bulk state - plus a
+    /// bounded ring buffer of recent adaptive shard-split events. Consolidation
+    /// folds are reflected in shard counts and per-shard migration state, but
+    /// are not recorded in that split-event ring. Repeated calls
     /// are served from a short in-memory cache configured via
     /// <see cref="LatticeOptions.DiagnosticsCacheTtl"/> (default 5 seconds).
     /// <para>

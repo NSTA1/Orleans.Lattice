@@ -30,7 +30,7 @@
 #      a caller may do ONLY what an authored grant allows. The differentiated
 #      grants come from identities.json (mounted into both silos and seeded by
 #      LocalDevIdentitySeeder), so the four identities below have genuinely
-#      different power and the Explorer Access tab is load-bearing.
+#      different power and the Explorer Access area is load-bearing.
 #
 #   3. PER-REQUEST identity switching without Entra. With Entra off there is no
 #      identity provider, so the harness supplies its own: an agent acts as any

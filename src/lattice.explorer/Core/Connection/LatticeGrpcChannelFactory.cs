@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Explorer.Core.Connection;
 /// <summary>
 /// The single place the Explorer builds a gRPC channel and its call invoker.
 /// Every gRPC client in every Explorer package - the state connection, the
-/// unauthenticated auth-scheme probe, and each plugin's control-plane client -
+/// unauthenticated auth-scheme probe, and each native area's facade client -
 /// routes through here, so the transport, the insecure-channel safeguard, and
 /// the credential pipeline are decided once rather than copied per client.
 /// <para>

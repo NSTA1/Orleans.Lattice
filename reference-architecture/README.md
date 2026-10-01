@@ -266,8 +266,12 @@ different region codes).
   purpose: KEDA asks for `ceil(value / threshold)` replicas and the scale value
   never exceeds the current replica count, so a threshold of `1` could only hold
   or shrink the pool, while `0.5` asks for twice the current count at full
-  saturation. The floor is pinned at or above one replica (never zero) so the
-  cluster always has a membership quorum; the ceiling defaults to three. A stopped
+  saturation. The same division applies at rest: the scale value never reads
+  below its own floor (`Scaling:MinReplicas`, which compute sets from
+  `siloMinReplicas`), so an idle region asks for twice that floor, capped at the
+  ceiling - two replicas at the defaults. The floor is pinned at or above one
+  replica (never zero) so the cluster always has a membership quorum; the ceiling
+  defaults to three. A stopped
   replica gets the termination grace period (120 seconds) to drain: it refuses new
   writes with `LatticeShuttingDownException` and settles in-flight WAL flushes. An
   interrupted shard split or reshard is not handed off; it resumes from its
@@ -617,8 +621,9 @@ deployment option.
 ### Cost note
 
 The validated two-region public topology's steady-state cost is dominated by the
-always-on silo replicas (one per region at the default floor, more while compute
-pressure scales a region out; see [Scaling behaviour](#scaling-behaviour)), the two managed
+always-on silo replicas (two per region at rest with the default floor and scale
+threshold, up to the ceiling while compute pressure scales a region out; see
+[Scaling behaviour](#scaling-behaviour)), the two managed
 Prometheus workspaces and Grafana heads, the two Standard storage accounts plus
 the shared backup blob account, the two Key Vaults, the shared container
 registry, and the single Front Door Standard profile. The scale-to-zero MCP and

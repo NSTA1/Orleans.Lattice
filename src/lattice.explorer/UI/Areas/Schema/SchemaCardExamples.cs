@@ -68,7 +68,7 @@ internal static class SchemaCardExamples
         _ => string.Empty,
     };
 
-    /// <summary>Whether a card of <paramref name="kind"/> can be chosen for <paramref name="node"/>, and why not when it cannot.</summary>
+    /// <summary>Whether a card of <paramref name="kind"/> can be chosen for the subject, and why not when it cannot.</summary>
     /// <param name="kind">The kind.</param>
     /// <param name="wholeValue">Whether the subject is the whole value (or the item) rather than a member.</param>
     /// <param name="predicateOnly">Whether only predicate cards may be chosen (inside "every item" or "any of").</param>

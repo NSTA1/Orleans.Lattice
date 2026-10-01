@@ -79,8 +79,10 @@ dialog, then:
    (`alice`), open **Apps**, then Task board, then its **Open** tab. The board loads in a
    sandboxed frame. Add a task, select it, move it between **To do**,
    **Doing** and **Done**, and delete it. Selecting a card updates the address
-   line, so the link to a task can be copied and reopened. Switch the theme
-   between Paper and Board and the board follows it at once.
+   line, so the link to a task can be copied and reopened. The board is drawn in
+   Paper whatever the console's theme: the Explorer currently gives every app
+   frame the default appearance and does not tell it when the console's theme
+   changes.
 
 ### The same app, three groups
 
@@ -125,10 +127,10 @@ consent, separate bindings, separate boards.
   network connection. The module never calls `fetch`, opens a socket, reads
   storage or cookies, or touches the parent window; a test enforces that.
 - Every read and write goes through `lattice.request(...)` to the Explorer's
-  broker and then to the cluster, which allows it only when both the app's
-  consented grants and the signed-in user's own rights allow it. An operator
-  who can write every tree still gets a read-only board when bound only as a
-  `viewer`.
+  broker and then to the cluster, which allows it only when the app's
+  consented grants, an app role the signed-in user holds by binding, and the
+  user's own rights all allow it. An operator who can write every tree still
+  gets a read-only board when bound only as a `viewer`.
 - The frame learns which of this app's roles the signed-in user holds from the
   `roles` member of `context.read`: role names only, never their groups. The
   board starts read-only and shows its write controls only when that list holds

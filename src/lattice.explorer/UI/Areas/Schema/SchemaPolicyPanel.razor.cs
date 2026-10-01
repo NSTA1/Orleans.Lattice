@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 public partial class SchemaPolicyPanel : IDisposable
 {
-    private const string StrictOn = "On: replicated and restored values are checked too, and one that fails is diverted to the dead letters";
+    private const string StrictOn = "On: replicated CRDT and atomic-batch entries are checked too, and one that fails is diverted to the dead letters; plain last-writer-wins replication, restore and merge are never checked";
 
     private const string StrictOff = "Off: replicated and restored values are trusted and not checked";
 

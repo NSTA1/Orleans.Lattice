@@ -121,22 +121,24 @@ public interface ILatticeAdmin : IGrainWithStringKey
 
     /// <summary>
     /// Returns a cluster-wide <see cref="SplitActivityReport"/>: how many
-    /// autonomic shard splits are in flight right now, summed across every tree.
+    /// shard migrations are in flight right now, summed across every tree.
+    /// Adaptive split sources and consolidation fold donors both occupy the
+    /// same shard-migration footprint.
     /// <para>
     /// This is the readable counterpart to the <c>orleans.lattice.split.in_flight</c>
     /// histogram. Metrics are write-only in-process, so a component that must
-    /// <em>decide</em> something from split activity - the
+    /// <em>decide</em> something from migration activity - the
     /// <c>Orleans.Lattice.Scaling</c> scale-in safety gate, an operator tool, a
-    /// deployment guard that should not drain a silo mid-split - cannot consult
+    /// deployment guard that should not drain a silo mid-migration - cannot consult
     /// them. This query can be, and it costs a single call to the cluster's
     /// split-admission singleton: it never fans out across trees or shards.
     /// </para>
     /// <para>
-    /// The figure is derived from the per-tree footprints each autonomic monitor
-    /// publishes every sampling pass, so it trails real activity by at most one
+    /// The figure is derived from the per-tree migration footprints each autonomic
+    /// monitor publishes every sampling pass, so it trails real activity by at most one
     /// <see cref="LatticeOptions.HotShardSampleInterval"/> and is a lower bound
     /// rather than an instantaneous truth. Footprints expire, so a silo lost
-    /// mid-split cannot pin the count above zero indefinitely. A deployment with
+    /// mid-migration cannot pin the count above zero indefinitely. A deployment with
     /// autonomic splitting disabled always reports zero.
     /// </para>
     /// </summary>

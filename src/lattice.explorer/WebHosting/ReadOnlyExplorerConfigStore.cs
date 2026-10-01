@@ -9,9 +9,10 @@ namespace Orleans.Lattice.Explorer.Web;
 /// <remarks>
 /// <para>
 /// The persisted configuration names the cluster endpoint every circuit dials and
-/// every sign-in is challenged against. In the desktop head that file is per-user,
-/// so the operator editing it is the only party affected. In the web head it is a
-/// single process-wide document shared by every browser, and nothing upstream
+/// every sign-in is challenged against. In a single-operator local host that file
+/// can be per-user, so the operator editing it is the only party affected. In the
+/// web head it is a single process-wide document shared by every browser, and
+/// nothing upstream
 /// authenticates the caller who writes it: an anonymous visitor could repoint the
 /// whole head at a host they control, then collect the next operator's cluster
 /// credential when the login endpoint challenges the attacker's endpoint, and have

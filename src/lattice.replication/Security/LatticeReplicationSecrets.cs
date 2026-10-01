@@ -39,9 +39,10 @@ public sealed class LatticeReplicationAcceptedSecrets
     }
 
     /// <summary>
-    /// The set of accepted shared secrets. A receiver authenticates an
-    /// inbound batch if and only if its credential matches one of the
-    /// entries in this collection.
+    /// The set of shared secrets accepted by the receiver's first authentication
+    /// phase. A transport can add stricter checks after this match; the gRPC
+    /// binding also binds the credential to the stamped origin when origin binding
+    /// is enabled.
     /// </summary>
     public IReadOnlyList<string> Secrets { get; }
 

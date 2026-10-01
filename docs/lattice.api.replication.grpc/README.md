@@ -4,7 +4,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Replication](../lattice.api.rep
 
 ## What is it?
 
-`Orleans.Lattice.Api.Replication.Grpc` is the remote transport for the cluster's replication control plane. A host references it when a dashboard, a CLI, or an internal admin service needs to enable and disable per-tree replication and inspect the replicated set over the network rather than in-process.
+`Orleans.Lattice.Api.Replication.Grpc` is the remote transport for the cluster's replication control plane. A host references it when a dashboard, a CLI, or an internal admin service needs to enable and disable per-tree replication, inspect the replicated set, or read each replication link's status over the network rather than in-process.
 
 It provides:
 
@@ -17,7 +17,7 @@ Enabling and disabling replication reconfigures cross-cluster data flow, so the 
 
 ## Core properties
 
-- **Public client, internal service.** Callers consume `LatticeReplicationApiGrpcClient`; the service, marshallers, method definitions, and interceptor are internal.
+- **Public clients, internal services.** Callers consume `LatticeReplicationApiGrpcClient` and, for peer status, `LatticeReplicationStatusGrpcClient`; the services, marshallers, method definitions, and interceptor are internal.
 - **No transport policy in the client.** Address, TLS, retries, deadlines, and credentials live on the caller's `GrpcChannel` / `CallInvoker`.
 - **Two load-bearing gates.** The transport meta-authorizer decides whether a call may run at all; the credential the identity bridge resolves then feeds the facade's own fail-closed access gate. Neither replaces the other.
 - **Discoverable sign-in.** An unauthenticated `GetAuthScheme` RPC lets a client discover how to authenticate before it holds a credential.
@@ -36,8 +36,12 @@ The gRPC service name is `orleans.lattice.api.replication`.
 ### Peer status service
 
 Read-only peer status is a separate service, `orleans.lattice.api.replication.status`,
-with one RPC, `GetPeerStatus`. It is registered with `AddLatticeReplicationStatusApiGrpc()`
-and mapped with `MapLatticeReplicationStatusApiGrpc()`. It sits behind the same
+with one unary RPC, `GetPeerStatus`. It is registered with `AddLatticeReplicationStatusApiGrpc()`
+and mapped with `MapLatticeReplicationStatusApiGrpc()`. Call
+`AddLatticeReplicationStatusApiGrpc()` after `AddLatticeReplicationApiGrpc()`, whose
+authorizer, credential bridge, options and interceptor it reuses - called first, it
+throws `InvalidOperationException` - and expose `ILatticeReplicationStatus` in the same
+service provider with `AddLatticeReplicationStatusApi()`. It sits behind the same
 default-deny interceptor, and `LatticeReplicationApiOperation.GetPeerStatus` names it
 for authorizers. `LatticeReplicationStatusGrpcClient` implements
 `ILatticeReplicationStatus` directly, so a remote caller uses the same contract as an
@@ -45,7 +49,7 @@ in-process one.
 
 ## Quick start
 
-Register the binding on a silo that already has `AddLatticeReplicationApi`, then map its routes. The snippet is illustrative and not compiled; [samples/RuntimeReplicationConfig](../../samples/RuntimeReplicationConfig) is a runnable example of the in-process facade this binding adapts, and does not host the gRPC binding.
+Register the binding on a silo that already has `AddLatticeReplicationApi`, then map its routes. The snippet is compiled but not run; [samples/RuntimeReplicationConfig](../../samples/RuntimeReplicationConfig) is a runnable example of the in-process facade this binding adapts, and does not host the gRPC binding.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -91,7 +95,7 @@ The `serializerProvider` must have Orleans serialization registered (`AddSeriali
 
 ## Reference
 
-- [API reference](api.md) - the public client, options, authorization seams, and wire message records.
+- [API reference](api.md) - the public clients, registration entry points, options, authorization seams, and wire message records.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
 - [Architecture](architecture.md) - the two-layer authorization model and the code-first binding.
 

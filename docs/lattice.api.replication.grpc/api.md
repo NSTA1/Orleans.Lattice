@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Replication.Grpc API reference
 
-The package exposes a public typed client, two registration entry points, public authorization, credential-bridge, and auth-scheme seams, the public wire message records, the binding's serialization-alias constants, and a public options type. The service, marshallers, method definitions, and interceptor are internal.
+The package exposes public typed clients for the control and peer-status services, their registration entry points, public authorization, credential-bridge, and auth-scheme seams, the public wire message records, the binding's serialization-alias constants, and a public options type. The services, marshallers, method definitions, and interceptor are internal.
 
 ## Registration
 
@@ -8,8 +8,10 @@ The package exposes a public typed client, two registration entry points, public
 |---|---|---|
 | `AddLatticeReplicationApiGrpc` | `IServiceCollection AddLatticeReplicationApiGrpc(this IServiceCollection services, Action<LatticeReplicationApiGrpcOptions>? configure = null)` | Registers the server-side binding: the method definitions, the service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. |
 | `MapLatticeReplicationApiGrpc` | `IEndpointRouteBuilder MapLatticeReplicationApiGrpc(this IEndpointRouteBuilder endpoints)` | Maps the gRPC service onto the ASP.NET Core endpoint routing. |
+| `AddLatticeReplicationStatusApiGrpc` | `IServiceCollection AddLatticeReplicationStatusApiGrpc(this IServiceCollection services)` | Registers the read-only peer-status service on top of the control binding, reusing its default-deny authorizer, credential bridge, options, and authorization interceptor. Must be called after `AddLatticeReplicationApiGrpc`; calling it first throws `InvalidOperationException`. The host must also expose `ILatticeReplicationStatus` (via `AddLatticeReplicationStatusApi`) in the same service provider. Idempotent. |
+| `MapLatticeReplicationStatusApiGrpc` | `IEndpointRouteBuilder MapLatticeReplicationStatusApiGrpc(this IEndpointRouteBuilder endpoints)` | Maps the peer-status service (the `GetPeerStatus` RPC). Requires `AddLatticeReplicationStatusApiGrpc` first. |
 
-Both are extension methods on the public static `LatticeReplicationApiGrpcServiceCollectionExtensions` class. Call `AddLatticeReplicationApiGrpc` once: its other registrations are `TryAdd`-guarded, but each call appends the authorization interceptor to the gRPC pipeline again, so after two calls every guarded call is authorized twice.
+Each is an extension method on the public static `LatticeReplicationApiGrpcServiceCollectionExtensions` class. Call `AddLatticeReplicationApiGrpc` once: its other registrations are `TryAdd`-guarded, but each call appends the authorization interceptor to the gRPC pipeline again, so after two calls every guarded call is authorized twice.
 
 ## Client
 
@@ -25,6 +27,15 @@ Both are extension methods on the public static `LatticeReplicationApiGrpcServic
 
 The result and report types (`ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`) are the shared facade model records documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
 
+`LatticeReplicationStatusGrpcClient` is the public typed client for the peer-status service. It implements `ILatticeReplicationStatus`, so a caller can swap an in-process facade for it with no adapter.
+
+| Member | Signature |
+|---|---|
+| Create | `static LatticeReplicationStatusGrpcClient Create(CallInvoker callInvoker, IServiceProvider serializerProvider)` |
+| Get peer status | `Task<ReplicationPeerStatusPage> GetPeerStatusAsync(ReplicationPeerStatusQuery query, CancellationToken cancellationToken = default)` |
+
+The query, page, and entry records are the same facade model records, documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
+
 ## Authorization seam
 
 | Member | Kind | Purpose |
@@ -32,8 +43,8 @@ The result and report types (`ReplicationEnableResult`, `ReplicationDisableResul
 | `ILatticeReplicationApiAuthorizer` | interface | The transport meta-authorizer the interceptor consults for every guarded RPC. A host implements it to decide whether a call may run at all. |
 | `DenyAllReplicationApiAuthorizer` | class | The default-deny authorizer used when a host registers no authorizer and leaves `RequireAuthorization` on. Rejects every guarded RPC. |
 | `AllowAllReplicationApiAuthorizer` | class | Opt-in authorizer that permits every guarded RPC. Register it explicitly only when an outer trust boundary already guards the endpoint. |
-| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
-| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable request supplied it, before the facade's tenant-scoped resolution, or `null` for the config read and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
+| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`, `GetPeerStatus`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
+| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable request or the peer-status query's tree filter supplied it, before the facade's tenant-scoped resolution, or `null` for the config read, a peer-status read with no tree filter, and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
 | `ILatticeReplicationApiCredentialBridge` | interface | Resolves the caller credential from an inbound `ServerCallContext` into the ambient `LatticeCredential` the facade access gate authorizes. Runs after the transport authorizer; returning `null` leaves the caller anonymous, which auth-backed replication control denies. The default reads `CredentialHeaderName` / `CredentialScheme`. |
 | `ILatticeReplicationApiAuthSchemeSource` | interface | Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns; it must carry only public configuration. |
 | `GrpcReplicationTypeAliases` | static class | The binding's stable serialization aliases for its wire messages (prefix `oirg.`). |
@@ -61,6 +72,8 @@ The request and response records the RPCs carry are public, `[GenerateSerializer
 
 The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, and `ReplicationConfigReport` rather than the wire records.
 
+The peer-status service has no wire records of its own: its `GetPeerStatus` RPC carries the facade's `ReplicationPeerStatusQuery` as the request and `ReplicationPeerStatusPage` as the response, Orleans-serialized under the `oir.` aliases of `ApiReplicationTypeAliases` in `Orleans.Lattice.Api.Abstractions`.
+
 ## Status mapping
 
 | Failure | gRPC status |
@@ -70,6 +83,8 @@ The typed client maps these onto the facade model records, so a caller of `Latti
 | Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
 | Any other fault | `Internal` (with a non-leaking message) |
+
+`GetPeerStatus` follows the same mapping, except that it has no `FailedPrecondition` outcome: a negative page size or a malformed continuation token is `InvalidArgument`.
 
 ## See also
 

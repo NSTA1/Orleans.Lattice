@@ -5,9 +5,9 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Cluster-wide singleton admission gate for autonomic shard splits.
+/// Cluster-wide singleton admission gate for shard migrations.
 /// <para>
-/// Caps the aggregate number of concurrently in-flight autonomic splits across
+/// Caps the aggregate number of concurrently in-flight shard migrations across
 /// every tree at the configured <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>
 /// ceiling. The ceiling is only ever applied when an operator opts in; with the
 /// option left at its <c>null</c> default no monitor requests a slot, so nothing
@@ -15,14 +15,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// It is driven by per-tree heartbeats: each enabled monitor reports its
-/// authoritative in-flight split count (from shard <c>IsSplitting</c>) every
+/// authoritative in-flight migration count (from shard <c>IsSplitting</c>) every
 /// sampling pass and is granted new slots against the remaining headroom. Each
 /// footprint carries a time-to-live, so a silo that crashes and stops reporting
-/// has its share reclaimed on expiry - a crashed split can never permanently
+/// has its share reclaimed on expiry - a crashed migration can never permanently
 /// consume cluster budget.
 /// </para>
 /// <para>
-/// The same footprints double as the cluster's readable split-activity source.
+/// The same footprints double as the cluster's readable migration-activity source.
 /// Monitors publish through <see cref="ReportInFlightAsync"/> even with no
 /// ceiling configured (edge-triggered, so an idle tree calls nothing), and
 /// <see cref="GetActivityAsync"/> reduces them into the snapshot that

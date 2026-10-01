@@ -361,7 +361,7 @@ behaviour described above.
 
 ## Instrument index
 
-Every instrument on the `orleans.lattice.replication` meter. Kind and unit come from the instrument declarations in `LatticeReplicationMetrics` and `ReplicationPeerStats`; Tags lists the replication-specific dimensions each emission site attaches (the derived `tenant` tag is implicit - see the note at the top of this page).
+Every instrument on the `orleans.lattice.replication` meter. Kind and unit come from the instrument declarations in `LatticeReplicationMetrics`, `ReplicationPeerStats`, `WireVersionNegotiationState`, and `RemediationGuard`; Tags lists the replication-specific dimensions each emission site attaches (the derived `tenant` tag is implicit - see the note at the top of this page). The gRPC transport package publishes one further instrument, `orleans.lattice.replication.grpc.insecure_channel`, on its own `orleans.lattice.replication.grpc` meter, which a subscriber must add by name - see [the gRPC transport API](../lattice.replication.grpc/api.md).
 
 | Instrument | Kind | Unit | Tags | Details |
 |---|---|---|---|---|

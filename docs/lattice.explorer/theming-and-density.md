@@ -68,7 +68,7 @@ The menu state uses pressed buttons, so the visible control and the palette are 
 
 The design layer respects `prefers-reduced-motion: reduce` by reducing transition and animation durations to `0.01ms` and limiting animation iteration to one. This is a global rule for the Explorer UI.
 
-Lattice App frames receive appearance through the app-frame protocol. The bundle and `context.read` include `{ theme, contrast, density, reducedMotion }`; a running frame can be notified with `context.changed` carrying the same closed set. The frame vocabulary is Paper or Board, standard or more contrast, comfortable or compact density, and a reduced-motion boolean. The fallback host context is Paper, standard contrast, comfortable density, and full motion unless a host supplies a richer context.
+Lattice App frames receive appearance through the app-frame protocol. The bundle and `context.read` include `{ theme, contrast, density, reducedMotion }`, and the protocol lets a host notify a running frame with `context.changed` carrying the same closed set. The frame vocabulary is Paper or Board, standard or more contrast, comfortable or compact density, and a reduced-motion boolean. The web head does not yet pass the console's own appearance on: every frame is given the fallback appearance - Paper, standard contrast, comfortable density and full motion - whatever theme, contrast, density or motion preference the console is using, and no `context.changed` is sent when they change.
 
 ## See also
 

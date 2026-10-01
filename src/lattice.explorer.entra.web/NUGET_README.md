@@ -3,10 +3,10 @@
 Microsoft Entra ID hosted-web (OpenID Connect) sign-in for the Orleans.Lattice
 Explorer web console.
 
-The interactive desktop provider (`Orleans.Lattice.Explorer.Entra`) runs a
-browser flow on the machine that hosts the UI. That cannot work for a remotely
-hosted Blazor Server console: the circuit runs on the server, which has no local
-browser. This package serves that topology instead.
+The interactive MSAL provider (`Orleans.Lattice.Explorer.Entra`) runs a
+browser flow from the host process, on the machine that runs it. That cannot
+work for a remotely hosted Blazor Server console: the circuit runs on the
+server, which has no local browser. This package serves that topology instead.
 
 It wires:
 

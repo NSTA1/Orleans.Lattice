@@ -7,13 +7,13 @@ namespace Orleans.Lattice.Api.Apps;
 
 /// <summary>
 /// Extension methods for registering the optional <c>Orleans.Lattice.Api.Apps</c>
-/// app lifecycle and consent control facade.
+/// app lifecycle, consent, catalogue, workspace, and role-binding facades.
 /// </summary>
 public static class LatticeAppsApiServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds the transport-agnostic app-control facade to the silo, registering it as
-    /// the <see cref="ILatticeAppsControl"/> singleton that transport bindings map.
+    /// Adds the transport-agnostic app facades to the silo, registering the control,
+    /// catalogue, workspace, and role-binding surfaces that transport bindings map.
     /// Must be called after <c>AddLatticeApps()</c>, whose registry, source seam and
     /// activation pipeline the facade composes. Idempotent.
     /// </summary>
@@ -29,10 +29,10 @@ public static class LatticeAppsApiServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Adds the transport-agnostic app-control facade to the service collection,
-    /// registering it as the <see cref="ILatticeAppsControl"/> singleton that transport
-    /// bindings map, and as the <see cref="ILatticeAppRoleBindings"/> singleton that re-binds
-    /// an installed app's roles. Must be called after <c>AddLatticeApps()</c>. Idempotent.
+    /// Adds the transport-agnostic app facades to the service collection, registering
+    /// <see cref="ILatticeAppsControl"/>, <see cref="ILatticeAppCatalog"/>,
+    /// <see cref="ILatticeAppWorkspace"/>, and <see cref="ILatticeAppRoleBindings"/>
+    /// that transport bindings map. Must be called after <c>AddLatticeApps()</c>. Idempotent.
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <returns>The same <paramref name="services"/> for chaining.</returns>

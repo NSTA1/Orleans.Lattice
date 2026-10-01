@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Runtime;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -99,44 +100,39 @@ public sealed class LatticeRegistryEnumerationHeadOfLineTests
         var registry = Registry();
         RegistryEnumerationGate.Arm();
 
-        Task<IReadOnlyList<string>>? blocker = null;
+        Task<IReadOnlyList<string>> blocker;
         try
         {
             blocker = registry.GetAllTreeIdsAsync(null);
             await RegistryEnumerationGate.Entered!.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
             var probe = registry.GetEntryAsync(UnrelatedTree);
-            var winner = await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(10)));
+            var entry = await InterleaveProbe.AnswersWhileHeldAsync(probe, RegistryEnumerationGate.Gate!.Task,
+                "GetEntryAsync for an unrelated tree, issued while a whole-registry enumeration is parked on the "
+                + "same singleton (the head-of-line block of issue #3180, where the response timeout fires for every "
+                + "activation in the process at once),");
 
-            Assert.That(winner, Is.SameAs(probe),
-                "GetEntryAsync for an unrelated tree must complete while a whole-registry enumeration is " +
-                "in flight on the same singleton. It queued behind the parked enumeration instead, which " +
-                "is the head-of-line block of issue #3180: in production this is where the response " +
-                "timeout fires, for every activation in the process at once.");
-
-            Assert.That(await probe, Is.Not.Null,
+            Assert.That(entry, Is.Not.Null,
                 "The interleaved read should have observed the registered entry, not a null from a " +
                 "half-completed turn.");
 
             // ResolveAsync is the call LatticeOptionsResolver actually makes on
             // its hot path, so pin it too rather than inferring it from
             // GetEntryAsync.
-            var resolve = registry.ResolveAsync(UnrelatedTree);
-            var resolveWinner = await Task.WhenAny(resolve, Task.Delay(TimeSpan.FromSeconds(10)));
-
-            Assert.That(resolveWinner, Is.SameAs(resolve),
-                "ResolveAsync must also interleave - it is the registry call LatticeOptionsResolver makes " +
-                "from five separate call sites during grain activation.");
-            Assert.That(await resolve, Is.EqualTo(UnrelatedTree));
+            var resolved = await InterleaveProbe.AnswersWhileHeldAsync(registry.ResolveAsync(UnrelatedTree),
+                RegistryEnumerationGate.Gate!.Task,
+                "ResolveAsync, the registry call LatticeOptionsResolver makes from five separate call sites during "
+                + "grain activation,");
+            Assert.That(resolved, Is.EqualTo(UnrelatedTree));
         }
         finally
         {
             RegistryEnumerationGate.Release();
-            if (blocker is not null)
-            {
-                await blocker.WaitAsync(TimeSpan.FromSeconds(60));
-            }
         }
+
+        // Drained only once the probes have passed, so the enumeration's own
+        // response timeout can never mask their verdict.
+        await blocker.WaitAsync(TimeSpan.FromSeconds(60));
     }
 
     /// <summary>

@@ -130,8 +130,9 @@ converged either way - the rule is gone from `site-b`.
   `http://` address - and turns receiver authentication off, because this is a
   loopback demo with no secret material. Production must use `https://` peer
   endpoints and leave receiver authentication on.
-- The gRPC ports default to `17001` / `17002`; change them in `Program.cs` if
-  those are taken on your machine.
+- The gRPC ports default to `17001` / `17002`, and the two clusters also bind
+  Orleans silo ports `11111` / `11112` and gateway ports `30000` / `30001`;
+  change them in `Program.cs` if those are taken on your machine.
 - The bootstrap administrator (`root-admin`) seeds the demo data before any rule
   grants access; the reserved membership and policy trees are written by the
   silo-side directory and policy store under system origin, not through it.

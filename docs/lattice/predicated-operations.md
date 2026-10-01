@@ -71,8 +71,8 @@ Four node kinds look at a value's shape rather than comparing a scalar. The
 translator never produces them, so a C# lambda cannot express them. They are
 built directly on `LatticePredicateNode` and reach the cluster wherever a node is
 supplied as is: a schema policy's structured rule (`LatticeSchemaRule.Structured`),
-a value transform's condition, a predicate view's filter, and
-`LatticePredicateEvaluation.Matches`.
+a value transform's condition, a materialised view's filter (a predicate, fold or
+aggregation view takes one), and `LatticePredicateEvaluation.Matches`.
 
 | Kind | Factory | Meaning |
 | --- | --- | --- |
@@ -123,17 +123,24 @@ bool matches = LatticePredicateEvaluation.Matches(
 Structural kinds always parse the whole document, so a predicate that contains
 one never takes the forward-only reader path. They are additive on the wire: the
 new kinds, and `LatticePredicateNode.ValueKind`, are appended values and members,
-and a predicate view's projection version includes the value kind only for a
-type test, so an existing view keeps the version it always had.
+and a view's projection version includes the value kind only for a type test, so
+an existing view keeps the version it always had.
 
 **Mixed-version clusters.** A silo that predates these kinds evaluates a node of
-a kind it does not know as `false`, and an operand of an unknown kind as
-missing. For a rule that can only make a value fail, that fails closed: during a
-rolling upgrade an older silo rejects a value a newer one would admit, never the
-reverse. The Explorer's schema rule builder only combines checks with *and* and
-*or*, so everything it writes has that property. A hand-written predicate that
-puts `Not` over a structural kind does not: on an older silo the negated `false`
-becomes `true`. Avoid `Not` over the new kinds until every silo is upgraded.
+a kind it does not know as `false`, and resolves an operand of a kind it does not
+know - a `Length` or `Self` operand - to the boolean `false`. A type test and a
+quantifier are then `false`, as is a string method or an ordering comparison
+(`<`, `<=`, `>`, `>=`) on such an operand, so a rule built from them with *and*
+and *or* fails closed: during a rolling upgrade an older silo rejects a value a
+newer one would admit, never the reverse. Two shapes do not. `Not` over a
+structural kind turns that `false` into `true`, and an equality test on a
+`Length` or `Self` operand
+compares the boolean `false`, so `!=` against anything but a boolean, or `==`
+against `false`, holds on an older silo whatever the value. The Explorer's schema
+rule builder combines checks only with *and* and *or*, but it names the whole
+value - a card with an empty member path - with a `Self` operand, so a
+whole-value required check that is not structural, or a whole-value boolean type
+check, is of the second shape. Avoid both shapes until every silo is upgraded.
 
 ## Reading values by predicate - `GetManyAsync`
 

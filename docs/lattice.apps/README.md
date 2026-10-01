@@ -21,8 +21,9 @@ remains the single enforcement seam: an app never evaluates a permission itself,
 installing one changes nothing about how the data path is authorized.
 
 It is a **companion package**. A host that does not reference it pays nothing: core
-carries only the `LatticeOperation.AppInstall` flag and two internal constants naming
-the app tree namespace and the app-registry tree prefix.
+carries only the `LatticeOperation.AppInstall` flag, two internal constants naming
+the app tree namespace and the app-registry tree prefix, and the `ITreeOwnershipGuard`
+alias seam, whose default allows every alias (see [Tree ownership](#tree-ownership)).
 
 The package is the engine. Operators reach it through companion packages:
 
@@ -147,12 +148,17 @@ properties are rejected.
 | `schema` | Optional per-tree schema family, envelope version and `strictIngest` flag. Validated and reported by the control facade's describe; activation does not apply it to the tree. |
 | `subscriptions` | Change-feed observations of the app's own trees or another app's trees. |
 | `mcpTools` | App-local MCP tool names, descriptions, and the role each tool requires. |
+| `presentation` | Optional display metadata: a display name, summary, description, icon, categories, documentation URL and publisher display name - see [Presentation and UI](#presentation-and-ui). |
+| `ui` | An optional untrusted UI bundle - entry fragment, styles, scripts and digest-pinned assets - and the bridge operations it requests - see [Presentation and UI](#presentation-and-ui). |
 
 ### Trees
 
 A tree declaration names an **app-local** tree. The physical tree is the
 structural `a/{app}/{name}`, composed per tenant as described above. Omitted shape
-pins inherit the host's defaults. `virtualShardCount` is applied when the install
+pins inherit the host's defaults. A declared pin is validated: `shardCount` from 1 to
+4096 and no more than `virtualShardCount`, `virtualShardCount` at least 1,
+`maxLeafKeys` at least 2, `maxInternalChildren` at least 3, `walPartitions` at least
+1, and a positive `softDeleteDuration`. `virtualShardCount` is applied when the install
 first registers the tree, and a manifest upgrade may not change it or drop the pin.
 A resize carries the declared slot count over to the resized copy and a reshard keeps
 it, and a reshard target cannot exceed it (see
@@ -524,13 +530,13 @@ code loads.
 
 `presentation` holds the following fields:
 
-- `displayName` (required when the section is present);
-- `summary`;
-- `description`;
+- `displayName` (required when the section is present; at most 60 characters);
+- `summary` (at most 160 characters);
+- `description` (at most 4000 characters);
 - `icon` (a bundle path and SHA-256, SVG, PNG or WebP);
-- `categories`;
-- `documentationUrl` (https only);
-- `publisherDisplayName`.
+- `categories` (at most 5, each distinct and matching `^[a-z][a-z0-9-]{1,30}$`);
+- `documentationUrl` (an absolute https URL of at most 2048 characters, with no white space or user information);
+- `publisherDisplayName` (at most 80 characters).
 
 Presentation text is untrusted. Consumers render it as text, never as HTML or
 markdown, and show the icon only through `<img>`. The validator rejects control
@@ -660,9 +666,10 @@ composed for its own install's tenant.
   sentinel, a reserved or system-data tree, or a tenant-qualified id, whatever the
   ceiling approves, and never emit a scopeless capability.
 - Physical tree ids are kept out of the control facade's responses and exception
-  messages (see the [facade](../lattice.api.apps/README.md)). Telemetry and mutation
-  observers report the logical tree id. Physical ids remain visible in storage
-  accounting and backup artifacts, each gated by its own capability: no app role can
+  messages (see the [facade](../lattice.api.apps/README.md)). Mutation observers and
+  most per-tree telemetry report the logical tree id, though not every series does.
+  Physical ids remain visible in those series, in storage accounting and in backup
+  artifacts, each gated by its own capability: no app role can
   carry the scopeless `Telemetry` capability, and a role confers `Backup` or
   `TreeLifecycle` only when the manifest requests it and the operator's ceiling
   allows it.
@@ -681,7 +688,7 @@ composed for its own install's tenant.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `Registrations` | empty | The apps present in the image, in registration order, each an `InImageAppRegistration` (slug, assembly, manifest resource name, and a `Publisher` that defaults to `first-party`). `AddLatticeApp` appends one, and `Register(slug, assembly, manifestResourceName)` adds one directly. Read once, when the source is constructed; a slug registered twice resolves as `DuplicateRegistration`. |
+| `Registrations` | empty | The apps present in the image, in registration order, each an `InImageAppRegistration` (slug, assembly, manifest resource name, a `Publisher` that defaults to `first-party`, and an `AssetResourcePrefix` for the UI bundle's embedded resources that defaults to `{manifestResourceNamespace}.ui.`). `AddLatticeApp` appends one, and `Register(slug, assembly, manifestResourceName)` adds one directly. Read once, when the source is constructed; a slug registered twice resolves as `DuplicateRegistration`. |
 
 ## See also
 

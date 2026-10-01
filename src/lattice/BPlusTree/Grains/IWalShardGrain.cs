@@ -203,9 +203,9 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <see cref="IWalStorageProvider.TrimAsync"/> removes a prefix
     /// (driven by <see cref="ILatticeWalGc"/> once every consumer has
     /// acked past that point) the live count drops by exactly the
-    /// trimmed prefix length, so dashboards, alerts, and the
-    /// back-pressure health check observe the persisted footprint
-    /// rather than a monotonically-growing offset counter.
+    /// trimmed prefix length, so state-observation cursors can detect when
+    /// a requested resume offset has fallen behind the retained prefix
+    /// rather than comparing against a monotonically-growing offset counter.
     /// </summary>
     Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
 
@@ -266,8 +266,8 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// persisted in this WAL shard. <b>Trim-unaware</b> -
     /// <see cref="IWalStorageProvider.TrimAsync"/> reduces the
     /// persisted footprint without updating this counter, so callers
-    /// that want the live footprint (dashboards, alerts, back-pressure)
-    /// must use <see cref="GetLiveEntryCountAsync"/> instead. Retained
+    /// that need the trim-aware live footprint must use
+    /// <see cref="GetLiveEntryCountAsync"/> instead. Retained
     /// as an obsolete forwarder for one minor version so existing
     /// callers compile without immediate change.
     /// </summary>

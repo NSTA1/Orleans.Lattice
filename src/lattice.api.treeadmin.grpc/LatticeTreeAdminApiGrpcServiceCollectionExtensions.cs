@@ -96,8 +96,7 @@ public static class LatticeTreeAdminApiGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps the tree-administration control-API RPC routes (the unary capability
-    /// probe and the unauthenticated auth-scheme discovery RPC) on the supplied
+    /// Maps the tree-administration control-API RPC routes on the supplied
     /// <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeTreeAdminApiGrpc"/> and must expose
     /// <c>Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdmin</c> (via

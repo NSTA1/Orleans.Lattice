@@ -72,7 +72,7 @@ internal sealed partial class TreeDeletionGrain
     }
 
     /// <summary>
-    /// Persists <see cref="TreeDeletionState"/> and, only once the write has
+    /// Persists <see cref="Orleans.Lattice.BPlusTree.State.TreeDeletionState"/> and, only once the write has
     /// succeeded, publishes what was written to the interleaved status read.
     /// </summary>
     private async Task PersistAsync()

@@ -29,7 +29,7 @@ public enum TreeLifecycleState
 /// </summary>
 public enum NodeKind
 {
-    /// <summary>The per-shard root node.</summary>
+    /// <summary>The per-shard root node. The current structure read does not produce this value.</summary>
     ShardRoot = 0,
 
     /// <summary>An internal (separator) node.</summary>

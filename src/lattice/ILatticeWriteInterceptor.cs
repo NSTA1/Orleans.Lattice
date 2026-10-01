@@ -24,11 +24,12 @@ namespace Orleans.Lattice;
 /// permitted to write.
 /// </para>
 /// <para>
-/// <b>System-origin bypass.</b> Library-internal traffic (replication apply,
-/// saga legs, view maintenance, and other system-origin turns) bypasses the
+/// <b>System-origin bypass.</b> The seam covers writes that reach the
+/// intercepted data-plane write methods. A system-origin turn that reaches that
+/// choke point, such as a saga leg or view-maintenance write, bypasses the
 /// interceptor by default, exactly as it bypasses the access gate, so internal
-/// machinery is never self-filtered. An interceptor that must also see that
-/// ingest opts in by returning <c>true</c> from
+/// machinery is not self-filtered. An interceptor that must also see those
+/// intercepted system-origin writes opts in by returning <c>true</c> from
 /// <see cref="InterceptsSystemOrigin"/>.
 /// </para>
 /// </remarks>
@@ -36,10 +37,12 @@ public interface ILatticeWriteInterceptor
 {
     /// <summary>
     /// Gets a value indicating whether this interceptor must also be consulted
-    /// on system-origin (library-internal) writes such as replication apply,
-    /// saga legs, and view maintenance. The default no-op returns <c>false</c>,
-    /// preserving the "internal machinery is never intercepted" contract; a real
-    /// interceptor returns <c>true</c> only when it must govern that ingest too.
+    /// on system-origin (library-internal) writes that reach the intercepted
+    /// data-plane write methods, such as saga legs and view maintenance. Direct
+    /// apply, restore, or merge paths that write below that choke point are not
+    /// covered by this opt-in. The default no-op returns <c>false</c>, preserving
+    /// the "internal machinery is never intercepted" contract; a real interceptor
+    /// returns <c>true</c> only when it must govern those intercepted writes too.
     /// </summary>
     bool InterceptsSystemOrigin => false;
 

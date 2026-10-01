@@ -1,12 +1,13 @@
 # Orleans.Lattice.Api.Replication API reference
 
-The package exposes one registration entry point (an extension method on the public static `LatticeApiReplicationServiceCollectionExtensions` class) and one public options type. The control contract itself, `ILatticeReplicationControl`, and the model records it returns are defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.
+The package exposes the registration entry points below (extension methods on the public static `LatticeApiReplicationServiceCollectionExtensions` class) and the public options types `LatticeApiReplicationOptions` and `LatticeReplicationStatusOptions`. The control contract `ILatticeReplicationControl`, the read-only peer-status contract `ILatticeReplicationStatus`, and the model records they return are defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.
 
 ## Registration
 
 | Member | Signature | Purpose |
 |---|---|---|
 | `AddLatticeReplicationApi` | `ISiloBuilder AddLatticeReplicationApi(this ISiloBuilder builder, Action<LatticeApiReplicationOptions>? configure = null)` | Registers the replication control facade on the silo. Must be called after `AddLatticeReplication(..., enableRuntimeConfig: true)`; calling it first throws at registration with an actionable message. |
+| `AddLatticeReplicationStatusApi` | `ISiloBuilder AddLatticeReplicationStatusApi(this ISiloBuilder builder, Action<LatticeReplicationStatusOptions>? configure = null)` | Registers the read-only peer-status facade (`ILatticeReplicationStatus`) on the silo and validates `LatticeReplicationStatusOptions`. Must be called after `AddLatticeReplication(...)`, which records the per-link telemetry it reads; calling it first throws `InvalidOperationException` at registration. Independent of `AddLatticeReplicationApi`, so it needs no runtime config authority. Repeated calls are idempotent for the structural wiring and still layer any supplied options delegate. |
 
 ## Facade
 
@@ -18,6 +19,14 @@ Every `treeId` these operations accept is a **tenant-local name**: the facade re
 | Enable replication | `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then enables it under the fixed `mode`. Rejects an in-place mode change on an already-enabled tree. When `bootstrapSourceClusterId` is supplied and the tree already holds data, requests a snapshot bootstrap; an enable that finds the tree already enabled under the same mode returns `AlreadyEnabled = true` and requests none. |
 | Disable replication | `Task<ReplicationDisableResult> DisableReplicationAsync(string treeId, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then disables its runtime enrollment without purging peer data. Idempotent. |
 | Get replication config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` | Returns a permission-scoped report; trees the caller may not manage are omitted rather than throwing. |
+
+## Peer status facade
+
+`ILatticeReplicationStatus` (defined in `Orleans.Lattice.Api.Abstractions`) is a separate, read-only contract, registered by `AddLatticeReplicationStatusApi`. `ILatticeReplicationControl` does not include it.
+
+| Operation | Signature | Notes |
+|---|---|---|
+| Get peer status | `Task<ReplicationPeerStatusPage> GetPeerStatusAsync(ReplicationPeerStatusQuery query, CancellationToken cancellationToken = default)` | Reads one page of per-link status for the whole local cluster, ordered by tree id, then peer region id, then direction. Page through the report by passing each page's `ContinuationToken` back in the next query until it is `null`; a page can hold fewer rows than the page size and still carry a token. Reports only the trees the caller holds `LatticeOperation.Replication` over, and a tree filter the caller may not manage yields an empty page. |
 
 ## Model types
 
@@ -63,18 +72,71 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `Static` | The static deployment-time replicated-tree map puts the tree in force: either the runtime config tree has no entry for it, or its entry yields no enabled unambiguous mode and the resolver falls back to the static declaration. A runtime disable therefore does not change the mode such a tree resolves to; the deployment configuration does. |
 | `RuntimeAndStatic` | Both sources declare the tree and the runtime entry is in force, so the reported mode is the runtime-fixed mode - or none, when that entry's mode is ambiguous. |
 
+### `ReplicationPeerStatusQuery`
+
+| Member | Type | Meaning |
+|---|---|---|
+| `TreeId` | `string?` | When set, only links of this tree are reported. A tenant-local name, scoped to the caller's tenant as the enrolment verbs scope theirs; an id the report itself returned selects the same tree. `null` or empty reports every tree the caller may see. |
+| `PeerRegionId` | `string?` | When set, only links to or from this peer region (cluster id) are reported. `null` or empty reports every peer. |
+| `PageSize` | `int` | The maximum number of rows in the page. `0` selects `DefaultPageSize` (100), a value above `MaxPageSize` (1000) is clamped to it, and a negative value is rejected. |
+| `ContinuationToken` | `string?` | The previous page's opaque `ContinuationToken`, or `null` for the first page. It is only meaningful with the same filters it was issued under. |
+
+`ReplicationPeerStatusQuery.All` is the query for the first page of every link the caller may see, at the default page size, and `ResolvePageSize()` returns the page size a query applies.
+
+### `ReplicationPeerStatusPage`
+
+| Member | Type | Meaning |
+|---|---|---|
+| `LocalRegionId` | `string` | The id (cluster id) of the region that produced the page, so a caller can place itself among the peers it reports. |
+| `Peers` | `IReadOnlyList<ReplicationPeerStatusEntry>` | The link rows on this page, ordered by tree id, then peer region id, then direction. |
+| `ContinuationToken` | `string?` | The token that resumes the report after the last row of this page, or `null` when there is nothing further to read. Pass it back unaltered. |
+
+`ReplicationPeerStatusPage.Empty(localRegionId)` creates an empty, final page.
+
+### `ReplicationPeerStatusEntry`
+
+| Member | Type | Meaning |
+|---|---|---|
+| `TreeId` | `string` | The effective tree id: the bare name for a default-tenant tree, and the tenant-qualified `t/{tenant}/{name}` id for a tree of an asserted, non-default tenant. It is the id `ReplicationTreeConfigEntry.TreeId` carries for the same tree. |
+| `PeerRegionId` | `string` | The id (cluster id) of the peer region at the other end of the link. |
+| `Direction` | `ReplicationLinkDirection` | Which way the link carries entries, relative to the local region. |
+| `EntriesBehind` | `long` | WAL entries the local region has yet to ship to the peer. Outbound links only; always `0` on an inbound link. |
+| `BytesBehind` | `long` | Payload bytes the local region has yet to ship to the peer. Outbound links only; always `0` on an inbound link. |
+| `ConsecutiveErrors` | `long` | Consecutive failed contact attempts since the last success: failed shipments on an outbound link, failed applies of the peer's entries on an inbound link. |
+| `TimeSinceLastContact` | `TimeSpan?` | Time since the last successful contact in this direction, or `null` when there has never been one. The liveness probe refreshes an idle outbound link; an inbound link is refreshed only when the peer's entries are applied, so an idle peer's inbound link ages without being unhealthy. |
+| `InFlight` | `long` | Batches shipped to the peer and not yet acknowledged. Outbound links only; always `0` on an inbound link. |
+| `Health` | `ReplicationLinkHealth` | The health derived from the fields above against the `LatticeReplicationStatusOptions` thresholds (see [Configuration](configuration.md#latticereplicationstatusoptions)). |
+
+### `ReplicationLinkDirection`
+
+| Value | Meaning |
+|---|---|
+| `Outbound` | The local region ships the tree's entries to the peer. |
+| `Inbound` | The local region applies the tree's entries authored by the peer. |
+
+### `ReplicationLinkHealth`
+
+| Value | Meaning |
+|---|---|
+| `Unknown` | Not enough is known to judge the link: it has never made a successful contact and no threshold has been crossed. Also the value an entry from a peer that predates the field decodes to. |
+| `Healthy` | Every signal is within its lagging threshold. |
+| `Lagging` | At least one signal is past its lagging threshold and none is past its stalled threshold. |
+| `Stalled` | At least one signal is past its stalled threshold. |
+
 ## Exceptions
 
 | Exception | Raised when |
 |---|---|
 | `LatticeAuthorizationDeniedException` | The caller is not authorized for the `LatticeOperation.Replication` capability on the target tree. |
-| `ArgumentException` | `treeId` is null or empty. |
-| `LatticeTenantAccessDeniedException` | The tenancy add-on is registered and the request asserts an active tenant the caller may not act as (an anonymous caller never can), or, under an asserted tenant, names a `sys-` tree or a malformed `t/` id, so the tenant-local `treeId` cannot be resolved. (Defined in `Orleans.Lattice`.) |
+| `ArgumentException` | `treeId` is null or empty, or a peer-status query's `ContinuationToken` is malformed (including a token of an earlier format version). |
+| `ArgumentNullException` | `GetPeerStatusAsync` is passed a null `query`. |
+| `ArgumentOutOfRangeException` | A peer-status query's `PageSize` is negative. |
+| `LatticeTenantAccessDeniedException` | The tenancy add-on is registered and the request asserts an active tenant the caller may not act as (an anonymous caller never can), or, under an asserted tenant, names a `sys-` tree or a malformed `t/` id, so the tenant-local `treeId` cannot be resolved. `GetPeerStatusAsync` checks the caller's tenant on every call, with or without a tree filter, and resolves its tree filter the same way. (Defined in `Orleans.Lattice`.) |
 | `LatticeReplicationModeChangeRejectedException` | An enable would change the merge mode of an already-enabled tree, or targets an enabled tree whose mode is currently ambiguous. Carries `TreeId`, `CurrentMode`, `RequestedMode`, and `CurrentModeAmbiguous`. (Defined in `Orleans.Lattice.Replication`.) |
 | `LatticeReplicationPreconditionFailedException` | A runtime precondition for authoring the change was not met: no local replica id is configured - the config entry's flag dots are stamped with it, so both an enable and the disable of an enabled tree need one - or a flag-based merge mode is requested without one. (Defined in `Orleans.Lattice.Replication`.) |
 | `InvalidOperationException` | An enable that requests a snapshot bootstrap finds a bootstrap for the same tree already in progress from a different source cluster. The enable itself has already been written to the config tree by the time this is raised. |
 
 ## See also
 
-- [Configuration](configuration.md) - the `LatticeApiReplicationOptions` properties.
-- [Architecture](architecture.md) - how each operation composes authorization and engine delegation.
+- [Configuration](configuration.md) - the `LatticeApiReplicationOptions` and `LatticeReplicationStatusOptions` properties.
+- [Architecture](architecture.md) - how each control operation composes authorization and engine delegation, and how the peer-status read path reads, authorizes, and pages.
