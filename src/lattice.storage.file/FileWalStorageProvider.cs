@@ -336,7 +336,13 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 
             if (records.Length > 0)
             {
-                ArrayPool<WalRecord>.Shared.Return(records, clearArray: true);
+                // Only the first `count` slots were populated; clearing that
+                // prefix drops the references the caller could observe, where
+                // clearArray: true additionally wipes the whole rounded-up
+                // rental - work proportional to the bucket rather than to the
+                // window actually read.
+                records.AsSpan(0, count).Clear();
+                ArrayPool<WalRecord>.Shared.Return(records);
             }
         }
     }

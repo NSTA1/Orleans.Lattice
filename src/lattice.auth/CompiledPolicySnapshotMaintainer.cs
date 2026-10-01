@@ -36,6 +36,19 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     private long _epoch;
     private long _lastRebuildUtcTicks;
 
+    // Whether the published snapshot may answer requests without a rebuild. Distinct
+    // from the epoch, which only ever advances: a snapshot built over an empty policy
+    // stops being warm the moment the first rule commits (see OnMutationAsync). The
+    // three fields below change together under _warmGate, so a rebuild cannot mark a
+    // snapshot warm after a write it did not see has marked it cold.
+    private readonly Lock _warmGate = new();
+    private volatile bool _warm;
+    private bool _currentHasRules;
+
+    // Advances on every policy-tree mutation, so a rebuild can tell whether a write
+    // landed while it scanned.
+    private long _policyMutations;
+
     // Coalescing state for background rebuilds: 0 idle, 1 running, 2 running with
     // a queued follow-up.
     private int _rebuildState;
@@ -91,19 +104,36 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     }
 
     /// <summary>
-    /// Ensures the snapshot has been built at least once, building it
-    /// synchronously (awaited) when it is still cold. Idempotent: once any rebuild
-    /// has advanced the epoch this returns immediately.
+    /// Whether <see cref="Current"/> may answer a request without first awaiting a
+    /// rebuild. False until the first build, and false again from the moment the
+    /// first rule commits to a policy whose published snapshot holds none, until a
+    /// rebuild whose scan no later policy write overlapped publishes.
+    /// </summary>
+    /// <remarks>
+    /// Once the snapshot holds rules this stays true across later edits, which are
+    /// reflected eventually (see the type remarks). The cold window exists because
+    /// an empty snapshot can be published at once - the store answers a policy tree
+    /// that was never written without scanning it (issue 4128) - and the first
+    /// rebuild after a host seeds its grants scans a tree whose shards those writes
+    /// are still creating, which can take seconds. Serving the empty snapshot
+    /// through that window denies every grant the host has just committed.
+    /// </remarks>
+    public bool IsWarm => _warm;
+
+    /// <summary>
+    /// Ensures the snapshot is warm (<see cref="IsWarm"/>), building it
+    /// synchronously (awaited) when it is not. Returns immediately once warm, and
+    /// skips its own scan when a rebuild it queued behind left the snapshot warm.
     /// </summary>
     /// <param name="cancellationToken">Cancels this caller's wait.</param>
     public async Task EnsureWarmAsync(CancellationToken cancellationToken = default)
     {
-        if (Interlocked.Read(ref _epoch) > 0)
+        if (_warm)
         {
             return;
         }
 
-        await RebuildOnceAsync(cancellationToken).ConfigureAwait(false);
+        await RebuildOnceAsync(skipIfWarm: true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -111,6 +141,18 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     {
         if (string.Equals(mutation.TreeId, AuthConstants.PolicyTree, StringComparison.Ordinal))
         {
+            lock (_warmGate)
+            {
+                _policyMutations++;
+
+                // The first rule over an empty snapshot: requests must wait for a
+                // scan that sees it rather than keep reading "no rules" (see IsWarm).
+                if (!_currentHasRules)
+                {
+                    _warm = false;
+                }
+            }
+
             ScheduleRebuild();
         }
 
@@ -123,7 +165,7 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     /// </summary>
     internal async Task<long> RebuildNowAsync(CancellationToken cancellationToken = default)
     {
-        await RebuildOnceAsync(cancellationToken).ConfigureAwait(false);
+        await RebuildOnceAsync(skipIfWarm: false, cancellationToken).ConfigureAwait(false);
         return CurrentEpoch;
     }
 
@@ -162,7 +204,7 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
         {
             try
             {
-                await RebuildOnceAsync(CancellationToken.None).ConfigureAwait(false);
+                await RebuildOnceAsync(skipIfWarm: false, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -180,11 +222,22 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
         }
     }
 
-    private async Task RebuildOnceAsync(CancellationToken cancellationToken)
+    private async Task RebuildOnceAsync(bool skipIfWarm, CancellationToken cancellationToken)
     {
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (skipIfWarm && _warm)
+            {
+                return;
+            }
+
+            long mutationsAtStart;
+            lock (_warmGate)
+            {
+                mutationsAtStart = _policyMutations;
+            }
+
             // The store's scan is resilient to a transient enumeration abort
             // caused by a concurrent scan over the policy tree, so a plain
             // buffering scan here is sufficient.
@@ -195,7 +248,20 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
             }
 
             var compiled = CompiledPolicy.Compile(rules);
-            Volatile.Write(ref _current, compiled);
+            lock (_warmGate)
+            {
+                Volatile.Write(ref _current, compiled);
+                _currentHasRules = rules.Count > 0;
+
+                // A cold snapshot turns warm only when no policy write landed during
+                // its scan; otherwise the queued follow-up (or a waiting request)
+                // rescans.
+                if (!_warm && _policyMutations == mutationsAtStart)
+                {
+                    _warm = true;
+                }
+            }
+
             Interlocked.Increment(ref _epoch);
             Interlocked.Exchange(ref _lastRebuildUtcTicks, _time.GetUtcNow().UtcTicks);
 

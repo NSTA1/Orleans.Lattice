@@ -1,0 +1,35 @@
+@*
+    A duration: a label row over one control box that holds a whole-number box for each
+    unit offered, each followed by its unit and named by it.
+*@
+<div class="lt-field lt-duration">
+    <label id="@LabelId" class="lt-field__label" for="@InputId">@Label</label>
+    <div class="@ControlClass" role="group" aria-labelledby="@LabelId">
+        @for (var i = 0; i < _units.Length; i++)
+        {
+            var index = i;
+            <input id="@UnitId(index)"
+                   class="lt-input lt-input--mono lt-duration__input"
+                   type="text"
+                   inputmode="numeric"
+                   autocomplete="off"
+                   spellcheck="false"
+                   value="@_texts[index]"
+                   disabled="@Disabled"
+                   aria-label="@UnitLabel(index)"
+                   aria-invalid="@(EffectiveError is null ? null : "true")"
+                   aria-describedby="@DescribedBy"
+                   @oninput="args => OnUnitInputAsync(index, args)"
+                   @onchange="args => OnUnitChangeAsync(index, args)" />
+            <span class="lt-duration__unit" aria-hidden="true">@_units[index].Short</span>
+        }
+    </div>
+    @if (Hint is not null)
+    {
+        <p id="@HintId" class="lt-field__hint">@Hint</p>
+    }
+    @if (EffectiveError is not null)
+    {
+        <p id="@ErrorId" class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @EffectiveError</p>
+    }
+</div>

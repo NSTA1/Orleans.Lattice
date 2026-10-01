@@ -5,21 +5,20 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="BackupToolInvocations"/>, the pure adapter layer
-/// between the backup MCP tools and the <see cref="Orleans.Lattice.Api.Backup.ILatticeBackupControl"/>
-/// facade. Proves the capture-then-inspect round trip, the fail-closed denial an
+/// between the backup MCP tools and the backup control and operations facades. Proves the capture-then-inspect round trip, the fail-closed denial an
 /// unauthorized caller gets from the facade gate (the MCP layer adds none), the
 /// bounded paged artifact export with its resume cursor, and the DTO projections.
 /// All deterministic against a stateful fake - no cluster, no ordering-by-timing.
 /// </summary>
 [TestFixture]
-public sealed class BackupToolInvocationsTests
+public sealed partial class BackupToolInvocationsTests
 {
     [Test]
     public async Task Create_then_list_and_describe_round_trips_a_backup()
     {
         var control = new FakeLatticeBackupControl();
 
-        var created = await BackupToolInvocations.CreateBackupAsync(
+        var created = await CaptureAsync(
             control, "nightly", "orders", scopeKind: null, keyOrPrefix: null, pageSize: 0, CancellationToken.None);
 
         var listed = await BackupToolInvocations.ListBackupsAsync(
@@ -46,7 +45,7 @@ public sealed class BackupToolInvocationsTests
         // per-capture artifact ids and that the surfaced id actually drives an
         // export end-to-end.
         var control = new FakeLatticeBackupControl();
-        var created = await BackupToolInvocations.CreateBackupAsync(
+        var created = await CaptureAsync(
             control, "nightly", "orders", null, null, 0, CancellationToken.None);
 
         var described = await BackupToolInvocations.DescribeBackupAsync(
@@ -74,10 +73,10 @@ public sealed class BackupToolInvocationsTests
     public async Task Create_incremental_records_the_base_and_chain()
     {
         var control = new FakeLatticeBackupControl();
-        var full = await BackupToolInvocations.CreateBackupAsync(
+        var full = await CaptureAsync(
             control, "full", "orders", null, null, 0, CancellationToken.None);
 
-        var incremental = await BackupToolInvocations.CreateIncrementalBackupAsync(
+        var incremental = await CaptureIncrementalAsync(
             control, "delta", "orders", null, null, full.BackupId, 0, CancellationToken.None);
         var described = await BackupToolInvocations.DescribeBackupAsync(
             control, incremental.BackupId, CancellationToken.None);
@@ -116,7 +115,7 @@ public sealed class BackupToolInvocationsTests
                     control, 0, null, false, CancellationToken.None),
                 Throws.TypeOf<LatticeAuthorizationDeniedException>());
             Assert.That(
-                async () => await BackupToolInvocations.CreateBackupAsync(
+                async () => await CaptureAsync(
                     control, "n", "orders", null, null, 0, CancellationToken.None),
                 Throws.TypeOf<LatticeAuthorizationDeniedException>());
             Assert.That(
@@ -129,7 +128,7 @@ public sealed class BackupToolInvocationsTests
     public async Task Delete_reports_whether_a_backup_existed()
     {
         var control = new FakeLatticeBackupControl();
-        var created = await BackupToolInvocations.CreateBackupAsync(
+        var created = await CaptureAsync(
             control, "nightly", "orders", null, null, 0, CancellationToken.None);
 
         var first = await BackupToolInvocations.DeleteBackupAsync(control, created.BackupId, CancellationToken.None);
@@ -194,8 +193,10 @@ public sealed class BackupToolInvocationsTests
     {
         var control = new FakeLatticeBackupControl();
 
-        var restore = await BackupToolInvocations.RestoreBackupAsync(
-            control, "bk-0", "orders", "ShadowCutover", "op-7", CancellationToken.None);
+        var handle = await BackupToolInvocations.StartRestoreAsync(
+            control, "bk-0", "orders", "ShadowCutover", restoreOperationId: "op-7", operationId: null, CancellationToken.None);
+        var status = await BackupToolInvocations.GetOperationStatusAsync(control, handle.OperationId, CancellationToken.None);
+        var restore = status.Operation!.RestoreResult!;
 
         await BackupToolInvocations.RevertRestoreAsync(
             control,
@@ -294,7 +295,7 @@ public sealed class BackupToolInvocationsTests
     public async Task Manifest_projection_carries_scope_and_artifact_count()
     {
         var control = new FakeLatticeBackupControl();
-        var created = await BackupToolInvocations.CreateBackupAsync(
+        var created = await CaptureAsync(
             control, "nightly", "orders", "Prefix", "eu/", 0, CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -312,7 +313,7 @@ public sealed class BackupToolInvocationsTests
         var control = new FakeLatticeBackupControl();
 
         Assert.That(
-            async () => await BackupToolInvocations.CreateBackupAsync(
+            async () => await CaptureAsync(
                 control, "nightly", "orders", "Nonsense", null, 0, CancellationToken.None),
             Throws.ArgumentException);
     }

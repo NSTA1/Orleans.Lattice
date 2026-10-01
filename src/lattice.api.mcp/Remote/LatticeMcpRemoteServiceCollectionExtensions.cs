@@ -151,6 +151,9 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeBackupControl>(sp =>
                 new GrpcLatticeBackupControl(LatticeBackupApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, backup, static r => r.Backup), sp)));
+            services.TryAddSingleton<ILatticeBackupOperations>(sp =>
+                new GrpcLatticeBackupOperations(LatticeBackupApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, backup, static r => r.Backup), sp)));
             services.AddBackupTools(options.EnableBackupControl);
         }
 

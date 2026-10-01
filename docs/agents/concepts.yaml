@@ -58,13 +58,15 @@ concepts:
   - id: api-backup-facade
     name: "Backup API facade"
     category: api
-    definition: "The backup facade drives backup capture, catalog listing, restore, revert, and health operations through a transport-agnostic contract."
+    definition: "The backup facade drives backup capture, catalog listing, accept-then-poll operation tracking, restore, revert, and health operations through a transport-agnostic contract."
     packages:
       - "Orleans.Lattice.Api.Backup"
     capability_boundary:
       in_scope:
         - statement: "Catalog listing is cursor-resumable and page-bounded."
           source: "docs/lattice.api.backup/README.md"
+        - statement: "Backup and restore start verbs return operation handles and expose status, list, and cancel through ILatticeBackupOperations."
+          source: "docs/lattice.api.backup/operations.md"
       out_of_scope:
         - statement: "Capability probes are advisory and do not replace per-operation authorization."
           source: "docs/lattice.api.backup/README.md"
@@ -72,6 +74,7 @@ concepts:
       limits: []
     sources:
       - "docs/lattice.api.backup/README.md"
+      - "docs/lattice.api.backup/operations.md"
   - id: api-data-facade
     name: "Data API facade"
     category: api
@@ -711,6 +714,8 @@ concepts:
       in_scope:
         - statement: "Capture operations authorize their target scope before touching backup data."
           source: "docs/lattice.api.backup/README.md"
+        - statement: "Tracked backup captures report progress as operation phases and units instead of blocking the caller."
+          source: "docs/lattice.api.backup/operations.md"
       out_of_scope:
         - statement: "A backup id is already an effective id and is not tenant-composed again."
           source: "docs/lattice.api.backup/api.md"
@@ -718,6 +723,7 @@ concepts:
       limits: []
     sources:
       - "docs/lattice.backup/README.md"
+      - "docs/lattice.api.backup/operations.md"
   - id: bplus-internal-node
     name: "B+ internal node"
     category: core
@@ -1640,6 +1646,8 @@ concepts:
       in_scope:
         - statement: "Backup restore authorizes the target scope before touching data."
           source: "docs/lattice.api.backup/README.md"
+        - statement: "Tracked restores expose their LatticeRestoreResult through the operation result map when they succeed."
+          source: "docs/lattice.api.backup/operations.md"
       out_of_scope:
         - statement: "A restore target is tenant-composed at the entry point rather than after authorization."
           source: "docs/lattice.api.backup/api.md"
@@ -1648,6 +1656,7 @@ concepts:
     sources:
       - "docs/lattice.backup/README.md"
       - "docs/lattice.api.backup/README.md"
+      - "docs/lattice.api.backup/operations.md"
   - id: scan-range
     name: "Scan and range"
     category: core

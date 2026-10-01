@@ -83,18 +83,54 @@ public sealed class DataHistoryPanelTests : DataTestContext
     [Test]
     public void Setting_a_point_in_time_puts_it_in_the_address_and_a_bad_one_is_refused()
     {
+        // The As-of field refuses the future, so the clock stands after the time typed.
+        Time.Advance(Start.AddDays(3) - Time.GetUtcNow());
         SeedHistory("orders", "k", "\"a\"");
         var cut = RenderAt("data/orders?tab=history&key=k");
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
 
-        Control(cut, "As of (UTC)").Input("not a time");
+        Control(cut, "As of").Input("not a time");
         cut.Find("form.lt-toolbar").Submit();
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Write a time such as")));
 
-        Control(cut, "As of (UTC)").Input("2026-09-28 14:05:00");
+        Control(cut, "As of").Input("2026-09-28 14:05:00");
         cut.Find("form.lt-toolbar").Submit();
 
         cut.WaitUntil(() => Assert.That(CurrentRelative, Is.EqualTo("/data/orders?tab=history&key=k&at=2026-09-28T14%3A05%3A00Z")));
+    }
+
+    [Test]
+    public void A_point_in_time_is_picked_from_the_calendar_and_put_in_the_address()
+    {
+        // #4148: the As-of field was free text; it is a date and time picker in UTC.
+        SeedHistory("orders", "k", "\"a\"");
+        var cut = RenderAt("data/orders?tab=history&key=k");
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+
+        cut.Find("form.lt-toolbar .lt-datetime__toggle").Click();
+        cut.FindAll(".lt-datetime__pick").Single(pick => pick.TextContent == "1 hour ago").Click();
+        var picked = Control(cut, "As of").GetAttribute("value");
+        cut.Find("form.lt-toolbar").Submit();
+
+        Assert.That(picked, Does.Match(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"), "the picked time is shown as an ISO instant in UTC");
+        cut.WaitUntil(() => Assert.That(CurrentRelative, Is.EqualTo("/data/orders?tab=history&key=k&at=" + Uri.EscapeDataString(picked!))));
+    }
+
+    [Test]
+    public void A_point_in_time_in_the_future_is_refused_before_it_reaches_the_address()
+    {
+        SeedHistory("orders", "k", "\"a\"");
+        var cut = RenderAt("data/orders?tab=history&key=k");
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+
+        Control(cut, "As of").Input("2999-01-01T00:00:00Z");
+        cut.Find("form.lt-toolbar").Submit();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Choose a time that is not in the future."));
+            Assert.That(CurrentRelative, Is.EqualTo("/data/orders?tab=history&key=k"));
+        });
     }
 
     [Test]
@@ -163,20 +199,22 @@ public sealed class DataHistoryPanelTests : DataTestContext
     }
 
     [Test]
-    public void The_as_of_field_starts_empty_and_describes_its_form_without_a_stale_sample_time()
+    public void The_as_of_field_starts_empty_says_empty_means_latest_and_shows_its_zone_without_a_stale_sample_time()
     {
         // #3987: a placeholder of 2026-09-28T14:00:00Z read as a pre-filled, stale value.
+        // #4148: the empty state is prose, and the zone is always shown.
         SeedHistory("orders", "k", "\"a\"");
 
         var cut = RenderAt("data/orders?tab=history&key=k");
 
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
-        var field = Control(cut, "As of (UTC)");
+        var field = Control(cut, "As of");
+        var described = field.GetAttribute("aria-describedby")!.Split(' ').Select(id => cut.Find("#" + id).TextContent).ToArray();
         Assert.Multiple(() =>
         {
             Assert.That(field.GetAttribute("value") ?? string.Empty, Is.Empty);
-            Assert.That(field.GetAttribute("placeholder"), Is.Null.Or.Empty);
-            Assert.That(cut.Find("#" + field.GetAttribute("aria-describedby")!.Split(' ')[0]).TextContent, Is.EqualTo(DataHistoryPanel.AtHint));
+            Assert.That(field.GetAttribute("placeholder"), Is.EqualTo("Latest"));
+            Assert.That(described, Does.Contain("UTC").And.Contain(DataHistoryPanel.AtHint));
         });
     }
 

@@ -73,6 +73,16 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
     /// <inheritdoc />
     protected override Assembly PackageAssembly => typeof(LatticeWriteFencedException).Assembly;
 
+    /// <summary>
+    /// A long-running operation's start request or completion: built fresh by the
+    /// runner for one call, and copied by the receiving operation grain into
+    /// read-only instances before it keeps any of it, so a shared instance is
+    /// never retained.
+    /// </summary>
+    private const string OperationCopiedOnReceipt =
+        "Built fresh by LatticeOperationRunner for one call; LatticeOperationGrain copies every collection into its "
+        + "own read-only instance before persisting it, so the sender's instance is never retained or written into.";
+
     /// <inheritdoc />
     protected override IReadOnlyDictionary<string, string> AcknowledgedReadOnlyPayloads =>
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -117,6 +127,14 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.RangeDeleteResult"] = ReadModel,
 
             ["Orleans.Lattice.BPlusTree.SiblingInitialization"] = CopiedOnReceipt,
+
+            ["Orleans.Lattice.Operations.LatticeOperationBeginRequest"] = OperationCopiedOnReceipt,
+            ["Orleans.Lattice.Operations.LatticeOperationCompletion"] = OperationCopiedOnReceipt,
+            ["Orleans.Lattice.Operations.LatticeOperationRecord"] =
+                "Durable operation record. LatticeOperationGrain builds every collection in it as its own read-only copy on "
+                + "receipt (TreeIds, Phases, Attributes, Result) and replaces the record wholesale with `with`; readers "
+                + "only project it, and no instance in it can be written into.",
+            ["Orleans.Lattice.Operations.LatticeOperationIndexPage"] = ReadModel,
 
             ["Orleans.Lattice.LatticePredicateNode"] =
                 "Caller-authored predicate tree; the grain walks it to evaluate a match and never writes into it.",

@@ -64,6 +64,12 @@ backup catalog - both ordinary reserved `sys-backup-*` trees - do not survive a
 restart. A durable deployment registers durable grain storage and a durable WAL
 provider, and for disaster recovery a durable external sink.
 
+For operator-facing backup and restore, the API facade offers accept-then-poll
+operations with durable progress and cancellation. Engine service interfaces in
+this package remain current; the facade's older blocking verbs are deprecated and
+will be removed in the next major version. Migration guide:
+https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs.
+
 Must be registered after `AddLattice(...)`. For a remotely-drivable control
 plane, add the
 [`Orleans.Lattice.Api.Backup`](https://www.nuget.org/packages/Orleans.Lattice.Api.Backup)

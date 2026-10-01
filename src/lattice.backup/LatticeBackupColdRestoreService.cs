@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Backup;
 
@@ -36,6 +37,12 @@ internal sealed class LatticeBackupColdRestoreService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(BackupOperationPhases.Bootstrapping).ConfigureAwait(false);
+        }
+
         // Bootstrap the reserved sys- trees so a fresh cluster whose catalog tree
         // has never been touched has its history retention and catalog index in
         // place before anything is registered. Idempotent and safe to re-run.
@@ -62,6 +69,11 @@ internal sealed class LatticeBackupColdRestoreService(
         // from the sink and surface a clear error on a broken chain or a
         // missing / tampered artifact before anything is installed.
         var result = await _restore.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
+
+        if (progress is not null)
+        {
+            await progress.ReportAsync(BackupOperationPhases.Cataloguing).ConfigureAwait(false);
+        }
 
         // Leave the recovered cluster with a correct catalog: re-project every
         // manifest the sink holds into the reserved catalog tree. Idempotent, and

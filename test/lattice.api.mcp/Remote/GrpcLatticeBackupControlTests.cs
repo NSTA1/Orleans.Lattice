@@ -2,6 +2,10 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Backup;
 
+// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
+// they prove the start-then-wait wrappers still behave exactly as before.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>

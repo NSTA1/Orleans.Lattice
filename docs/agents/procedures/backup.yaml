@@ -3,13 +3,13 @@ id: backup
 name: "Capture tree snapshots and durable backups"
 surfaces:
   in_process:
-    api: "ILatticeTreeAdmin.SnapshotTreeAsync and ILatticeBackupControl.CreateBackupAsync"
+    api: "ILatticeTreeAdmin.SnapshotTreeAsync and ILatticeBackupOperations.StartBackupAsync"
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/SnapshotTree and orleans.lattice.api.backup/CreateBackup"
+    api: "/orleans.lattice.api.treeadmin/SnapshotTree and orleans.lattice.api.backup/StartBackup"
     source: "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CreateBackupMethodName"
   mcp_tool:
-    api: "lattice_treeadmin_tree_snapshot and lattice_backup_create"
+    api: "lattice_treeadmin_tree_snapshot and lattice_backup_start"
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
 preconditions:
   - id: backup-engine
@@ -33,15 +33,15 @@ steps:
     expects: "Reports whether a point-in-time capture is in flight."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetSnapshotStatusAsync"
   - n: 3
-    action: "For durable backup, capture a full backup for the selected scope."
-    api: "ILatticeBackupControl.CreateBackupAsync / CreateBackup"
-    expects: "Returns the captured backup id and manifest."
-    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+    action: "For durable backup, start a tracked full backup for the selected scope."
+    api: "ILatticeBackupOperations.StartBackupAsync / StartBackup / lattice_backup_start"
+    expects: "Returns an operation handle immediately; poll status for the backup id."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupAsync"
   - n: 4
-    action: "For an incremental chain, capture against the selected base backup id."
-    api: "ILatticeBackupControl.CreateIncrementalBackupAsync / CreateIncrementalBackup"
-    expects: "Returns the incremental backup id and manifest."
-    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+    action: "For an incremental chain, start a tracked capture against the selected base backup id."
+    api: "ILatticeBackupOperations.StartIncrementalBackupAsync / StartIncrementalBackup / lattice_backup_start_incremental"
+    expects: "Returns an operation handle immediately; poll status for the incremental backup id."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartIncrementalBackupAsync"
   - n: 5
     action: "Describe the backup before using it as a restore point."
     api: "ILatticeBackupControl.DescribeBackupAsync / DescribeBackup"
@@ -69,6 +69,10 @@ failure_modes:
     signal: "Facade raises LatticeAuthorizationDeniedException."
     effect: "No data is captured."
     response: "Grant the required tree or backup operation and retry."
+  - id: operation-runner-lost
+    signal: "Tracked operation status becomes Failed after the accepting silo is lost or stops heartbeating."
+    effect: "The background backup is not resumed."
+    response: "Start a new tracked operation with a fresh id after confirming the previous status."
 rollback:
   supported: false
   mechanism: "No snapshot abort verb is surfaced; unwanted backup artifacts are removed only through DeleteBackupAsync."
@@ -84,9 +88,12 @@ concurrency:
     source: "docs/lattice/snapshots.md"
   - rule: "Backup set capture can use one causal fence so a cross-tree atomic write is not torn across the set boundary."
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+  - rule: "Tracked backup operations run on the accepting silo and are marked Failed on silo loss or lease lapse; resumption is not supported."
+    source: "docs/lattice.api.abstractions/operations.md"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs"
+  - "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs"
   - "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs"
   - "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
   - "docs/lattice.api.treeadmin/README.md"
