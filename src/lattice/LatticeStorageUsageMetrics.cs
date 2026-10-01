@@ -140,13 +140,13 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             LatticeMetrics.StorageTotalBytesName,
             static () => ObserveAll(static r => r.TotalBytes, requireDeep: true),
             unit: "By",
-            description: "Sum of the three storage surfaces for the tree.");
+            description: "Sum of the three storage surfaces for the tree; the WAL term is physical occupancy after a deep publish and the retained WAL bytes after a WAL-only poll.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StoragePolicyOverThresholdName,
             static () => ObserveAllOverThreshold(),
             unit: "1",
-            description: "1 when the tree's retained WAL bytes currently breach the advisory ceiling, else 0.");
+            description: "1 when the tree's WAL occupancy bytes currently breach the advisory ceiling, else 0.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageUsageDeepPublishedName,
@@ -339,7 +339,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     }
 
     /// <summary>
-    /// Records whether the named tree's retained WAL bytes currently breach
+    /// Records whether the named tree's WAL occupancy bytes currently breach
     /// the advisory ceiling, driving the <c>storage.policy.over_threshold</c>
     /// 0/1 gauge. Pushed by the per-tree aggregator and by the WAL garbage
     /// collector after each byte-pressure evaluation so the gauge tracks the

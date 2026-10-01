@@ -290,10 +290,14 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <c>GrpcChannelHardening</c> stamps
     /// <c>LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader</c> from
     /// the sender's configured local cluster id alongside the shared secret.
-    /// The receiving interceptor does not read that header: it matches the
-    /// presented secret against the whole accepted set, so the header is not
-    /// bound to the secret, and this check compares the stamped header with the
-    /// body-declared origin only. The header is fixed per peer channel from the
+    /// With <see cref="LatticeReplicationSecurityOptions.BindCredentialToOriginCluster"/>
+    /// on (the default) the receiving interceptor reads that header and requires
+    /// the presented secret to be the one this cluster is configured to use for
+    /// the claimed origin, so the header is bound to the credential before this
+    /// check compares it with the body-declared origin. With binding off the
+    /// interceptor matches the presented secret against the whole accepted set
+    /// and never reads the header, so the header is not bound to the secret and
+    /// this check is the only one it meets. The header is fixed per peer channel from the
     /// configured local cluster id, or from the cluster-wide replication cluster id
     /// when no override is set; request bodies carry the sending tree's resolved
     /// replication cluster id. The header is <b>required</b>: an absent value refuses

@@ -47,14 +47,22 @@
     still reports the container healthy.
 
 .PARAMETER WorkspacePath
-    The host directory mounted read-only at /workspace. Defaults to REPO_PATH from an
-    existing .env, else this file's grandparent, matching the base compose file.
+    The corpus root to measure. Defaults to the repository root, this file's
+    grandparent, rather than the base compose file's REPO_PATH.
 
 .PARAMETER OutFile
     Where to write. Defaults to .env beside the compose files.
 
 .PARAMETER DryRun
     Print the derivation and the resulting file without writing anything.
+
+.PARAMETER CorpusOnly
+    Measure and print the corpus summary, then exit before host sizing,
+    refusal checks, or .env writing.
+
+.PARAMETER IgnoreHostLoad
+    Bypass the concurrent-load refusal when measured free memory is below the
+    derived container commitment; the derived grant still uses total host memory.
 
 .PARAMETER Force
     Overwrite the derived keys in an existing .env, PRESERVING every key this script does

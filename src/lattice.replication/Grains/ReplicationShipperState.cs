@@ -39,7 +39,7 @@ internal sealed class ReplicationShipperState
     /// schedule before settling. The trade-off is intentional: writing
     /// state on every failure would amplify a transient outage into a
     /// per-failure storage write storm. Operators monitor the
-    /// <c>orleans.lattice.replication.consecutive_errors</c> metric
+    /// <c>orleans.lattice.replication.peer.consecutive_errors</c> metric
     /// for steady-state visibility rather than relying on this field
     /// surviving migration.
     /// </remarks>
@@ -73,12 +73,14 @@ internal sealed class ReplicationShipperState
     /// extra rescan on first pump tick after activation.
     /// </para>
     /// <para>
-    /// Persisted on every cursor advance via the same
-    /// <c>WriteStateAsync</c> call
-    /// that flushes the HLC cursor - one round-trip, atomic across
-    /// the two slots. A failed write rolls back both, preserving the
-    /// pre-existing pump-side guarantee that a transient storage
-    /// failure leaves the shipper at the prior durable resume point.
+    /// Persisted by the same <c>WriteStateAsync</c> call that flushes the
+    /// HLC cursor - one round-trip, atomic across the two slots. That write
+    /// is coalesced rather than issued on every cursor advance: it runs once
+    /// <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/> advances
+    /// are pending or <see cref="LatticeReplicationOptions.ShipCursorWriteMaxDelay"/>
+    /// has passed since the oldest pending one. A failed write changes
+    /// neither slot, preserving the pump-side guarantee that a transient
+    /// storage failure leaves the shipper at the prior durable resume point.
     /// </para>
     /// </remarks>
     [Id(2)]

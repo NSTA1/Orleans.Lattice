@@ -10,15 +10,19 @@
     http://localhost:5001  US cluster
     http://localhost:5002  EU cluster
 
-  The endpoint, transport posture, and (optionally) the sign-in credential are
-  passed to the explorer through the launcher-friendly environment-variable
-  bootstrap, so no per-user app-data config is hand-edited. The explorer
-  connects over loopback h2c (HTTP/2 cleartext, insecure-loopback-dev mode),
-  which is how the sample exposes the state API through Traefik.
+  The endpoint and transport posture are passed to the explorer through the
+  launcher-friendly environment-variable bootstrap, so no per-user app-data
+  config is hand-edited. Username and password parameters are accepted for
+  compatibility with the old launcher flow, but the rewritten web head ignores
+  credential seeding by default; sign in manually in the connection dialog when
+  the browser opens. The explorer connects over loopback h2c (HTTP/2 cleartext,
+  insecure-loopback-dev mode), which is how the sample exposes the state API
+  through Traefik.
 
   Bring the cluster up first with ./run.ps1 (anonymous) or
   ./run.ps1 -Username <u> -Password <p> (state-API auth enabled), then run this
-  script with matching credentials.
+  script. For an auth-enabled cluster, enter the matching credentials in the
+  Explorer sign-in dialog.
 
 .PARAMETER Cluster
   Which cluster to browse: 'us' (default, http://localhost:5001) or 'eu'
@@ -28,14 +32,14 @@
   Explicit state-API endpoint URL, overriding the -Cluster default.
 
 .PARAMETER Username
-  Sign-in username. Supply together with -Password when the cluster was started
-  with ./run.ps1 -Username/-Password (state-API auth enabled). Omit both to
-  connect anonymously.
+  Sign-in username accepted for compatibility with the old launcher flow. The
+  rewritten web head keeps credential seeding off, so this value is ignored by
+  the web head; use the Explorer sign-in dialog after launch.
 
 .PARAMETER Password
-  The plaintext password paired with -Username. Passed to the explorer via
-  an environment variable that is cleared as soon as the explorer exits; it never
-  appears on a command line.
+  The plaintext password paired with -Username. It is exported only for
+  compatibility and cleared as soon as the explorer exits; the rewritten web head
+  ignores it unless a host explicitly enables environment credential seeding.
 
 .EXAMPLE
   ./run-explorer.ps1
@@ -47,8 +51,8 @@
 
 .EXAMPLE
   ./run-explorer.ps1 -Username alice -Password 'Sup3rSecret'
-    Launch the web explorer against the US cluster, signed in as alice
-    (matches ./run.ps1 -Username alice -Password 'Sup3rSecret').
+    Launch the web explorer against the US cluster; when the sign-in dialog opens,
+    enter alice / Sup3rSecret (matching ./run.ps1).
 #>
 param(
   [ValidateSet('us', 'eu')]
@@ -101,14 +105,16 @@ $webProject = Join-Path $PSScriptRoot "..\..\src\lattice.explorer\Web\Orleans.La
 $webUrl = "http://localhost:5290"
 
 # Seed the explorer via the launcher-friendly environment bootstrap. The
-# endpoint + insecure-loopback-dev flag are honoured by the config bootstrap; the credential (if any) is applied in memory only and never
-# persisted. The password env var is cleared in the finally block below.
+# endpoint + insecure-loopback-dev flag are honoured by the config bootstrap.
+# Credential env vars are kept only for compatibility with the old launcher flow:
+# the rewritten web head ignores them by default, so the operator signs in through
+# the browser dialog. The password env var is cleared in the finally block below.
 $env:LATTICE_EXPLORER_ENDPOINT = $Endpoint
 $env:LATTICE_EXPLORER_INSECURE_DEV = "true"
 if ($signIn) {
     $env:LATTICE_EXPLORER_USERNAME = $Username
     $env:LATTICE_EXPLORER_PASSWORD = $Password
-    Write-Host "Signing in as '$Username'." -ForegroundColor Cyan
+    Write-Host "Credential seed for '$Username' was provided, but the web head ignores it by default; sign in through the browser dialog." -ForegroundColor Cyan
 } else {
     Remove-Item Env:LATTICE_EXPLORER_USERNAME -ErrorAction SilentlyContinue
     Remove-Item Env:LATTICE_EXPLORER_PASSWORD -ErrorAction SilentlyContinue

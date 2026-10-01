@@ -23,7 +23,8 @@ namespace Orleans.Lattice.Api.Replication.Grpc;
 /// The host must also expose the facade
 /// (<c>Orleans.Lattice.Api.Replication.ILatticeReplicationControl</c>) in the
 /// same service provider - typically by co-hosting Orleans with
-/// <c>AddLattice(...)</c> and <c>AddLatticeReplicationApi()</c> on the same host.
+/// <c>AddLattice(...)</c>, <c>AddLatticeReplication(..., enableRuntimeConfig: true)</c>,
+/// and <c>AddLatticeReplicationApi()</c> on the same host.
 /// The binding fails closed: with the default
 /// <see cref="DenyAllReplicationApiAuthorizer"/> and
 /// <see cref="LatticeReplicationApiGrpcOptions.RequireAuthorization"/> at its
@@ -103,6 +104,7 @@ public static partial class LatticeReplicationApiGrpcServiceCollectionExtensions
     /// on the supplied <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeReplicationApiGrpc"/> and must expose
     /// <c>Orleans.Lattice.Api.Replication.ILatticeReplicationControl</c> (via
+    /// <c>AddLatticeReplication(..., enableRuntimeConfig: true)</c> and
     /// <c>AddLatticeReplicationApi</c>) in the same service provider before this
     /// call.
     /// </summary>

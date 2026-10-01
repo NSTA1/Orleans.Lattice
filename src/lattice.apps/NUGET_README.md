@@ -15,7 +15,8 @@ available assembly without depending on the package's filesystem layout.
 Neither entry point invokes app code, installs an app, or registers services.
 
 Manifests declare identity, trees, flat membership-group roles, optional
-replication intent and schema-family bindings, subscriptions, and MCP tools.
+replication intent and schema-family bindings, subscriptions, MCP tools, and
+optional presentation metadata and an untrusted UI bundle.
 Parsing and validation return `AppManifestResult` with path-addressed errors;
 invalid content never produces a usable manifest. Missing resources also return
 an error. Null assembly/stream arguments are programming errors.

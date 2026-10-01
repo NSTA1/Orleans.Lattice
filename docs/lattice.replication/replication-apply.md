@@ -157,7 +157,7 @@ For a 256-entry single-origin `LwwRegister` batch this collapses roughly 4 x 256
 
 ### Preserved per-entry semantics
 
-Every classification the per-entry path produces survives the batch path:
+Every classification the per-entry path produces survives the batch path, except the tombstone-reap no-op (the last bullet):
 
 - **Range-delete entries** bypass the pinned-floor gate and apply unconditionally (a range apply is naturally idempotent at the leaf layer).
 - **Local-origin runs** classify every entry as `Dedup` with `HighWaterMark = HybridLogicalClock.Zero` and emit no grain calls.
@@ -165,10 +165,11 @@ Every classification the per-entry path produces survives the batch path:
 - **Causal-park** is exercised per-entry; only the local-vector-clock fetch is lazy.
 - **Per-entry instrumentation** (`ApplyDuration`, `ApplyLag`, `ApplyFifoViolations`) is recorded inside the per-entry loop so observability is preserved verbatim.
 - **Single-entry batches** defer to `ApplyAsync` so behaviour is bit-identical with the legacy receiver for the trivial case.
+- **Tombstone-reap envelopes** are not acknowledged as `dedup` on the batch path: it has no no-op branch for them, so a multi-entry batch carrying one faults on that entry, because the point-apply step has no rule for it. The dead-letter-tracking decorator then falls back to per-entry apply, which does acknowledge the envelope as a no-op. The sender never ships these envelopes, so only an older shipper or a hand-built caller can deliver one.
 
 ### Failure model
 
-Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The gRPC receiver endpoint wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. The dead-letter-tracking applier decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
+Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The gRPC receiver endpoint wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. The dead-letter-tracking applier decorator falls back to per-entry routing when any entry in the batch already has retry history, or when the batch call throws part-way, so its DLQ accounting is exact. On that per-entry fallback (and for a single-entry batch) the decorator itself records the inbound per-peer contact, which the batch path otherwise records once per run; entries from runs the failed batch attempt already recorded can therefore record contact a second time for the same push (see [Observability](observability.md#bidirectional-peerlast_contact_seconds-and-the-liveness-probe)).
 
 ### Parallel apply across independent runs
 

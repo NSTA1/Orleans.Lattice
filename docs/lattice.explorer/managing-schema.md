@@ -8,9 +8,9 @@ Schema is tenant-scoped. In a tenant-rooted Explorer, the same address under `/t
 
 Schema is visible when its fail-closed capability probe returns any schema grant. The probe names a reserved sentinel tree and has no side effects. A definite visible or refused answer is remembered until the sign-in state or connection changes. A transport fault is not remembered, so the next navigation asks again.
 
-The area is hidden when the schema facade is absent, when a signed-in identity receives no grant, when the probe is denied, when the cluster does not serve schema administration, or when the connection is unavailable.
+The area is hidden when the schema facade is absent, when a signed-in identity receives no grant or is refused by the probe, when the cluster does not serve schema administration, or when the connection is unavailable.
 
-An anonymous caller whose probe returns no grants sees the area as unavailable. The exact sentence shown is:
+An anonymous caller whose probe returns no grants, or is refused, sees the area as unavailable. The exact sentence shown is:
 
 > Sign in to manage schema on this cluster.
 
@@ -115,7 +115,7 @@ The **Advanced** switch shows the exact policy as JSON, as the cluster will stor
 
 The member-path fields in the builder and the raw editor are [pickers](navigation-model.md#pickers) that suggest the members of the inferred shape and accept any path, because a value's members are not known to the cluster until a rule names them.
 
-**Strict ingest** controls whether replicated and restored values are checked too. When it is on, a value that fails strict ingest is diverted to dead letters instead of being applied.
+**Strict ingest** is the tree's half of [strict-mode ingest](../lattice.schema/schema-enforcement.md#strict-mode-ingest), which takes effect only where the silo's schema enforcement also turns strict ingest on (`LatticeSchemaEnforcementOptions.StrictIngest`). With both on, a value that replication or another internal write path sends through the tree's checked write operations, and that fails the policy, is diverted to dead letters instead of being applied. A backup restore, a tree merge and a last-writer-wins replication apply outside an atomic batch write straight into the tree's storage instead, so their values are stored unchecked even with strict ingest on; see [which writes are checked](../lattice.schema/schema-enforcement.md#setting-a-policy-on-a-tree).
 
 Clearing a policy uses a destructive confirmation named **Clear this tree's policy**. The confirmation states that every value will be accepted from then on, strict ingest stops diverting values, and the rules are not kept.
 

@@ -6,8 +6,9 @@ namespace Orleans.Lattice.Explorer.Core.Tenancy;
 /// cross-tenant request always degrades to the caller's active tenant.
 /// </summary>
 /// <remarks>
-/// A platform-operator signal is a real, probed decision owned by the plugin
-/// that performs the probe, so the pure navigation core has none of its own.
+/// A platform-operator signal is a real, probed decision owned by the
+/// administrative surface that performs the probe, so the pure navigation core
+/// has none of its own.
 /// Registering this default keeps the tenant-view graph resolvable on a head
 /// that opts into tenant scoping without registering an administrative surface,
 /// and it fails closed rather than admitting an unvalidated caller.

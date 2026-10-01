@@ -23,7 +23,7 @@ namespace Orleans.Lattice.ReferenceArchitecture.Silo;
 /// groups on the principal. The asserted-group path makes grants resolve on the
 /// very first call (before this seed lands); the directory path makes the same
 /// identity model introspectable through the ordinary read / scan surface and the
-/// Explorer Access tab, so an operator can SEE who is in which group and why a
+/// Explorer Access area, so an operator can SEE who is in which group and why a
 /// call was allowed or denied. The two agree by construction because both derive
 /// from the one mounted <c>identities.json</c>.
 /// </para>

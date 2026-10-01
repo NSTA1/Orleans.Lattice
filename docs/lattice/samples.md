@@ -4,7 +4,7 @@ Each sample lives in its own directory under [`samples/`](../../samples); nearly
 
 ## Feature gallery
 
-Minimal, focused samples, grouped by the same concerns as the [feature catalogue](../../FEATURES.md). Most are independent console apps that host a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrate one capability with heavily-commented, before/after output, and carry their own README, most with a "When to use / When not to use" note; run those with `dotnet run --project samples/<Name>`. The exceptions say so in their row - notably the two-cluster CrossClusterReplication and CrossClusterAuthorization samples, the Azure-deployed ClusterScaling, the containerised RepoContextContainer, and AgentBacklog, a tool-driven walkthrough with no project of its own.
+Minimal, focused samples, grouped by the same concerns as the [feature catalogue](../../FEATURES.md). Most are independent console apps that host a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrate one capability with heavily-commented, before/after output, and carry their own README, most with a "When to use / When not to use" note; run those with `dotnet run --project samples/<Name>`. The exceptions say so in their row - notably the two-cluster CrossClusterReplication, CrossClusterAuthorization and Explorer samples, the Azure-deployed ClusterScaling, the containerised RepoContextContainer, and AgentBacklog, a tool-driven walkthrough with no project of its own.
 
 Four samples have a detailed section of their own further down: [HelloWorld](#helloworld), the minimal starting point, and [MultiSiteManufacturing](#multisitemanufacturing), [VehicleFleetSimulator](#vehiclefleetsimulator), and [ClusterScaling](#clusterscaling), which deploy or compose more than one process.
 
@@ -72,7 +72,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 
 | Sample | What it shows |
 |---|---|
-| [Explorer](../../samples/Explorer/README.md) | The opt-in `Orleans.Lattice.Explorer.Web` hosting library co-hosted with a single-silo cluster in one process, so the console can be browsed against live data. **In progress** - the Explorer surface is still moving. |
+| [Explorer](../../samples/Explorer/README.md) | The opt-in `Orleans.Lattice.Explorer.Web` hosting library co-hosted in one process with a two-region estate - two single-silo clusters with tenancy on, replication between them, and one shared backup sink - so every Explorer area can be browsed against live data; `--minimal` runs a single region with no tenancy and no peer. **In progress** - the Explorer surface is still moving. |
 
 ### AI and MCP
 

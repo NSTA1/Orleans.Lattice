@@ -1183,9 +1183,11 @@ public static class LatticeMetrics
     /// </para>
     /// <para>
     /// Read beside <see cref="RegistryAdmissionInFlight"/>: batches larger than
-    /// one can only form once the permits are saturated, so a batch-size
-    /// distribution above one with a width distribution below the ceiling is
-    /// contradictory and means one of the two is being read wrongly.
+    /// one form when several queued logical tree ids are drained by one dispatch,
+    /// while width reports how many dispatches are already in flight. A batch-size
+    /// distribution above one with a width distribution below the ceiling means
+    /// demand is arriving in bursts that the gate can coalesce without keeping
+    /// every permit saturated.
     /// </para>
     /// </summary>
     public static readonly Histogram<int> RegistryAdmissionBatchSize =
@@ -2258,7 +2260,7 @@ public static class LatticeMetrics
             description: "Consecutive failed WAL garbage-collection registry enumerations, tagged by cause.");
 
     /// <summary>
-    /// Histogram of retained WAL bytes remaining after a garbage-collection pass,
+    /// Histogram of physical WAL bytes remaining after a garbage-collection pass,
     /// tagged with <see cref="TagTree"/>. Sampled from the pass's own
     /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/>, so it costs no extra
     /// I/O. Read against <see cref="WalGcInterval"/> it answers the operational
@@ -2268,8 +2270,8 @@ public static class LatticeMetrics
     /// <b>Byte accounting is a capability, and its absence is knowable rather
     /// than silent.</b> The series exists for a tree only when the byte-pressure
     /// policy is enabled (<see cref="LatticeOptions.WalMaxRetainedBytes"/> is
-    /// set) <i>and</i> the configured <see cref="IWalStorageProvider"/> reports a
-    /// retained byte size. <see cref="WalGcPasses"/> is emitted unconditionally
+    /// set, or the default durability hold needs its byte bound) <i>and</i> the configured <see cref="IWalStorageProvider"/> reports a
+    /// byte size. <see cref="WalGcPasses"/> is emitted unconditionally
     /// for every pass, so a tree that is reporting passes but no backlog bytes is
     /// positively identifying a host without byte accounting - the two series are
     /// read together, and no consumer has to distinguish "no backlog" from "not
@@ -2280,7 +2282,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<long> WalGcBacklogBytes =
         Meter.CreateHistogram<long>("orleans.lattice.wal.gc.backlog_bytes", unit: "By",
-            description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
+            description: "Physical WAL bytes remaining after a garbage-collection pass, tagged by tree.");
 
     /// <summary>
     /// How long, in seconds, since a tree's durable materialiser offset floor
@@ -2495,7 +2497,7 @@ public static class LatticeMetrics
     /// the tree's logical retained payload. Tagged with <see cref="TagTree"/>.
     /// <para>
     /// <b>This is a statement about configuration, not about lag, and that is why
-    /// it is a separate instrument rather than an eighth arm of
+    /// it is a separate instrument rather than another arm of
     /// <see cref="WalGcPasses"/>.</b> Those arms partition invocations - exactly
     /// one is recorded per pass, so their sum can never over-count - and an
     /// unsatisfiable ceiling is not a pass outcome at all. It co-occurs with
@@ -2858,14 +2860,15 @@ public static class LatticeMetrics
         new(TagReason, "durable_offset_refusal");
 
     /// <summary>
-    /// Counter of WAL garbage-collection passes for which no retained-byte
-    /// backlog could be sampled, tagged with <see cref="TagTree"/> and with
+    /// Counter of WAL garbage-collection passes for which no WAL byte backlog
+    /// could be sampled, tagged with <see cref="TagTree"/> and with
     /// <see cref="TagReason"/> = <c>policy_disabled</c> or
     /// <c>provider_unsupported</c>. This is the positive "not measured" signal
     /// for <see cref="WalGcBacklogBytes"/> (issue #2694).
     /// <para>
-    /// <see cref="WalGcBacklogBytes"/> records only when the pass actually
-    /// sampled bytes, so on a host with byte accounting turned off it publishes
+    /// <see cref="WalGcBacklogBytes"/> records whenever the pass actually
+    /// sampled bytes - including samples taken for the default durability hold -
+    /// so on a host with byte accounting turned off it publishes
     /// <b>no series at all</b> - a shape a reader cannot distinguish from a dead
     /// subsystem, a broken instrument, or a genuine zero backlog without opening
     /// the source. That ambiguity is the defect: the prior contract asked the
@@ -2876,21 +2879,25 @@ public static class LatticeMetrics
     /// </para>
     /// <para>
     /// This counter states it instead, and separates the two causes a reader
-    /// would act on differently: <c>policy_disabled</c> means
-    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset and setting it
-    /// turns byte accounting on, whereas <c>provider_unsupported</c> means the
-    /// policy <i>is</i> enabled but the configured <see cref="IWalStorageProvider"/>
-    /// returned no retained byte size, so the remedy is a different provider.
+    /// would act on differently: <c>policy_disabled</c> means no byte-pressure
+    /// ceiling (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) is set for the
+    /// tree, whereas <c>provider_unsupported</c> means one is set but the
+    /// configured <see cref="IWalStorageProvider"/> returned no byte size, so the
+    /// remedy is a different provider. The reason is decided on the byte-pressure
+    /// ceiling alone while the byte sample is also taken for the default-on
+    /// durability hold, so with the default options a provider that accounts
+    /// bytes never advances this counter and one that cannot is reported as
+    /// <c>policy_disabled</c>.
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcBacklogBytesUnavailable =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.backlog_bytes_unavailable", unit: "{pass}",
-            description: "WAL GC passes that sampled no retained-byte backlog, tagged by tree and by reason (policy_disabled/provider_unsupported).");
+            description: "WAL GC passes that sampled no WAL byte backlog, tagged by tree and by reason (policy_disabled/provider_unsupported).");
 
-    /// <summary><see cref="TagReason"/> = <c>policy_disabled</c> (byte accounting is off because <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset).</summary>
+    /// <summary><see cref="TagReason"/> = <c>policy_disabled</c> (no byte-pressure ceiling, <see cref="LatticeOptions.WalMaxRetainedBytes"/>, is set for the tree).</summary>
     public static readonly KeyValuePair<string, object?> ReasonBytePolicyDisabled = new(TagReason, "policy_disabled");
 
-    /// <summary><see cref="TagReason"/> = <c>provider_unsupported</c> (the byte-pressure policy is enabled but the WAL storage provider reports no retained byte size).</summary>
+    /// <summary><see cref="TagReason"/> = <c>provider_unsupported</c> (a byte-pressure ceiling is set but the WAL storage provider reports no byte size).</summary>
     public static readonly KeyValuePair<string, object?> ReasonByteProviderUnsupported = new(TagReason, "provider_unsupported");
 
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
@@ -2942,17 +2949,17 @@ public static class LatticeMetrics
     /// Split out of <see cref="OutcomeIdle"/> by issue #3119. The floor state is
     /// <see cref="WalGcCursorFloorState.Available"/> in both cases, so before
     /// this arm existed the two were the same measurement: a tree whose
-    /// consumers are lagging far enough to breach the operator's byte ceiling
-    /// reported as quiet and healthy. That is not a presentational complaint -
+    /// consumers are lagging far enough to leave physical WAL bytes - dead bytes
+    /// included - above the operator's byte ceiling reported as quiet and healthy. That is not a presentational complaint -
     /// <c>idle</c> is the arm an operator reads as "nothing to do", so the
     /// breach was visible only on a different instrument
     /// (<see cref="StoragePolicyOverThresholdName"/>) that a pass-rate panel
     /// does not show.
     /// </para>
     /// <para>
-    /// This arm says the safe trim frontier is pinned below bytes the policy
-    /// wants back: the cursor branch ran, found nothing it was permitted to
-    /// remove, and the footprint is still over the ceiling. It is advisory about
+    /// This arm says the safe trim frontier is pinned below physical WAL bytes the
+    /// policy wants back: the cursor branch ran, found nothing it was permitted
+    /// to remove, and the occupancy footprint is still over the ceiling. It is advisory about
     /// the <i>cause</i> and definite about the <i>condition</i> - the GC never
     /// trims past the safe frontier to honour a ceiling, so this is "the bytes
     /// could not be safely reclaimed", never "the trim failed".
@@ -4119,18 +4126,14 @@ public static class LatticeMetrics
     /// <see cref="TagTree"/>, <see cref="TagPartition"/>, and the derived tenant
     /// dimension.
     /// <para>
-    /// <b>This is the second of the two factors that set peak replay memory, and
-    /// it is the one an operator cannot configure.</b> Peak memory is the product
-    /// of how many replays run at once and how much each one buffers. The first
-    /// factor is <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>,
-    /// which is an option, is surfaced on the container's tuning overlay, and is
-    /// already measured from both sides by
-    /// <see cref="WalReplayPermitAdaptations"/> and
-    /// <see cref="WalReplayPermitQueueWait"/>. The second is the per-replay slice
-    /// width, which is a private constant with no option behind it, so the only
-    /// thing that ever moves it is this reactive narrowing. Without this counter
-    /// that entire factor is invisible: the narrowing is reported by a warning
-    /// log alone, and a log is not a series.
+    /// <b>This is the second of the two factors that set peak replay memory.</b>
+    /// Peak memory is the product of how many replays run at once and how much
+    /// each one buffers. The first factor is
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>; the
+    /// second is the per-replay slice width, whose configured starting point is
+    /// <see cref="LatticeOptions.WalReplaySliceBudget"/>. This counter reports
+    /// the reactive narrowings below that starting width, so the allocation
+    /// factor is visible as a series rather than only as warning logs.
     /// </para>
     /// <para>
     /// <b>What it discriminates.</b> A managed <c>OutOfMemoryException</c> during
@@ -8051,7 +8054,7 @@ public static class LatticeMetrics
     /// <summary>Canonical name of the observable gauge reporting the per-tree sum of the three storage surfaces (tagged <see cref="TagTree"/>).</summary>
     public const string StorageTotalBytesName = "orleans.lattice.storage.total_bytes";
 
-    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose retained WAL bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>).</summary>
+    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose WAL occupancy bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>).</summary>
     public const string StoragePolicyOverThresholdName = "orleans.lattice.storage.policy.over_threshold";
 
     /// <summary>
@@ -8076,7 +8079,7 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter incremented once per <see cref="ILatticeWalGc.RunOnceAsync"/>
-    /// pass that observes a tree's pre-trim retained WAL bytes exceeding the
+    /// pass that observes a tree's pre-trim WAL occupancy bytes exceeding the
     /// configured advisory ceiling
     /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and therefore
     /// schedules a byte-pressure trim, tagged with <see cref="TagTree"/> and
@@ -8093,17 +8096,17 @@ public static class LatticeMetrics
     public const string StoragePolicyTrimTriggeredName = "orleans.lattice.storage.policy.trim_triggered";
 
     /// <summary>
-    /// Counter of WAL bytes freed by a byte-pressure-triggered trim pass
-    /// (pre-trim retained bytes minus post-trim retained bytes), tagged with
-    /// <see cref="TagTree"/>. Emitted alongside
-    /// <see cref="StoragePolicyTrimTriggered"/>; zero-reclaim passes (a
-    /// lagging consumer pinned every byte) do not emit so a perpetually
-    /// over-ceiling tree with no caught-up consumer produces no reclaim
-    /// traffic.
+    /// Counter of WAL occupancy bytes freed by a GC pass on a tree with an
+    /// advisory byte ceiling (<see cref="LatticeOptions.WalMaxRetainedBytes"/>)
+    /// configured (pre-trim occupancy bytes minus post-trim occupancy bytes),
+    /// tagged with <see cref="TagTree"/>. Emitted on every such pass whose
+    /// occupancy fell, whether or not the byte-pressure trim arm triggered;
+    /// zero-reclaim passes, and passes that sampled bytes only for the
+    /// durability hold, do not emit.
     /// </summary>
     public static readonly Counter<long> StoragePolicyBytesReclaimed =
         Meter.CreateCounter<long>(StoragePolicyBytesReclaimedName, unit: "By",
-            description: "WAL bytes freed by byte-pressure-triggered trim passes, tagged by tree.");
+            description: "WAL occupancy bytes freed by GC passes on trees with an advisory byte ceiling, tagged by tree.");
 
     /// <summary>Canonical name of <see cref="StoragePolicyBytesReclaimed"/>.</summary>
     public const string StoragePolicyBytesReclaimedName = "orleans.lattice.storage.policy.bytes_reclaimed";
@@ -9950,8 +9953,9 @@ public static class LatticeMetrics
     /// Arm of a <c>replay_permit_admission</c> refusal on
     /// <see cref="SaturationRefusals"/>: a WAL GC starvation drive found the
     /// process-wide GC share of replay permits full, or no permit immediately
-    /// free. Starvation drives never queue, so this is a bounded background
-    /// drive being told to try later, not a foreground activation refused.
+    /// free. This arm covers any bounded background drive - including the leaf
+    /// coverage-lag timer - being told to try later rather than queueing like a
+    /// foreground activation.
     /// </summary>
     public static readonly KeyValuePair<string, object?> SaturationArmGcShare = new(TagSaturationArm, "gc_share");
 
@@ -10311,8 +10315,9 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram sampled once per autonomic monitor pass with the number of
-    /// splits currently in flight for that tree (derived from each shard's
-    /// authoritative <c>IsSplitting</c> status). Tagged with <see cref="TagTree"/>.
+    /// shard migrations currently in flight for that tree: adaptive split
+    /// sources and consolidation fold donors both report through each shard's
+    /// authoritative <c>IsSplitting</c> status. Tagged with <see cref="TagTree"/>.
     /// Emitted every pass <em>regardless</em> of whether the cluster-wide split
     /// gate (<see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>) is
     /// enabled, so operators can compute the cluster aggregate as a
@@ -10321,7 +10326,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<long> SplitInFlight =
         Meter.CreateHistogram<long>("orleans.lattice.split.in_flight", unit: "{split}",
-            description: "Per-tree autonomic splits in flight, sampled every monitor pass (sum across tree for the cluster total).");
+            description: "Per-tree shard migrations in flight: adaptive split sources plus consolidation fold donors, sampled every monitor pass (sum across tree for the cluster total).");
 
     /// <summary>
     /// Counter of hot shards that passed the admission filters but could not start
@@ -10392,9 +10397,10 @@ public static class LatticeMetrics
     /// Counter of leaves visited by a compaction pass, tagged with
     /// <see cref="TagTree"/> and <see cref="TagOutcome"/> = <c>reaped</c>
     /// (the leaf removed at least one tombstone or expired entry),
-    /// <c>noop</c> (the leaf short-circuited because nothing has changed
-    /// since its last compaction), or <c>skipped</c> (the leaf threw and
-    /// the pass advanced past it). Lets operators distinguish work-done
+    /// <c>noop</c> (nothing was removed: the leaf was unchanged since
+    /// its last complete compaction, or every tombstone and expired entry
+    /// it held was still inside the grace window), or <c>skipped</c>
+    /// (the leaf threw and the pass advanced past it). Lets operators distinguish work-done
     /// from work-skipped on a single rate panel.
     /// </summary>
     public static readonly Counter<long> CompactionLeavesVisited =

@@ -433,9 +433,11 @@ repocontext_claim(
 Rules, all of which follow from how the surface actually behaves:
 
 - **Claim only in the item's `homeRegion`.** The underlying lock is cluster-wide
-  and therefore region-scoped, so a claim taken elsewhere fails closed on the
-  write path with `ForeignRegion`. Read the `homeRegion:` tag and skip the item
-  if it is not your region; do not spend a session discovering it.
+  and therefore region-scoped: another region's lock knows nothing of your claim,
+  and a write served from a region other than the one the claim was taken in
+  fails closed on the write path with `ForeignRegion`. Read the `homeRegion:` tag
+  and skip the item if it is not your region; do not spend a session discovering
+  it.
 - **Omit `maxWaitSeconds`.** Fail fast. Queueing behind a live lease means
   blocking for the remainder of somebody else's session when there is other ready
   work you could be doing. The whole point of a refusal is that you move on.

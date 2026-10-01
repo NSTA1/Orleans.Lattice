@@ -12,7 +12,7 @@ namespace Orleans.Lattice.ReferenceArchitecture.Silo;
 /// authorization rule at silo startup, so the estate's designated security
 /// administrator can discover and use every MCP tool group (state, data, backup,
 /// auth, telemetry, replication) immediately after deployment - without first
-/// hand-authoring a grant for themselves through the Explorer Access tab.
+/// hand-authoring a grant for themselves through the Explorer Access area.
 /// </summary>
 /// <remarks>
 /// <para>

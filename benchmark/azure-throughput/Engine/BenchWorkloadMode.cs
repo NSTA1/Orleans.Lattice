@@ -2,12 +2,12 @@ namespace VehicleFleetSimulator.AzureThroughput.Engine;
 
 /// <summary>
 /// Selects which <c>ILattice</c> operation the benchmark silo dispatches
-/// per producer batch. Used by <see cref="BenchWorkloadDispatcher"/> in
-/// <c>TcpIngestService.FlushAsync</c>. The default <see cref="SetMany"/>
+/// per producer batch. Used by <see cref="BenchWorkloadDispatcher"/> from
+/// <see cref="BenchIngestEngine"/>. The default <see cref="SetMany"/>
 /// preserves the harness's legacy behaviour (one <c>SetManyAsync</c> per
-/// producer batch); the other four modes exist so a single rung can
-/// produce headline numbers for every public <c>ILattice</c> op against
-/// the c2-iii operating point. See throughput-capture-plan.md.
+/// producer batch); the other modes let a single rung produce headline
+/// numbers for the public <c>ILattice</c> operation shapes against the
+/// c2-iii operating point. See throughput-capture-plan.md.
 /// </summary>
 public enum BenchWorkloadMode
 {

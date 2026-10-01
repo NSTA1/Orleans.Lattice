@@ -124,7 +124,7 @@ persona's scenarios).
 | Band | Purpose                              | Panel type                                    | Reads                                                                                  |
 |------|--------------------------------------|-----------------------------------------------|----------------------------------------------------------------------------------------|
 | 0    | Headline KPIs                        | `stat` × {3..4} with threshold-coloured bg    | Per-persona last-known KPI values (e.g. commit p99, ship p95, reads/sec).              |
-| 1    | Trends across runs                   | `timeseries` × {family count}, `points` mode  | One line per `{__name__, scenario, git_sha}` in the persona's metric families.         |
+| 1    | Trends across runs                   | `timeseries` × {family count}, `points` mode  | One series per metric per run in the persona's metric families (every pushed sample carries `scenario`, `run_id` and `git_sha`; the legend shows the metric name, `scenario` and `git_sha`, so runs at one commit share a legend label).         |
 | 2    | Per-run history (commit comparator)  | `barchart` × {KPI count}, vertical            | One bar per run, hover shows `{{scenario}} {{run_id}} @ {{git_sha}}`.                  |
 
 As committed, the Replication and WAL Performance dashboards, and the Replication, WAL
@@ -138,14 +138,21 @@ then emits one JSON per persona under `grafana/dashboards/`, plus the Overview. 
 wipe also removes the hand-maintained `BenchmarkHistory.atomic-writes.json`, and
 the regenerated Overview drops the hand-added `Atomic Writes` row (the script's
 `$Personas` table has no atomic-writes entry); restore both from git after
-regenerating. Adding or moving a
+regenerating. Regenerating also points the Microbench persona's mixed-workload
+stat tile and per-run bar chart, and the Overview's mixed-workload tile, at
+`bench_microbench_mixed_70r_30w_p99_ns`, a series no run pushes: the harness
+writes that key as `microbench_mixed_70_r_30_w_p99_ns`, pushed as
+`bench_microbench_mixed_70_r_30_w_p99_ns`, which is what the committed
+dashboards query. Those panels then read empty, so restore
+`BenchmarkHistory.microbench.json` from git as well. Adding or moving a
 scenario between personas is a one-line edit to the `$Personas` table at the
 top of the script, and Grafana's file provider picks the regenerated JSON up
 within ~30 s. As committed, though, the script aborts at its KPI validation
 before writing anything: the Replication persona's two headline KPIs
 (`bench_replication_ship_p95_ms`, `bench_replication_apply_lag_p95_ms`) are
 `$ScalarAliases` keys, and that check reads only the `$ScalarPanelExtra` keys
-and the auto-discovery key shapes.
+and the auto-discovery and microbench key shapes, so a misspelt name that still
+fits a key shape, like the mixed-workload one above, passes it.
 
 ## Querying directly
 

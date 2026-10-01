@@ -71,14 +71,14 @@ report's per-shard counts would still disclose the keys they counted. See
 
 | Field | What a healthy value looks like | What an unhealthy value points at |
 |---|---|---|
-| `ShardCount` | The tree's physical shard count. It rises by one with each committed split - adaptive, or driven by an online reshard - and falls when automatic shard healing folds an over-split tree back towards its registry-pinned base shard count. | A value you did not expect means you are looking at a different tree than you think, or splits or healing changed the topology: check `RecentSplits` and `orleans.lattice.shard.splits_committed`. See [Shard splitting](shard-splitting.md), [Online reshard](online-reshard.md), and [`ShardHealingEnabled`](configuration.md#shardhealingenabled). |
+| `ShardCount` | The tree's physical shard count. It rises by one with each committed split - adaptive, or driven by an online reshard that grows the tree - and falls by one with each committed fold, which an online reshard that shrinks the tree drives, and automatic shard healing drives when it folds an over-split tree back towards its registry-pinned base shard count. | A value you did not expect means you are looking at a different tree than you think, or splits, folds or healing changed the topology: check `RecentSplits` and `orleans.lattice.shard.splits_committed` for splits, and `orleans.lattice.shard.consolidations_committed` for folds, which `RecentSplits` never records. See [Shard splitting](shard-splitting.md), [Online reshard](online-reshard.md), and [`ShardHealingEnabled`](configuration.md#shardhealingenabled). |
 | `VirtualShardCount` | 4096 by default - a compile-time constant - or the slot count an installed app's manifest declared for a tree it created (see [Virtual shard space](configuration.md#virtual-shard-space-constant)). It is not a runtime option: persisted shard maps reference virtual slots by index. | Nothing to act on - it is the routing map's resolution, not a load signal. See [Tree sizing](tree-sizing.md). |
 | `TotalLiveKeys` | Tracks your expected working-set size. | Growth that outruns your model points at [Slow scans](#slow-scans) and admission headroom. Compare against `LatticeOptions.MaxLiveKeys` if you have set one. |
 | `TotalTombstones` | Small relative to `TotalLiveKeys`. | A large share of the total points at [tombstone bloat](#slow-scans). Only populated when `deep: true`. |
 | `SampledAt` | Within `DiagnosticsCacheTtl` (default 5 s) of now. | Older than the TTL means you are reading a cached report; see [the traps](#traps-when-reading-a-report). |
 | `Deep` | Echoes the argument you passed. | If it is `false`, ignore every tombstone field in the report. |
 | `Shards` | One entry per physical shard, ordered by `ShardIndex`. | See the per-shard table below. |
-| `RecentSplits` | Empty on a stable tree; a short list after adaptive splits or an online reshard. | A steady stream of entries points at [Concurrent split activity](#concurrent-split-activity). |
+| `RecentSplits` | Empty on a stable tree; a short list after adaptive splits or an online reshard that grows the tree. A fold is never recorded here. | A steady stream of entries points at [Concurrent split activity](#concurrent-split-activity). |
 
 ### Per-shard fields
 
@@ -91,9 +91,9 @@ report's per-shard counts would still disclose the keys they counted. See
 | `OpsPerSecond` | Comparable across shards. | One shard far above its peers is a hot shard - the exact condition adaptive splitting exists to relieve. See [Concurrent split activity](#concurrent-split-activity). |
 | `Reads` / `Writes` | The raw counters `OpsPerSecond` is derived from, over `HotnessWindow`: `(Reads + Writes) / HotnessWindow.TotalSeconds`. | A read-heavy shard and a write-heavy shard need different remedies; the split between the two counters tells you which you have. |
 | `HotnessWindow` | The window the counters cover: the time since the shard activated, so it restarts when the shard deactivates. Positive on every shard that answered the fan-out. | Exactly `TimeSpan.Zero` marks the placeholder entry of a shard whose diagnostics call failed (`OpsPerSecond` then reads `0.0`); see [the traps](#traps-when-reading-a-report). A very short window means the shard activated recently, so its counters and `OpsPerSecond` cover only that span. |
-| `SplitInProgress` | `false` on a stable tree. | `true` means this shard is the source of an in-flight split - adaptive, or driven by an online reshard. Normal if transient; see [Concurrent split activity](#concurrent-split-activity). |
+| `SplitInProgress` | `false` on a stable tree. | `true` means this shard is the source of an in-flight slot migration: a split (adaptive, or driven by an online reshard that grows the tree), or a fold that hands this shard's slots to an adjacent shard (an online reshard that shrinks the tree, or automatic shard healing). Normal if transient; see [Concurrent split activity](#concurrent-split-activity). |
 | `BulkOperationPending` | `false` on a stable tree. | `true` means the shard has recorded a bulk-load graft it has not finished linking in: normal while a chunk of an append-based bulk load grafts, and cleared by the shard's next read or write if the graft was interrupted. While any shard reports it, autonomic splitting is suspended for the whole tree. See [Bulk loading](bulk-loading.md). |
-| `SampleFailed` | `false` on every shard. | `true` marks the placeholder entry of a shard whose diagnostics call failed: its counts are unmeasured, not zero, and a bulk load refuses to begin until every shard answers. See [the traps](#traps-when-reading-a-report). |
+| `SampleFailed` | `false` on every shard. | `true` marks the placeholder entry of a shard whose diagnostics call failed: its counts are unmeasured, not zero, and the tree-administration facade's streamed bulk load (`ILatticeTreeAdmin.BeginBulkLoadAsync`) refuses to begin until every shard answers. See [the traps](#traps-when-reading-a-report). |
 
 ### A worked reading
 
@@ -274,11 +274,11 @@ Two things this is *not*:
 
 - **Bound what callers can write, at the edge.** Both guards are opt-in and
   both default to `null`; on `SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`,
-  `SetManyAsync`, `SetManyWherePredicateAsync`, the single-tree atomic batches
-  (checked before the saga starts) and the CRDT delta paths each throws an
-  `ArgumentException` before the write reaches storage, which is a far better
-  failure than a provider error deep in the persistence path. The bulk-load
-  paths do not check them:
+  `SetManyAsync`, `SetManyWherePredicateAsync`, the single-tree and cross-tree
+  atomic batches (checked before anything is staged) and the CRDT delta paths
+  each throws an `ArgumentException` before the write reaches storage, which
+  is a far better failure than a provider error deep in the persistence path.
+  The bulk-load paths and `MergeAsync` do not check them:
 
   ```csharp verify
   siloBuilder.ConfigureLattice("orders", options =>
@@ -336,8 +336,12 @@ shard is elevated, and `RecentSplits` shows entries appearing regularly.
 `SplitInProgress` means the shard is the **source** of an in-flight adaptive
 split: Lattice has detected a hot shard and is moving part of its virtual-shard
 range to a new physical shard. An online reshard (`ILattice.ReshardAsync`)
-drives the same per-shard split, so while one runs the flag and `RecentSplits`
-also move on the shards it divides, hot or not. The autonomic splitter watches
+that grows the tree drives the same per-shard split, so while one runs the
+flag and `RecentSplits` also move on the shards it divides, hot or not. A
+fold - an online reshard that shrinks the tree, or automatic shard healing -
+sets the same flag on the shard whose slots it is handing to an adjacent
+shard, but is never recorded in `RecentSplits`;
+`orleans.lattice.shard.consolidations_committed` counts folds. The autonomic splitter watches
 per-shard throughput and triggers when a shard's observed operations per second exceed
 `HotShardOpsPerSecondThreshold` (default 200). That figure is computed as
 `(reads + writes) / window.TotalSeconds` - the same quantity the report
@@ -382,12 +386,15 @@ Then decide which case you are in:
 | Observation | Reading |
 |---|---|
 | Flag set, clears within a few report intervals, `RecentSplits` gains one entry | Normal. The split committed. |
-| Flag set on several shards at once | Also normal if it is bounded: `MaxConcurrentAutoSplits` (default 2) caps in-flight autonomic splits per tree, `MaxClusterConcurrentAutoSplits` (default `null`, disabled) adds a cluster-wide ceiling on top of it, and `MaxConcurrentMigrations` (default 4) bounds the splits an online reshard runs at once. |
+| Flag set, clears, `ShardCount` one lower, `RecentSplits` unchanged | Normal. A fold committed; `orleans.lattice.shard.consolidations_committed` counts it. |
+| Flag set on several shards at once | Also normal if it is bounded: `MaxConcurrentAutoSplits` (default 2) caps in-flight autonomic splits per tree, `MaxClusterConcurrentAutoSplits` (default `null`, disabled) adds a cluster-wide ceiling on top of it, `MaxConcurrentMigrations` (default 4) bounds the splits or folds an online reshard runs at once, and `MaxConcurrentShardConsolidations` (default 1) bounds the folds automatic shard healing runs on a tree. |
 | Flag set on the same shard across many reports, no new `RecentSplits` entry, no throughput recovery | Stuck. Treat as a fault. |
 | Flag never set even though one shard is obviously hot | The candidate is being suppressed. |
 
 For the last two cases, the metrics tell you which: `orleans.lattice.split.in_flight`
-shows what is actually running; `orleans.lattice.split.candidates_suppressed`
+shows how many of the tree's shards carry the flag on each monitor pass - the
+donor of an in-flight healing fold included, so a fold occupies one of the
+`MaxConcurrentAutoSplits` slots too; `orleans.lattice.split.candidates_suppressed`
 counts hot, eligible shards a monitor pass found but could not start, because
 the per-tree cap (`MaxConcurrentAutoSplits`) had fewer free slots than
 candidates or the cluster-wide gate (`MaxClusterConcurrentAutoSplits`) withheld
@@ -550,9 +557,12 @@ reads issued close together disagree.
 
 ### Likely cause
 
-Lattice serves `GetAsync`, `ExistsAsync`, and `GetManyAsync` through a
-per-silo read-through cache. Whether that cache can return a stale value is
-entirely determined by `CacheTtl`:
+Lattice serves `ExistsAsync` and `GetManyAsync` - and any `GetAsync` the
+shard root serves serially - through a per-silo read-through cache. With
+[`OptimisticShardRootPointReads`](configuration.md#optimisticshardrootpointreads)
+on (the default), a `GetAsync` whose optimistic read validates reads the
+primary leaf instead and never consults the cache. Whether the cache can
+return a stale value is entirely determined by `CacheTtl`:
 
 - **`CacheTtl = TimeSpan.Zero` (the default).** Every read confirms freshness
   before answering. When the primary leaf is activated on the same silo and its
@@ -624,10 +634,12 @@ Two secondary checks:
   possibly-cached report.
 - **After a resize or reshard, no cache flush is needed.** A resize rebuilds
   the tree into a new physical tree with different leaf grain identities, so
-  reads land on fresh cache activations. A reshard moves virtual slots onto
-  new physical shards, so moved keys likewise read through new leaves and
-  their fresh caches, while keys that stay put keep reading through the same
-  leaves, whose caches keep refreshing against them. See
+  reads land on fresh cache activations. A reshard that grows the tree moves
+  virtual slots onto new physical shards, so moved keys likewise read through
+  new leaves and their fresh caches; one that shrinks it folds a shard's keys
+  into an adjacent shard's existing leaves, whose caches pick the moved keys
+  up on their next refresh like any other write. Keys that stay put keep
+  reading through the same leaves, whose caches keep refreshing against them. See
   [Tree sizing](tree-sizing.md) and [Online reshard](online-reshard.md).
 
 ---
@@ -646,7 +658,7 @@ Two secondary checks:
 | Scan latency climbing while live keys stay flat | [Slow scans](#slow-scans) |
 | `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity); from `GetManyAsync`, concurrent [atomic writes](atomic-writes.md) |
 | `LatticeTransactionOutcomeUnavailableException` on a read | [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception) - the transaction registry was unreachable for a key under a pending atomic write: transient, retry after a back-off |
-| `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry. `SaturationSource` names the seam that refused, and the `source` tag on `orleans.lattice.saturation.refusals` counts refusals by seam |
+| `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry. `SaturationSource` names the seam that refused, and the `source` tag on `orleans.lattice.saturation.refusals` counts refusals by seam; a `replay_permit_admission` refusal also carries an `arm` tag naming which part of the replay admission check refused |
 | `LatticeTreeOwnershipDeniedException` from an alias change | [Ownership-bounded aliasing](tree-registry.md#ownership-bounded-aliasing) - the registered `ITreeOwnershipGuard` refused the alias before anything was written; `Reason` carries the guard's explanation |
 | Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |

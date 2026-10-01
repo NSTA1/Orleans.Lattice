@@ -13,13 +13,13 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <see cref="LatticeApiMcpGroup.TenantAdmin"/> whose tools are thin adapters over
 /// the <see cref="ILatticeTenantAdmin"/> tenant lifecycle facade and the
 /// <see cref="ILatticeTenantRegionAdmin"/> region-residency facade. The tenant
-/// lifecycle is all-mutating - there is no read-only inspect operation - so the
-/// group contributes its control tools (<c>lattice_tenant_create</c>,
-/// <c>lattice_tenant_suspend</c>, <c>lattice_tenant_resume</c>,
-/// <c>lattice_tenant_delete</c>, <c>lattice_tenant_set_quotas</c>,
-/// <c>lattice_tenant_authorize_regions</c>, <c>lattice_tenant_set_residency</c>,
-/// <c>lattice_tenant_region_status</c>) only when tenant-admin control is opted in
-/// via <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> or
+/// group contributes its tenant lifecycle and region-residency tools
+/// (<c>lattice_tenant_create</c>, <c>lattice_tenant_suspend</c>,
+/// <c>lattice_tenant_resume</c>, <c>lattice_tenant_delete</c>,
+/// <c>lattice_tenant_set_quotas</c>, <c>lattice_tenant_authorize_regions</c>,
+/// <c>lattice_tenant_set_residency</c>, <c>lattice_tenant_region_status</c>) only
+/// when tenant-admin control is opted in via
+/// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> or
 /// <c>AddTenantAdminTools(enableControl: true)</c>. Every tool is annotated
 /// destructive and non-read-only except the read-only
 /// <c>lattice_tenant_region_status</c>.
@@ -35,9 +35,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// module adds no authorization path of its own.
 /// </para>
 /// <para>
-/// Every tenant lifecycle operation mutates cluster state (delete cascades the
-/// tenant's trees; set-quotas rewrites the tenant's capacity allocation), so all
-/// tools carry <c>destructiveHint</c>. The group
+/// Tenant lifecycle and mutating residency operations mutate cluster state (delete
+/// cascades the tenant's trees; set-quotas rewrites the tenant's capacity allocation),
+/// so those tools carry <c>destructiveHint</c>. The group
 /// itself is advertised only to a caller whose effective permissions grant
 /// <see cref="LatticeOperation.Admin"/> - an agent without the grant is offered no
 /// tenant-admin tools at all - and only when the host has opted the group in, so a
@@ -212,11 +212,11 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 RequestContext<CallToolRequestParams> context,
                 [Description("The tenant id whose quotas to author. Must be a valid, non-empty tenant id that is registered and is not the reserved default tenant.")] string tenantId,
                 CancellationToken cancellationToken,
-                [Description("The maximum total stored value bytes, or null for unbounded on this dimension.")] long? maxBytes = null,
-                [Description("The maximum total live key count, or null for unbounded on this dimension.")] long? maxKeys = null,
-                [Description("The maximum resident memory in bytes, or null for unbounded on this dimension.")] long? maxMemoryBytes = null,
-                [Description("The maximum number of trees the tenant may own, or null for unbounded on this dimension.")] long? maxTreeCount = null,
-                [Description("The maximum sustained operations per second, or null for unbounded on this dimension.")] long? maxOpsPerSecond = null,
+                [Description("The maximum total stored value bytes, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxBytes = null,
+                [Description("The maximum total live key count, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxKeys = null,
+                [Description("The maximum resident memory in bytes, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxMemoryBytes = null,
+                [Description("The maximum number of trees the tenant may own, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxTreeCount = null,
+                [Description("The maximum sustained operations per second, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxOpsPerSecond = null,
                 [Description("The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative.")] int burstPercent = 0) =>
             {
                 using var scope = StampCredential(context.Services!);
@@ -240,8 +240,9 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Authors a tenant's resource quotas and burst allowance, replacing whatever quotas the tenant "
                     + "currently carries. Each resource ceiling (maxBytes, maxKeys, maxMemoryBytes, maxTreeCount, "
-                    + "maxOpsPerSecond) is null for unbounded on that dimension; pass every dimension null to lift a "
-                    + "tenant's caps again. burstPercent is the transient headroom above the bounded ceilings and must "
+                    + "maxOpsPerSecond) is null for unbounded on that dimension or non-negative when bounded; pass "
+                    + "every dimension null to lift a tenant's caps again. burstPercent is the transient headroom "
+                    + "above the bounded ceilings and must "
                     + "be non-negative. The reserved default tenant can never be given quotas and fails closed. Fails "
                     + "closed if the tenant is not registered. Subject to the fail-closed tenant-admin access gate. "
                     + "Requires tenant-admin control to be enabled on the server.",

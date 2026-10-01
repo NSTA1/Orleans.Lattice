@@ -44,7 +44,7 @@ either is a breaking change (see [Drift detection](#drift-detection)).
 | `WithKeyCodec(IGrainKeyCodec<TGrain>)` | codec for the grain's key type | How a grain identity is encoded into, and decoded out of, an index entry. |
 | `AllowReplication(bool)` | `false` | Whether the index's tree may be replicated across clusters. See [Grain indexes are cluster-local](#grain-indexes-are-cluster-local). |
 | `WithBackfillBatchSize(int)` | `256` | How many grains one backfill pass visits. Must be at least 1. |
-| `WithBackfillInterval(TimeSpan)` | 1 second | The pause between backfill passes. Must be greater than zero. |
+| `WithBackfillInterval(TimeSpan)` | 1 second | The pause between backfill passes. Must be greater than zero and at most `0xFFFFFFFE` milliseconds (about 49.7 days); either violation throws `ArgumentOutOfRangeException`. |
 | `Include<TProperty>(Expression<Func<TState, TProperty>>)` | none | Adds one property to the projection. At least one is required. |
 
 `Include` is the only way a property enters the index. There is no
@@ -143,7 +143,7 @@ one of two `GrainIndexProjectionMode` values:
 | Mode | Behaviour |
 |---|---|
 | `Synchronous` (default) | The entries are written as part of the grain's write path. The grain's own state is committed first, and a failed index write on `WriteStateAsync` or `ClearStateAsync` is thrown to the caller (on activation or a state re-read it is logged instead); the outbox entry recorded beforehand is retried until it lands either way. |
-| `Eventual` | The index write is recorded durably in the outbox during the write path but applied afterwards by the outbox drain, so the caller neither waits for it nor sees its failures. A query issued straight after the write may not see the new entries until the next drain pass. `ClearStateAsync` is the exception: it applies its removal on the write path under either mode and throws a failure to the caller. The activation keeps diffing later writes against the entries it last confirmed itself, which a drained write does not update, so a value the drain published and a later write from the same activation replaced can leave its entry behind; see [Consistency](architecture.md#consistency). |
+| `Eventual` | The index write is recorded durably in the outbox during the write path but applied afterwards by the outbox drain, so the caller neither waits for it nor sees its failures. A query issued straight after the write may not see the new entries until the next drain pass. `ClearStateAsync` is the exception: it applies its removal on the write path under either mode and throws a failure to the caller. The activation keeps diffing later writes against the entries it last confirmed itself, which a drained write does not update, so a value the drain published and a later write or `ClearStateAsync` from the same activation replaced can leave its entry behind; see [Consistency](architecture.md#consistency). |
 
 ### `GrainIndexOutboxOptions`
 
@@ -154,7 +154,7 @@ deferred in `Eventual` mode. It is configured for the whole silo with
 | Option | Default | What it controls |
 |---|---|---|
 | `Enabled` | `true` | Whether this silo drains pending projections in the background. Switching it off still records them; it only stops this silo retrying them. |
-| `RetryInterval` | 5 seconds (`DefaultRetryInterval`) | The pause between drain passes, which bounds how long an index lags a failed or deferred write. A non-positive value falls back to the 5-second default. |
+| `RetryInterval` | 5 seconds (`DefaultRetryInterval`) | The pause between drain passes, which bounds how long an index lags a failed or deferred write. A non-positive value falls back to the 5-second default, and a value above the timer ceiling (about 49.7 days) is clamped to it. |
 | `MaxBatchSize` | `256` (`DefaultMaxBatchSize`) | The most pending entries one drain pass visits before yielding to the next pass. A value below 1 is treated as 1. |
 
 See [The outbox](architecture.md#the-outbox) for what writes a marker and what

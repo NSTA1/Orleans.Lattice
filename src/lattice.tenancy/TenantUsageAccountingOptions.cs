@@ -25,7 +25,8 @@ public sealed class TenantUsageAccountingOptions
     /// re-roll-up must move before the cluster republishes its usage slot. A
     /// smaller movement is suppressed by the hysteresis gate so a stream of
     /// negligible deltas does not churn the registry. Defaults to
-    /// <c>64 * 1024</c> (64 KiB / keys / trees), and must be non-negative.
+    /// <c>64 * 1024</c> (64 KiB / keys / trees). Negative values are treated as
+    /// zero by the hysteresis gate.
     /// </summary>
     public long PublishMinAbsoluteDelta { get; set; } = 64 * 1024;
 
@@ -36,7 +37,7 @@ public sealed class TenantUsageAccountingOptions
     /// <see cref="PublishMinAbsoluteDelta"/>: a movement republishes when it clears
     /// that dimension's significance band, which is the larger of the absolute
     /// floor and this relative fraction of the last value. Defaults to <c>0.05</c>
-    /// (5%), and must be non-negative.
+    /// (5%). Negative values are treated as zero by the hysteresis gate.
     /// </summary>
     public double PublishMinRelativeDelta { get; set; } = 0.05;
 

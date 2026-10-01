@@ -6,7 +6,7 @@ Registering the `Orleans.Lattice.Api.Mcp` server on a silo host, configuring the
 
 The MCP server binds the `Orleans.Lattice.Api.*` facades, so the facades a tool module needs must be registered on the same silo:
 
-- Permission-scoped discovery needs `AddLatticeAuthApi()` (which itself follows `AddLatticeAuth(...)`) whichever modules you expose: the default discovery resolver reads each caller's effective permissions through that auth facade, and without it discovery grants no group, so an authenticated caller is offered only `lattice_capabilities`.
+- Permission-scoped discovery needs `AddLatticeAuthApi()` (which itself follows `AddLatticeAuth(...)`) whichever modules you expose: the default discovery resolver reads each caller's effective permissions through that auth facade, and without it discovery grants no group, so an authenticated caller is offered no facade-group tool - only `lattice_capabilities`, plus any [installable-app tools](../lattice.api.mcp.apps/README.md) whose role it holds, which do not depend on that facade.
 - State tools need `AddLatticeStateApi()`.
 - Data tools need `AddLatticeDataApi()`.
 - Backup tools need `AddLatticeBackupApi()` (which itself follows `AddLatticeBackup(...)`).

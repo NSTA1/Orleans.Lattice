@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// like. Unlike <see cref="IUiSessionStore"/> (which is in-memory and lost when
 /// the session ends), preferences survive a page reload and a browser restart
 /// because they are persisted to per-origin browser storage (<c>localStorage</c>
-/// on the web head, the platform preference store on the desktop head).
+/// on the web head) or another host-supplied durable backing store.
 /// <para>
 /// Values are mirrored in memory so reads are synchronous; the mirror is
 /// hydrated from the backing store once per session by

@@ -148,9 +148,14 @@ saturation back-pressure signal (`IWalSaturationSignal`,
 exposes the writer-side admission gate as a typed, `Healthy` /
 `Throttled` / `Saturated` per-tree state, so callers driving offered
 load into the silo can slow down or pause *before* the failure tail
-above surfaces. The signal is silo-scoped, and a healthy partition's
-`SetAsync` / `SetManyAsync` hot path pays only a concurrent-dictionary
-lookup per append to consult it - it is the leading-edge surface
+above surfaces. The state is keyed by the id the tree's WAL is written
+under, so on an [aliased](tree-registry.md#tree-aliasing) tree a read by
+the logical id returns `Healthy`
+(see [Resolution and scope](wal-saturation-signal.md#resolution-and-scope)).
+The signal is silo-scoped, and a healthy partition's
+`SetAsync` / `SetManyAsync` hot path pays only two concurrent-dictionary
+lookups per append to consult it, one each at the writer's admission
+gate and throttle pace - it is the leading-edge surface
 that pairs with the structural fix above (multi-account fan-out) and
 the shutdown drain below (bounded SIGTERM). The storage-account
 ceiling is still the binding constraint; the signal stops callers

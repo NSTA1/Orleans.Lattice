@@ -138,6 +138,15 @@ Artifacts per cohort under `benchmark/.run/azure-throughput/`: `silo-<cohort>.lo
 
 Loops `run-cohort.ps1` over a list of rungs and appends one row per rung to a results CSV.
 
+**As the scripts stand, the CSV's measured columns and `-DegradeThresholdPct` do not work.**
+The ladder parses them out of the `run-cohort.ps1` output it captures with `2>&1`, but
+`run-cohort.ps1` prints its whole summary with `Write-Host`, which that capture never
+receives. Every rung therefore records `0` in each measured column and `UNKNOWN` as its
+`verdict`, the ladder's own per-rung line and closing table repeat those values, and the
+early stop never fires. Read each rung's result from the per-cohort summary `run-cohort.ps1`
+prints to the console, or from that cohort's `silo-<cohort>.log` and `sampler-<cohort>.csv`
+(see "Reading a cohort result").
+
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `-Rungs <"V:Hz"[]>` | `1000:5 ... 50000:5` | Array of `vehicles:tickHz` rungs. |
@@ -145,8 +154,8 @@ Loops `run-cohort.ps1` over a list of rungs and appends one row per rung to a re
 | `-CooldownSec <N>` | `5` | Pause between rungs. |
 | `-ResponseTimeoutSec <N>` | `180` | Sets `BENCH_RESPONSE_TIMEOUT_SEC` for every rung (drop to 30 to reproduce the grain-RPC-deadline failure mode). |
 | `-ExtraSiloEnv @{...}` | `@{}` | Extra silo env forwarded to every cohort. |
-| `-DegradeThresholdPct <N>` | `0` | If non-zero, stop the sweep once a rung's throughput drops below `(1 - N/100)` of the best observed (a "find the peak" sweep). |
-| `-ResultsCsv <path>` | `scripts/.ladder-results.csv` | Output CSV path. |
+| `-DegradeThresholdPct <N>` | `0` | Meant to stop the sweep once a rung's throughput drops below `(1 - N/100)` of the best observed (a "find the peak" sweep). It never fires as the scripts stand: the throughput it compares always parses as `0` (see above). |
+| `-ResultsCsv <path>` | `scripts/.ladder-results.csv` | Output CSV path, rewritten from its header at the start of every sweep. Its measured columns read `0` and `verdict` `UNKNOWN` as the scripts stand (see above). |
 | `-NamePrefix <name>` / `-ParametersFile <path>` | - | As above. |
 
 ### `vm.ps1 <action>` - day-to-day VM control
@@ -462,7 +471,11 @@ counts internal back-pressure/stall signals.
 `ladder.ps1` additionally writes one CSV row per rung to its `-ResultsCsv`, with the columns
 `vehicles, tickHz, durationSec, written, failed, activeSec, steadyMean, activeAvg,
 drainTailSamples, totalElapsedSec, siloCpuPeakPct, siloCpuAvgPct, sysCpuPeakPct,
-siloRssGiB, verdict, timestampUtc`.
+siloRssGiB, verdict, timestampUtc`. As the scripts stand only the rung's own inputs
+(`vehicles`, `tickHz`, `durationSec`) and `timestampUtc` carry information: the ladder
+parses every other column out of the `run-cohort.ps1` output it captures, which holds
+none of the `Write-Host` summary, so they read `0` and `verdict` reads `UNKNOWN`. Take a
+rung's numbers from its cohort summary or its `silo-<cohort>.log` instead.
 
 ---
 

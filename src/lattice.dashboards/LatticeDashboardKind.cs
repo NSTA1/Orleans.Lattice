@@ -36,7 +36,8 @@ public enum LatticeDashboardKind
 
     /// <summary>
     /// Cross-cluster replication operator view: ship / apply / lag
-    /// durations, WAL append vs trim throughput, dead-letter queue
+    /// durations, WAL ship vs trim throughput, leaf WAL append vs ship rate,
+    /// dead-letter queue
     /// churn, apply FIFO violations, causal-wait histograms,
     /// fall-off-log events, and per-peer cursor lag. Sources the
     /// <c>orleans.lattice.replication</c> meter and core WAL series from

@@ -13,9 +13,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// replication (replicate the store-of-record trees; treat rebuildable vector
 /// projections as optionally local-only), independent time-to-live / garbage-
 /// collection and backup policy per family, and clean single-tree enumeration for
-/// derived-projection rebuilds. The three vector trees are reserved here so the
-/// layout is fixed before the retrieval surface is built; this package writes
-/// only the structural and memory trees today.
+/// derived-projection rebuilds. The store now writes structural, memory, content,
+/// cross-reference, session, and vector-plane records; the dedicated tree names keep
+/// those families independently configurable.
 /// </para>
 /// </summary>
 internal static class RepoContextTrees
@@ -66,13 +66,13 @@ internal static class RepoContextTrees
     /// </summary>
     internal const string CrossReference = "repo-context-xref";
 
-    /// <summary>Reserved tree for vector membership (the retrieval surface, built later).</summary>
+    /// <summary>Tree holding vector membership markers for embedded sources and memory entries.</summary>
     internal const string VectorMembership = "repo-context-vector-membership";
 
-    /// <summary>Reserved tree for vector payloads (the retrieval surface, built later).</summary>
+    /// <summary>Tree holding the content-addressed vector payloads referenced by vector metadata.</summary>
     internal const string VectorPayload = "repo-context-vector-payload";
 
-    /// <summary>Reserved tree for vector metadata (the retrieval surface, built later).</summary>
+    /// <summary>Tree holding vector metadata records that point at payload content addresses.</summary>
     internal const string VectorMetadata = "repo-context-vector-metadata";
 
     /// <summary>

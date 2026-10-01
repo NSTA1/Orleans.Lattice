@@ -39,8 +39,8 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     public const string LockFailuresCounterName = "lattice_repocontext_grain_storage_lock_failures_total";
 
     /// <summary>
-    /// Pin-state writes and clears re-issued after a SQLite lock failure, by how the
-    /// re-issue ended.
+    /// Writes and clears admitted by the lock retry policy after a SQLite lock
+    /// failure, by how the re-issue ended.
     /// </summary>
     public const string LockRetriesCounterName = "lattice_repocontext_grain_storage_lock_retries_total";
 
@@ -144,8 +144,9 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
             unit: "{operation}",
             description:
                 "Grain-storage writes and clears that failed on a SQLite lock and were re-issued under "
-                + "the retry policy (by default only the WAL materialiser pin store, issue #3761), by "
-                + "operation and by outcome: recovered when a re-issue succeeded, gave_up when every "
+                + "the retry policy (by default leaf checkpoint/snapshot state, shard-root state, and "
+                + "the WAL materialiser pin store), by operation and by outcome: recovered when a "
+                + "re-issue succeeded, gave_up when every "
                 + "allowed attempt failed and the lock failure reached the grain. Counted once per "
                 + "operation, not per attempt; every failed attempt is also counted on "
                 + LockFailuresCounterName

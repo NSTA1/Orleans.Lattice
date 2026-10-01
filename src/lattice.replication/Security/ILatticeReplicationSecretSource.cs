@@ -43,12 +43,11 @@ public interface ILatticeReplicationSecretSource
     ValueTask<string?> GetOutboundSecretAsync(string peerClusterId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Returns the set of inbound secrets the local cluster currently
-    /// accepts. The receiver authenticates a batch when its presented
-    /// credential matches any entry in the returned snapshot, which
-    /// is what enables zero-downtime rotation: the operator publishes
-    /// <c>{old, new}</c>, flips senders to <c>new</c>, then narrows
-    /// the accepted set to <c>{new}</c>.
+    /// Returns the set of inbound secrets the local cluster currently accepts.
+    /// The receiver first checks the presented credential against this snapshot;
+    /// transports may add stricter checks. With the gRPC origin-binding default,
+    /// rotation also requires coordinating the outbound secret each peer resolves
+    /// for the stamped origin; see <c>docs/lattice.replication/transport-security.md</c>.
     /// </summary>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     ValueTask<LatticeReplicationAcceptedSecrets> GetAcceptedSecretsAsync(CancellationToken cancellationToken);

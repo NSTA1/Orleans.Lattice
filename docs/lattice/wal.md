@@ -202,7 +202,7 @@ replication change feed.
 | `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight is returned, so a cursor-advancing reader never skips a prefix hole. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
 | `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
-| `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so dashboards, alerts, and the back-pressure health check observe the persisted footprint rather than a monotonically-growing offset counter. |
+| `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so it reports the persisted footprint rather than a monotonically-growing offset counter; the state API's change observation reads it to refuse a resume point the GC has already trimmed. |
 | `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetLiveEntryCountAsync` for the trim-aware live count. |
 
 The grain also serves the replication shipper's bytes-shaped page read (the
@@ -767,8 +767,12 @@ advance once the interval has elapsed, so a pending advance becomes durable
 within the later of the interval and the next check (issue #3608).
 
 The checkpoint is **not** an additional durability boundary - it's a replay-cost
-optimization. If a checkpoint flush fails, the next activation simply replays
-more WAL entries; correctness is unaffected. The checkpoint is also flushed
+optimization. If a checkpoint flush fails, the leaf rolls the advance back and
+keeps it pending for its next flush, and the durable pin it publishes for the
+WAL GC never runs ahead of the checkpoint that actually reached storage, so
+the GC cannot trim the range the failed write would have covered and the next
+activation simply replays more WAL entries; correctness is unaffected. The
+checkpoint is also flushed
 opportunistically in `OnDeactivateAsync` so a graceful shutdown doesn't lose an
 already-pending advance.
 
@@ -1017,6 +1021,13 @@ floor, can advance. The sweep's drives share the per-silo WAL replay permits
 with leaf activations; see
 [Starvation-drive admission](projection-rebuild.md#starvation-drive-admission)
 for how a pass sizes its fan-out to that share and what a refused drive costs.
+A deleted tree is the exception: before a pass touches leaves to heal its
+floor, the scheduler reads the tree's deletion state, and it never reactivates
+a deleted tree's leaves. It retires any pin still held against a discarded
+copy - an undone resize's destination, whose discard trims the copy's log
+itself - and leaves any other deleted tree's floor where its pins hold it;
+see
+[Discarding an undone resize's copy](tree-deletion.md#discarding-an-undone-resizes-copy).
 
 The scheduler composes with the replication maintenance grain:
 `RunOnceAsync` and the underlying `IWalStorageProvider.TrimAsync` are

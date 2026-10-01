@@ -5,7 +5,9 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Tree-wide health snapshot returned by <see cref="ILattice.DiagnoseAsync"/>.
 /// Aggregates per-shard structural and runtime metrics plus a bounded ring
-/// buffer of recent adaptive-split events. Values are a point-in-time
+/// buffer of recent adaptive shard-split events. Consolidation folds are
+/// reflected in shard counts and per-shard migration state, but are not
+/// recorded in <see cref="RecentSplits"/>. Values are a point-in-time
 /// sample; the diagnostics grain may serve repeat calls from a short
 /// in-memory cache (configured via <see cref="LatticeOptions.DiagnosticsCacheTtl"/>).
 /// </summary>
@@ -35,7 +37,7 @@ public readonly record struct TreeDiagnosticReport
     /// <summary>Per-shard diagnostics, ordered by shard index.</summary>
     [Id(5)] public ImmutableArray<ShardDiagnosticReport> Shards { get; init; }
 
-    /// <summary>Most recent adaptive-split events (oldest first, bounded to 32).</summary>
+    /// <summary>Most recent adaptive shard-split commits (oldest first, bounded to 32); consolidation folds are not recorded here.</summary>
     [Id(6)] public ImmutableArray<RecentSplit> RecentSplits { get; init; }
 
     /// <summary>UTC time at which this report was assembled.</summary>

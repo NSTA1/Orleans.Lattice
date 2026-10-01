@@ -6,7 +6,7 @@ Turn on cross-cluster replication for the repository-context store with one guar
 
 ## Why it is a separate package
 
-The repository-context core deliberately does **not** reference `Orleans.Lattice.Replication`. That boundary is what keeps its configuration-only seam free of the replication engine, so a single-cluster deployment never takes that dependency. Enabling multi-cluster has to call into the replication package, so it lives here as an opt-in companion - exactly like the other `*.Replication` and `*.Grpc` add-ons in the family. You take the replication-engine dependency only when you install this package.
+The repository-context core does **not** reference `Orleans.Lattice.Replication` itself and never registers the replication engine, so a single-cluster deployment never runs it. The package is still in the core's dependency graph, though: the core references `Orleans.Lattice.Apps`, which references `Orleans.Lattice.Replication` to enrol an app's declared replication intent, so the replication assembly arrives transitively even in a single-cluster deployment. Enabling multi-cluster has to call into the replication package's registration, so it lives here as an opt-in companion - exactly like the other `*.Replication` and `*.Grpc` add-ons in the family. Installing this package and calling `EnableRepoContextMultiCluster(...)` is what turns the replication engine on for the repository-context store.
 
 ## What it does
 

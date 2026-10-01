@@ -12,6 +12,8 @@ orleans.lattice.auth
 
 Recording is guarded by each instrument's `Enabled` flag: when no listener is attached the gate builds no tag list and does no measurement work, so the meter is zero-cost on the hot path when nobody is listening.
 
+Besides `MeterName` and the tag keys below, `LatticeAuthMetrics` exposes each instrument name as a constant (`DecisionsName`, `DecisionDurationName`, `SnapshotRebuildsName`, `SnapshotEpochName`, `SnapshotAgeName`, `SnapshotSubjectsName`), the `Meter` instance and the `Decisions`, `DecisionDuration`, and `SnapshotRebuilds` instruments, the `effect` values (`EffectAllow`, `EffectDeny`, the prebuilt `EffectAllowTag` / `EffectDenyTag` pairs, and `EffectTag(allowed)`), and `PrimeDecisions(operation, treeId)`, the call that performs the priming described under [Zero-primed effect arms](#zero-primed-effect-arms).
+
 ### Instruments
 
 | Instrument | Name | Kind | Emitted? | Meaning |

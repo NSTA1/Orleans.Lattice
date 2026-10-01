@@ -90,7 +90,10 @@ These override or extend the base for Orleans.Lattice only.
    When you deploy workers directly against several unrelated issues at once,
    open one integration bucket `<type>/epic/<bucket-slug>` and target every
    member pull request at it, then land the bucket at `main` as a single gated
-   pull request. `main` is strict-protected, so **N pull requests raised at it
+   pull request, with a merge commit rather than a squash
+   (`gh pr merge <n> --merge --subject ... --body ...`), so each member's
+   reviewed commit survives on `main`. `main` is strict-protected, so **N pull
+   requests raised at it
    concurrently cost `N(N+1)/2` CI cycles** - every merge invalidates every other
    open pull request, which must then update and re-run the full suite. Bucketed
    they cost `N+1`. The trigger is **concurrency, not count**: items raised a
@@ -105,9 +108,14 @@ These override or extend the base for Orleans.Lattice only.
      displaying as unblocked rather than failing.
    - **The bucket's pull request must carry every `Closes #N` itself.** GitHub
      honours a closing keyword only when the pull request targets the **default
-     branch**, so a `Closes #N` in a member pull request is silently inert: it
-     merges, it reads correctly, and the issue stays open with no signal
-     anywhere. You own that list. Verify it with
+     branch**, so a `Closes #N` in a member pull request is inert: the
+     `Guard - inert closing keywords` step in `ci.yml` fails a member pull
+     request that carries one, and the member records the deferral as
+     `Refs #N` instead. You own that list, and the
+     `Guard - bucket closing list` step fails the bucket's pull request when an
+     open issue a merged member claims with `Refs #N` is in neither its closing
+     set nor a `## Deliberately held open` block that states a reason (or when
+     no merged member records a `Refs #N` at all). Verify it with
      `gh pr view <n> --json closingIssuesReferences`, never by reading the body.
    - **You keep the bucket current with `main`, and review happens on the member
      pull requests** - deferring review to the bucket turns N reviewable pull

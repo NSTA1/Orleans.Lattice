@@ -101,8 +101,10 @@ local sign-out `POST` redirects to an identity-provider end-session URL.
 
 ## Environment variables
 
-The launcher bootstrap is registered while
-`LatticeExplorerWebOptions.UseEnvironmentBootstrap` is `true`.
+The launcher bootstrap, registered while
+`LatticeExplorerWebOptions.UseEnvironmentBootstrap` is `true`, reads every
+variable below except `LATTICE_EXPLORER_CONFIG`, which `AddLatticeExplorerWeb`
+reads at registration whatever that option says.
 
 | Variable | Meaning |
 |---|---|
@@ -115,6 +117,12 @@ The launcher bootstrap is registered while
 The endpoint seed is held in memory and used only when no persisted
 configuration exists. The credential seed is exposed through a separate in-memory
 credential seam, never through the persisted configuration document.
+
+The bootstrap reads its variables through `IExplorerEnvironment`, which defaults
+to the process environment (`ProcessExplorerEnvironment`). A host that registers
+its own `IExplorerEnvironment` before calling `AddLatticeExplorerWeb` supplies the
+values instead, as the [Explorer sample](../../samples/Explorer/README.md) does.
+`LATTICE_EXPLORER_CONFIG` is always read from the process environment.
 
 ## The configuration document
 
@@ -142,6 +150,9 @@ this immutable connection snapshot. `Endpoint` becomes `Address`,
 `AllowUnencryptedHttp2` is copied, non-empty `Headers` becomes
 `Authentication`, and non-empty `TransportHeaders` is copied. `TransportMode` is
 validated before the settings are applied and has no property on the live record.
+It sets no `ActiveTenantProvider`: a `LatticeStateConnection` constructed with a
+tenant source, which is the constructor dependency injection selects once the
+head registers tenancy, attaches that source to any settings that carry none.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
@@ -149,6 +160,7 @@ validated before the settings are applied and has no property on the live record
 | `AllowUnencryptedHttp2` | `bool` | `false` | Enables h2c for plain `http://` development endpoints. It is also required before a static sign-in credential is sent to a non-`https` endpoint. |
 | `Authentication` | `LatticeCallAuthentication?` | `null` | Authentication seam attached to calls. `null` connects anonymously. |
 | `TransportHeaders` | `IReadOnlyDictionary<string, string>?` | `null` | Non-secret headers attached to every call regardless of sign-in state. |
+| `ActiveTenantProvider` | `ILatticeActiveTenantProvider?` | `null` | Live source of the tenant every call asserts through the `lattice-active-tenant` header (`LatticeActiveTenantAssertion.DefaultHeaderName`). It is read as each call starts, never when the channel is built, so a tenant switch changes the next call without a rebuild. When it is set, the connection owns that header: a value for it among `TransportHeaders` is replaced by the provider's answer, or removed when the provider asserts none. `null` asserts no tenant. The web head's tenancy registration (`AddExplorerTenantView`) supplies a per-circuit provider that asserts the circuit's active tenant, and nothing for the reserved `default` tenant. |
 | `DegradeAfter` | `TimeSpan` | 5 seconds | Time a connection may keep failing transiently before degrading to `Faulted`. |
 | `HealthCheckInterval` | `TimeSpan` | 1 second | How often the background monitor probes while connecting, reconnecting, or faulted. |
 | `TransientRetryBackoff` | `TimeSpan` | 250 milliseconds | Delay between inline transient retries. |
