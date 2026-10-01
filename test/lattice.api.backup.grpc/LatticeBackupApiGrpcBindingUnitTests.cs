@@ -90,7 +90,6 @@ public sealed class LatticeBackupApiGrpcBindingUnitTests
         var service = new LatticeBackupGrpcService(
             methods,
             Substitute.For<ILatticeBackupControl>(),
-            Substitute.For<ILatticeBackupOperations>(),
             Substitute.For<ILatticeBackupApiCredentialBridge>(),
             Substitute.For<ILatticeBackupApiAuthSchemeSource>(),
             Options.Create(new LatticeBackupApiGrpcOptions()),

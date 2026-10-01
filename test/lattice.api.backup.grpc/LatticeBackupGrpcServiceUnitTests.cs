@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 /// two streaming RPCs; the success round trips are covered by the E2E suite.
 /// </summary>
 [TestFixture]
-public sealed class LatticeBackupGrpcServiceUnitTests
+public sealed partial class LatticeBackupGrpcServiceUnitTests
 {
     private ServiceProvider _services = null!;
 
@@ -41,11 +41,11 @@ public sealed class LatticeBackupGrpcServiceUnitTests
         return new LatticeBackupGrpcService(
             methods,
             control,
-            operations ?? Substitute.For<ILatticeBackupOperations>(),
             bridge,
             schemeSource,
             Options.Create(new LatticeBackupApiGrpcOptions()),
-            Substitute.For<ILogger<LatticeBackupGrpcService>>());
+            Substitute.For<ILogger<LatticeBackupGrpcService>>(),
+            operations);
     }
 
     private static FakeServerCallContext Context(string method = "unit") => new(method);

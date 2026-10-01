@@ -211,7 +211,7 @@ internal abstract class LatticeBackupGrpcServiceBase
 internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 {
     private readonly ILatticeBackupControl _control;
-    private readonly ILatticeBackupOperations _operations;
+    private readonly ILatticeBackupOperations? _operations;
     private readonly ILatticeBackupApiCredentialBridge _credentialBridge;
     private readonly ILatticeBackupApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeBackupApiGrpcOptions> _options;
@@ -229,22 +229,25 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     public LatticeBackupGrpcService(
         LatticeBackupGrpcMethods methods,
         ILatticeBackupControl control,
-        ILatticeBackupOperations operations,
         ILatticeBackupApiCredentialBridge credentialBridge,
         ILatticeBackupApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeBackupApiGrpcOptions> options,
-        ILogger<LatticeBackupGrpcService> logger)
+        ILogger<LatticeBackupGrpcService> logger,
+        ILatticeBackupOperations? operations = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
-        ArgumentNullException.ThrowIfNull(operations);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
-        _operations = operations;
+        // A host that registered only the control facade keeps working: the default
+        // facade implements both interfaces, and a custom one that does not leaves
+        // the accept-then-poll RPCs answering Unimplemented rather than failing the
+        // whole service at construction.
+        _operations = operations ?? control as ILatticeBackupOperations;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;
@@ -462,13 +465,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartBackup(BackupCaptureRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
             operations.StartBackupAsync(
                 new LatticeBackupCaptureRequest(req.Name, req.Scope, req.PageSize), req.TrackingOperationId, ct));
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
             operations.StartIncrementalBackupAsync(
                 new LatticeBackupIncrementalCaptureRequest(req.Name, req.Scope, req.BaseBackupId, req.PageSize),
                 req.TrackingOperationId,
@@ -476,7 +479,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
             operations.StartBackupSetAsync(
                 new LatticeBackupSetCaptureRequest(req.Name, req.Scopes, req.CrossTreeConsistent, req.PageSize),
                 req.TrackingOperationId,
@@ -484,17 +487,17 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartRestore(RestoreRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
             operations.StartRestoreAsync(ToRestoreRequest(req), req.TrackingOperationId, ct));
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartColdRestore(RestoreRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
             operations.StartColdRestoreAsync(ToRestoreRequest(req), req.TrackingOperationId, ct));
 
     /// <inheritdoc />
     public override Task<BackupOperationStatusResponse> GetBackupOperationStatus(BackupOperationRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static async (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static async (operations, req, ct) =>
             new BackupOperationStatusResponse
             {
                 Status = await operations.GetOperationStatusAsync(req.OperationId, ct).ConfigureAwait(false),
@@ -502,15 +505,20 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
     /// <inheritdoc />
     public override Task<LatticeOperationPage> ListBackupOperations(LatticeOperationListRequest request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static (operations, req, ct) => operations.ListOperationsAsync(req, ct));
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) => operations.ListOperationsAsync(req, ct));
 
     /// <inheritdoc />
     public override Task<BackupOperationStatusResponse> CancelBackupOperation(BackupOperationRequestMessage request, ServerCallContext context)
-        => InvokeAsync(_operations, request, context, static async (operations, req, ct) =>
+        => InvokeAsync(Operations, request, context, static async (operations, req, ct) =>
             new BackupOperationStatusResponse
             {
                 Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
             });
+
+    private ILatticeBackupOperations Operations => _operations
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented,
+            "This host registers no ILatticeBackupOperations, so the accept-then-poll backup operation RPCs are unavailable."));
 
     private static LatticeRestoreRequest ToRestoreRequest(RestoreRequestMessage req) =>
         new(req.BackupId, req.TargetTreeId, req.Scope, req.Mode, req.OperationId, req.ApplyBatchSize);
