@@ -214,6 +214,7 @@ public sealed partial class LatticeTreeAdminOperationsTests
                 NewPlacementVersion = 5,
                 CopiedFromOffset = 10,
                 CopiedThroughOffset = 99,
+                SourceRetained = true,
                 Outcome = WalMoveOutcome.Moved,
             });
         _factory.GetGrain<ILatticeAdminTrackedGrain>(LatticeConstants.AdminGrainKey, null).Returns(admin);
@@ -229,6 +230,7 @@ public sealed partial class LatticeTreeAdminOperationsTests
             Assert.That(grain.Completion.Result[TreeAdminOperationResultKeys.Outcome], Is.EqualTo(nameof(TreeWalMoveOutcome.Moved)));
             Assert.That(grain.Completion.Result[TreeAdminOperationResultKeys.CopiedThroughOffset], Is.EqualTo("99"));
             Assert.That(grain.Completion.Result[TreeAdminOperationResultKeys.NewPlacementVersion], Is.EqualTo("5"));
+            Assert.That(grain.Completion.Result[TreeAdminOperationResultKeys.SourceRetained], Is.EqualTo("true"), "The page offers to reclaim only a retained source.");
         });
     }
 

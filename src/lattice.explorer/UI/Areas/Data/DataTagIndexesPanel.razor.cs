@@ -1,20 +1,20 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
-
-// Still calls the deprecated blocking tree-administration verbs (LATTICE0002); the Explorer moves to
-// ILatticeTreeAdminOperations in the second #4124 change, which removes this suppression.
-#pragma warning disable LATTICE0002
+using Orleans.Lattice.Explorer.UI.Operations;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
 /// <summary>
 /// The Tag indexes tab: the indexes over this tree with their status, members
 /// and reconcile action (the retired Tag Index plugin, plus the reconcile the
-/// tree-administration facade offers).
+/// tree-administration facade offers). A reconcile runs on the cluster as a
+/// tracked operation (#4124): the tab follows its progress, picks it up again when it
+/// is opened later - after a reload or in another tab - and can ask it to stop.
 /// </summary>
 public partial class DataTagIndexesPanel : IDisposable
 {
@@ -38,7 +38,9 @@ public partial class DataTagIndexesPanel : IDisposable
     private bool _loadingMembers;
     private bool _canReconcile;
     private bool _confirming;
-    private bool _reconciling;
+    private string? _starting;
+    private bool _cancelling;
+    private TreeAdminOperationWatch _watch = default!;
     private string? _error;
 
     [CascadingParameter]
@@ -53,7 +55,21 @@ public partial class DataTagIndexesPanel : IDisposable
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
+
     private TagIndexRef? SelectedIndex => _indexes?.FirstOrDefault(index => index.IndexName == _selected);
+
+    /// <summary>The index a reconcile is running on, or <see langword="null"/>.</summary>
+    private string? Reconciling => _starting ?? (_watch.IsRunning ? _watch.Target : null);
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        _watch = new TreeAdminOperationWatch(Time);
+        _watch.Changed += OnWatchChanged;
+        _watch.Finished += OnWatchFinished;
+    }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -67,7 +83,9 @@ public partial class DataTagIndexesPanel : IDisposable
         {
             _loadedFor = workspace.Tree.StateId;
             _selection = null;
+            _watch.Clear();
             await ReloadAsync();
+            await ResumeAsync();
         }
 
         var selection = (workspace.Address.GetQuery(DataTabs.IndexQuery), workspace.Address.GetQuery(DataTabs.TagQuery));
@@ -90,6 +108,7 @@ public partial class DataTagIndexesPanel : IDisposable
     public void Dispose()
     {
         _lifetime.Leave();
+        _watch?.Dispose();
         GC.SuppressFinalize(this);
     }
 
@@ -98,14 +117,14 @@ public partial class DataTagIndexesPanel : IDisposable
             .WithQuery(DataTabs.IndexQuery, indexName)
             .WithQuery(DataTabs.TagQuery, null);
 
-    private LtStateRole ReconcileRole(TagIndexRef index) => _statuses.GetValueOrDefault(index.IndexName) switch
+    private LtStateRole ReconcileRole(TagIndexRef index) => Reconciling == index.IndexName ? LtStateRole.Lagging : _statuses.GetValueOrDefault(index.IndexName) switch
     {
         null => LtStateRole.Unknown,
         { ReconcileIdle: true } => LtStateRole.Healthy,
         _ => LtStateRole.Lagging,
     };
 
-    private string ReconcileText(TagIndexRef index) => _statuses.GetValueOrDefault(index.IndexName) switch
+    private string ReconcileText(TagIndexRef index) => Reconciling == index.IndexName ? "Reconciling" : _statuses.GetValueOrDefault(index.IndexName) switch
     {
         null => "Unknown",
         { ReconcileIdle: true } => "Idle",
@@ -173,7 +192,7 @@ public partial class DataTagIndexesPanel : IDisposable
             return;
         }
 
-        _canReconcile = workspace.OffersAdministration && Gate.Admin is not null && await Gate.CanAdministerAsync(index.TreeId, _lifetime.Token);
+        _canReconcile = workspace.OffersAdministration && TreeAdminOperationsAccess.Of(Gate.Admin) is not null && await Gate.CanAdministerAsync(index.TreeId, _lifetime.Token);
         try
         {
             var covered = await reader.ListCoveredTreesForIndexAsync(index.IndexName, _lifetime.Token);
@@ -243,24 +262,41 @@ public partial class DataTagIndexesPanel : IDisposable
         }
     }
 
-    private async Task ReconcileAsync()
+    private async Task ResumeAsync()
     {
-        if (SelectedIndex is not { } index || Gate.Admin is not { } admin)
+        if (_indexes is not { Count: > 0 } indexes || TreeAdminOperationsAccess.Of(Gate.Admin) is not { } operations)
         {
             return;
         }
 
-        _reconciling = true;
+        var candidates = indexes.Select(index => (TreeAdminOperationKinds.TagIndexReconcile, index.IndexName)).ToList();
+        try
+        {
+            await _watch.ResumeAsync(operations, candidates, _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        {
+        }
+    }
+
+    private async Task ReconcileAsync()
+    {
         _confirming = false;
+        if (SelectedIndex is not { } index || TreeAdminOperationsAccess.Of(Gate.Admin) is not { } operations || Reconciling is not null)
+        {
+            return;
+        }
+
+        _starting = index.IndexName;
         StateHasChanged();
         try
         {
-            var report = await admin.ReconcileTagIndexAsync(index.IndexName, _lifetime.Token);
-            Toasts.Show(
-                $"Reconciled {index.IndexName}: scanned {DataArea.Plural(report.KeysScanned, "key")} and removed {DataArea.Plural(report.OrphanRowsRemoved, "orphaned row")}.",
-                LtToastTone.Success);
-            _statuses[index.IndexName] = await StatusAsync(admin, index.IndexName);
-            await ResetMembersAsync();
+            await _watch.StartAsync(
+                operations,
+                TreeAdminOperationKinds.TagIndexReconcile,
+                index.IndexName,
+                (operationId, ct) => operations.StartTagIndexReconcileAsync(index.IndexName, operationId, ct),
+                _lifetime.Token);
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
@@ -271,7 +307,74 @@ public partial class DataTagIndexesPanel : IDisposable
         }
         finally
         {
-            _reconciling = false;
+            _starting = null;
         }
     }
+
+    private async Task CancelAsync()
+    {
+        _cancelling = true;
+        try
+        {
+            await _watch.CancelAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            Toasts.Show(DataErrors.Describe(exception, "stop this reconcile"), LtToastTone.Danger);
+        }
+        finally
+        {
+            _cancelling = false;
+        }
+    }
+
+    private void OnWatchChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnWatchFinished(LatticeOperationStatus status)
+    {
+        var indexName = _watch.Target ?? string.Empty;
+        _ = InvokeAsync(async () =>
+        {
+            if (_lifetime.IsLeft)
+            {
+                return;
+            }
+
+            switch (status.State)
+            {
+                case LatticeOperationState.Succeeded:
+                    Toasts.Show(
+                        $"Reconciled {indexName}: scanned {DataArea.Plural(ResultCount(status, TreeAdminOperationResultKeys.KeysScanned), "key")} and removed {DataArea.Plural(ResultCount(status, TreeAdminOperationResultKeys.OrphanRowsRemoved), "orphaned row")}.",
+                        LtToastTone.Success);
+                    _watch.Clear();
+                    if (Gate.Admin is { } admin)
+                    {
+                        _statuses[indexName] = await StatusAsync(admin, indexName);
+                    }
+
+                    if (string.Equals(SelectedIndex?.IndexName, indexName, StringComparison.Ordinal))
+                    {
+                        await ResetMembersAsync();
+                    }
+
+                    break;
+                case LatticeOperationState.Cancelled:
+                    Toasts.Show($"Stopped the reconcile of {indexName}.", LtToastTone.Warning);
+                    break;
+                default:
+                    Toasts.Show($"The reconcile of {indexName} failed.", LtToastTone.Danger);
+                    break;
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    private static long ResultCount(LatticeOperationStatus status, string key) =>
+        status.Result.TryGetValue(key, out var text) && long.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
 }

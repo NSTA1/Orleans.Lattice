@@ -46,7 +46,7 @@ A succeeded operation's `ResultReference` is the view name, the index name, or t
 | View rebuild | `viewName`, `sourceTreeId`. |
 | View reconcile | `viewName`, `sourceTreeId`, `driftRepaired`. |
 | Tag-index reconcile | `indexName`, `treeId`, `treesCovered`, `keysScanned`, `membershipRowsScanned`, `orphanRowsRemoved`. |
-| WAL move | `treeId`, `partition`, `fromProviderKey`, `toProviderKey`, `outcome` (a `TreeWalMoveOutcome` name), `previousPlacementVersion`, `newPlacementVersion`, `copiedFromOffset`, `copiedThroughOffset`, `sourceHighestOffset`, `targetHighestOffset`. |
+| WAL move | `treeId`, `partition`, `fromProviderKey`, `toProviderKey`, `outcome` (a `TreeWalMoveOutcome` name), `previousPlacementVersion`, `newPlacementVersion`, `copiedFromOffset`, `copiedThroughOffset`, `sourceHighestOffset`, `targetHighestOffset`, `sourceRetained` (`true` while the source still holds the copied entries, until `ReclaimMovedWalSourceAsync`). |
 | Orphaned-leaf audit | `treeId`, `leavesWalked`, `orphanedLeaves`, `repairable`, `refused`, `gaps`. |
 | Orphaned-leaf repair | `treeId`, `leavesWalked`, `orphanedLeaves`, `repaired`, `refused`, `gaps`. |
 

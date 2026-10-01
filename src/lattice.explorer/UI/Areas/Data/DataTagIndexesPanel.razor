@@ -4,8 +4,11 @@
     the selected tag, each member linking to its key. Reconcile - which removes
     membership rows for keys that no longer carry their tag - is drawn only when
     the caller holds administrative authority over the index, and runs only after
-    the destructive-action confirmation.
+    the destructive-action confirmation. A reconcile runs on the cluster as a
+    tracked operation whose progress the tab follows and picks up again when it is
+    reopened.
 *@
+@using Orleans.Lattice.Explorer.UI.Operations
 
 @if (Workspace is not null)
 {
@@ -56,6 +59,28 @@
             </DetailActions>
         </LtTable>
 
+        @if (_watch.Status is { } operation)
+        {
+            <section class="lt-data-entry" aria-live="polite" data-lt-data-operation="@operation.Kind">
+                <div class="lt-data-heading">
+                    <h2 class="lt-data-section-title">@(operation.IsTerminal ? "Reconcile of " : "Reconciling ")<span class="lt-shell-mono">@_watch.Target</span></h2>
+                    @if (!operation.IsTerminal)
+                    {
+                        <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_cancelling || operation.CancelRequested)" OnClick="CancelAsync">Stop</LtButton>
+                    }
+                </div>
+                <LtOperationProgress Status="@operation" Label="Tag index reconcile progress" />
+                @if (_watch.LastError is not null)
+                {
+                    <p class="lt-data-note" role="alert">The progress could not be read just now; trying again. The reconcile keeps running on the cluster.</p>
+                }
+                else if (!operation.IsTerminal)
+                {
+                    <p class="lt-data-note">It runs on the cluster: you can leave this page and come back to it.</p>
+                }
+            </section>
+        }
+
         @if (SelectedIndex is { } selected)
         {
             <section class="lt-data-entry" aria-labelledby="@_headingId">
@@ -63,7 +88,7 @@
                     <h2 class="lt-data-section-title" id="@_headingId">Tag index <span class="lt-shell-mono">@selected.IndexName</span></h2>
                     @if (_canReconcile)
                     {
-                        <LtButton Variant="LtButtonVariant.Destructive" Disabled="@_reconciling" OnClick="() => _confirming = true">@(_reconciling ? "Reconciling" : "Reconcile")</LtButton>
+                        <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(Reconciling is not null)" OnClick="() => _confirming = true">@(Reconciling == selected.IndexName ? "Reconciling" : "Reconcile")</LtButton>
                     }
                 </div>
 
@@ -154,7 +179,7 @@
                                   ObjectName="@selected.IndexName"
                                   ConfirmText="Reconcile"
                                   OnConfirm="ReconcileAsync">
-                Reconciling rescans every covered tree and removes membership rows for keys that no longer carry their tag. It runs online and is safe to repeat, but it reads every covered key.
+                Reconciling rescans every covered tree and removes membership rows for keys that no longer carry their tag. It runs online on the cluster and is safe to repeat, but it reads every covered key.
             </LtConfirmDestructive>
         }
     }

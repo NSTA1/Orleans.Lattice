@@ -65,6 +65,9 @@ public static class TreeAdminOperationResultKeys
     /// <summary>The target's highest offset at the cutover.</summary>
     public const string TargetHighestOffset = "targetHighestOffset";
 
+    /// <summary>Whether the source partition still holds the copied entries (<c>true</c> or <c>false</c>), so the move can be reverted until it is reclaimed.</summary>
+    public const string SourceRetained = "sourceRetained";
+
     /// <summary>The leaves an orphaned-leaf pass walked.</summary>
     public const string LeavesWalked = "leavesWalked";
 

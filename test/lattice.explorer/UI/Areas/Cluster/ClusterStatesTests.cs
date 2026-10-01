@@ -91,10 +91,19 @@ public sealed class ClusterStatesTests : ClusterTestContext
             TreeId = "orders",
             Findings = [new TreeOrphanedLeafFinding { LeafId = "leaf-9", ShardIndex = 3, KeyCount = 12, Disposition = TreeOrphanedLeafDisposition.Repairable }],
         });
+        Tracked.Script(
+            Orleans.Lattice.Api.TreeAdmin.TreeAdminOperationKinds.OrphanedLeavesAudit,
+            Orleans.Lattice.Explorer.Tests.UI.Operations.TreeAdminOperationScript.Status(
+                Orleans.Lattice.Api.TreeAdmin.TreeAdminOperationKinds.OrphanedLeavesAudit,
+                Orleans.Lattice.Api.Operations.LatticeOperationState.Succeeded,
+                "Completed",
+                result: new Dictionary<string, string> { [Orleans.Lattice.Api.TreeAdmin.TreeAdminOperationResultKeys.OrphanedLeaves] = "1", [Orleans.Lattice.Api.TreeAdmin.TreeAdminOperationResultKeys.Repairable] = "1" }));
         var cut = RenderAt("/cluster/orphans?tree=orders", LtBreakpoint.Compact);
         cut.WaitUntil(() => Assert.That(HasButton(cut, "Audit"), Is.True));
 
         Button(cut, "Audit").Click();
+        cut.WaitUntil(() => Assert.That(HasButton(cut, "Show each leaf"), Is.True));
+        Button(cut, "Show each leaf").Click();
 
         cut.WaitUntil(() =>
         {
