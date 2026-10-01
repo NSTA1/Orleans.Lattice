@@ -118,6 +118,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **WAL - A failed durable pin write is retried rather than recorded as done.** A batched materialiser pin write recorded its debounce state before writing, so a faulted shard left those pins looking durable and the next report was coalesced away. Each shard is now recorded once its write lands. ([#3319](https://github.com/NSTA1/Orleans.Lattice/issues/3319)) (`Orleans.Lattice`)
+
 - **Core - A range read no longer comes up short during a leaf division.** A donor mid-split hid rows it still held, so a scan, count or stats call returned successfully while missing keys a point or batched read still answered. The gap lasted until that leaf's next write, so it could outlive the division indefinitely on a range that had gone quiet. ([#3918](https://github.com/NSTA1/Orleans.Lattice/issues/3918)) (`Orleans.Lattice`)
 
 - **Batch writes can be bounded by a whole-call budget, not just a fan-out one.** `SetManyEnvelopeBudget` bounds `SetManyAsync` end to end, so stages that each stay inside the deadline cannot sum past it unseen. The refusal names the per-stage breakdown, and unlike the fan-out budget it also covers single-shard batches. Opt-in; unbounded by default. ([#2685](https://github.com/NSTA1/Orleans.Lattice/issues/2685)) (`Orleans.Lattice`)
