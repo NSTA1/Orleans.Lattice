@@ -1,11 +1,12 @@
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 
 namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The pure adapter layer between the backup MCP tools and the internal
-/// <see cref="ILatticeBackupControl"/> facade: one method per tool that maps the
+/// <see cref="ILatticeBackupControl"/> and <see cref="ILatticeBackupOperations"/> facades: one method per tool that maps the
 /// tool's arguments onto a facade call and projects the facade result onto the
 /// compact MCP DTO. These methods hold no transport or authorization concern -
 /// the fail-closed backup access gate lives in the facade and the caller
@@ -133,68 +134,139 @@ internal static class BackupToolInvocations
         };
     }
 
-    /// <summary>Captures a full backup of the request's scope.</summary>
-    public static async Task<McpBackupCaptureResult> CreateBackupAsync(
-        ILatticeBackupControl control,
+    /// <summary>Starts a tracked full capture of the requested scope.</summary>
+    public static async Task<McpBackupOperationHandle> StartBackupAsync(
+        ILatticeBackupOperations operations,
         string name,
         string treeId,
         string? scopeKind,
         string? keyOrPrefix,
         int pageSize,
+        string? operationId,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(control);
+        ArgumentNullException.ThrowIfNull(operations);
         var scope = BackupToolMappings.ToScope(treeId, scopeKind, keyOrPrefix);
-        var request = new LatticeBackupCaptureRequest(
-            name,
-            scope,
-            pageSize <= 0 ? LatticeBackupCaptureRequest.DefaultPageSize : pageSize);
-        var result = await control.CreateBackupAsync(request, cancellationToken).ConfigureAwait(false);
-        return BackupToolMappings.ToMcp(result);
+        var request = new LatticeBackupCaptureRequest(name, scope, NormalisePageSize(pageSize));
+        var handle = await operations
+            .StartBackupAsync(request, NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
     }
 
-    /// <summary>Captures an incremental backup layered on a base backup.</summary>
-    public static async Task<McpBackupCaptureResult> CreateIncrementalBackupAsync(
-        ILatticeBackupControl control,
+    /// <summary>Starts a tracked incremental capture layered on a base backup.</summary>
+    public static async Task<McpBackupOperationHandle> StartIncrementalBackupAsync(
+        ILatticeBackupOperations operations,
         string name,
         string treeId,
         string? scopeKind,
         string? keyOrPrefix,
         string baseBackupId,
         int pageSize,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(control);
-        var scope = BackupToolMappings.ToScope(treeId, scopeKind, keyOrPrefix);
-        var request = new LatticeBackupIncrementalCaptureRequest(
-            name,
-            scope,
-            baseBackupId,
-            pageSize <= 0 ? LatticeBackupCaptureRequest.DefaultPageSize : pageSize);
-        var result = await control.CreateIncrementalBackupAsync(request, cancellationToken).ConfigureAwait(false);
-        return BackupToolMappings.ToMcp(result);
-    }
-
-    /// <summary>Restores a backup into its target tree.</summary>
-    public static async Task<McpRestoreResult> RestoreBackupAsync(
-        ILatticeBackupControl control,
-        string backupId,
-        string? targetTreeId,
-        string? mode,
         string? operationId,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(control);
-        var request = new LatticeRestoreRequest(
-            backupId,
-            string.IsNullOrEmpty(targetTreeId) ? null : targetTreeId,
-            scope: null,
-            mode: BackupToolMappings.ToRestoreMode(mode),
-            operationId: string.IsNullOrEmpty(operationId) ? null : operationId);
-        var result = await control.RestoreBackupAsync(request, cancellationToken).ConfigureAwait(false);
-        return BackupToolMappings.ToMcp(result);
+        ArgumentNullException.ThrowIfNull(operations);
+        var scope = BackupToolMappings.ToScope(treeId, scopeKind, keyOrPrefix);
+        var request = new LatticeBackupIncrementalCaptureRequest(name, scope, baseBackupId, NormalisePageSize(pageSize));
+        var handle = await operations
+            .StartIncrementalBackupAsync(request, NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
     }
 
+    /// <summary>Starts a tracked whole-tree backup-set capture over <paramref name="treeIds"/>.</summary>
+    public static async Task<McpBackupOperationHandle> StartBackupSetAsync(
+        ILatticeBackupOperations operations,
+        string name,
+        IReadOnlyList<string> treeIds,
+        bool crossTreeConsistent,
+        int pageSize,
+        string? operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        ArgumentNullException.ThrowIfNull(treeIds);
+        var scopes = new BackupScopeSelector[treeIds.Count];
+        for (var i = 0; i < scopes.Length; i++)
+        {
+            scopes[i] = BackupScopeSelector.WholeTree(treeIds[i]);
+        }
+
+        var request = new LatticeBackupSetCaptureRequest(name, scopes, crossTreeConsistent, NormalisePageSize(pageSize));
+        var handle = await operations
+            .StartBackupSetAsync(request, NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
+    }
+
+    /// <summary>Starts a tracked restore of a backup into its target tree.</summary>
+    public static async Task<McpBackupOperationHandle> StartRestoreAsync(
+        ILatticeBackupOperations operations,
+        string backupId,
+        string? targetTreeId,
+        string? mode,
+        string? restoreOperationId,
+        string? operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var request = new LatticeRestoreRequest(
+            backupId,
+            NullIfEmpty(targetTreeId),
+            scope: null,
+            mode: BackupToolMappings.ToRestoreMode(mode),
+            operationId: NullIfEmpty(restoreOperationId));
+        var handle = await operations
+            .StartRestoreAsync(request, NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
+    }
+
+    /// <summary>Reads a tracked backup operation's status.</summary>
+    public static async Task<McpBackupOperationResult> GetOperationStatusAsync(
+        ILatticeBackupOperations operations,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var status = await operations.GetOperationStatusAsync(operationId, cancellationToken).ConfigureAwait(false);
+        return ToResult(operationId, status);
+    }
+
+    /// <summary>Lists one page of the caller's tracked backup operations, newest-first.</summary>
+    public static async Task<McpBackupOperationPage> ListOperationsAsync(
+        ILatticeBackupOperations operations,
+        int pageSize,
+        string? pageToken,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var page = await operations
+            .ListOperationsAsync(
+                new LatticeOperationListRequest { PageSize = pageSize, PageToken = NullIfEmpty(pageToken) },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var items = new McpBackupOperation[page.Operations.Count];
+        for (var i = 0; i < items.Length; i++)
+        {
+            items[i] = BackupToolMappings.ToMcp(page.Operations[i]);
+        }
+
+        return new McpBackupOperationPage { Operations = items, NextPageToken = page.NextPageToken };
+    }
+
+    /// <summary>Requests cancellation of a tracked backup operation.</summary>
+    public static async Task<McpBackupOperationResult> CancelOperationAsync(
+        ILatticeBackupOperations operations,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var status = await operations.CancelOperationAsync(operationId, cancellationToken).ConfigureAwait(false);
+        return ToResult(operationId, status);
+    }
     /// <summary>Reverts a shadow-cutover restore reconstructed from the tool arguments.</summary>
     public static async Task<McpBackupRevertResult> RevertRestoreAsync(
         ILatticeBackupControl control,
@@ -238,6 +310,18 @@ internal static class BackupToolInvocations
         return new McpBackupDeleteResult { BackupId = backupId, Deleted = deleted };
     }
 
+    private static McpBackupOperationResult ToResult(string operationId, LatticeOperationStatus? status) =>
+        new()
+        {
+            OperationId = operationId,
+            Found = status is not null,
+            Operation = status is null ? null : BackupToolMappings.ToMcp(status),
+        };
+
+    private static int NormalisePageSize(int pageSize) =>
+        pageSize <= 0 ? LatticeBackupCaptureRequest.DefaultPageSize : pageSize;
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
     private static void AppendChunk(List<byte> buffer, ReadOnlyMemory<byte> chunk)
     {
         if (chunk.IsEmpty)

@@ -25,4 +25,11 @@ public sealed record BackupCaptureRequestMessage
     /// round-trip. Defaults to <see cref="LatticeBackupCaptureRequest.DefaultPageSize"/>.
     /// </summary>
     [Id(2)] public int PageSize { get; init; } = LatticeBackupCaptureRequest.DefaultPageSize;
+
+    /// <summary>
+    /// The idempotency id of the tracked operation an accept-then-poll start RPC
+    /// creates, or <see langword="null"/> to generate one. Ignored by the deprecated
+    /// blocking RPC.
+    /// </summary>
+    [Id(3)] public string? TrackingOperationId { get; init; }
 }
