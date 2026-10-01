@@ -1326,7 +1326,13 @@ internal sealed partial class WalShardGrain(
         }
         finally
         {
-            ArrayPool<WalShardSequencedEntry>.Shared.Return(buffer, clearArray: true);
+            // Entries hold references (tree id, key strings), so the slots this
+            // page filled are cleared before the buffer goes back. Only those:
+            // clearArray: true memsets the whole rental, which the power-of-two
+            // growth in Append can leave at nearly twice the entries written,
+            // and the shipper polls this read path continuously.
+            buffer.AsSpan(0, count).Clear();
+            ArrayPool<WalShardSequencedEntry>.Shared.Return(buffer);
         }
     }
 
@@ -1339,7 +1345,11 @@ internal sealed partial class WalShardGrain(
         {
             var larger = ArrayPool<WalShardSequencedEntry>.Shared.Rent(buffer.Length * 2);
             buffer.AsSpan(0, count).CopyTo(larger);
-            ArrayPool<WalShardSequencedEntry>.Shared.Return(buffer, clearArray: true);
+            // Every slot of the old buffer is populated here (count == Length),
+            // so the prefix clear covers it exactly while skipping the pool's
+            // round-up slack that clearArray: true would also memset.
+            buffer.AsSpan(0, count).Clear();
+            ArrayPool<WalShardSequencedEntry>.Shared.Return(buffer);
             buffer = larger;
         }
 
