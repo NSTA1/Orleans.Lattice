@@ -1101,7 +1101,7 @@ internal sealed class LatticeCrossTreeTxGrain(
             AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
             var keys = new string[p.Entries.Count];
             for (var i = 0; i < p.Entries.Count; i++) keys[i] = p.Entries[i].Key;
-            Array.Sort(keys, StringComparer.Ordinal);
+            Array.Sort(keys, OrdinalStringOrder.Comparison);
             BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, keys.Length);
             hash.AppendData(lenPrefix);
             foreach (var key in keys)

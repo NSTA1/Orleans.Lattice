@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -66,7 +67,7 @@ public sealed class GCounterProvenanceDecoder : ICrdtProvenanceDecoder
             var delta = (GCounterDelta)entry.Delta;
             var start = result.Count;
             Emit(result, delta.Increments, entry.WallClock);
-            result.Sort(start, result.Count - start, CrdtMemberChangeCausalComparer.Instance);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeCausalComparer.Comparison);
         }
         return result;
     }
@@ -91,7 +92,7 @@ public sealed class GCounterProvenanceDecoder : ICrdtProvenanceDecoder
 
         var result = new List<CrdtMemberChange>(total);
         Emit(result, counter.Increments, null);
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 

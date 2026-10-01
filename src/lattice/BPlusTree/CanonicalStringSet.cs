@@ -33,7 +33,7 @@ internal static class CanonicalStringSet
     {
         ArgumentNullException.ThrowIfNull(source);
         var list = new List<string>(new HashSet<string>(source, StringComparer.Ordinal));
-        list.Sort(StringComparer.Ordinal);
+        list.Sort(OrdinalStringOrder.Comparison);
         return list;
     }
 
@@ -48,7 +48,7 @@ internal static class CanonicalStringSet
         var set = new HashSet<string>(source, StringComparer.Ordinal);
         var array = new string[set.Count];
         set.CopyTo(array);
-        Array.Sort(array, StringComparer.Ordinal);
+        Array.Sort(array, OrdinalStringOrder.Comparison);
         return array;
     }
 }

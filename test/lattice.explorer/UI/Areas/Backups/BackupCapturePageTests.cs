@@ -41,7 +41,7 @@ public sealed class BackupCapturePageTests : BackupsTestContext
         cut.Find("form").Submit();
 
         cut.WaitUntil(() => Assert.That(CurrentPath, Is.EqualTo("/backups/operations/1")));
-        var request = Backups.LastOf<LatticeBackupCaptureRequest>(nameof(ILatticeBackupControl.CreateBackupAsync));
+        var request = Backups.LastOf<LatticeBackupCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupAsync));
         Assert.Multiple(() =>
         {
             Assert.That(request.Name, Is.EqualTo("nightly"));
@@ -63,8 +63,8 @@ public sealed class BackupCapturePageTests : BackupsTestContext
         Input(cut, scope == "prefix" ? "Key prefix" : "Key", value);
         cut.Find("form").Submit();
 
-        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateBackupAsync)), Is.EqualTo(1)));
-        var request = Backups.LastOf<LatticeBackupCaptureRequest>(nameof(ILatticeBackupControl.CreateBackupAsync));
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartBackupAsync)), Is.EqualTo(1)));
+        var request = Backups.LastOf<LatticeBackupCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupAsync));
         Assert.That(request.Scope, Is.EqualTo(new BackupScopeSelector((BackupScopeKind)kind, "orders", value)));
     }
 
@@ -113,8 +113,8 @@ public sealed class BackupCapturePageTests : BackupsTestContext
         Select(cut, "Base backup", "full0");
         cut.Find("form").Submit();
 
-        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateIncrementalBackupAsync)), Is.EqualTo(1)));
-        Assert.That(Backups.LastOf<LatticeBackupIncrementalCaptureRequest>(nameof(ILatticeBackupControl.CreateIncrementalBackupAsync)).BaseBackupId, Is.EqualTo("full0"));
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartIncrementalBackupAsync)), Is.EqualTo(1)));
+        Assert.That(Backups.LastOf<LatticeBackupIncrementalCaptureRequest>(nameof(ILatticeBackupOperations.StartIncrementalBackupAsync)).BaseBackupId, Is.EqualTo("full0"));
     }
 
     [Test]
@@ -161,8 +161,8 @@ public sealed class BackupCapturePageTests : BackupsTestContext
         Assert.That(cut.FindAll(".lt-backups-trees__item"), Has.Count.EqualTo(2));
         cut.Find("form").Submit();
 
-        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateBackupSetAsync)), Is.EqualTo(1)));
-        var request = Backups.LastOf<LatticeBackupSetCaptureRequest>(nameof(ILatticeBackupControl.CreateBackupSetAsync));
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartBackupSetAsync)), Is.EqualTo(1)));
+        var request = Backups.LastOf<LatticeBackupSetCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupSetAsync));
         Assert.Multiple(() =>
         {
             Assert.That(request.Scopes.Select(scope => scope.TreeId), Is.EqualTo(new[] { "orders", "a/crm/customers" }));

@@ -20,13 +20,20 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// are in-cluster operator verbs the backup binding does not serve over the wire,
 /// so they fail with <see cref="NotSupportedException"/> - the same shape the
 /// shared fault table gives a verb a cluster answers <c>Unimplemented</c> for.
+/// A cold restore is served over the wire only as a tracked operation, through
+/// <see cref="StartColdRestoreAsync"/>.
 /// </remarks>
 /// <param name="channel">The circuit's transport channel.</param>
-internal sealed class ShellBackupControlTransport(ShellTransportChannel channel)
+internal sealed partial class ShellBackupControlTransport(ShellTransportChannel channel)
     : ShellTransportAdapter<LatticeBackupApiGrpcClient>(channel, LatticeBackupApiGrpcClient.Create), ILatticeBackupControl
 {
     /// <summary>The message the verbs the backup binding does not serve fail with.</summary>
     internal const string NotServedMessage = "The backup control API does not serve this operation over the wire.";
+
+    // The shipped ILatticeBackupControl still carries the deprecated blocking verbs
+    // (LATTICE0002), so this adapter forwards them to the client's deprecated calls.
+    // Nothing in the Explorer calls them: it starts tracked operations instead.
+#pragma warning disable LATTICE0002
 
     /// <inheritdoc />
     public Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)
@@ -52,6 +59,7 @@ internal sealed class ShellBackupControlTransport(ShellTransportChannel channel)
         ArgumentNullException.ThrowIfNull(request);
         return CallAsync(request, static (client, state, ct) => client.CreateBackupSetAsync(state, ct), null, cancellationToken);
     }
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task ScheduleBackupAsync(LatticeBackupScheduleRequest request, CancellationToken cancellationToken = default)
@@ -104,7 +112,9 @@ internal sealed class ShellBackupControlTransport(ShellTransportChannel channel)
     public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
         return CallAsync(request, static (client, state, ct) => client.RestoreBackupAsync(state, ct), null, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <inheritdoc />

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Data;
@@ -425,8 +426,13 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
+        // Force-refreshed: the tree's stateless worker caches its routing per
+        // activation, a reshard does not invalidate that cache, and this read
+        // meets no stale-routing refusal that would. An unforced read went on
+        // reporting the pre-reshard map - version 0 and the old shard count -
+        // while the registry held the new one (#4146).
         var routing = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .GetRoutingAsync(cancellationToken)
+            .GetRoutingAsync(forceRefresh: true, cancellationToken)
             .ConfigureAwait(false);
 
         var physical = routing.Map.GetPhysicalShardIndices();
@@ -439,6 +445,19 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             indices.Add(physical[i]);
         }
         indices.Sort();
+        var sorted = indices.MoveToImmutable();
+
+        // Count the virtual slots each shard owns, position for position with
+        // the sorted indices; every slot names one of them.
+        var slotCounts = new int[sorted.Length];
+        foreach (var shard in routing.Map.Slots)
+        {
+            var position = sorted.BinarySearch(shard);
+            if (position >= 0)
+            {
+                slotCounts[position]++;
+            }
+        }
 
         return new ShardMapInspection
         {
@@ -447,7 +466,8 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             VirtualShardCount = routing.Map.VirtualShardCount,
             PhysicalShardCount = physical.Count,
             MapVersion = routing.Map.Version,
-            PhysicalShardIndices = indices.MoveToImmutable(),
+            PhysicalShardIndices = sorted,
+            SlotCounts = ImmutableCollectionsMarshal.AsImmutableArray(slotCounts),
         };
     }
 

@@ -318,3 +318,30 @@
   margin: 0;
   padding: 0;
 }
+
+/* Why the caller holds no role in an app, and how to get one (issue #4150). */
+.lt-apps-holding {
+  margin-block: var(--lt-space-3);
+  padding: var(--lt-space-3) var(--lt-space-4);
+  border: 1px solid var(--lt-op-state-drift);
+  border-radius: var(--lt-radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-apps-holding p {
+  margin: 0 0 var(--lt-space-2);
+}
+
+.lt-apps-holding--compact {
+  display: block;
+  margin-block: var(--lt-space-1) 0;
+  padding: 0;
+  border: 0;
+}
+
+.lt-apps-holding__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  align-items: center;
+}

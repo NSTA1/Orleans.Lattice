@@ -24,7 +24,7 @@ public class LatticeStatsGrainTests
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(virtualShardCount, physicalShardCount);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new RoutingInfo(TreeId, map));
         factory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
@@ -257,6 +257,20 @@ public class LatticeStatsGrainTests
         Assert.That(() => LatticeStatsGrain.SortByShardIndexIfNeeded(empty), Throws.Nothing);
         Assert.That(() => LatticeStatsGrain.SortByShardIndexIfNeeded(single), Throws.Nothing);
         Assert.That(single[0].ShardIndex, Is.EqualTo(7));
+    }
+
+    [Test]
+    public async Task GetReportAsync_force_refreshes_the_routing_it_walks()
+    {
+        // The tree's stateless worker caches its routing per activation and a
+        // reshard does not invalidate it, so an unforced read kept reporting the
+        // pre-reshard shards (#4146).
+        var (grain, _, lattice, _) = CreateGrain();
+
+        await grain.GetReportAsync(deep: false, CancellationToken.None);
+
+        _ = lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
+        _ = lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 }
 

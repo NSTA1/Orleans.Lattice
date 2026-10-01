@@ -12,7 +12,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
-- **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+- **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 - **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)
 - **Tree admin - Accept-then-poll maintenance.** View rebuild and reconcile, tag-index reconcile, WAL moves and orphaned-leaf audit and repair return a handle at once and report phase and unit progress; they survive a closed tab and can be cancelled. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
@@ -66,6 +66,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Online reshard shrinks.** `ReshardAsync` accepts a count below a populated tree's current one and folds adjacent shards together online, completing only once the retired shards' storage is released; the `shrink_unsupported` rejection reason is gone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Changed
+
+- **Performance - Sort comparer delegate trims.** Sorting with an `IComparer<T>` minted a fresh `Comparison<T>` delegate per call, as the runtime converts its method group rather than caching it. Thirty-six CRDT, primitive and grain sort sites pass a cached comparison now and allocate nothing. ([#4184](https://github.com/NSTA1/Orleans.Lattice/pull/4184)) (`Orleans.Lattice`)
 
 - **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
 
@@ -129,6 +131,9 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Tree admin - Blocking maintenance verbs.** `RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` and their gRPC client methods raise `LATTICE0002` and will be removed in the next major version. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 ### Fixed
+
+- **Explorer - An app's installer is told when they will hold no role in it.** Binding roles, the install's confirmation, Your apps and the app's page say whether you are in each bound group, and offer to join it or re-bind instead of a missing Open. ([#4150](https://github.com/NSTA1/Orleans.Lattice/issues/4150)) (`Orleans.Lattice.Explorer.UI`)
+- **Core - Key history shows each write once.** Copies made by resize, reshard and replication no longer repeat a revision, and the Explorer says "Set - value not kept". ([#4149](https://github.com/NSTA1/Orleans.Lattice/issues/4149)) (`Orleans.Lattice`, `Orleans.Lattice.Explorer`)
 
 - **Auth - Grants a host seeds at startup are honoured as soon as they are written.** Since the alias-swap fix above, a silo whose policy had never been written warmed its access gate over an empty snapshot at once, and the rebuild after the first seeded rules could take seconds while the policy tree's shards were being created. Requests in that window were denied as "no matching rule". The first rule written over an empty snapshot now makes the gate wait for a rebuild that saw it. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice.Auth`)
 

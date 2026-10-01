@@ -1,0 +1,38 @@
+@namespace Orleans.Lattice.Explorer.UI.Operations
+@using Orleans.Lattice.Api.Operations
+@using Orleans.Lattice.Explorer.UI.Design.Components
+@*
+    One long-running operation's status (#4122): its state, the step it is on,
+    and its progress in real units through LtProgress - a determinate bar when
+    the phase total is known, a hatched bar with the count alone when it is not.
+    Kind-agnostic, so every area that shows a LatticeOperationStatus draws it the
+    same way.
+*@
+
+<div class="lt-operation-progress" data-lt-operation-state="@Status.State">
+    <p class="lt-operation-progress__state">
+        <LtStatusPill State="@OperationText.Role(Status.State)" Text="@OperationText.State(Status)" />
+        @if (OperationText.Step(Status) is { } step && !Status.IsTerminal)
+        {
+            <span class="lt-operation-progress__step">@step</span>
+        }
+    </p>
+
+    @if (!Status.IsTerminal)
+    {
+        <LtProgress Label="@Label"
+                    Phase="@PhaseText"
+                    Value="@Status.CompletedUnits"
+                    Maximum="@Status.TotalUnits"
+                    Detail="@OperationText.Units(Status)" />
+    }
+    else if (Status.State != LatticeOperationState.Succeeded)
+    {
+        <p class="lt-operation-progress__stopped">@StoppedText</p>
+    }
+
+    @if (Status.FailureReason is { Length: > 0 } reason && Status.IsTerminal)
+    {
+        <p class="lt-operation-progress__reason">@reason</p>
+    }
+</div>

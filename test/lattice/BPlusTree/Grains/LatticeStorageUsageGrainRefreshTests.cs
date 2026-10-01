@@ -56,7 +56,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         options.WalPartitions = 1;
 
         var lattice = Substitute.For<ILattice>();
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new RoutingInfo(TreeId, ShardMap.CreateDefault(16, 1)));
         factory.GetGrain<ILattice>(TreeId).Returns(lattice);
 

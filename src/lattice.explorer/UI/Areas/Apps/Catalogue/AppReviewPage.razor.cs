@@ -18,9 +18,13 @@ public partial class AppReviewPage : IDisposable
     private ExplorerAddress? _resolvedFor;
     private string? _slug;
     private AppInstallStage? _announcedStage;
+    private AppsCallerGroups _caller = AppsCallerGroups.Unknown;
 
     [Inject]
     internal AppsAccess Access { get; set; } = default!;
+
+    [Inject]
+    internal AppsMembership Membership { get; set; } = default!;
 
     [Inject]
     internal AppsFacades Facades { get; set; } = default!;
@@ -53,6 +57,21 @@ public partial class AppReviewPage : IDisposable
     private string SourceName => _flow?.Source?.DisplayName ?? _flow?.Key.SourceKey ?? string.Empty;
 
     private string TenantPhrase => Address.Tenant is { } tenant ? $" in tenant {tenant}" : string.Empty;
+
+    /// <summary>The tenant the flow installs into, named where its outcome is reported.</summary>
+    private string InstallTenantPhrase => _flow?.Key.Tenant is { } tenant ? $" in tenant {tenant}" : string.Empty;
+
+    /// <summary>The app's own page in the tenant it was installed into.</summary>
+    private string AppHref => _flow is { } flow ? Href(AppsRoutes.App(flow.Key.Tenant, flow.Key.Slug)) : string.Empty;
+
+    /// <summary>The app's address as the address line shows it.</summary>
+    private string AppAddressText => "/" + AppHref.TrimStart('/');
+
+    /// <summary>Where the installed version's role bindings are changed, or <see langword="null"/> when the caller may not.</summary>
+    private string? RebindHref =>
+        CanInstall && Facades.RoleBindings is not null && _flow is { Descriptor: { } descriptor } flow
+            ? Href(AppsRoutes.Review(flow.Key.Tenant, flow.Key.SourceKey, flow.Key.Slug, descriptor.Version))
+            : null;
 
     private string Lede => _flow switch
     {
@@ -144,7 +163,29 @@ public partial class AppReviewPage : IDisposable
         _announcedStage = flow.Stage is AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Rebound ? flow.Stage : null;
         flow.Changed += OnFlowChanged;
         _ = flow.LoadAsync();
+        _ = ReadCallerAsync();
         TakeUpgradeIntent();
+    }
+
+    /// <summary>
+    /// Reads the caller's groups, so the outcome of an install or a re-binding can say whether
+    /// they hold a role; read again after each, since the caller may have joined a group meanwhile.
+    /// </summary>
+    private async Task ReadCallerAsync()
+    {
+        try
+        {
+            _caller = await Membership.ReadAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (!_lifetime.IsLeft)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void Detach()
@@ -177,6 +218,7 @@ public partial class AppReviewPage : IDisposable
             _announcedStage = flow.Stage;
             Access.Invalidate(flow.Key.Slug);
             Directory.Invalidate();
+            _ = ReadCallerAsync();
         }
         else if (_flow is { Stage: not (AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Enabling or AppInstallStage.Rebound) })
         {

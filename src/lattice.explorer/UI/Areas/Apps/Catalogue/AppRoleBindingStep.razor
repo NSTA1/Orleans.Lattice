@@ -1,4 +1,7 @@
 @using Orleans.Lattice.Explorer.UI.Suggestions
+@using Orleans.Lattice.Explorer.UI.Areas.Access
+@using Orleans.Lattice.Explorer.UI.Design.Components
+@implements IDisposable
 
 @*
     Bind roles: each role the app declares is bound to one membership group - never
@@ -26,11 +29,34 @@
                             Noun="group"
                             ExistingMessage="A group the cluster knows."
                             Hint="A membership group id. Type part of a name or id to find one." />
+                @if (Flow.Bindings.GetValueOrDefault(name) is { } group)
+                {
+                    @switch (_caller.Of(group))
+                    {
+                        case AppGroupMembership.Member:
+                            <p class="lt-apps-hint" data-lt-holding="member">You are in @group, the group @name is bound to.</p>
+                            break;
+                        case AppGroupMembership.NotMember:
+                            <p class="lt-apps-hint" data-lt-holding="not-member">
+                                You are not in @group, so you will not hold the @name role.
+                                <a class="lt-apps-link" href="@Navigator.Canonicalize(AccessRoutes.Group(group)).ToHref()" data-lt-join="@group">Add me to @group</a>,
+                                or bind it to a group you are in.
+                            </p>
+                            break;
+                        default:
+                            <p class="lt-apps-hint" data-lt-holding="unknown">Whether you are in @group is unknown: your group membership could not be read.</p>
+                            break;
+                    }
+                }
             </div>
         }
         @if (app.Roles.IsDefaultOrEmpty)
         {
             <p class="lt-apps-hint">It declares no role, so there is nothing to bind.</p>
+        }
+        @if (Holding is { HoldsAny: false } holding && holding.BoundGroups.Count > 0)
+        {
+            <p class="lt-apps-hint" role="status" data-lt-holding-summary="none">You will hold no role in @AppsPresentation.DisplayName(app.Presentation, app.Slug), so you won't be able to open it. A role is held only through membership of the group it is bound to; administrator rights do not grant one.</p>
         }
         <div class="lt-apps-actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="Flow.Back">Back</LtButton>
@@ -44,9 +70,36 @@
 }
 
 @code {
+    private readonly ComponentLifetime _lifetime = new();
+    private AppsCallerGroups _caller = AppsCallerGroups.Unknown;
+
     [CascadingParameter]
     internal AppInstallFlow? Flow { get; set; }
 
     [Inject]
     internal ExplorerSuggestions Suggestions { get; set; } = default!;
+
+    [Inject]
+    internal AppsMembership Membership { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerNavigator Navigator { get; set; } = default!;
+
+    private AppRoleHoldingAssessment? Holding => Flow is { } flow ? AppRoleHoldingAssessment.Assess(flow.DraftedRoleGroups, _caller) : null;
+
+    /// <summary>Stops reading the caller's groups.</summary>
+    public void Dispose() => _lifetime.Leave();
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        // Advisory only: the step works the same whether or not the caller's groups can be read.
+        try
+        {
+            _caller = await Membership.ReadAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 }

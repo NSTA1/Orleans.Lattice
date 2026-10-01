@@ -32,9 +32,11 @@ public abstract class BackupsTestContext : ShellChromeTestContext
         Workspace.DescribeMyAppAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<WorkspaceAppDescriptor?>(null));
 
         Services.RemoveAllKeyed<ILatticeBackupControl>(ShellFacades.Key);
+        Services.RemoveAllKeyed<ILatticeBackupOperations>(ShellFacades.Key);
         Services.RemoveAllKeyed<ILatticeAppsControl>(ShellFacades.Key);
         Services.RemoveAllKeyed<ILatticeAppWorkspace>(ShellFacades.Key);
         Services.AddKeyedSingleton<ILatticeBackupControl>(ShellFacades.Key, Backups);
+        Services.AddKeyedSingleton<ILatticeBackupOperations>(ShellFacades.Key, Backups);
         Services.AddKeyedSingleton(ShellFacades.Key, AppsControl);
         Services.AddKeyedSingleton(ShellFacades.Key, Workspace);
 

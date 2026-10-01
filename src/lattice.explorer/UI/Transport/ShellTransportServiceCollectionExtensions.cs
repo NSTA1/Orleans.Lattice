@@ -48,6 +48,7 @@ internal static class ShellTransportServiceCollectionExtensions
     [
         typeof(ILatticeAuthAdmin),
         typeof(ILatticeBackupControl),
+        typeof(ILatticeBackupOperations),
         typeof(ILatticeSchemaControl),
         typeof(ILatticeTenantAdmin),
         typeof(ILatticeTenantAccessAdmin),
@@ -85,6 +86,7 @@ internal static class ShellTransportServiceCollectionExtensions
 
         services.TryAddKeyedScoped<ILatticeAuthAdmin, ShellAuthAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeBackupControl, ShellBackupControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeBackupOperations, ShellBackupControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeSchemaControl, ShellSchemaControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantAdmin, ShellTenantAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantAccessAdmin, ShellTenantAccessAdminTransport>(ShellFacades.Key);

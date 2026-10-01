@@ -16,13 +16,21 @@ public partial class AppsPage : IDisposable
     private readonly Dictionary<string, string?> _icons = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> _installedIcons = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Source, string Slug), AppPresentationDescriptor?> _presentations = [];
+    private readonly Dictionary<string, AppDescriptor> _described = new(StringComparer.Ordinal);
     private readonly ComponentLifetime _lifetime = new();
     private AppsAccessSnapshot? _snapshot;
     private IReadOnlyList<AppSummary> _failed = [];
     private ImmutableArray<AppSummary> _installed = [];
+    private AppsCallerGroups _caller = AppsCallerGroups.Unknown;
 
     [Inject]
     internal AppsAccess Access { get; set; } = default!;
+
+    [Inject]
+    internal AppsMembership Membership { get; set; } = default!;
+
+    [Inject]
+    internal AppInstallFlowStore Flows { get; set; } = default!;
 
     [Inject]
     internal AppsFacades Facades { get; set; } = default!;
@@ -67,8 +75,48 @@ public partial class AppsPage : IDisposable
         _failed = [.. _snapshot.FailedActivations];
         _installed = _snapshot.Control.CanList ? _snapshot.InTenant : [];
         StateHasChanged();
+        await LoadHoldingAsync(_snapshot);
         await LoadIconsAsync(_snapshot);
         await LoadInstalledPresentationAsync(_snapshot);
+    }
+
+    /// <summary>
+    /// For each enabled installed app the caller holds no role in, reads its recorded bindings and
+    /// the caller's groups, so its row can say why there is no way in and how to get one (issue #4150).
+    /// </summary>
+    private async Task LoadHoldingAsync(AppsAccessSnapshot snapshot)
+    {
+        _described.Clear();
+        var roleless = _installed.Where(app => !HoldsRole(snapshot, app)).ToArray();
+        if (roleless.Length == 0 || !snapshot.Control.CanDescribe || Facades.Control is not { } control)
+        {
+            return;
+        }
+
+        try
+        {
+            _caller = await Membership.ReadAsync(_lifetime.Token);
+            foreach (var app in roleless)
+            {
+                try
+                {
+                    if (await control.DescribeAsync(app.Slug, cancellationToken: _lifetime.Token) is { } described)
+                    {
+                        _described[app.Slug] = described;
+                    }
+                }
+                catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    // Its row simply carries no notice: the bindings could not be read.
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        StateHasChanged();
     }
 
     private async Task LoadInstalledPresentationAsync(AppsAccessSnapshot snapshot)
@@ -183,6 +231,25 @@ public partial class AppsPage : IDisposable
     }
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
+
+    /// <summary>The installs this circuit completed in a tenant other than the one the page is in.</summary>
+    private IEnumerable<AppInstallFlow> OtherTenantInstalls =>
+        Flows.Flows
+            .Where(flow => flow.Stage is AppInstallStage.Installed or AppInstallStage.Enabled
+                && flow.Key.Tenant is not null
+                && !string.Equals(flow.Key.Tenant, Address.Tenant, StringComparison.Ordinal))
+            .OrderBy(flow => flow.Key.Tenant, StringComparer.Ordinal)
+            .ThenBy(flow => flow.Key.Slug, StringComparer.Ordinal);
+
+    private static bool HoldsRole(AppsAccessSnapshot snapshot, AppSummary app) =>
+        app.State != AppLifecycleState.Enabled
+        || snapshot.MyApps.Any(mine => string.Equals(mine.Slug, app.Slug, StringComparison.Ordinal));
+
+    /// <summary>Why the caller cannot open an enabled installed app they hold no role in, or <see langword="null"/>.</summary>
+    private AppRoleHoldingAssessment? InstalledHolding(AppSummary app) =>
+        _described.TryGetValue(app.Slug, out var described) && !described.Roles.IsDefaultOrEmpty
+            ? AppRoleHoldingAssessment.Assess(described, _caller)
+            : null;
 
     private RenderFragment AppActions(WorkspaceAppSummary app) => builder => BuildActions(builder, app);
 
