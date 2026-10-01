@@ -282,6 +282,7 @@ internal static class AppsControlMapping
             Presentation = AppsPresentationMapping.ToWirePresentation(manifest.Presentation),
             Ui = AppsPresentationMapping.ToWireUi(manifest),
             SourceKey = provenance.Source,
+            ManifestDigest = AppManifestDigest.Compute(manifest, provenance),
         };
     }
 

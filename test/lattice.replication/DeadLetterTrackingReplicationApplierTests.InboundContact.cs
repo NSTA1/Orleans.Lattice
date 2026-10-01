@@ -21,20 +21,31 @@ public partial class DeadLetterTrackingReplicationApplierTests
     private const string RemoteOrigin = "site-b";
 
     private static (DeadLetterTrackingReplicationApplier Decorator, IReplicationApplier Inner, ReplicationPeerStats Stats)
-        BuildWithStats(int maxRetries = 3)
+        BuildWithStats(
+            int maxRetries = 3,
+            IReadOnlyDictionary<string, LatticeMergeMode>? replicatedTrees = null,
+            ILatticeReplicationContext? context = null,
+            bool enroll = true)
     {
         var inner = Substitute.For<IReplicationApplier>();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).Returns(Substitute.For<IReplicationDeadLetterGrain>());
         grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>())
             .Returns(Substitute.For<IReplicationHighWaterMarkGrain>());
-        var options = new LatticeReplicationOptions { ClusterId = "site-a", MaxApplyRetries = maxRetries };
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaxApplyRetries = maxRetries,
+            ReplicatedTrees = enroll
+                ? replicatedTrees ?? new Dictionary<string, LatticeMergeMode> { [TreeId] = MakeEntry().Mode }
+                : null,
+        };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(options);
         var stats = new ReplicationPeerStats();
 
         var decorator = new DeadLetterTrackingReplicationApplier(
-            inner, grainFactory, monitor, NullLogger<DeadLetterTrackingReplicationApplier>.Instance, stats);
+            inner, grainFactory, monitor, NullLogger<DeadLetterTrackingReplicationApplier>.Instance, stats, context);
         return (decorator, inner, stats);
     }
 

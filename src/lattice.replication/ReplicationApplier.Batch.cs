@@ -543,11 +543,13 @@ internal sealed partial class ReplicationApplier
     /// remote peer. Local-origin entries (the loopback defence path)
     /// are similarly excluded - they describe a same-cluster mutation
     /// that bounced through the apply pipeline and have no inbound
-    /// peer to attribute. The recording is best-effort and never
+    /// peer to attribute. A run the receiver's enrollment / merge-mode gate did
+    /// not admit is never attributed either: its tree id is peer-controlled
+    /// (issue #4021). The recording is best-effort and never
     /// throws into the apply pipeline.
     /// </summary>
     private void RecordInboundContact(WalRecord representative, bool success) =>
-        ReplicationInboundContact.Record(_peerStats, options, representative, success);
+        ReplicationInboundContact.Record(_peerStats, options, _replicationContext, representative, success);
 
     /// <summary>
     /// Applies a contiguous run of entries that share the same

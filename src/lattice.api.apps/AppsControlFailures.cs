@@ -33,6 +33,14 @@ internal static class AppsControlFailures
         new($"App '{slug}' could not be read from the app source ({result.Status})"
             + Detail(result.Errors, slug) + ".");
 
+    /// <summary>The exception for an app source that no longer serves the manifest the operator reviewed.</summary>
+    /// <param name="slug">The app slug.</param>
+    /// <param name="version">The version being installed.</param>
+    /// <returns>The exception to throw.</returns>
+    public static InvalidOperationException ManifestChanged(AppSlug slug, AppVersion version) =>
+        new($"App '{slug}' version '{version}' no longer matches the manifest that was reviewed; "
+            + "review it again before installing.");
+
     /// <summary>The exception for a slug that several sources offer when no source key was named.</summary>
     /// <param name="slug">The app slug.</param>
     /// <param name="result">The ambiguous source result, carrying the offering source keys.</param>
