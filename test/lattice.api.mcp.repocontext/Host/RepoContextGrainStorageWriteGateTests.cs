@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
@@ -16,6 +17,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 public sealed class RepoContextGrainStorageWriteGateTests
 {
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The poll cadence the private barrier this fixture used to carry ran at.
+    /// Preserved verbatim so admission timing is unchanged by the move onto
+    /// <see cref="TestPoll"/>.
+    /// </summary>
+    private static readonly TimeSpan Cadence = TimeSpan.FromMilliseconds(5);
 
     [Test]
     public async Task A_gate_with_free_permits_admits_immediately_and_without_queueing()
@@ -43,7 +51,11 @@ public sealed class RepoContextGrainStorageWriteGateTests
         var held = await gate.AcquireAsync(CancellationToken.None);
 
         var queued = gate.AcquireAsync(CancellationToken.None).AsTask();
-        await WaitUntilAsync(() => gate.Queued == 1);
+        await TestPoll.UntilAsync(
+            () => gate.Queued == 1,
+            "the writer beyond the bound must be observed queued on the gate",
+            Generous,
+            Cadence);
 
         Assert.Multiple(() =>
         {
@@ -163,7 +175,11 @@ public sealed class RepoContextGrainStorageWriteGateTests
             }
         }).ToArray();
 
-        await WaitUntilAsync(() => Volatile.Read(ref concurrent) == Permits && gate.Queued == 20);
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref concurrent) == Permits && gate.Queued == 20,
+            $"the gate must settle at {Permits} writers in flight with 20 queued behind them",
+            Generous,
+            Cadence);
         release.Release(24);
         await Task.WhenAll(writers).WaitAsync(Generous);
 
@@ -227,20 +243,6 @@ public sealed class RepoContextGrainStorageWriteGateTests
             }
 
             observed = seen;
-        }
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + Generous;
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                Assert.Fail("The gate did not reach the expected state within the timeout.");
-            }
-
-            await Task.Delay(5);
         }
     }
 }

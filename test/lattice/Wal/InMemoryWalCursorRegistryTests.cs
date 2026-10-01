@@ -24,11 +24,29 @@ public sealed partial class InMemoryWalCursorRegistryTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
+    /// <summary>
+    /// Spins until the wall clock reads strictly past <paramref name="ticks"/> and
+    /// returns that reading, bounded by a monotonic budget.
+    /// </summary>
+    /// <remarks>
+    /// The registry stamps freshness from <see cref="DateTime.UtcNow"/>, so the
+    /// returned floor has to come from the same clock. That clock can step
+    /// backwards, so the spin is bounded by <see cref="Environment.TickCount64"/>
+    /// and fails by name rather than busy-waiting a core forever.
+    /// </remarks>
     private static long WaitUntilAfter(long ticks)
     {
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(10).TotalMilliseconds;
         var current = DateTime.UtcNow.Ticks;
         while (current <= ticks)
         {
+            if (Environment.TickCount64 > deadline)
+            {
+                Assert.Fail(
+                    "The wall clock did not advance past the recorded freshness floor within 10s, "
+                    + "so it must have stepped backwards.");
+            }
+
             Thread.SpinWait(64);
             current = DateTime.UtcNow.Ticks;
         }
