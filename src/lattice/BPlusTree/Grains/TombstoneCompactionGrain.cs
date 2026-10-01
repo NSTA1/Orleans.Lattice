@@ -967,12 +967,15 @@ internal sealed class TombstoneCompactionGrain(
                 {
                     var dirtyLeafId = GrainId.Parse(dirtyLeaves[dirtyIndex]);
                     var dirtyLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(dirtyLeafId);
+                    var leafResult = LeafCompactionResult.Complete(0);
+                    var leafFaulted = false;
                     try
                     {
-                        await dirtyLeaf.CompactTombstonesAsync(gracePeriod);
+                        leafResult = await dirtyLeaf.CompactTombstonesAsync(gracePeriod);
                     }
                     catch (Exception leafEx)
                     {
+                        leafFaulted = true;
                         // A leaf that will not compact is a LEAF-scoped fault and
                         // must not abort the shard's walk. Re-throwing here left
                         // dirtyIndex pinned on the blocker for the life of the
@@ -1011,6 +1014,60 @@ internal sealed class TombstoneCompactionGrain(
                         logger.LogWarning(leafEx,
                             "Leaf {LeafId} of shard {ShardKey} refused to compact; recorded as skipped and its dirty mark retained above the pass watermark, so the walk continues and the next pass re-nominates it.",
                             dirtyLeafId, shardKey);
+                    }
+
+                    if (!leafFaulted && !leafResult.Completed)
+                    {
+                        // The leaf stopped on its own work budget with condemned
+                        // entries still in place (issue 4135). It did not fail,
+                        // so there is nothing to record as a fault - the leaf
+                        // itself already tagged this visit `outcome=partial`,
+                        // which is what keeps it distinguishable from the
+                        // `outcome=skipped` above rather than conflated with it.
+                        //
+                        // But completing the shard calls
+                        // ClearDirtyLeavesUpToAsync(advance), which would remove
+                        // this leaf's mark and silently forget the outstanding
+                        // work. Re-mark it strictly above the watermark this
+                        // pass drains to, exactly as the skip path does, so the
+                        // existing strictly-greater preservation rule retains it
+                        // and the next pass re-nominates it. The ordering is
+                        // what carries the guarantee, so the completion branch
+                        // below needs to know nothing about which leaves were
+                        // truncated.
+                        //
+                        // Nothing durable is written to record the truncation
+                        // itself, deliberately: a marker would need a state
+                        // write, and that write fails under precisely the write
+                        // pressure that causes the truncation. Declining to
+                        // drain is an omission rather than a write, so it cannot
+                        // fail in the case it exists for. A retain failure is
+                        // still fatal to the batch for the same reason it is on
+                        // the skip path - a loud stall beats a quiet omission.
+                        try
+                        {
+                            await shardRoot.RetainDirtyLeafAsync(
+                                dirtyLeafId, state.State.CurrentShardDirtyAdvance);
+                        }
+                        catch (Exception retainEx)
+                        {
+                            logger.LogWarning(retainEx,
+                                "Leaf {LeafId} of shard {ShardKey} compacted only partially within its work budget and its dirty mark could not be retained above the pass watermark; failing the batch so the drain cannot discard it.",
+                                dirtyLeafId, shardKey);
+                            throw;
+                        }
+
+                        // Guarded on the level because the args-array overload
+                        // allocates at the call site whether or not Debug is
+                        // enabled, and this fires once per truncated leaf - which
+                        // on the saturated tree this bound exists for is every
+                        // leaf in the batch.
+                        if (logger.IsEnabled(LogLevel.Debug))
+                        {
+                            logger.LogDebug(
+                                "Leaf {LeafId} of shard {ShardKey} reaped {EntriesRemoved} entries and stopped on its work budget; its dirty mark is retained above the pass watermark so the next pass re-nominates it.",
+                                dirtyLeafId, shardKey, leafResult.EntriesRemoved);
+                        }
                     }
 
                     // Charged for a skipped leaf as well as a compacted one: a
@@ -1081,6 +1138,15 @@ internal sealed class TombstoneCompactionGrain(
                 var leaf = walk.CurrentLeaf;
                 try
                 {
+                    // A partial result needs no handling here, and that is a
+                    // property of this path rather than an omission. The legacy
+                    // walk has no dirty set to drain, so there is no mark that
+                    // completing the shard could discard; a leaf that stopped on
+                    // its work budget simply did not stamp its
+                    // LastCompactionVersion, and the next pass over this shard
+                    // re-scans it for exactly that reason (issue 4135). The leaf
+                    // tags its own visit `outcome=partial`, so the condition is
+                    // still observable from here.
                     await leaf.CompactTombstonesAsync(gracePeriod);
                 }
                 catch
@@ -1111,8 +1177,21 @@ internal sealed class TombstoneCompactionGrain(
     /// <summary>
     /// Tags the per-leaf visited counter with <c>outcome=skipped</c> for a leaf
     /// the coordinator gave up on, so operators can distinguish it from a leaf
-    /// that legitimately had nothing to reap (<c>outcome=noop</c>) or actively
-    /// reaped (<c>outcome=reaped</c>).
+    /// that legitimately had nothing to reap (<c>outcome=noop</c>), actively
+    /// reaped and finished (<c>outcome=reaped</c>), or reaped what its bounded
+    /// turn allowed and stopped with work outstanding (<c>outcome=partial</c>,
+    /// tagged by the leaf itself).
+    /// <para>
+    /// <c>skipped</c> now means the leaf declined, and only that. It used to
+    /// conflate declining with a call that overran the request timeout, because
+    /// an unbounded <c>CompactTombstonesAsync</c> surfaced an overrun as a
+    /// timeout exception and this counter fires unconditionally for any leaf
+    /// exception. Since issue 4135 a turn that runs out of budget returns
+    /// normally with <c>Completed=false</c> and is tagged <c>partial</c>, so the
+    /// two conditions are separate arms with separate remedies: a rising
+    /// <c>partial</c> rate is a capacity signal, a rising <c>skipped</c> rate is
+    /// a fault.
+    /// </para>
     /// <para>
     /// On the legacy chain walk the caller re-throws afterwards, so the
     /// surrounding shard-level retry/skip logic in <c>ProcessNextShardAsync</c>

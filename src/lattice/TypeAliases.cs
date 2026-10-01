@@ -91,6 +91,7 @@ internal static class TypeAliases
     internal const string SnapshotBaselineCaptureResult = "ol.sbc";
     internal const string ShardRootState = "ol.srs";
     internal const string DirtyLeavesSnapshot = "ol.dls";
+    internal const string LeafCompactionResult = "ol.lcr";
     internal const string PendingBulkGraft = "ol.pbg";
     internal const string GraftEntry = "ol.ge";
     internal const string PendingChildLink = "ol.pcl";

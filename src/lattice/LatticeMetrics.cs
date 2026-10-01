@@ -884,7 +884,14 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.leaf.scan.duration", unit: "ms",
             description: "Duration of leaf-level range scans (GetKeysAsync / GetEntriesAsync).");
 
-    /// <summary>Histogram of <c>CompactTombstonesAsync</c> durations.</summary>
+    /// <summary>
+    /// Histogram of <c>CompactTombstonesAsync</c> durations, clocked over the
+    /// whole grain call - the activation replay barrier included - so it
+    /// measures the same quantity the pass's work budget bounds. A sample at or
+    /// above <see cref="LatticeOptions.BackgroundDrainMaxDuration"/> is a pass
+    /// that truncated, and pairs with the <c>partial</c> arm of
+    /// <see cref="CompactionLeavesVisited"/>.
+    /// </summary>
     public static readonly Histogram<double> LeafCompactionDuration =
         Meter.CreateHistogram<double>("orleans.lattice.leaf.compaction.duration", unit: "ms",
             description: "Duration of tombstone compaction passes on a single leaf.");
@@ -10392,11 +10399,15 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of leaves visited by a compaction pass, tagged with
     /// <see cref="TagTree"/> and <see cref="TagOutcome"/> = <c>reaped</c>
-    /// (the leaf removed at least one tombstone or expired entry),
-    /// <c>noop</c> (the leaf short-circuited because nothing has changed
-    /// since its last compaction), or <c>skipped</c> (the leaf threw and
-    /// the pass advanced past it). Lets operators distinguish work-done
-    /// from work-skipped on a single rate panel.
+    /// (the leaf removed at least one tombstone or expired entry and
+    /// finished), <c>noop</c> (the leaf short-circuited because nothing has
+    /// changed since its last compaction), <c>partial</c> (the leaf reaped
+    /// what its bounded turn allowed and stopped with condemned entries still
+    /// outstanding), or <c>skipped</c> (the leaf threw and the pass advanced
+    /// past it). Lets operators distinguish work-done from work-skipped on a
+    /// single rate panel. A sustained <c>partial</c> rate on one tree means
+    /// compaction is reclaiming ground more slowly than the tree is condemning
+    /// it, which is a capacity signal rather than a fault.
     /// </summary>
     public static readonly Counter<long> CompactionLeavesVisited =
         Meter.CreateCounter<long>("orleans.lattice.compaction.leaves.visited", unit: "{leaf}",
@@ -10477,6 +10488,16 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagOutcome"/> = <c>skipped</c>.</summary>
     public static readonly KeyValuePair<string, object?> OutcomeSkipped = new(TagOutcome, "skipped");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>partial</c> (a tombstone-compaction turn
+    /// reaped at least one entry and then stopped on its work budget with
+    /// condemned entries still outstanding, so the leaf's dirty mark survives
+    /// and a later pass re-nominates it). Distinct from <c>skipped</c>, which
+    /// before issue 4135 conflated a leaf that declined to compact with a call
+    /// that overran the request timeout.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomePartial = new(TagOutcome, "partial");
 
     /// <summary><see cref="TagKind"/> = <c>compact</c> (per-leaf WAL-write attribution).</summary>
     public static readonly KeyValuePair<string, object?> KindCompact = new(TagKind, "compact");

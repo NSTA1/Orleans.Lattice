@@ -2943,8 +2943,15 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public async Task<int> CompactTombstonesAsync(TimeSpan gracePeriod)
+    public async Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod)
     {
+        // Clock starts here, not at the scan loop. The replay barrier below is
+        // part of the time this call holds the leaf, and on a cold activation it
+        // is itself a WAL replay, so measuring from the loop would exclude it
+        // and grant a call that had already held the leaf for seconds a further
+        // full budget (the residual hole issue 1992 closed for the page fills).
+        var startTicks = LeafWalkBudget.StartClock();
+
         await AwaitReplayBarrierAsync();
 
         // Skip scan if nothing has changed since last compaction.
@@ -2998,7 +3005,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTenantTag);
             }
-            return 0;
+            return LeafCompactionResult.Complete(0);
         }
 
         // Pre-scan ratio sample so dashboards see space-amplification
@@ -3018,13 +3025,42 @@ internal sealed partial class BPlusLeafGrain(
         // value, not the absence of one).
         using var maintenanceScope = LatticeMaintenanceContext.BeginScope();
 
-        var startTicks = Stopwatch.GetTimestamp();
+        // The work budget this turn runs under. Wall clock only, and the same
+        // net every other background pass spends - see
+        // LeafWalkBudget.ForLeafCompactionTurn for why this is a reuse of an
+        // existing budget rather than a third one stacked on the storage busy
+        // window and the request timeout.
+        var compactionOptions = await GetOptionsAsync();
+        var budget = LeafWalkBudget.ForLeafCompactionTurn(compactionOptions, startTicks);
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var cutoff = nowTicks - gracePeriod.Ticks;
-        var toRemove = new List<(string Key, HybridLogicalClock ReapAt)>();
+        var toRemove = new List<(string Key, HybridLogicalClock ReapAt, bool WasExpired)>();
         var anyInGraceRemaining = false;
         var tombstonesRemoved = 0;
         var expiredRemoved = 0;
+
+        // Set when the turn stopped on its budget rather than on the end of its
+        // work. Suppresses the LastCompactionVersion stamp below and is reported
+        // to the coordinator, which then leaves the leaf's dirty mark in place.
+        // Incomplete is the default: nothing is written to record it, so nothing
+        // about recording it can fail.
+        var truncated = false;
+
+        // Entries whose WAL reap envelope has actually landed and whose row has
+        // actually left the cache. Distinct from toRemove.Count, which is only
+        // what the scan condemned: a turn truncated part-way through the
+        // removal loop must report - and tally its reaped/expired metrics
+        // against - what it really reaped, or every truncated pass would
+        // overstate the reclamation an operator is reading.
+        var entriesRemoved = 0;
+
+        // Stride for the scan's budget check. The scan is a synchronous walk
+        // with no awaits, so checking a timestamp per row would be pure
+        // overhead against a loop body that does almost nothing; a stride keeps
+        // the check off the per-row path while still bounding the phase.
+        const int ScanBudgetCheckStride = 1024;
+        var scannedSinceBudgetCheck = 0;
 
         foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
@@ -3039,12 +3075,29 @@ internal sealed partial class BPlusLeafGrain(
             // identical to the one-pass walk this replaced.
             foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
             {
+                // Budget check for the scan phase, on a stride and gated on
+                // having already condemned something. The gate is the forward
+                // progress guarantee: a turn that arrives with its budget
+                // already spent (a cold activation whose replay barrier
+                // consumed it) still collects at least one condemned entry
+                // rather than returning empty and leaving the leaf exactly as
+                // it found it. Without it a leaf could truncate at zero every
+                // pass, which is an absorbing state, not a bound.
+                if (++scannedSinceBudgetCheck >= ScanBudgetCheckStride)
+                {
+                    scannedSinceBudgetCheck = 0;
+                    if (toRemove.Count > 0 && budget.ShouldYield())
+                    {
+                        truncated = true;
+                        break;
+                    }
+                }
+
                 if (lww.IsTombstone)
                 {
                     if (lww.Timestamp.WallClockTicks <= cutoff)
                     {
-                        toRemove.Add((key, lww.Timestamp));
-                        tombstonesRemoved++;
+                        toRemove.Add((key, lww.Timestamp, false));
                     }
                     else
                     {
@@ -3063,8 +3116,7 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (lww.ExpiresAtTicks <= cutoff)
                     {
-                        toRemove.Add((key, lww.Timestamp));
-                        expiredRemoved++;
+                        toRemove.Add((key, lww.Timestamp, true));
                     }
                     else
                     {
@@ -3072,6 +3124,9 @@ internal sealed partial class BPlusLeafGrain(
                     }
                 }
             }
+
+            if (truncated)
+                break;
         }
 
         // WAL-as-sole-commit-point: every reaped key is durably committed
@@ -3103,7 +3158,7 @@ internal sealed partial class BPlusLeafGrain(
             var transactionId = LatticeTransactionContext.Current;
             var maintenance = LatticeMaintenanceContext.Current;
 
-            foreach (var (key, reapAt) in toRemove)
+            foreach (var (key, reapAt, wasExpired) in toRemove)
             {
                 if (writer is not null)
                 {
@@ -3139,17 +3194,40 @@ internal sealed partial class BPlusLeafGrain(
                 }
 
                 RemoveEntry(key);
+                entriesRemoved++;
+                if (wasExpired) expiredRemoved++; else tombstonesRemoved++;
+
+                // Budget checked AFTER the removal, never before it. Checking
+                // first would let a turn that arrives with a spent budget reap
+                // nothing, so every pass would re-scan the same condemned set
+                // and the leaf could never drain. Checking after guarantees at
+                // least one entry leaves the leaf per pass whenever any was
+                // condemned, and because the WAL append above is the commit
+                // point, the entries reaped so far stay reaped across the turn
+                // boundary. Every re-scan therefore finds strictly less than
+                // the one before it, which is the exit from the absorbing
+                // state rather than merely a bound on one call.
+                if (entriesRemoved < toRemove.Count && budget.ShouldYield())
+                {
+                    truncated = true;
+                    break;
+                }
             }
         }
 
-        // Only mark this version as "fully compacted" when no tombstones were
-        // left in the grace window. Stamping while tombstones remain would
-        // dead-end every subsequent pass until a new write ticks the version
-        // vector (audit bug #2). The advance lives in-memory only; the next
+        // Only mark this version as "fully compacted" when the pass both reached
+        // the end of the leaf and left no tombstones inside the grace window.
+        // Stamping while tombstones remain would dead-end every subsequent pass
+        // until a new write ticks the version vector (audit bug #2), and
+        // stamping after a budget-truncated pass would do the same to condemned
+        // entries this turn never reached - which is why `truncated` gates it
+        // alongside `anyInGraceRemaining`. Not stamping is the fail-closed
+        // default and costs no write, so a truncated pass cannot fail to record
+        // that it was truncated. The advance lives in-memory only; the next
         // projection-checkpoint flush snapshots it alongside Entries, and a
         // missed flush before deactivation simply causes the next activation
         // to re-scan once (no data loss).
-        if (!anyInGraceRemaining)
+        if (!anyInGraceRemaining && !truncated)
             state.State.LastCompactionVersion = state.State.Version.Clone();
 
         var elapsedTotalMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
@@ -3157,7 +3235,15 @@ internal sealed partial class BPlusLeafGrain(
         var tenantTag = LeafTenantTag();
         var triggerTag = CompactionTriggerTag();
         var pathTag = CompactionPathTag();
-        var outcomeTag = toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop;
+
+        // `partial` outranks `reaped`: a truncated turn did remove entries, but
+        // reporting it as `reaped` would read as a drained leaf on the one
+        // panel operators use to tell work-done from work-outstanding. It is
+        // emitted by the leaf rather than added by the coordinator so each leaf
+        // visit contributes exactly one sample to this counter.
+        var outcomeTag = truncated
+            ? LatticeMetrics.OutcomePartial
+            : entriesRemoved > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop;
         if (triggerTag is { } trig)
         {
             LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag, trig, tenantTag);
@@ -3219,7 +3305,9 @@ internal sealed partial class BPlusLeafGrain(
         // event - bypass the c2-xxviii coalescing window.
         await PublishDigestUpwardInlineAsync();
 
-        return toRemove.Count;
+        return truncated
+            ? LeafCompactionResult.Truncated(entriesRemoved)
+            : LeafCompactionResult.Complete(entriesRemoved);
     }
 
     public async Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
