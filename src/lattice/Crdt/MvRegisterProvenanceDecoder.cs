@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -83,7 +84,7 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
             var delta = (MvRegisterDelta)entry.Delta;
             var start = result.Count;
             Emit(result, delta.Entries, delta.Context, entry.WallClock);
-            result.Sort(start, result.Count - start, CrdtMemberChangeCausalComparer.Instance);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeCausalComparer.Comparison);
         }
         return result.Count == 0 ? Array.Empty<CrdtMemberChange>() : result;
     }
@@ -107,7 +108,7 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
         var result = new List<CrdtMemberChange>(register.Entries.Count + register.Context.Count);
         Emit(result, register.Entries, register.Context, null);
         if (result.Count == 0) return Array.Empty<CrdtMemberChange>();
-        result.Sort(CrdtMemberChangeCausalComparer.Instance);
+        result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
 

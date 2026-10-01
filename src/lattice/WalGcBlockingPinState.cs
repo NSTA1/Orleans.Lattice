@@ -88,6 +88,43 @@ public enum WalGcBlockingPinState
     /// it is a tree whose WAL genuinely cannot be reclaimed yet, and the
     /// remedy lies in getting the leaf to checkpoint, not in changing the pin.
     /// </para>
+    /// <para>
+    /// <b>This state does NOT imply the candidate's published pin offset is the
+    /// blocking sentinel, and reading it that way is the trap (issue #3258).</b>
+    /// It is derived by <c>ClassifyCheckpoint</c> from the <i>persisted</i>
+    /// checkpoint alone and constrains the published offset not at all, so it
+    /// has two readings that look identical on
+    /// <c>orleans.lattice.wal.gc.blocking_pin_state</c> and mean opposite
+    /// things. The <b>sentinel</b> reading carries offset <c>-1</c>, is routed
+    /// into the WAL GC floor-holder sweep's unusable sample, constrains no
+    /// offset floor, and is the benign case this summary describes: the leaf
+    /// checkpoints and the block clears. The <b>divergent</b> reading carries a
+    /// <b>non-negative</b> published offset, because
+    /// <c>ResolveDurablePinForPartition</c> publishes
+    /// <c>min(checkpoint, covered)</c> over
+    /// <c>GetCurrentCheckpointForPartition</c> =
+    /// <c>max(persisted, pending)</c> - so a leaf that applied and published
+    /// while activated and then deactivated without persisting leaves a durable
+    /// pin at a real offset above a persisted checkpoint of <c>-1</c>.
+    /// </para>
+    /// <para>
+    /// <b>The divergent reading is not benign and is not repairable from the WAL
+    /// GC side.</b> Such a pin can hold its tree's offset floor, where it is
+    /// refused admission to the issue #3178 liveness drive - correctly, since
+    /// driving a leaf with no proven durable checkpoint toward a durable claim
+    /// is the silent-data-loss shape the floor-holder fixtures guard - while the
+    /// issue #3310 prefetch above it is gated on the floor's own holder having
+    /// been admitted. So nothing on that tree can be admitted, the durable pin
+    /// store merges monotonic-max and cannot be lowered, and the tree's WAL
+    /// becomes permanently unreclaimable. <c>ClassifyCheckpoint</c>'s remarks
+    /// call the persisted-versus-pending divergence "the one deliberate
+    /// divergence" and judge that it "costs nothing here" because a leaf with
+    /// pending offsets has a live activation; that holds of the <i>leaf</i> and
+    /// not of the <i>durable pin store</i>, which retains what the leaf
+    /// published after the activation that justified it is gone. The remedy is
+    /// therefore upstream, in what a leaf is allowed to publish durably, and
+    /// never a widening of the floor-holder admission gate.
+    /// </para>
     /// </summary>
     NeverCheckpointed = 1,
 

@@ -60,6 +60,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Sort comparer delegate trims.** Sorting with an `IComparer<T>` minted a fresh `Comparison<T>` delegate per call, as the runtime converts its method group rather than caching it. Thirty-six CRDT, primitive and grain sort sites pass a cached comparison now and allocate nothing. ([#4184](https://github.com/NSTA1/Orleans.Lattice/pull/4184)) (`Orleans.Lattice`)
+
 - **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
 
 - **Performance - Leaf digest string feeding.** Feeding a string to the digest appended its length prefix separately from the body, and sized its staging buffer to the key's own worst case, emitting a variable `localloc` per call. It stages both into one constant-size buffer now: 20-46% faster. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
@@ -118,6 +120,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **WAL - A GC report field blamed a cause its own predicate excludes.** `LatticeWalGcReport.BytePressureOverThreshold` documented itself as a lagging consumer or pin holding bytes back. It is occupancy against the ceiling and nothing else, and the pass arm it drives reports only when the trim floor is clear. ([#3204](https://github.com/NSTA1/Orleans.Lattice/issues/3204)) (`Orleans.Lattice`)
+
 - **WAL - A failed durable pin write is retried rather than recorded as done.** A batched materialiser pin write recorded its debounce state before writing, so a faulted shard left those pins looking durable and the next report was coalesced away. Each shard is now recorded once its write lands. ([#3319](https://github.com/NSTA1/Orleans.Lattice/issues/3319)) (`Orleans.Lattice`)
 
 - **Core - A range read no longer comes up short during a leaf division.** A donor mid-split hid rows it still held, so a scan, count or stats call returned successfully while missing keys a point or batched read still answered. The gap lasted until that leaf's next write, so it could outlive the division indefinitely on a range that had gone quiet. ([#3918](https://github.com/NSTA1/Orleans.Lattice/issues/3918)) (`Orleans.Lattice`)
@@ -125,6 +129,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Batch writes can be bounded by a whole-call budget, not just a fan-out one.** `SetManyEnvelopeBudget` bounds `SetManyAsync` end to end, so stages that each stay inside the deadline cannot sum past it unseen. The refusal names the per-stage breakdown, and unlike the fan-out budget it also covers single-shard batches. Opt-in; unbounded by default. ([#2685](https://github.com/NSTA1/Orleans.Lattice/issues/2685)) (`Orleans.Lattice`)
 
 - **Core - Tombstone compaction no longer times out on a tombstone-heavy leaf.** A leaf's reap yields on a work budget and resumes, reaping strictly less each pass until it drains, and a partial pass keeps the leaf queued instead of dropping it. ([#4135](https://github.com/NSTA1/Orleans.Lattice/issues/4135)) (`Orleans.Lattice`)
+
+- **Core - The cold-replay loop warning now describes what actually happens.** It told operators no snapshot is banked and the leaf cannot escape on its own, which stopped being true once a cancelled cold replay began banking its progress. It now names the three cases that still reach the threshold. ([#2280](https://github.com/NSTA1/Orleans.Lattice/issues/2280)) (`Orleans.Lattice`)
 
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
 
