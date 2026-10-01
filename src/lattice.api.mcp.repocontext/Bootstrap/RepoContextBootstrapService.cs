@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
 
@@ -2032,22 +2030,7 @@ internal sealed class RepoContextBootstrapService : IDisposable
         string repoId,
         int chunkIndex,
         IReadOnlyList<KeyValuePair<string, byte[]>> upserts,
-        IReadOnlyList<string> deletes)
-    {
-        var builder = new StringBuilder();
-        builder.Append(repoId).Append('\n').Append(chunkIndex);
-        foreach (var upsert in upserts)
-        {
-            builder.Append("\nU").Append(upsert.Key).Append('=').Append(FileDigest.Compute(upsert.Value));
-        }
-
-        foreach (var delete in deletes)
-        {
-            builder.Append("\nD").Append(delete);
-        }
-
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
-        return "rcb-" + Convert.ToHexStringLower(hash.AsSpan(0, 16));
-    }
+        IReadOnlyList<string> deletes) =>
+        RepoContextOperationId.Build("rcb-", operationScope: null, repoId, chunkIndex, upserts, deletes);
 
 }
