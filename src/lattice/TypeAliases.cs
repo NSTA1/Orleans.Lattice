@@ -277,6 +277,10 @@ internal static class TypeAliases
     internal const string LeafReclaimProbe = "ol.lrb";
     internal const string LeafRetired = "ol.lrt";
 
+    // Why a predecessor accepted or refused to unlink its successor, so the
+    // three distinct declinations stop sharing one misleading log line (#2160).
+    internal const string LeafUnlinkOutcome = "ol.luo";
+
     // Operator-invoked repair of a tree that already holds an orphaned leaf -
     // one spliced into the sibling chain but unreachable by descent (issue 3269).
     internal const string OrphanedLeafDisposition = "ol.old";

@@ -304,7 +304,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Atomically points this leaf past <paramref name="expectedNext"/> and
     /// widens its owned range to cover what that successor gave up, and
-    /// returns whether it did.
+    /// returns whether it did - and when it did not, which of the three
+    /// declinations fired.
     /// <para>
     /// The compare half is what makes empty-leaf reclaim safe against a
     /// concurrent split. Reclaim is a multi-grain sequence while the split
@@ -324,8 +325,18 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// cache and vanishes on the next projection rebuild. The widen is
     /// monotonic, so a re-driven reclaim converges.
     /// </para>
+    /// <para>
+    /// The result is a <see cref="LeafUnlinkOutcome"/> rather than a
+    /// <see langword="bool"/> because three unrelated conditions decline this
+    /// call and a caller that cannot tell them apart reports all three as the
+    /// first one. That is not a cosmetic loss - see
+    /// <see cref="LeafUnlinkOutcome"/> for the production misdiagnosis it
+    /// produced. Every declination still leaves this leaf exactly as it was
+    /// found, so the outcome is for the log, never for control flow beyond
+    /// "did it happen".
+    /// </para>
     /// </summary>
-    Task<bool> TryUnlinkSuccessorAsync(
+    Task<LeafUnlinkOutcome> TryUnlinkSuccessorAsync(
         GrainId expectedNext,
         GrainId? newNext,
         string? absorbHighKeyExclusive);

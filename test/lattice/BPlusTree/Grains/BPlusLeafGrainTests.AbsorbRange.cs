@@ -274,7 +274,7 @@ public partial class BPlusLeafGrainTests
         var unlinked = await grain.TryUnlinkSuccessorAsync(
             AbsorbNextSibling, AbsorbBeyondSibling, "z");
 
-        Assert.That(unlinked, Is.True);
+        Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.Unlinked));
         Assert.That(state.State.NextSibling, Is.EqualTo(AbsorbBeyondSibling));
         Assert.That(state.State.HighKeyExclusive, Is.EqualTo("z"));
         Assert.That(state.WriteCount, Is.EqualTo(writesBefore + 1),
