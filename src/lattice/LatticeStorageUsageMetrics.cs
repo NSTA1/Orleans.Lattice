@@ -160,8 +160,12 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     /// instance. A tree's aggregator is a single cluster-wide activation for one
     /// addressed id, so within one process a given id is published through at
     /// most one instance; co-hosted silos each contribute the ids they host.
-    /// An aliased tree can still appear under both the logical id and the
-    /// physical copy id because pollers and roll-ups walk every registered id.
+    /// An aliased tree contributes a single series under its logical id: the
+    /// pollers and roll-ups still walk every registered id, including the
+    /// <c>{treeId}/resized/{operationId}</c> copy a resize registers, but both
+    /// aggregators publish under the logical tree the copy was derived from, so
+    /// the duplicate publish is an idempotent overwrite of one series rather
+    /// than a second series keyed by the physical copy (issue #4152).
     /// </summary>
     /// <param name="selector">Selects the byte surface to observe from a report.</param>
     /// <param name="requireDeep">
