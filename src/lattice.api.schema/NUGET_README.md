@@ -22,6 +22,17 @@ transports bind over it, and it costs nothing until it is registered.
   rewrites or dead-letters data - and honours cancellation between values.
 - **Bounded-memory enumeration.** Dead-letter listing is streamed, so a large
   strict-mode queue enumerates with bounded memory.
+- **Accept-then-poll remediation and migration.** `ILatticeSchemaOperations`
+  starts a remediation, migration or advance-and-migrate and returns a handle at
+  once; poll `GetOperationStatusAsync` for the phase (dry run, build, cutover) and
+  the values processed, and cancel before cutover with `CancelOperationAsync`.
+
+## Deprecated
+
+`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` on
+`ILatticeSchemaControl` block until the run ends, so a long run is cut off by the
+caller's timeout. They raise warning `LATTICE0002` and **will be removed in the
+next major version**; use the `ILatticeSchemaOperations` start verbs instead.
 
 ## Security
 

@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Schema - Accept-then-poll remediation and migration.** Remediations and migrations return a handle at once and run on in the background; follow the dry run, build and cutover in values processed, cancel before cutover, and find a run again after closing the Explorer tab. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Explorer.UI`)
+
 - **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 - **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)
@@ -126,6 +128,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Deprecated
 
+- **Schema - Blocking remediation and migration verbs.** `RemediateAsync`, `MigrateToTargetVersionAsync`, `AdvanceAndMigrateAsync` and their gRPC RPCs raise `LATTICE0002` and will be removed in the next major version; start the run as a schema operation instead. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema.Grpc`)
+
 - **Backup - Blocking capture and restore verbs.** `CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Fixed
@@ -136,7 +140,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. On a host with an access gate, a resize swap driven by its own phase timer runs as system origin. It is no longer refused as an anonymous alias change on every tick. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
 
-- **Schema - Remediation status answers while a run is in progress.** Reading a tree's remediation or migration status no longer waits for a running remediate or migrate to finish, so the Explorer's Schema operation page shows the live phase and count instead of timing out. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
+- **Schema - Remediation status answers while a run is in progress, and long runs no longer time out.** A status read no longer waits for a running remediate or migrate, and a run is driven in resumable slices, so no single cluster call outlasts the response timeout. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
 
 - **Core - A range read no longer comes up short during a leaf division.** A donor mid-split hid rows it still held, so a scan, count or stats call returned successfully while missing keys a point or batched read still answered. The gap lasted until that leaf's next write, so it could outlive the division indefinitely on a range that had gone quiet. ([#3918](https://github.com/NSTA1/Orleans.Lattice/issues/3918)) (`Orleans.Lattice`)
 
