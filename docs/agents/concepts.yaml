@@ -209,6 +209,34 @@ concepts:
       limits: []
     sources:
       - "docs/lattice.api.treeadmin/README.md"
+  - id: app-bridge
+    name: "App bridge"
+    category: apps
+    definition: "The app bridge is the cluster-side facade that enforces an installed app UI's logical-tree data access for a caller and then executes the core data path under that caller's identity."
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "The bridge target is an app slug, install revision and app-local tree name."
+          source: "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
+        - statement: "The bridge resolves the effective tree id server-side after checking install revision, bridge consent and app-owned grants."
+          source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+      out_of_scope:
+        - statement: "The bridge exposes no overload that accepts a physical tree id."
+          source: "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
+    operational_envelope:
+      limits:
+        - name: "max-value-bytes"
+          value: 65536
+          unit: "bytes"
+          source: "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits.MaxValueBytes"
+        - name: "max-scan-page-size"
+          value: 200
+          unit: "entries"
+          source: "src/lattice.api.apps/AppBridgeLimits.cs#AppBridgeLimits.MaxPageSize"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
+      - "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
   - id: app-capability-ceiling
     name: "App capability ceiling"
     category: apps
@@ -229,6 +257,54 @@ concepts:
     sources:
       - "src/lattice.apps/Install/AppCapabilityCeiling.cs"
       - "docs/lattice.apps/README.md"
+  - id: app-catalog
+    name: "App catalog"
+    category: apps
+    definition: "The app catalog is the administrative source browser that lists configured app sources and source-offered app versions before installation."
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "The catalog lists source summaries and source-offered apps after authorizing AppInstall."
+          source: "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog.ListSourcesAsync"
+        - statement: "The catalog joins source-offered rows with the active tenant's installs only when the install came from that row's source."
+          source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.ToSummaryAsync"
+      out_of_scope:
+        - statement: "The catalog does not load or activate app code while describing a source app or reading its icon."
+          source: "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+    operational_envelope:
+      limits:
+        - name: "max-concurrent-source-fetches"
+          value: 4
+          unit: "source-pages"
+          source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.MaxConcurrentFetches"
+        - name: "max-source-fetches-per-call"
+          value: 64
+          unit: "source-pages"
+          source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.MaxFetchesPerCall"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog"
+      - "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog"
+  - id: app-catalog-source
+    name: "App catalog source"
+    category: apps
+    definition: "An app catalog source is a named app source that can list app entries and open digest-verified bundle assets without activating app code."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "A catalog source describes itself with a stable key, display name, kind and capabilities."
+          source: "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource.Descriptor"
+        - statement: "A catalog source opens an asset only as a structured result verified against the expected SHA-256 digest."
+          source: "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource.OpenAssetAsync"
+      out_of_scope:
+        - statement: "A catalog source reports missing, unavailable or mismatched assets as structured outcomes rather than startup failures."
+          source: "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource.OpenAssetAsync"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource"
   - id: app-change-feed-subscription
     name: "App change-feed subscription"
     category: apps
@@ -389,6 +465,8 @@ concepts:
           source: "src/lattice.apps/Registry/AppRegistry.cs#AppRegistry.ValidateRequest"
         - statement: "The role compiler emits group subject selectors from bindings, never user subject selectors."
           source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler.Compile"
+        - statement: "UpdateRoleBindingsAsync replaces every role-to-group binding of an installed app while keeping consent, bridge consent and lifecycle state."
+          source: "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
       out_of_scope:
         - statement: "The manifest has no role inheritance construct; group nesting is a membership concern."
           source: "docs/lattice.apps/README.md"
@@ -417,16 +495,40 @@ concepts:
     sources:
       - "src/lattice.apps/Compiler/AppRoleCompiler.cs"
       - "docs/lattice.apps/README.md"
+  - id: app-role-grant-evaluator
+    name: "App role grant evaluator"
+    category: identity
+    definition: "The app role grant evaluator is the shared evaluator that decides which roles of an enabled install a caller holds in the current registry snapshot."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "A binding grants the role only when the caller's group closure contains a group the install binds to that role."
+          source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeld"
+        - statement: "The shared access gate is asked only after the binding holds and can only remove the role."
+          source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
+      out_of_scope:
+        - statement: "Rights granted through any non-app-owned rule never make a caller hold an app role."
+          source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate"
+      - "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
   - id: app-source
     name: "App source"
     category: apps
-    definition: "An app source resolves an app slug and optional version to a manifest, provenance, and deferred activation handle without activating app code."
+    definition: "An app source is a named catalogue source that lists apps, resolves a slug and optional version to a manifest, provenance and deferred activation handle, and opens digest-verified UI bundle assets without activating app code."
     packages:
       - "Orleans.Lattice.Apps"
     capability_boundary:
       in_scope:
         - statement: "ResolveAsync returns structured source results for unknown slugs, version mismatches, invalid manifests, and identity mismatches."
           source: "src/lattice.apps/Sources/IAppSource.cs#IAppSource.ResolveAsync"
+        - statement: "AppSourceSet composes named catalogue sources in registration order; without a source key, resolution succeeds only when exactly one source offers the slug."
+          source: "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet.ResolveAsync"
+        - statement: "OpenAssetAsync returns bundle bytes only after recomputing the SHA-256 digest over the bytes it returns and matching the expected digest."
+          source: "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource.OpenAssetAsync"
         - statement: "The in-image source reads named embedded manifest resources lazily and caches each result."
           source: "src/lattice.apps/Sources/InImageAppSource.cs#InImageAppSource.ResolveAsync"
       out_of_scope:
@@ -436,6 +538,8 @@ concepts:
       limits: []
     sources:
       - "src/lattice.apps/Sources/IAppSource.cs"
+      - "src/lattice.apps/Sources/IAppCatalogSource.cs"
+      - "src/lattice.apps/Sources/AppSourceSet.cs"
       - "src/lattice.apps/Sources/InImageAppSource.cs"
   - id: app-tree-ownership-ledger
     name: "App tree ownership ledger"
@@ -457,6 +561,26 @@ concepts:
     sources:
       - "docs/lattice.apps/README.md"
       - "src/lattice.apps/Ownership/AppTreeOwnershipLedger.cs"
+  - id: app-workspace
+    name: "App workspace"
+    category: apps
+    definition: "The app workspace is the per-caller facade over enabled installed apps in which that caller holds at least one app role."
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "The workspace lists enabled apps where the caller holds at least one role."
+          source: "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.ListMyAppsAsync"
+        - statement: "The workspace serves installed-version icons and UI assets after digest verification."
+          source: "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.GetUiAssetAsync"
+      out_of_scope:
+        - statement: "The workspace description excludes ceilings, approved exception scopes, role-to-group bindings and physical tree ids."
+          source: "src/lattice.api.apps/AppsWorkspaceMapping.cs#AppsWorkspaceMapping.ToDescriptor"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace"
+      - "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
   - id: atomic-action-saga
     name: "Atomic action saga"
     category: coordination
@@ -881,6 +1005,79 @@ concepts:
     sources:
       - "docs/lattice.explorer/README.md"
       - "FEATURES.md"
+  - id: explorer-app-frame
+    name: "Explorer app frame"
+    category: administration
+    definition: "The Explorer app frame authorizes a Lattice App launch, loads verified UI bundle bytes, hosts the app in a sandboxed iframe and relays frame requests through the broker."
+    packages:
+      - "Orleans.Lattice.Explorer.UI"
+      - "Orleans.Lattice.Explorer.AppKit"
+    capability_boundary:
+      in_scope:
+        - statement: "The frame host renders an iframe sandboxed with allow-scripts and no other sandbox token."
+          source: "src/lattice.explorer/UI/AppFrame/AppFrame.razor.cs#AppFrame"
+        - statement: "The broker validates request shape, logical tree name, launch grants, rate and concurrency before relay."
+          source: "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker.HandleAsync"
+      out_of_scope:
+        - statement: "The frame does not receive the Explorer credential."
+          source: "docs/lattice.explorer/lattice-apps.md"
+    operational_envelope:
+      limits:
+        - name: "handshake-timeout"
+          value: 15
+          unit: "seconds"
+          source: "src/lattice.explorer/UI/AppFrame/AppFrame.razor.cs#AppFrame.HandshakeTimeout"
+    sources:
+      - "src/lattice.explorer/UI/AppFrame/AppFrame.razor.cs#AppFrame"
+      - "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker"
+  - id: explorer-appkit-protocol
+    name: "Explorer AppKit protocol"
+    category: administration
+    definition: "The Explorer AppKit protocol is the versioned message and operation vocabulary exchanged by a sandboxed Lattice App frame and its host."
+    packages:
+      - "Orleans.Lattice.Explorer.AppKit"
+    capability_boundary:
+      in_scope:
+        - statement: "The protocol names the bridge operations an app UI may request."
+          source: "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol.Operations"
+        - statement: "The protocol defines closed error code and failure code sets."
+          source: "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol.ErrorCodes"
+      out_of_scope:
+        - statement: "The protocol has no lifecycle, consent, authentication, cross-app, fetch or frame-sizing messages."
+          source: "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol"
+    operational_envelope:
+      limits:
+        - name: "max-request-bytes"
+          value: 131072
+          unit: "bytes"
+          source: "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol.Limits"
+        - name: "max-response-bytes"
+          value: 1048576
+          unit: "bytes"
+          source: "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol.Limits"
+    sources:
+      - "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol"
+  - id: explorer-shell
+    name: "Explorer shell"
+    category: administration
+    definition: "The Explorer shell is the scoped navigation and session chrome that translates addresses, preferences and navigation requests for one circuit."
+    packages:
+      - "Orleans.Lattice.Explorer.Core"
+      - "Orleans.Lattice.Explorer.UI"
+    capability_boundary:
+      in_scope:
+        - statement: "The shell router is scoped per session so two circuits do not share a route."
+          source: "src/lattice.explorer/Core/Navigation/ExplorerShellRouter.cs#ExplorerShellRouter"
+        - statement: "The shell entry policy restores a remembered route only for a bare address."
+          source: "src/lattice.explorer/Core/Navigation/ExplorerShellEntryPolicy.cs#ExplorerShellEntryPolicy.Decide"
+      out_of_scope:
+        - statement: "The shell entry policy does not decide whether a remembered route still resolves for the caller."
+          source: "src/lattice.explorer/Core/Navigation/ExplorerShellEntryPolicy.cs#ExplorerShellEntryPolicy"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.explorer/Core/Navigation/ExplorerShellRouter.cs#ExplorerShellRouter"
+      - "src/lattice.explorer/Core/Navigation/ExplorerShellEntryPolicy.cs#ExplorerShellEntryPolicy"
   - id: fencing-token
     name: "Fencing token"
     category: coordination
@@ -1308,6 +1505,27 @@ concepts:
     sources:
       - "docs/lattice.replication/README.md"
       - "docs/lattice/api.md"
+  - id: replication-peer-status
+    name: "Replication peer status"
+    category: replication
+    definition: "Replication peer status is the read-only facade report of per-tree, per-peer, per-direction replication link telemetry."
+    packages:
+      - "Orleans.Lattice.Api.Replication"
+      - "Orleans.Lattice.Api.Replication.Grpc"
+    capability_boundary:
+      in_scope:
+        - statement: "The peer-status facade returns one page ordered by tree id, peer region id and direction."
+          source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus.GetPeerStatusAsync"
+        - statement: "The peer-status facade omits rows for trees the caller cannot manage."
+          source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+      out_of_scope:
+        - statement: "The peer-status facade does not repeat replication enrolment configuration."
+          source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+      - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
   - id: replication-seam
     name: "Replication seam"
     category: seam
@@ -2203,11 +2421,41 @@ relationships:
     to: api-facade
     sources:
       - "docs/lattice.api.treeadmin/README.md"
+  - from: app-bridge
+    relation: consumes
+    to: app-role-grant-evaluator
+    sources:
+      - "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge"
+  - from: app-bridge
+    relation: guards
+    to: app-owned-tree
+    sources:
+      - "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+  - from: app-bridge
+    relation: implements
+    to: api-facade
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppBridge.cs#ILatticeAppBridge"
   - from: app-capability-ceiling
     relation: part-of
     to: app-install-record
     sources:
       - "docs/lattice.apps/README.md"
+  - from: app-catalog
+    relation: consumes
+    to: app-catalog-source
+    sources:
+      - "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.ListAvailableAsync"
+  - from: app-catalog
+    relation: implements
+    to: api-facade
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppCatalog.cs#ILatticeAppCatalog"
+  - from: app-catalog-source
+    relation: extends
+    to: app-source
+    sources:
+      - "src/lattice.apps/Sources/IAppCatalogSource.cs#IAppCatalogSource"
   - from: app-change-feed-subscription
     relation: depends-on
     to: mutation-observer
@@ -2263,6 +2511,11 @@ relationships:
     to: app-owned-rule
     sources:
       - "docs/lattice.apps/README.md"
+  - from: app-role-grant-evaluator
+    relation: consumes
+    to: app-role-binding
+    sources:
+      - "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator.CompileRoles"
   - from: app-source
     relation: produces
     to: app-manifest
@@ -2273,6 +2526,16 @@ relationships:
     to: tree-ownership-guard
     sources:
       - "docs/lattice.apps/README.md"
+  - from: app-workspace
+    relation: consumes
+    to: app-role-grant-evaluator
+    sources:
+      - "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
+  - from: app-workspace
+    relation: implements
+    to: api-facade
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppWorkspace.cs#ILatticeAppWorkspace"
   - from: atomic-action-saga
     relation: extends
     to: atomic-batch
@@ -2373,6 +2636,31 @@ relationships:
     to: grpc-binding
     sources:
       - "docs/lattice.explorer/README.md"
+  - from: explorer-app-frame
+    relation: consumes
+    to: app-bridge
+    sources:
+      - "src/lattice.explorer/UI/AppFrame/Broker/AppBridgeBroker.cs#AppBridgeBroker.RelayAsync"
+  - from: explorer-app-frame
+    relation: consumes
+    to: app-workspace
+    sources:
+      - "src/lattice.explorer/UI/AppFrame/AppFrameBundleLoader.cs#AppFrameBundleLoader.AuthorizeAsync"
+  - from: explorer-app-frame
+    relation: part-of
+    to: explorer
+    sources:
+      - "docs/lattice.explorer/lattice-apps.md"
+  - from: explorer-appkit-protocol
+    relation: part-of
+    to: explorer-app-frame
+    sources:
+      - "src/lattice.explorer/AppKit/AppKitProtocol.cs#AppKitProtocol"
+  - from: explorer-shell
+    relation: part-of
+    to: explorer
+    sources:
+      - "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
   - from: file-storage-provider
     relation: implements
     to: wal-storage-provider
@@ -2468,6 +2756,16 @@ relationships:
     to: replication-seam
     sources:
       - "docs/lattice.replication/README.md"
+  - from: replication-peer-status
+    relation: implements
+    to: api-facade
+    sources:
+      - "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+  - from: replication-peer-status
+    relation: observes
+    to: replication-peer
+    sources:
+      - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
   - from: replication-seam
     relation: replicates
     to: wal

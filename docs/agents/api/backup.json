@@ -1826,8 +1826,8 @@
         "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync"
+        "rule": "ListBackups is a cursor-resumable read-only page; ActiveTenantOnly narrows the catalog before paging to backups of trees owned by the caller active tenant.",
+        "source": "src/lattice.api.abstractions/Backup/Model/BackupCatalogRequest.cs#BackupCatalogRequest.ActiveTenantOnly"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync",

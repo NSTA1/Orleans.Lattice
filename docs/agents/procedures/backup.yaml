@@ -61,6 +61,10 @@ failure_modes:
     signal: "Snapshot returns InvalidOperationException for an existing destination."
     effect: "Snapshot is not started."
     response: "Choose a fresh destination tree id."
+  - id: undefined-snapshot-mode
+    signal: "Snapshot rejects a mode outside TreeSnapshotMode before tree resolution or authorization."
+    effect: "Snapshot is not started."
+    response: "Pass a defined snapshot mode."
   - id: unauthorized
     signal: "Facade raises LatticeAuthorizationDeniedException."
     effect: "No data is captured."

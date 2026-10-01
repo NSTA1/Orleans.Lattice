@@ -4357,7 +4357,7 @@
       "transport_scope": "in_process_only",
       "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
       "request": "SchemaTreeRequest",
-      "response": "LatticeSchemaVersionConfig",
+      "response": "LatticeSchemaVersionConfig?",
       "errors": [
         {
           "error_id": "invalid-argument",
@@ -4752,7 +4752,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Request validation failed."
+          "condition": "Request validation failed, including an undefined TreeHistoryRetentionMode value or a non-positive retention window."
         },
         {
           "error_id": "permission-denied",
@@ -4893,7 +4893,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Request validation failed."
+          "condition": "Request validation failed, including an undefined TreeSnapshotMode value."
         },
         {
           "error_id": "permission-denied",

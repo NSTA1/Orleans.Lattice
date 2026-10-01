@@ -543,7 +543,8 @@
         {
           "name": "MaxByteLength",
           "type": "int?",
-          "required": false
+          "required": false,
+          "notes": "For MaxByteLength encoding rules, a supplied limit must be non-negative."
         },
         {
           "name": "Description",

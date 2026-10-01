@@ -80,7 +80,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Installable-apps control facade (Orleans.Lattice.Api.Apps, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Installable-apps facades (Orleans.Lattice.Api.Apps, .Grpc): app control, role bindings, catalogue, workspace and app bridge operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "api/auth.json",
@@ -122,7 +122,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Replication facade (Orleans.Lattice.Api.Replication, .Grpc) and operator re-seed admin (Orleans.Lattice.Replication): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Replication facade and peer-status facade (Orleans.Lattice.Api.Replication, .Grpc) and operator re-seed admin (Orleans.Lattice.Replication): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "api/schema.json",

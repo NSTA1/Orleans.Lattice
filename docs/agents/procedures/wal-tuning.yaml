@@ -60,6 +60,10 @@ failure_modes:
     signal: "Audit reports a provider key this silo cannot resolve."
     effect: "WAL shards using that key fail closed."
     response: "Fix provider registration before moving or relying on placement."
+  - id: timer-ceiling
+    signal: "Options validation rejects a finite timer-armed duration above the .NET timer ceiling."
+    effect: "Host configuration is not accepted."
+    response: "Use Timeout.InfiniteTimeSpan when supported, or a finite value no greater than LatticeOptionsValidator.MaxTimerDuration."
 rollback:
   supported: true
   mechanism: "Restore previous host option values and previous per-tree WalMaxRetainedBytes; already-trimmed WAL cannot be untrimmed."

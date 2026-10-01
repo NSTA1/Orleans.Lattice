@@ -118,7 +118,7 @@
         "max_ops_per_second",
         "burst_percent"
       ],
-      "definition": "Nullable quota dimensions are unbounded and BurstPercent is transient headroom above bounded ceilings.",
+      "definition": "Nullable quota dimensions are unbounded; bounded quota dimensions must be non-negative; BurstPercent is transient headroom above bounded ceilings.",
       "source": "src/lattice.tenancy/TenantQuotas.cs"
     },
     {
@@ -475,6 +475,11 @@
           "name": "SeedDefaultTenant",
           "type": "bool",
           "default": true
+        },
+        {
+          "name": "PolicySnapshotLeaseDuration",
+          "type": "TimeSpan",
+          "default": "00:00:10"
         }
       ],
       "source": "src/lattice.tenancy/LatticeTenancyOptions.cs"
