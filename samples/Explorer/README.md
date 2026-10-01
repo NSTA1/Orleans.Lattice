@@ -182,7 +182,13 @@ tenant admin sees:
   residency and the page previews what applying it does, region by region. A
   region added to a residency starts *Provisioning*, and nothing in the sample
   promotes it, so a change that would leave a tenant served nowhere turns
-  **Apply residency** off.
+  **Apply residency** off. Remove the region the console is connected to from
+  acme's residency and its row shows the step it has reached (*Removing:
+  Draining*, *Step 1 of 3*); that region's own silos complete the drain, and the
+  page follows it to *Removed* without a refresh. Each region keeps its own
+  tenant registry in this sample, so a drain recorded for the other region is
+  never seen by that region's silos and stays *Draining* here, which is what the
+  page says a lasting *Draining* means.
 
 For the **tenant-scoped view**, restart with `--sign-in-as acme-admin`. The
 console opens at `/t/acme` with only Data, Apps, Tenancy, Replication and

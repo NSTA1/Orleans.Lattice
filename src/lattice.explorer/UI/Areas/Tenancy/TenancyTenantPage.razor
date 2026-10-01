@@ -51,7 +51,7 @@ else
     </LtDefinitionList>
     @if (TenancyFormat.IsServedNowhere(view.Regions))
     {
-        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: it has residency set and none of its regions is Online yet.</p>
+        <p class="lt-tenancy-warning" role="status">This tenant is not served anywhere: @TenancyFormat.ServedNowhereReason(view.Regions)</p>
     }
 
     <section class="lt-tenancy-section" aria-labelledby="tenancy-lifecycle-heading">
