@@ -42,6 +42,16 @@ internal sealed class SchemaOperations : IDisposable
         _operations.TryGetValue(treeId, out var operation) ? operation : null;
 
     /// <summary>
+    /// Whether the cluster status of the operation on <paramref name="treeId"/> is
+    /// being re-read on the circuit's clock, which it is from just after the first
+    /// read until the operation is terminal.
+    /// </summary>
+    /// <param name="treeId">The logical tree id.</param>
+    /// <returns><see langword="true"/> while following.</returns>
+    internal bool IsFollowing(string treeId) =>
+        _followers.TryGetValue(treeId, out var follower) && follower.IsFollowing;
+
+    /// <summary>
     /// Starts <paramref name="run"/> as the operation on <paramref name="treeId"/>
     /// and returns at once; the operation moves on in the background.
     /// </summary>

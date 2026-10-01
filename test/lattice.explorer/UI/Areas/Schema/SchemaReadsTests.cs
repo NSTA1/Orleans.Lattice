@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
@@ -309,6 +310,11 @@ public sealed class SchemaReadsTests : SchemaTestContext
                 ended.TrySetResult();
             }
         };
+        // The follower arms its re-read timer just after the first read raises
+        // Changed; advance the clock only once it has, so the tick is not lost.
+        await TestPoll.UntilAsync(
+            () => Task.FromResult(Operations.IsFollowing("orders")),
+            "the tracker to follow the accepted operation on the circuit's clock");
         Schema.MoveOperation("op-7", status => status with
         {
             State = LatticeOperationState.Succeeded,
@@ -320,11 +326,6 @@ public sealed class SchemaReadsTests : SchemaTestContext
             FinishedAtUtc = Time.GetUtcNow().Add(SchemaOperationStatus.PollInterval),
         });
         Time.Advance(SchemaOperationStatus.PollInterval);
-        await Task.Yield();
-        if (!ended.Task.IsCompleted)
-        {
-            Time.Advance(SchemaOperationStatus.PollInterval);
-        }
 
         await ended.Task.WaitAsync(TimeSpan.FromSeconds(10));
 

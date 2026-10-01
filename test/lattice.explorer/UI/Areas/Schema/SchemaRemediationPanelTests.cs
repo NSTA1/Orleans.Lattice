@@ -154,7 +154,13 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
             UnitName = SchemaOperationPhases.ValuesUnit,
         };
         var cut = Open();
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("3 of 8 values")));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("3 of 8 values"));
+            // The follower arms its re-read just after the first read renders;
+            // advance only once it has, so the tick is not lost.
+            Assert.That(Time.ArmedTimers, Is.GreaterThan(0));
+        });
 
         Schema.MoveOperation("op-42", status => status with { CompletedUnits = 5 });
         Time.Advance(SchemaOperationStatus.PollInterval);
