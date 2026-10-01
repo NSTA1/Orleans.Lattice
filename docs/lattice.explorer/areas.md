@@ -360,7 +360,11 @@ system trees, ... stored.").
 The overview reads cluster identity and shallow storage usage in parallel. The
 storage card can refresh the shallow summary or open a destructive confirmation
 for a deep re-measure. Deep re-measure walks every leaf of every shard of every
-tree, changes nothing, and is described as expensive. The region diagram rolls
+tree, changes nothing, and is described as expensive. It runs on the cluster as a
+[tracked operation](../lattice.api.treeadmin/operations.md) of kind
+`treeadmin.storage-usage-refresh`: the card shows its progress in trees measured,
+offers **Stop re-measuring**, and reads the refreshed shallow summary once it
+succeeds. A re-measure still running is picked up again when the overview opens. The region diagram rolls
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 

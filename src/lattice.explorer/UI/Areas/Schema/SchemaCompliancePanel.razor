@@ -1,8 +1,11 @@
+@using Orleans.Lattice.Explorer.UI.Operations
 @*
     Compliance: a read-only scan of every value of the tree against its policy,
     started here (or by the "Scan compliance..." command, which arrives with
-    ?scan=start), with the counts and the reasons non-compliant values fail. The
-    last result is kept for this session and summarised in the directory.
+    ?scan=start) as a tracked cluster operation whose progress in entries is
+    followed until it finishes (#4126), with the counts and the reasons
+    non-compliant values fail. The last result is kept for this session and
+    summarised in the directory.
 *@
 
 @if (Workspace is not null)
@@ -22,24 +25,28 @@
     }
     else
     {
-        <p class="lt-schema-note">A scan reads every value of the tree and checks it against the policy. It changes nothing, and on a large tree it takes a while.</p>
+        <p class="lt-schema-note">A scan reads every value of the tree and checks it against the policy. It changes nothing, and on a large tree it takes a while. It runs on the cluster, so you can leave this page and come back to it.</p>
         <div class="lt-toolbar lt-schema-actions">
-            @if (_scanning is null)
+            @if (!IsScanning)
             {
                 <LtButton OnClick="ScanAsync">@(_result is null ? "Scan compliance" : "Scan again")</LtButton>
             }
             else
             {
-                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelScan">Stop scanning</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(Running is null)" OnClick="CancelScanAsync">Stop scanning</LtButton>
             }
         </div>
 
-        @if (_scanning is not null)
+        @if (IsScanning)
         {
             <p class="lt-schema-status" role="status">Scanning every value of @Workspace.TreeId...</p>
-            <LtSkeleton Lines="3" Label="Scanning" />
+            @if (Running is { } running)
+            {
+                <LtOperationProgress Status="@running" Label="Compliance scan progress" />
+            }
         }
-        else if (_error is not null)
+
+        @if (_error is not null)
         {
             <p class="lt-schema-error" role="alert">@_error</p>
         }
@@ -89,7 +96,7 @@
                 }
             </section>
         }
-        else if (_scanning is null && _error is null)
+        else if (!IsScanning && _error is null)
         {
             <LtEmptyState Title="Not scanned in this session" HeadingLevel="2">
                 Scan the tree to see how many of its values comply with its policy.
