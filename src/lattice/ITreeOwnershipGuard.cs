@@ -24,7 +24,10 @@ public interface ITreeOwnershipGuard
     /// This is an in-process service, not a grain. A synchronous decision should
     /// complete without allocation. The registry holds its mutation turn while
     /// awaiting the decision; implementations must not call registry mutations
-    /// or range scans from this method.
+    /// or range scans from this method, and must not read a tree that is not
+    /// registered, because the read registers it - a registry mutation - and
+    /// deadlocks behind the turn awaiting the decision. Check the tree's
+    /// existence first and treat an unregistered tree as empty.
     /// Denial reasons must be safe to expose to the caller through API transports.
     /// </remarks>
     ValueTask<TreeOwnershipDecision> AuthorizeAliasAsync(

@@ -13,6 +13,8 @@ Trees are automatically registered on first use - not only on the first write. T
 1. The tree is discoverable before any data exists.
 2. The registry write must succeed before the data write proceeds - registration is **not** best-effort.
 
+A shard root first checks whether the tree is already registered, using the registry's interleaved existence read, and calls the registration mutator only when it is not. Registering an already-registered tree changes nothing, so the check alters no outcome. It exists because a registry mutator can hold the registry's turn while it waits on an in-process seam: an alias change waits on the tree ownership guard and the access gate, and those can read a tree whose shard has never been seeded. If that read registered the tree, the registration would queue behind the alias change waiting on it, and the alias change would deadlock until its timeout. For the same reason, the reserved trees a gate or guard reads are checked for existence before they are read, so a tree nobody has written is treated as empty and is not registered. These reserved trees are the tree ownership ledger (`sys-app-trees`), the authorization policy tree and the membership edges tree. See [#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128).
+
 ### System trees
 
 Tree IDs starting with `_lattice_` are reserved for internal use and are excluded from self-registration to avoid circular bootstrap. The system trees are the registry itself (`_lattice_trees`), the replication package's write-ahead-log trees (`_lattice_replog_*`), and the trees backing cluster-internal queues (`_lattice_queue_*`).
