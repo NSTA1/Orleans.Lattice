@@ -40,11 +40,10 @@ public partial class TreeDeletionIntegrationTests
         {
             var resolver = silo.SiloHost.Services.GetRequiredService<LatticeOptionsResolver>();
             try { await resolver.ResolveAsync(treeName); }
-            catch (InvalidOperationException) { }
-        }
+                catch (InvalidOperationException) { }
+            }
 
-        try { await router.GetAsync("a"); }
-        catch (InvalidOperationException) { }
+            Assert.That(await router.GetAsync("a"), Is.Null, "a purged tree must read as empty");
 
         Assert.That(await registry.ExistsAsync(treeName), Is.False, "a read recreated the purged tree's registry row");
         Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
@@ -90,11 +89,12 @@ public partial class TreeDeletionIntegrationTests
     }
 
     /// <summary>
-    /// Issue #3940's reuse, after a refused read: the read fails closed, and the
-    /// next write still registers a new, empty tree under the purged id.
+    /// Issue #3940's reuse, after a read: the read answers the purged tree as
+    /// empty without recreating it, and the next write still registers a new,
+    /// empty tree under the purged id.
     /// </summary>
     [Test]
-    public async Task A_write_after_a_refused_read_reuses_a_purged_id()
+    public async Task A_write_after_a_read_reuses_a_purged_id()
     {
         var treeName = $"purged-rewrite-{Guid.NewGuid():N}";
         var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
@@ -103,7 +103,9 @@ public partial class TreeDeletionIntegrationTests
         await router.DeleteTreeAsync();
         await router.PurgeTreeAsync();
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("a"), "a read of a purged tree must fail closed");
+        Assert.That(await router.GetAsync("a"), Is.Null, "a purged tree must read as empty");
+        Assert.That(await _cluster.GrainFactory.GetLatticeRegistry().ExistsAsync(treeName), Is.False,
+            "the read recreated the purged tree");
 
         await router.SetAsync("b", Encoding.UTF8.GetBytes("2"));
 
@@ -119,10 +121,10 @@ public partial class TreeDeletionIntegrationTests
 
     /// <summary>
     /// Issue #3940's reuse through an explicit create: registering the id again
-    /// makes it a live, empty tree that reads answer rather than refuse.
+    /// makes it a live, empty tree.
     /// </summary>
     [Test]
-    public async Task An_explicit_create_after_a_refused_read_reuses_a_purged_id()
+    public async Task An_explicit_create_after_a_read_reuses_a_purged_id()
     {
         var treeName = $"purged-recreate-{Guid.NewGuid():N}";
         var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
@@ -131,7 +133,8 @@ public partial class TreeDeletionIntegrationTests
         await router.DeleteTreeAsync();
         await router.PurgeTreeAsync();
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("a"), "a read of a purged tree must fail closed");
+        Assert.That(await router.GetAsync("a"), Is.Null, "a purged tree must read as empty");
+        Assert.That(await router.TreeExistsAsync(), Is.False, "the read recreated the purged tree");
 
         await _cluster.GrainFactory.GetLatticeRegistry().RegisterAsync(treeName);
 
@@ -141,6 +144,48 @@ public partial class TreeDeletionIntegrationTests
             Assert.That(await router.GetAsync("a"), Is.Null, "a purged tree's data must not come back");
             Assert.That(await _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName).IsDeletedAsync(), Is.False);
         });
+    }
+
+    /// <summary>
+    /// A purged tree reads as empty rather than refusing the read, so a flow that
+    /// purges a tree and then reads it before writing - the repo-context
+    /// re-derivation reset, or any reader after a soft-delete window's
+    /// reminder-driven purge - observes the empty tree the purge left. The read
+    /// still never recreates it: the registry row stays absent and
+    /// recover-after-purge still throws (issue #4219).
+    /// </summary>
+    [Test]
+    public async Task Reads_and_deletes_of_a_purged_tree_answer_empty_without_reregistering_it()
+    {
+        var treeName = $"purged-read-{Guid.NewGuid():N}";
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+        var registry = _cluster.GrainFactory.GetLatticeRegistry();
+
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await router.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await router.DeleteTreeAsync();
+        await router.PurgeTreeAsync();
+        Assert.That(await registry.ExistsAsync(treeName), Is.False, "precondition: the purge removed the row");
+
+        var keys = new List<string>();
+        await foreach (var key in router.KeysAsync()) keys.Add(key);
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var entry in router.EntriesAsync(reverse: true)) entries.Add(entry);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await router.GetAsync("a"), Is.Null);
+            Assert.That(await router.ExistsAsync("a"), Is.False);
+            Assert.That(await router.GetManyAsync(["a", "b"]), Is.Empty);
+            Assert.That(await router.CountAsync(), Is.Zero);
+            Assert.That(keys, Is.Empty);
+            Assert.That(entries, Is.Empty);
+            Assert.That(await router.DeleteAsync("a"), Is.False);
+            Assert.That(await router.DeleteRangeAsync("a", "z"), Is.Zero);
+        });
+
+        Assert.That(await registry.ExistsAsync(treeName), Is.False, "a read recreated the purged tree's registry row");
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
     }
 
     private async Task<bool> WaitForLoopRemindersAsync(

@@ -650,7 +650,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<byte[]?> GetAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return null;
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
         return await TraverseForReadAsync(key);
@@ -659,7 +659,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<VersionedValue> GetWithVersionAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new VersionedValue();
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
         return await TraverseForReadWithVersionAsync(key);
@@ -669,7 +669,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<LwwEntry?> GetRawEntryAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return null;
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
 
@@ -692,12 +692,13 @@ internal sealed partial class ShardRootGrain(
     public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
-        await PrepareForOperationAsync();
-        ThrowIfMovedAwayForReadAnyKey(keys);
-        RecordRead();
-
+        var ready = await PrepareForReadAsync();
         var result = new List<LwwEntry?>(keys.Count);
         for (int i = 0; i < keys.Count; i++) result.Add(null);
+        if (!ready) return result;
+
+        ThrowIfMovedAwayForReadAnyKey(keys);
+        RecordRead();
 
         if (state.State.RootNodeId is null) return result;
 
@@ -863,7 +864,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> ExistsAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return false;
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
         return await TraverseForExistsAsync(key);
@@ -872,7 +873,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new Dictionary<string, byte[]>();
         ThrowIfMovedAwayForReadAnyKey(keys);
         RecordRead();
         return await TraverseForBatchReadAsync(keys);
@@ -1844,7 +1845,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Delete);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return false;
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
@@ -2000,7 +2001,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new ShardRangeDeletePage();
         // range deletes do not currently shadow-forward tombstones - see
         // ForwardLocalWriteToShadowIfNeededAsync XML doc. The cleanup phase of
         // the split coordinator restores convergence by re-tombstoning moved-slot entries on T after the swap. No explicit reject check is performed
@@ -2177,7 +2178,7 @@ internal sealed partial class ShardRootGrain(
         string? endExclusive,
         ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new ShardCountPage { Count = 0 };
         RecordRead();
 
         if (state.State.RootNodeId is null)
@@ -2345,7 +2346,7 @@ internal sealed partial class ShardRootGrain(
 
     private async Task<ShardAnyPage> AnyBoundedCoreAsync(string? resumeFromInclusive, ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new ShardAnyPage { Found = false };
         RecordRead();
 
         if (state.State.RootNodeId is null)
@@ -2445,7 +2446,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromInclusive,
         ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new ShardCountWithMovedAwayPage { Count = 0 };
         RecordRead();
 
         if (state.State.RootNodeId is null)
@@ -2571,7 +2572,7 @@ internal sealed partial class ShardRootGrain(
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
 
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new ShardCountPage { Count = 0 };
         RecordRead();
 
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
@@ -2651,12 +2652,12 @@ internal sealed partial class ShardRootGrain(
         return arr;
     }
 
-    private async Task EnsureRootAsync(bool forWrite = false)
+    private async Task<bool> EnsureRootAsync(bool forWrite = false, bool purgedAnswersEmpty = false)
     {
         // Steady-state fast path: once a root exists, short-circuit with
         // zero storage I/O and no gate acquisition. This is the only path
         // every hot-path read/write pays after the shard is initialised.
-        if (state.State.RootNodeId is not null) return;
+        if (state.State.RootNodeId is not null) return true;
 
         // Slow path: this activation believes the shard is brand new.
         // Serialise the re-read + seed behind the init gate so two
@@ -2664,7 +2665,7 @@ internal sealed partial class ShardRootGrain(
         await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            await EnsureRootSlowWithDeadlineAsync(forWrite);
+            return await EnsureRootSlowWithDeadlineAsync(forWrite, purgedAnswersEmpty);
         }
         finally
         {
@@ -2711,7 +2712,12 @@ internal sealed partial class ShardRootGrain(
     /// the seed is awaited unbounded, restoring the historical behaviour.
     /// </para>
     /// </summary>
-    private async Task EnsureRootSlowWithDeadlineAsync(bool forWrite)
+    /// <returns>
+    /// <see langword="false"/> only when <paramref name="purgedAnswersEmpty"/> is
+    /// set and the tree has been purged, so the shard has no root and none was
+    /// seeded; <see langword="true"/> when the shard has a root.
+    /// </returns>
+    private async Task<bool> EnsureRootSlowWithDeadlineAsync(bool forWrite, bool purgedAnswersEmpty)
     {
         // Read from configuration, not a registry resolve: the tree may not be
         // registered until the seed below runs, and a resolve of a purged id
@@ -2721,14 +2727,13 @@ internal sealed partial class ShardRootGrain(
             ?? optionsResolver.GetConfiguredOptions(TreeId).ActivationReadyTimeout;
         if (timeout == Timeout.InfiniteTimeSpan)
         {
-            await EnsureRootSlowAsync(forWrite).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
-            return;
+            return await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
 
         using var deadline = new CancellationTokenSource(timeout);
         try
         {
-            await EnsureRootSlowAsync(forWrite).WaitAsync(deadline.Token)
+            return await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).WaitAsync(deadline.Token)
                 .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
@@ -2751,12 +2756,12 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    private async Task EnsureRootSlowAsync(bool forWrite)
+    private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty)
     {
         // Re-check under the gate: a turn that lost the race to the gate
         // observes the winner's published RootNodeId and returns without
         // seeding.
-        if (state.State.RootNodeId is not null) return;
+        if (state.State.RootNodeId is not null) return true;
 
         // Defensive re-read before seeding a fresh single-leaf root.
         //
@@ -2776,7 +2781,7 @@ internal sealed partial class ShardRootGrain(
         // set RootNodeId and tripped the fast-path guard above - so it
         // cannot clobber a pending in-memory mutation.
         await state.ReadStateAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
-        if (state.State.RootNodeId is not null) return;
+        if (state.State.RootNodeId is not null) return true;
 
         // Register the tree in the registry before creating the root node.
         // This ensures the tree is discoverable before any data is written.
@@ -2800,9 +2805,16 @@ internal sealed partial class ShardRootGrain(
             {
                 // A write is the deliberate reuse of an id (issue #3940) and
                 // registers it; a read must not recreate a purged tree
-                // (issue #4219).
+                // (issue #4219). A data read or delete answers it as the
+                // empty tree the purge left, seeding nothing; any other
+                // operation on it refuses.
                 if (!forWrite)
-                    await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, TreeId);
+                {
+                    if (!purgedAnswersEmpty)
+                        await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, TreeId);
+                    else if (await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId))
+                        return false;
+                }
                 await registry.RegisterAsync(TreeId);
             }
             state.State.IsRegistered = true;
@@ -2847,6 +2859,8 @@ internal sealed partial class ShardRootGrain(
             state.State.RootIsLeaf = prevRootIsLeaf;
             throw;
         }
+
+        return true;
     }
 
     /// <summary>
@@ -2929,11 +2943,32 @@ internal sealed partial class ShardRootGrain(
     /// read-side purge guard (issue #4219). Identical to
     /// <see cref="PrepareForOperationAsync"/> on a seeded shard.
     /// </summary>
-    private Task PrepareForWriteAsync() => PrepareForOperationAsync(forWrite: true);
+    private Task<bool> PrepareForWriteAsync() => PrepareForOperationAsync(forWrite: true, purgedAnswersEmpty: false);
 
-    private Task PrepareForOperationAsync() => PrepareForOperationAsync(forWrite: false);
+    /// <summary>
+    /// <see cref="PrepareForOperationAsync"/> for an entry point that reads
+    /// data, or deletes it. Answers <see langword="false"/> when the tree has
+    /// been purged and this shard was never seeded again, and the caller then
+    /// answers as the empty tree the purge left: a purged tree holds no data, so
+    /// there is nothing to read or delete (issue #4219). Nothing is seeded or
+    /// registered, so the read never recreates the tree, and a flow that purges
+    /// a tree and reads it before writing - the repo-context re-derivation reset,
+    /// or any reader after a soft-delete window's reminder-driven purge - keeps
+    /// working. Identical to <see cref="PrepareForOperationAsync"/> on a seeded
+    /// shard.
+    /// </summary>
+    private Task<bool> PrepareForReadAsync() => PrepareForOperationAsync(forWrite: false, purgedAnswersEmpty: true);
 
-    private Task PrepareForOperationAsync(bool forWrite)
+    /// <summary>
+    /// Readies the shard for an operation that neither writes nor reads data:
+    /// maintenance, administration and transaction terminals. A purged tree
+    /// refuses it with an <see cref="InvalidOperationException"/>.
+    /// </summary>
+    private Task<bool> PrepareForOperationAsync() => PrepareForOperationAsync(forWrite: false, purgedAnswersEmpty: false);
+
+    private static readonly Task<bool> ShardReady = Task.FromResult(true);
+
+    private Task<bool> PrepareForOperationAsync(bool forWrite, bool purgedAnswersEmpty)
     {
         // Order matters: a shard that participated as the *source* of an
         // online resize transitions Reject -> Cleanup, which sets BOTH
@@ -2957,7 +2992,7 @@ internal sealed partial class ShardRootGrain(
         // short-circuit when their state pointers are null. The original
         // `async Task` wrapper still ran three nested `MoveNext` traversals
         // for every read; this peek lets the whole prepare chain compile to
-        // a `Task.CompletedTask` return when nothing is owed, deferring the
+        // a cached completed-task return when nothing is owed, deferring the
         // async machinery to `PrepareForOperationSlowAsync` only when at
         // least one helper actually has work. The cycle 36 lesson
         // (synchronous-completion async methods are zero-alloc) still
@@ -2967,13 +3002,13 @@ internal sealed partial class ShardRootGrain(
             && state.State.PendingBulkGraft is null
             && state.State.PendingChildLinks.Count == _inFlightChildLinks.Count)
         {
-            return Task.CompletedTask;
+            return ShardReady;
         }
 
-        return PrepareForOperationSlowAsync(forWrite);
+        return PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
     }
 
-    private async Task PrepareForOperationSlowAsync(bool forWrite)
+    private async Task<bool> PrepareForOperationSlowAsync(bool forWrite, bool purgedAnswersEmpty)
     {
         // Bracketed as a routing mutation (issue #3474): the serial reads that
         // reach here are exempt from the call-filter bracket, yet this path can
@@ -2982,10 +3017,12 @@ internal sealed partial class ShardRootGrain(
         BeginRoutingMutation();
         try
         {
-            await EnsureRootAsync(forWrite);
+            if (!await EnsureRootAsync(forWrite, purgedAnswersEmpty))
+                return false;
             await ResumePendingPromotionAsync();
             await ResumePendingBulkGraftAsync();
             await ResumePendingChildLinksAsync();
+            return true;
         }
         finally
         {
@@ -3370,7 +3407,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey,
         ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new KeysPage { Keys = [], HasMore = false };
         RecordRead();
 
         // Determine the starting leaf. A resume key is an inclusive lower
@@ -3541,7 +3578,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey,
         ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new KeysPage { Keys = [], HasMore = false };
         RecordRead();
 
         // Determine the starting leaf (rightmost, or the leaf for the seek key).
@@ -3697,7 +3734,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey,
         ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new EntriesPage { Entries = [], HasMore = false };
         RecordRead();
 
         var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
@@ -3854,7 +3891,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFromKey,
         ScanPageWalk scan)
     {
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new EntriesPage { Entries = [], HasMore = false };
         RecordRead();
 
         var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
@@ -4014,7 +4051,7 @@ internal sealed partial class ShardRootGrain(
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
 
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new KeysPage { Keys = [], HasMore = false };
         RecordRead();
 
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
@@ -4152,7 +4189,7 @@ internal sealed partial class ShardRootGrain(
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
 
-        await PrepareForOperationAsync();
+        if (!await PrepareForReadAsync()) return new EntriesPage { Entries = [], HasMore = false };
         RecordRead();
 
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)

@@ -706,7 +706,9 @@ public interface ILattice : IGrainWithStringKey
     /// Permanently removes the tree's leaf and internal node state and unregisters
     /// it. On an aliased tree it purges the live copy the delete pinned and
     /// unregisters both that copy and the logical tree. Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted.
+    /// deleted. Once the purge completes, a read or delete of the id answers as
+    /// an empty tree without registering it again; a write or an explicit create
+    /// reuses the id for a new tree.
     /// <para>
     /// Accept-then-poll: the purge is recorded as in progress and its shard walk
     /// runs in the background on the tree's deletion coordinator, where no
