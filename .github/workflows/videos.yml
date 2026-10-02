@@ -28,9 +28,12 @@ on:
       - '.github/workflows/videos.yml'
 
   # Integration-branch lane, mirroring ci.yml's push trigger (#2972). ADVISORY,
-  # AND IT MUST NEVER BECOME BRANCH PROTECTION. As in explorer-ci.yml, a push
+  # AND IT MUST NEVER BECOME BRANCH PROTECTION. As in ui-tests.yml, a push
   # `paths:` filter is evaluated against the push diff, so on a bucket this runs
-  # only when the member that just merged touched the workspace.
+  # only when the member that just merged touched the workspace. The glob also
+  # matches MEMBER branches (`<type>/epic/<bucket>-<item>`), whose own
+  # pull_request run already gates them; the `plan` job below classifies the
+  # pushed ref and the workspace job skips on a member push (#4260).
   push:
     branches: ['*/epic/**']
     paths:
@@ -53,7 +56,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Member-push classifier (#4260). The '*/epic/**' push trigger cannot tell a
+  # bucket `<type>/epic/<bucket>` from its member `<type>/epic/<bucket>-<item>`,
+  # and no glob can, so without this every push to a member pull request would
+  # re-run the whole workspace check on top of the pull_request run that
+  # already gates the same commit.
+  #
+  # The script is ci.yml's `pushref` step, which is the SOURCE OF TRUTH for the
+  # rule and documents it (and its one residual false positive) at length. Do
+  # not edit it here alone: CiIntegrationBranchTriggerTests fails the build
+  # when this copy and ci.yml's differ.
+  #
+  # On pull_request and workflow_dispatch the steps do not run, the output is
+  # empty, and `!= 'true'` below lets the workspace job run exactly as before;
+  # a bucket (non-member) push classifies as `false` and also runs it.
+  plan:
+    name: Classify pushed ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      push_is_member: ${{ steps.pushref.outputs.member }}
+    steps:
+      # Only the remote's heads are read, so a one-commit sparse checkout
+      # suffices to give `git ls-remote` an `origin`.
+      - uses: actions/checkout@v5
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
+
+      - name: Classify the pushed integration ref
+        id: pushref
+        if: github.event_name == 'push'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          member=false
+          parent=""
+
+          while read -r _sha ref; do
+            branch="${ref#refs/heads/}"
+
+            # A proper prefix, and the very next character is the `-` separator.
+            case "$BRANCH" in
+              "$branch"-*)
+                if [ "$branch" != "$BRANCH" ]; then
+                  member=true
+                  parent="$branch"
+                fi
+                ;;
+            esac
+          done < <(git ls-remote --heads origin)
+
+          echo "member=$member" >> "$GITHUB_OUTPUT"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+
+          if [ "$member" = "true" ]; then
+            echo "Pushed ref '$BRANCH' extends integration branch '$parent'; treating it as a member."
+          else
+            echo "Pushed ref '$BRANCH' extends no existing branch; treating it as an integration branch."
+          fi
+
   workspace:
+    needs: plan
+    if: needs.plan.outputs.push_is_member != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
