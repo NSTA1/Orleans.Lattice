@@ -36,7 +36,7 @@ public partial class TreeShardSplitGrainTests
         {
             source.EnterRejectPhaseAsync();
             registry.ReassignSlotsAsync(
-                Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+                Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>());
         });
     }
 
@@ -101,7 +101,7 @@ public partial class TreeShardSplitGrainTests
             source.EnterRejectPhaseAsync();
             source.GetLeftmostLeafIdAsync();
             registry.ReassignSlotsAsync(
-                Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+                Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>());
         });
     }
 }

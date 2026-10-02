@@ -283,6 +283,14 @@ internal static class ObservedLatticeRegistry
                 MethodTag(nameof(ReassignSlotsAsync)));
 
         /// <inheritdoc />
+        public Task<ShardMap?> ReassignSlotsAsync(
+            string treeId, int[] slots, int targetShardIndex, ShardMap fallbackMap, string boundPhysicalTreeId) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.ReassignSlotsAsync(treeId, slots, targetShardIndex, fallbackMap, boundPhysicalTreeId),
+                MethodTag(nameof(ReassignSlotsAsync)));
+
+        /// <inheritdoc />
         public Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap) =>
             Observe(
                 Stopwatch.GetTimestamp(),

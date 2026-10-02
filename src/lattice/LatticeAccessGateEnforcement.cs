@@ -135,6 +135,57 @@ internal static class LatticeAccessGateEnforcement
     }
 
     /// <summary>
+    /// Enforces an all-or-nothing <paramref name="operation"/> over every key that
+    /// starts with <paramref name="prefix"/> - the half-open range
+    /// <c>[prefix, LatticeKeyRange.PrefixUpperBound(prefix))</c> - with
+    /// <b>hard-deny</b> semantics: a plain deny <em>and</em> a partial-coverage
+    /// (filtered) allow both throw; only a uniform whole-range allow proceeds.
+    /// <para>
+    /// Used where an operation drains or overwrites a whole prefix, such as a
+    /// prefix-scoped backup capture or restore. Such an operation runs system-origin
+    /// once authorized, so no later per-key check exists that a filter could be
+    /// applied to. Authorizing it as a point at the prefix string would let an
+    /// exact-key grant on that string certify every descendant, and would never
+    /// consult a deny scoped below the prefix.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="prefix"/> is <c>null</c>.</exception>
+    public static async ValueTask EnforcePrefixAsync(
+        ILatticeAccessGate gate,
+        ILatticeMembershipContext? membership,
+        string treeId,
+        LatticeOperation operation,
+        string prefix,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(prefix);
+        if (LatticeAccessGateContext.IsGateBypassed || gate is NullLatticeAccessGate)
+        {
+            return;
+        }
+
+        var subject = await ResolveSubjectAsync(membership, cancellationToken);
+        var request = new LatticeAccessRequest(
+            treeId, operation, subject, key: null, rangeStart: prefix, rangeEnd: LatticeKeyRange.PrefixUpperBound(prefix));
+        var decision = await gate.AuthorizeAsync(in request, cancellationToken);
+
+        if (!decision.Allowed)
+        {
+            throw Denied(treeId, operation, subject, decision.Reason);
+        }
+
+        if (decision.KeyFilter is not null)
+        {
+            throw new LatticeAuthorizationDeniedException(
+                treeId,
+                operation,
+                subject.SubjectId,
+                decision.Reason ?? $"Operation is not fully authorized over every key under prefix '{prefix}'; "
+                    + "a prefix-scoped operation is all-or-nothing and is refused rather than narrowed.");
+        }
+    }
+
+    /// <summary>
     /// Enforces a whole-tree <see cref="LatticeOperation"/> that carries no key or
     /// range (for example <see cref="LatticeOperation.Admin"/>,
     /// <see cref="LatticeOperation.BulkLoad"/>). Throws when the gate denies, or

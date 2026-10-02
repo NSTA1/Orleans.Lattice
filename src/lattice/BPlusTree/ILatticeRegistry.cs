@@ -319,6 +319,36 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task<ShardMap> ReassignSlotsAsync(string treeId, int[] slots, int targetShardIndex, ShardMap fallbackMap);
 
     /// <summary>
+    /// Fenced form of <see cref="ReassignSlotsAsync(string, int[], int, ShardMap)"/>
+    /// for a split or fold bound to <paramref name="boundPhysicalTreeId"/>: applies
+    /// the diff exactly as the unfenced form does, but only while
+    /// <see cref="ShardMapCommitFence.Admits"/> holds for the tree's entry, and
+    /// returns <see langword="null"/> without writing anything otherwise.
+    /// </summary>
+    /// <remarks>
+    /// The check and the write run inside one call, so no alias cutover can land
+    /// between them (issue #4264). A <see langword="null"/> result means the
+    /// logical tree now resolves to, or is being cut over to, a different
+    /// physical tree, whose map the diff's shard indices do not describe; the
+    /// caller abandons its migration rather than retrying.
+    /// </remarks>
+    /// <param name="treeId">The tree whose shard map is being updated.</param>
+    /// <param name="slots">Virtual-slot indices to reassign; may be empty.</param>
+    /// <param name="targetShardIndex">Physical shard index to point them at.</param>
+    /// <param name="fallbackMap">
+    /// Map to apply the diff onto when the tree has no persisted map yet.
+    /// </param>
+    /// <param name="boundPhysicalTreeId">
+    /// The physical tree whose shards the caller drained and swapped.
+    /// </param>
+    /// <exception cref="LatticeTreeNotRegisteredException">
+    /// The tree has no registry row (never registered, or purged); nothing is
+    /// created (issue #4230).
+    /// </exception>
+    Task<ShardMap?> ReassignSlotsAsync(
+        string treeId, int[] slots, int targetShardIndex, ShardMap fallbackMap, string boundPhysicalTreeId);
+
+    /// <summary>
     /// Atomically allocates a fresh physical shard index for an adaptive split
     ///. Returns <c>max(currentMaxFromMap, persisted) + 1</c> and
     /// persists the new high-water mark so concurrent split coordinators each

@@ -4,7 +4,8 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Carries routing maps across the alias swap of a shadow-cutover restore or a
-/// schema remediation cutover (issue #4250).
+/// schema remediation cutover (issue #4250), and of an explicit alias set through
+/// the tree-administration facade (issue #4263).
 /// <para>
 /// Routing reads the shard map under the id it is addressed by, and splits,
 /// folds and reshards write it there, so for an aliased tree the logical entry
@@ -31,7 +32,10 @@ internal static class AliasCutoverShardMaps
     /// tree by on the destination entry (once, so a resumed cutover keeps the
     /// original), stamps that map onto the current physical tree's own entry when
     /// it is not the logical id itself, and carries the destination's own map onto
-    /// the logical entry.
+    /// the logical entry, marking it with the destination as
+    /// <see cref="TreeRegistryEntry.AliasCutoverTarget"/> until the alias swap
+    /// clears it, so a split or fold bound to the replaced tree cannot commit onto
+    /// the carried map (issue #4264).
     /// </summary>
     /// <returns>
     /// The map the replaced physical tree's shards are addressed by, for arming or
@@ -52,16 +56,20 @@ internal static class AliasCutoverShardMaps
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
         var registry = grainFactory.GetLatticeRegistry();
         var current = await registry.ResolveAsync(logicalTreeId);
-        var destination = await registry.GetEntryAsync(destinationPhysicalTreeId) ?? new TreeRegistryEntry();
+        var recorded = await registry.GetEntryAsync(destinationPhysicalTreeId);
 
         // The logical map is carried before the swap, so a cutover resumed after it
         // has nothing left to carry: the logical entry now describes the
         // destination, and splits since may have moved it on.
         if (string.Equals(current, destinationPhysicalTreeId, StringComparison.Ordinal))
         {
-            return destination.ReplacedShardMap;
+            return recorded?.ReplacedShardMap;
         }
 
+        // A destination with no row yet is normal: a restore's or remediation's
+        // copy can be addressed before its row is materialised, and this carry is
+        // what first records it.
+        var destination = recorded ?? new TreeRegistryEntry();
         var replaced = destination.ReplacedShardMap;
         if (replaced is null)
         {
@@ -92,11 +100,20 @@ internal static class AliasCutoverShardMaps
 
         var destinationRouting = await grainFactory.GetGrain<ILattice>(destinationPhysicalTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken);
+
+        // A shadow-cutover restore into a target that was never created has no
+        // logical row: this cutover is what creates it, as an alias of the restored
+        // copy, so an absent row is a genuine create and starts from an empty entry.
+        // It cannot be a lost row - the alias lives on that row, and the resolve
+        // above found none - unlike the revert read, which refuses.
         var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
+        // The marker fences a split or fold bound to the replaced tree off this
+        // map until the alias swap clears it (#4264).
         await registry.UpdateAsync(logicalTreeId, logical with
         {
             ShardMap = Restamp(destinationRouting.Map, logical.ShardMap),
             NextShardIndex = destination.NextShardIndex,
+            AliasCutoverTarget = destinationPhysicalTreeId,
         });
 
         return replaced;
@@ -108,7 +125,9 @@ internal static class AliasCutoverShardMaps
     /// <paramref name="previousPhysicalTreeId"/>; call it immediately before the
     /// alias swap. Stamps the logical map, which describes the shadow, onto the
     /// shadow's own entry, then carries the map recorded at the cutover back onto
-    /// the logical entry. A no-op unless the alias currently resolves to the shadow.
+    /// the logical entry, marked with <paramref name="previousPhysicalTreeId"/> as
+    /// its <see cref="TreeRegistryEntry.AliasCutoverTarget"/> until the alias swap.
+    /// A no-op unless the alias currently resolves to the shadow.
     /// </summary>
     public static async Task PrepareRevertAsync(
         IGrainFactory grainFactory,
@@ -149,7 +168,7 @@ internal static class AliasCutoverShardMaps
 
         var live = (await grainFactory.GetGrain<ILattice>(logicalTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken)).Map;
-        var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
+        var logical = await RequireEntryAsync(registry, logicalTreeId, RevertOperation);
 
         // A revert resumed after the map was carried back would read the restored
         // map here, so leave the shadow's entry as the first pass stamped it.
@@ -166,6 +185,7 @@ internal static class AliasCutoverShardMaps
         {
             ShardMap = Restamp(restored, logical.ShardMap),
             NextShardIndex = restoredNextShardIndex,
+            AliasCutoverTarget = previousPhysicalTreeId,
         });
     }
 
@@ -193,11 +213,99 @@ internal static class AliasCutoverShardMaps
     }
 
     /// <summary>
+    /// Runs the explicit alias swap <paramref name="swapAsync"/> of
+    /// <paramref name="logicalTreeId"/> onto <paramref name="targetPhysicalTreeId"/>
+    /// and carries the routing maps across it (issue #4263). After the swap the
+    /// logical entry takes the target's own map and split allocation mark, and the
+    /// map the logical tree addressed its previous physical tree by is written to
+    /// that tree's own entry when it has one and is not the logical id itself, so
+    /// an alias back onto it finds its layout.
+    /// <para>
+    /// The maps are read before the swap and written only after it succeeds, so
+    /// an alias the registry refuses (a multi-level target, a deleted tree, an
+    /// ownership denial) changes nothing. A re-set of the current alias carries
+    /// nothing: the logical map already describes the target. Every write is to
+    /// the registry from outside its turn (issue #4128).
+    /// </para>
+    /// </summary>
+    public static async Task CarryAcrossExplicitAliasAsync(
+        IGrainFactory grainFactory,
+        string logicalTreeId,
+        string targetPhysicalTreeId,
+        Func<Task> swapAsync)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(logicalTreeId);
+        ArgumentNullException.ThrowIfNull(targetPhysicalTreeId);
+        ArgumentNullException.ThrowIfNull(swapAsync);
+
+        var registry = grainFactory.GetLatticeRegistry();
+        var logicalBefore = await registry.GetEntryAsync(logicalTreeId);
+        var current = logicalBefore?.PhysicalTreeId ?? logicalTreeId;
+        if (string.Equals(current, targetPhysicalTreeId, StringComparison.Ordinal))
+        {
+            await swapAsync();
+            return;
+        }
+
+        var replaced = EffectiveMap(logicalBefore);
+        await swapAsync();
+
+        // A previous physical tree with its own id was addressed by the logical
+        // map, never its own, so its own entry is stale once the alias moves off.
+        if (!string.Equals(current, logicalTreeId, StringComparison.Ordinal)
+            && await registry.GetEntryAsync(current) is { } previous
+            && (previous.ShardMap is null || !SameSlots(replaced, previous.ShardMap)))
+        {
+            await registry.UpdateAsync(current, previous with
+            {
+                ShardMap = Restamp(replaced, previous.ShardMap),
+                NextShardIndex = logicalBefore?.NextShardIndex ?? previous.NextShardIndex,
+            });
+        }
+
+        // Routing reads the map under the logical id, so the target's shards are
+        // addressed by whatever map the logical entry holds: carry the target's.
+        var target = await registry.GetEntryAsync(targetPhysicalTreeId);
+        var targetMap = EffectiveMap(target);
+        var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
+        if (!SameSlots(EffectiveMap(logical), targetMap) || logical.NextShardIndex != target?.NextShardIndex)
+        {
+            await registry.UpdateAsync(logicalTreeId, logical with
+            {
+                ShardMap = Restamp(targetMap, logical.ShardMap),
+                NextShardIndex = target?.NextShardIndex,
+            });
+        }
+    }
+
+    /// <summary>
+    /// The map routing addresses a tree's shards by: its persisted map, or the
+    /// default map for its shard-count pin, as the tree router resolves it.
+    /// </summary>
+    private static ShardMap EffectiveMap(TreeRegistryEntry? entry) =>
+        entry?.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
+            LatticeConstants.DefaultVirtualShardCount,
+            entry?.ShardCount ?? LatticeConstants.DefaultShardCount);
+
+    /// <summary>
     /// A copy of <paramref name="map"/> versioned above both it and
     /// <paramref name="existing"/>, so every cached router sees the change.
     /// </summary>
     private static ShardMap Restamp(ShardMap map, ShardMap? existing) =>
         Copy(map, Math.Max(existing?.Version ?? 0L, map.Version) + 1);
+
+    private const string RevertOperation = "the alias-revert shard-map carry";
+
+    /// <summary>
+    /// Reads the row a carry is about to rewrite, refusing when there is none
+    /// (issue #4270). <see cref="ILatticeRegistry.UpdateAsync"/> is an
+    /// unconditional upsert, so defaulting a missing row to an empty entry would
+    /// create one with no structural pins and hide whatever removed it.
+    /// </summary>
+    private static async Task<TreeRegistryEntry> RequireEntryAsync(
+        ILatticeRegistry registry, string treeId, string operation) =>
+        await registry.GetEntryAsync(treeId) ?? throw new LatticeTreeNotRegisteredException(treeId, operation);
 
     private static ShardMap Copy(ShardMap map, long version) =>
         new() { Slots = (int[])map.Slots.Clone(), Version = version };

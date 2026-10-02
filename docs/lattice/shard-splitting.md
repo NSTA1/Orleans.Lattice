@@ -107,6 +107,23 @@ The coordinator state is persisted before any side effect, so a silo crash
 mid-split is recovered by the keepalive reminder, which resumes from the
 last persisted phase; every phase is idempotent.
 
+A split is bound to the physical tree the logical tree resolved to when it
+started, and that binding is persisted, so a coordinator resumed after a
+crash keeps working on the same shards. If an alias cutover - a resize swap,
+a shadow-cutover restore, a schema remediation cutover, or a restore revert -
+re-points the logical tree at another physical tree before the split
+commits, the split is abandoned rather than committed: its moved-slot diff
+names shard indices of the replaced tree, which the copy's map does not
+describe. Every drain tick and the swap check the binding first, and the
+registry re-checks it inside the same call that would apply the diff, so the
+check cannot be overtaken by a cutover. A cutover carries the copy's map onto
+the logical entry one registry call before it swaps the alias, and records
+the target on the entry for that gap, so a split cannot commit in between
+either; a split started in that gap is refused. When the abandonment is
+detected before the swap freezes *S*, *S*'s migration record is cleared, so
+the replaced tree is unchanged if the cutover is later undone. Shard
+consolidation folds are bound and abandoned the same way.
+
 ## Scan semantics during a split
 
 This section describes the *mechanism* by which live operations behave

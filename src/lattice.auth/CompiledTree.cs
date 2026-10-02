@@ -21,6 +21,9 @@ internal sealed class CompiledTree
 {
     private readonly FrozenDictionary<string, CompiledRule[]> _exact;
 
+    // The exact-key map's keys sorted ascending (ordinal), so a range request can
+    // find whether any exact-key rule falls inside it with one binary search.
+    private readonly string[] _exactKeys;
     // Parallel arrays: _prefixes is sorted ascending (ordinal); _prefixRules[i]
     // holds the rules scoped at _prefixes[i]. Sorting lets us binary-search for
     // the longest prefix of a key (the largest stored prefix that the key starts
@@ -32,11 +35,13 @@ internal sealed class CompiledTree
 
     private CompiledTree(
         FrozenDictionary<string, CompiledRule[]> exact,
+        string[] exactKeys,
         string[] prefixes,
         CompiledRule[][] prefixRules,
         CompiledRule[] treeRules)
     {
         _exact = exact;
+        _exactKeys = exactKeys;
         _prefixes = prefixes;
         _prefixRules = prefixRules;
         _treeRules = treeRules;
@@ -125,6 +130,170 @@ internal sealed class CompiledTree
         }
 
         return default;
+    }
+
+    /// <summary>
+    /// Resolves a collection request over the half-open range
+    /// <c>[<paramref name="rangeStart"/>, <paramref name="rangeEnd"/>)</c> to the
+    /// single rule match every key in the range resolves to, when there is one.
+    /// The range is uniform when no exact-key rule applying to the subject and
+    /// operation lies inside it, and every stored prefix with such a rule that
+    /// governs any key of the range governs every key of it - which is true only of
+    /// a prefix of <paramref name="rangeStart"/> whose own prefix range contains the
+    /// whole request range. A rule that does not apply to the subject and operation
+    /// is skipped by every resolution, so it cannot vary the decision. Every key
+    /// then resolves through the same applicable prefix and tree tiers, so
+    /// <see cref="ResolvePoint"/> agrees across the range and the shared answer is
+    /// the below-exact-tier resolution of the range start.
+    /// </summary>
+    /// <param name="subject">The requesting subject.</param>
+    /// <param name="operation">The requested operation.</param>
+    /// <param name="rangeStart">The inclusive range start, or <c>null</c> for the start of the keyspace.</param>
+    /// <param name="rangeEnd">The exclusive range end, or <c>null</c> for the end of the keyspace.</param>
+    /// <param name="userRuleBeatsGroupRule">The user-over-group tie-break toggle.</param>
+    /// <param name="match">The shared match (possibly unmatched) when the range is uniform.</param>
+    /// <returns><c>true</c> when every key in a non-empty range resolves to <paramref name="match"/>.</returns>
+    public bool TryResolveUniformRange(
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        string? rangeStart,
+        string? rangeEnd,
+        bool userRuleBeatsGroupRule,
+        out PolicyMatch match)
+    {
+        match = default;
+        var start = rangeStart ?? string.Empty;
+        if (rangeEnd is not null && string.CompareOrdinal(start, rangeEnd) >= 0)
+        {
+            // An empty range is left to the per-key filter path unchanged.
+            return false;
+        }
+
+        // An exact-key rule inside the range that applies to this subject and
+        // operation decides that one key differently.
+        for (var i = FirstAtOrAbove(_exactKeys, start); i < _exactKeys.Length && IsBelowEnd(_exactKeys[i], rangeEnd); i++)
+        {
+            if (Applies(_exact[_exactKeys[i]], subject, operation, userRuleBeatsGroupRule))
+            {
+                return false;
+            }
+        }
+
+        // A stored prefix sorting strictly above the start but inside the range
+        // governs the keys that extend it, and not the range start.
+        var below = LargestPrefixAtOrBelow(start);
+        for (var i = below + 1; i < _prefixes.Length && IsBelowEnd(_prefixes[i], rangeEnd); i++)
+        {
+            if (Applies(_prefixRules[i], subject, operation, userRuleBeatsGroupRule))
+            {
+                return false;
+            }
+        }
+
+        // A stored prefix at or below the start governs the range only if it is a
+        // prefix of the start (otherwise every key extending it sorts below the
+        // start), and then it must govern the whole range, not just its head.
+        for (var i = below; i >= 0; i--)
+        {
+            var prefix = _prefixes[i];
+            if (start.StartsWith(prefix, StringComparison.Ordinal)
+                && !RangeEndWithinPrefix(rangeEnd, prefix)
+                && Applies(_prefixRules[i], subject, operation, userRuleBeatsGroupRule))
+            {
+                return false;
+            }
+        }
+
+        match = ResolveBelowExactTier(subject, operation, start, userRuleBeatsGroupRule);
+        return true;
+    }
+
+    private static bool Applies(
+        CompiledRule[] rules,
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        bool userRuleBeatsGroupRule) =>
+        TryBestInBucket(rules, subject, operation, userRuleBeatsGroupRule, out _);
+
+    private static bool IsBelowEnd(string value, string? rangeEnd) =>
+        rangeEnd is null || string.CompareOrdinal(value, rangeEnd) < 0;
+
+    /// <summary>
+    /// <c>true</c> when every key below <paramref name="rangeEnd"/> that is at or
+    /// above <paramref name="prefix"/> starts with it: the exclusive end is at or
+    /// below <see cref="LatticeKeyRange.PrefixUpperBound(string)"/> of the prefix.
+    /// Compares against that bound without materializing it.
+    /// </summary>
+    private static bool RangeEndWithinPrefix(string? rangeEnd, string prefix)
+    {
+        var last = prefix.Length - 1;
+        while (last >= 0 && prefix[last] == char.MaxValue)
+        {
+            last--;
+        }
+
+        if (last < 0)
+        {
+            // No finite upper bound: every key at or above the prefix extends it.
+            return true;
+        }
+
+        if (rangeEnd is null)
+        {
+            return false;
+        }
+
+        // The bound is prefix[0..last) followed by prefix[last] + 1.
+        for (var j = 0; j < last; j++)
+        {
+            if (j >= rangeEnd.Length)
+            {
+                return true;
+            }
+
+            if (rangeEnd[j] != prefix[j])
+            {
+                return rangeEnd[j] < prefix[j];
+            }
+        }
+
+        if (last >= rangeEnd.Length)
+        {
+            return true;
+        }
+
+        var boundUnit = (char)(prefix[last] + 1);
+        if (rangeEnd[last] != boundUnit)
+        {
+            return rangeEnd[last] < boundUnit;
+        }
+
+        return rangeEnd.Length == last + 1;
+    }
+
+    /// <summary>
+    /// Returns the index of the first element of the ordinal-sorted
+    /// <paramref name="sorted"/> that is at or above <paramref name="value"/>, or
+    /// its length when none is.
+    /// </summary>
+    private static int FirstAtOrAbove(string[] sorted, string value)
+    {
+        var lo = 0;
+        var hi = sorted.Length;
+        while (lo < hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            if (string.CompareOrdinal(sorted[mid], value) < 0)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+
+        return lo;
     }
 
     /// <summary>
@@ -365,7 +534,19 @@ internal sealed class CompiledTree
         }
 
         var treeRules = treeBuilder is null ? Array.Empty<CompiledRule>() : treeBuilder.ToArray();
-        return new CompiledTree(exact, prefixes, prefixRules, treeRules);
+        string[] exactKeys;
+        if (exactBuilder is null)
+        {
+            exactKeys = Array.Empty<string>();
+        }
+        else
+        {
+            exactKeys = new string[exactBuilder.Count];
+            exactBuilder.Keys.CopyTo(exactKeys, 0);
+            Array.Sort(exactKeys, StringComparer.Ordinal);
+        }
+
+        return new CompiledTree(exact, exactKeys, prefixes, prefixRules, treeRules);
     }
 
     private static void Append(Dictionary<string, CompiledRule[]> builder, string key, CompiledRule rule)

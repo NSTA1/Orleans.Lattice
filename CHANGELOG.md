@@ -84,6 +84,16 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Delete, recover and purge reach every shard.** A tree re-pinned to fewer shards while empty, and an aliased tree split after its alias was set, no longer leave shards readable after delete or in storage after purge. ([#4234](https://github.com/NSTA1/Orleans.Lattice/issues/4234)) (`Orleans.Lattice`)
+
+- **Core - Resize and restore revert no longer recreate a missing tree.** A resize swap or undo, or a restore revert, against a tree whose registry row is gone now fails as not found instead of writing back a row with no sizing. ([#4270](https://github.com/NSTA1/Orleans.Lattice/issues/4270)) (`Orleans.Lattice`)
+
+- **Admin - Aliasing a tree onto a resharded tree keeps its keys readable.** Setting an alias now gives the tree the target's shard map, as a restore cutover does. Before, the tree kept its own map, so most of the target's keys read as absent. ([#4263](https://github.com/NSTA1/Orleans.Lattice/issues/4263)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+
+- **Core - A split or fold in flight across an alias cutover no longer misroutes keys.** One overtaken by a resize, restore or schema cutover is abandoned instead of applying its slot change to the new copy's map, where the moved keys would read as absent. ([#4264](https://github.com/NSTA1/Orleans.Lattice/issues/4264)) (`Orleans.Lattice`)
+
+- **Core - A purge whose registry removal failed now finishes.** The removal is retried by the purge's keepalive or the next purge call, so the id no longer reads as a live tree that kept the purged tree's settings. ([#4265](https://github.com/NSTA1/Orleans.Lattice/issues/4265)) (`Orleans.Lattice`)
+
 - **Explorer - An app's installer is told when they will hold no role in it.** Binding roles, the install's confirmation, Your apps and the app's page say whether you are in each bound group, and offer to join it or re-bind instead of a missing Open. ([#4150](https://github.com/NSTA1/Orleans.Lattice/issues/4150)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Core - Key history shows each write once.** Copies made by resize, reshard and replication no longer repeat a revision, and the Explorer says "Set - value not kept". ([#4149](https://github.com/NSTA1/Orleans.Lattice/issues/4149)) (`Orleans.Lattice.Explorer`)
@@ -166,6 +176,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Observability - Series-ceiling saturation was silent.** The repository-context metrics collector reported drops as a level with no onset, so no historical absence could be trusted. Each ceiling now logs one `MetricsCeilingReached` warning the moment it first refuses a series. ([#2519](https://github.com/NSTA1/Orleans.Lattice/issues/2519)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **Observability - WAL GC trees blocked before classification were invisible.** `floor_holder_admission` and `never_checkpointed_pin_offset` are now zero-primed for every evaluated tree, and an `unreached` arm counts passes blocked before classification. ([#4227](https://github.com/NSTA1/Orleans.Lattice/issues/4227)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
 - **Indexing - Gitignore escapes matched a literal backslash.** A `\` escape in a `.gitignore` pattern was read as a backslash, so `\#*\#` and `.\#*` from GitHub's Emacs template never matched and `\*` or an escaped trailing space misfired. The escaped character is now matched literally. ([#3466](https://github.com/NSTA1/Orleans.Lattice/issues/3466)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Indexing - Saturation and degradation signals.** The ingestor inferred WAL saturation from three consecutive failures and misread a Throttled tree as Saturated; it now defers only when the saturation signal reports Saturated. The hydration-drift `index_degraded` outcome now logs at Warning. ([#2683](https://github.com/NSTA1/Orleans.Lattice/issues/2683), [#2688](https://github.com/NSTA1/Orleans.Lattice/issues/2688)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -197,7 +209,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Vector - A header declaring more centroid chunks than chunks was believed.** `VectorIndexHeader.Read` and `TryRead` now refuse it as a format no build writes, so a durable index whose manifest carries one rebuilds instead of waiting on centroid chunks that cannot exist. ([#4223](https://github.com/NSTA1/Orleans.Lattice/issues/4223)) (`Orleans.Lattice.Vector`)
 - **Explorer - History bound with no earliest revision.** A trimmed history with no earliest retained revision no longer reads "available from -."; it says older revisions were trimmed, and a range deletion with no end key is described in words. ([#4178](https://github.com/NSTA1/Orleans.Lattice/issues/4178)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Core - Splits, folds and reshards stop when their tree is purged.** A saga in flight when its tree is purged now abandons itself on its next failed step instead of retrying forever; a soft-deleted tree's saga still retries. ([#4271](https://github.com/NSTA1/Orleans.Lattice/issues/4271)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
 ### Security
+
+- **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
 
 - **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 

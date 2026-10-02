@@ -126,16 +126,22 @@ public partial class TreeShardConsolidationGrainTests
         // applied to the live map inside the call, so a coordinator carrying a
         // stale fallback view cannot erase another coordinator's reassignment.
         registry.ReassignSlotsAsync(TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>())
-            .Returns(ci =>
-            {
-                var basis = persistedMap ?? (ShardMap)ci[3];
-                var newSlots = (int[])basis.Slots.Clone();
-                foreach (var slot in (int[])ci[1])
-                    newSlots[slot] = (int)ci[2];
-                persistedMap = new ShardMap { Slots = newSlots, Version = basis.Version + 1 };
-                log.Record("registry.ReassignSlots");
-                return Task.FromResult(persistedMap);
-            });
+            .Returns(ci => Task.FromResult(Reassign(ci)));
+        // The fenced overload the swap commits through: admitted here, so it
+        // applies the diff exactly as above. Refusal is arranged per test.
+        registry.ReassignSlotsAsync(TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>())
+            .Returns(ci => Task.FromResult<ShardMap?>(Reassign(ci)));
+
+        ShardMap Reassign(NSubstitute.Core.CallInfo ci)
+        {
+            var basis = persistedMap ?? (ShardMap)ci[3];
+            var newSlots = (int[])basis.Slots.Clone();
+            foreach (var slot in (int[])ci[1])
+                newSlots[slot] = (int)ci[2];
+            persistedMap = new ShardMap { Slots = newSlots, Version = basis.Version + 1 };
+            log.Record("registry.ReassignSlots");
+            return persistedMap;
+        }
 
         var donor = Substitute.For<IShardRootGrain>();
         var survivor = Substitute.For<IShardRootGrain>();
@@ -421,6 +427,8 @@ public partial class TreeShardConsolidationGrainTests
         await h.Registry.DidNotReceive().SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
         await h.Registry.DidNotReceive()
             .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+        await h.Registry.DidNotReceive()
+            .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>());
     }
 
     [Test]
@@ -676,7 +684,7 @@ public partial class TreeShardConsolidationGrainTests
         await h.Grain.SwapAsync();
 
         await h.Registry.Received(1).ReassignSlotsAsync(
-            TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+            TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), TreeId);
         await h.Registry.DidNotReceive().GetShardMapAsync(TreeId);
         await h.Registry.DidNotReceive().SetShardMapAsync(TreeId, Arg.Any<ShardMap>());
     }
@@ -911,6 +919,8 @@ public partial class TreeShardConsolidationGrainTests
         await h.Registry.DidNotReceive().SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
         await h.Registry.DidNotReceive()
             .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+        await h.Registry.DidNotReceive()
+            .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>());
     }
 
     [Test]
