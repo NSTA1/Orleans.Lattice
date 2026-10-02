@@ -1,7 +1,9 @@
 using Bunit;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Areas.Backups;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
@@ -87,24 +89,84 @@ public sealed class BackupHealthPageTests : BackupsTestContext
     }
 
     [Test]
-    public void Check_now_runs_a_fresh_verification()
+    public void Check_now_starts_a_cluster_check_followed_with_real_progress_until_the_fresh_report_shows()
     {
         Backups.HealthAvailable = () => Task.FromResult(true);
         Seed(FakeBackupControl.Manifest("b1", "nightly"));
-        var check = new TaskCompletionSource<BackupHealthReport>();
-        Backups.Check = _ => check.Task;
         var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("has not been checked yet")));
 
         cut.FindAll("button").Single(button => button.TextContent == "Check now").Click();
-        Assert.That(cut.FindAll("button").Single(button => button.TextContent == "Checking").HasAttribute("disabled"), Is.True);
 
-        check.SetResult(new BackupHealthReport("b1", BackupHealthStatus.Healthy, true, [], [], DateTimeOffset.UnixEpoch, "All present.", BackupSinkSharingStatus.Shared));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Backups.LastOf<string>(nameof(ILatticeBackupOperations.StartBackupHealthCheckAsync)), Is.EqualTo("b1"));
+            Assert.That(cut.FindAll("button").Single(button => button.TextContent == "Checking").HasAttribute("disabled"), Is.True);
+            Assert.That(cut.Find(".lt-operation-progress .lt-pill").TextContent.Trim(), Is.EqualTo("Queued"));
+        });
+        Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CheckBackupHealthAsync)), Is.Zero, "the blocking verb is not called");
+        var id = Backups.Statuses.Keys.Single();
+        Assert.That(id, Does.StartWith("health.b1."));
+
+        Backups.Move(id, status => status with
+        {
+            State = LatticeOperationState.Running,
+            Phase = BackupOperationPhases.Verifying,
+            PhaseIndex = 0,
+            PhaseCount = 1,
+            CompletedUnits = 1,
+            TotalUnits = 4,
+            UnitName = BackupOperationUnits.Artifacts,
+        });
+        Tick();
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-progress__phase").TextContent, Is.EqualTo("Verifying artifacts"));
+            Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("1 of 4 artifacts"));
+            Assert.That(cut.FindAll("a").Single(a => a.TextContent == "Open the check's page").GetAttribute("href"), Is.EqualTo("backups/operations/" + id));
+        });
+
+        Backups.HealthReports["b1"] = new BackupHealthReport("b1", BackupHealthStatus.Healthy, true, [], [], DateTimeOffset.UnixEpoch, "All present.", BackupSinkSharingStatus.Shared);
+        Backups.Succeed(id, "b1", FakeBackupControl.HealthResult("b1", BackupHealthStatus.Healthy));
+        Tick();
+
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Find(".lt-dl .lt-pill").TextContent.Trim(), Is.EqualTo("Healthy"));
             Assert.That(cut.Markup, Does.Contain("Yes, every peer cluster can read it"));
+            Assert.That(cut.FindAll("button").Single(button => button.TextContent == "Check now").HasAttribute("disabled"), Is.False);
         });
+    }
+
+    [Test]
+    public void A_check_still_running_from_an_earlier_page_is_picked_up()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        var id = BackupClusterOperation.HealthCheckId("b1", DateTimeOffset.UnixEpoch)!;
+        Backups.Statuses[id] = FakeBackupControl.Running(id, BackupOperationKinds.HealthCheck, "orders") with
+        {
+            State = LatticeOperationState.Running,
+            Phase = BackupOperationPhases.Verifying,
+            CompletedUnits = 2,
+            TotalUnits = 3,
+            UnitName = BackupOperationUnits.Artifacts,
+        };
+
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("2 of 3 artifacts"));
+            Assert.That(cut.FindAll("button").Single(button => button.TextContent == "Checking").HasAttribute("disabled"), Is.True);
+        });
+        Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartBackupHealthCheckAsync)), Is.Zero);
+
+        Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers >= 1, TimeSpan.FromSeconds(10)), Is.True);
+        cut.Instance.Dispose();
+        var reads = Backups.StatusReads;
+        Time.Advance(ClusterStatusPoller.Interval * 3);
+        Assert.That(Backups.StatusReads, Is.EqualTo(reads), "leaving the page stops following the check");
     }
 
     [Test]
@@ -112,13 +174,35 @@ public sealed class BackupHealthPageTests : BackupsTestContext
     {
         Backups.HealthAvailable = () => Task.FromResult(true);
         Seed(FakeBackupControl.Manifest("b1", "nightly"));
-        Backups.Check = _ => Task.FromException<BackupHealthReport>(new KeyNotFoundException());
+        Backups.StartFault = new KeyNotFoundException();
         var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
         cut.WaitUntil(() => Assert.That(cut.FindAll("button").Where(button => button.TextContent == "Check now"), Has.Exactly(1).Items));
 
         cut.FindAll("button").Single(button => button.TextContent == "Check now").Click();
 
         cut.WaitUntil(() => Assert.That(cut.Find("[role=alert]").TextContent, Is.EqualTo(BackupsFaults.NotFound)));
+    }
+
+    [Test]
+    public void A_check_that_fails_on_the_cluster_says_where_it_stopped()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("button").Where(button => button.TextContent == "Check now"), Has.Exactly(1).Items));
+        cut.FindAll("button").Single(button => button.TextContent == "Check now").Click();
+        cut.WaitUntil(() => Assert.That(Backups.Statuses, Has.Count.EqualTo(1)));
+        var id = Backups.Statuses.Keys.Single();
+
+        Backups.Move(id, status => status with { State = LatticeOperationState.Failed, FailureReason = "IOException: the store went away", FinishedAtUtc = status.StartedAtUtc });
+        Tick();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-operation-progress .lt-pill").TextContent.Trim(), Is.EqualTo("Failed"));
+            Assert.That(cut.Find(".lt-operation-progress").TextContent, Does.Contain("the store went away"));
+            Assert.That(cut.FindAll("button").Single(button => button.TextContent == "Check now").HasAttribute("disabled"), Is.False);
+        });
     }
 
     [Test]
@@ -209,5 +293,12 @@ public sealed class BackupHealthPageTests : BackupsTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-table-list__row"), Has.Count.EqualTo(1)));
         cut.Find(".lt-table-list__row button").Click();
         cut.WaitUntil(() => Assert.That(cut.Find("[role=dialog] a").GetAttribute("href"), Is.EqualTo("backups/health?backup=b1")));
+    }
+
+    /// <summary>Moves the circuit's clock one polling interval, once the follower has armed its wait.</summary>
+    private void Tick()
+    {
+        Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers >= 1, TimeSpan.FromSeconds(10)), Is.True, "the follower re-arms");
+        Time.Advance(ClusterStatusPoller.Interval);
     }
 }

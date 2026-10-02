@@ -67,6 +67,10 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.TypeOf<GrpcLatticeReplicationControl>());
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.TypeOf<GrpcLatticeTreeAdmin>());
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.TypeOf<GrpcLatticeSchemaControl>());
+            Assert.That(
+                provider.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaOperations>(),
+                Is.SameAs(provider.GetService<ILatticeSchemaControl>()),
+                "The schema operation tools must be served by the same GrpcLatticeSchemaControl as the schema tools.");
             Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.TypeOf<GrpcLatticeTenantSelfService>());
             Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.TypeOf<GrpcLatticeTenantAdmin>());
             Assert.That(provider.GetService<ILatticeTenantRegionAdmin>(), Is.TypeOf<GrpcLatticeTenantRegionAdmin>());
@@ -106,6 +110,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.Null);
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.Null);
+            Assert.That(provider.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaOperations>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTenantRegionAdmin>(), Is.Null);
