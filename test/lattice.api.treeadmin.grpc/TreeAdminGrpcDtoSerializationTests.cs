@@ -1071,6 +1071,12 @@ public sealed class TreeAdminGrpcDtoSerializationTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(
+                aliases,
+                Is.Not.Empty,
+                "The registry scan found no alias constants. Is.Unique and Is.All both pass on an "
+                + "empty population, so without this the wire-format guard would silently stop "
+                + "guarding the moment the constants were renamed or stopped being const strings.");
             Assert.That(GrpcTreeAdminTypeAliases.AliasPrefix, Is.EqualTo("oitg."));
             Assert.That(aliases, Is.Unique);
             Assert.That(aliases, Is.All.StartsWith(GrpcTreeAdminTypeAliases.AliasPrefix));

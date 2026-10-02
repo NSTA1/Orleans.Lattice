@@ -17,7 +17,7 @@ public sealed partial class LatticeTreeAdminOperationsTests
     private ILattice WireTree(int shards, params OrphanedLeafRepairReport[] batches)
     {
         var tree = Substitute.For<ILattice>();
-        tree.GetRoutingAsync(Arg.Any<CancellationToken>())
+        tree.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo(SourceTree, ShardMap.CreateDefault(shards * 16, shards))));
         tree.RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(batches[0], batches[1..]);
         tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(batches[0], batches[1..]);
