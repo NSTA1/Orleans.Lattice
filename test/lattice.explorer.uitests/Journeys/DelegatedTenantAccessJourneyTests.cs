@@ -118,10 +118,12 @@ public sealed class DelegatedTenantAccessJourneyTests : UiTestBase
         // Acme's addresses, followed directly, show none of acme's access.
         foreach (var path in new[] { "groups", "members", "rules", "explain" })
         {
+            // A tenant administrator is not a platform operator, so another tenant's
+            // address is never honoured: it lands on globex's own page.
             await Shell.GotoAsync(page, world.Head, $"/t/{ExplorerWorld.Acme}/access/{path}");
             await Expect(Shell.Heading(page)).ToBeVisibleAsync();
-            await Expect(content.Locator("[data-lt-tenant-view]")).ToHaveCountAsync(0);
-            await Expect(content.Locator("table")).ToHaveCountAsync(0);
+            await Expect(page).Not.ToHaveURLAsync(new Regex($"/t/{ExplorerWorld.Acme}/"));
+            await Expect(content.Locator($"[data-lt-tenant-view][aria-label$=\"tenant {ExplorerWorld.Acme}\"]")).ToHaveCountAsync(0);
             await Expect(content).Not.ToContainTextAsync(ExplorerWorld.AcmeGroup);
         }
 
