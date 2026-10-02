@@ -30,6 +30,7 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     private readonly ILatticeAuthorizationPolicyStore _store;
     private readonly ILogger<CompiledPolicySnapshotMaintainer> _logger;
     private readonly TimeProvider _time;
+    private readonly ITenantRuleLayer? _tenantLayer;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
 
     private CompiledPolicy _current = CompiledPolicy.Empty;
@@ -60,16 +61,23 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     /// The clock used to stamp the last-rebuild time that backs the snapshot-age
     /// observable gauge; defaults to <see cref="TimeProvider.System"/>.
     /// </param>
+    /// <param name="tenantLayer">
+    /// The tenant-layer switch, read at the start of each rebuild to decide whether
+    /// the snapshot carries a tenant partition. <c>null</c> (a host-built maintainer)
+    /// means the layer is inactive.
+    /// </param>
     public CompiledPolicySnapshotMaintainer(
         ILatticeAuthorizationPolicyStore store,
         ILogger<CompiledPolicySnapshotMaintainer> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ITenantRuleLayer? tenantLayer = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(logger);
         _store = store;
         _logger = logger;
         _time = timeProvider ?? TimeProvider.System;
+        _tenantLayer = tenantLayer;
 
         // Publish this maintainer as a source for the compiled-snapshot epoch and
         // age observable gauges. Registration is idempotent and holds only a weak
@@ -169,6 +177,14 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
         return CurrentEpoch;
     }
 
+    /// <summary>
+    /// Requests a coalesced background rebuild without a policy mutation. Called by
+    /// the decision engine when the tenant layer is active over a snapshot compiled
+    /// without its tenant partition (the layer was switched on). Cheap and
+    /// idempotent: while a rebuild is already queued it returns after one read.
+    /// </summary>
+    internal void RequestRebuild() => ScheduleRebuild();
+
     private void ScheduleRebuild()
     {
         while (true)
@@ -238,6 +254,11 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
                 mutationsAtStart = _policyMutations;
             }
 
+            // Read the tenant-layer switch before the scan: a flip during the scan is
+            // caught by the engine, which requests another rebuild when it finds the
+            // layer active over a snapshot built without the tenant partition.
+            var includeTenantLayer = _tenantLayer?.IsActive == true;
+
             // The store's scan is resilient to a transient enumeration abort
             // caused by a concurrent scan over the policy tree, so a plain
             // buffering scan here is sufficient.
@@ -247,7 +268,7 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
                 rules.Add(rule);
             }
 
-            var compiled = CompiledPolicy.Compile(rules);
+            var compiled = CompiledPolicy.Compile(rules, includeTenantLayer);
             lock (_warmGate)
             {
                 Volatile.Write(ref _current, compiled);

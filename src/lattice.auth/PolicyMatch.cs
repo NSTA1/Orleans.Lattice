@@ -21,7 +21,24 @@ internal readonly record struct PolicyMatch
     /// decision reason can truthfully render its scope as "all trees" instead of
     /// "tree". See <see cref="LatticeScope.ClusterWideTreeId"/>.
     /// </param>
-    public PolicyMatch(LatticeEffect effect, string ruleId, LatticeScopeKind scopeKind, string? scopeValue, bool allTrees = false)
+    /// <param name="layer">
+    /// The layer the winning rule belongs to. Defaults to
+    /// <see cref="PolicyDecisionLayer.Operator"/>; the tenant layer passes
+    /// <see cref="PolicyDecisionLayer.Tenant"/>.
+    /// </param>
+    /// <param name="tenantWide">
+    /// <c>true</c> when the winning rule is a tenant-wide rule
+    /// (<see cref="LatticeScope.TenantWide(TenantId)"/>) rather than one scoped to the
+    /// requested tree. Meaningful only for the tenant layer.
+    /// </param>
+    public PolicyMatch(
+        LatticeEffect effect,
+        string ruleId,
+        LatticeScopeKind scopeKind,
+        string? scopeValue,
+        bool allTrees = false,
+        PolicyDecisionLayer layer = PolicyDecisionLayer.Operator,
+        bool tenantWide = false)
     {
         Matched = true;
         Effect = effect;
@@ -29,6 +46,8 @@ internal readonly record struct PolicyMatch
         ScopeKind = scopeKind;
         ScopeValue = scopeValue;
         AllTrees = allTrees;
+        Layer = layer;
+        TenantWide = tenantWide;
     }
 
     /// <summary><c>true</c> when a rule matched the request.</summary>
@@ -54,4 +73,32 @@ internal readonly record struct PolicyMatch
     /// <see cref="Matched"/> is <c>true</c>.
     /// </summary>
     public bool AllTrees { get; }
+
+    /// <summary>
+    /// The layer that decided: <see cref="PolicyDecisionLayer.Operator"/> or
+    /// <see cref="PolicyDecisionLayer.Tenant"/> for a matched rule, and
+    /// <see cref="PolicyDecisionLayer.None"/> for the default (unmatched) value.
+    /// Together with <see cref="RuleId"/> this is the internal explain trace the
+    /// tenant and cluster policy facades surface.
+    /// </summary>
+    public PolicyDecisionLayer Layer { get; }
+
+    /// <summary>
+    /// <c>true</c> when the winning rule is a tenant-wide rule
+    /// (<see cref="LatticeScope.TenantWide(TenantId)"/>), so a decision reason can
+    /// render "tenant-wide" instead of "tree". Meaningful only when
+    /// <see cref="Layer"/> is <see cref="PolicyDecisionLayer.Tenant"/>.
+    /// </summary>
+    public bool TenantWide { get; }
+
+    /// <summary>
+    /// Returns this match re-labelled as a tenant-layer match. A default
+    /// (unmatched) value is returned unchanged.
+    /// </summary>
+    /// <param name="tenantWide">Whether the match came from the tenant-wide bucket.</param>
+    /// <returns>The tenant-layer match.</returns>
+    internal PolicyMatch AsTenantLayer(bool tenantWide) =>
+        Matched
+            ? new PolicyMatch(Effect, RuleId!, ScopeKind, ScopeValue, allTrees: false, PolicyDecisionLayer.Tenant, tenantWide)
+            : default;
 }

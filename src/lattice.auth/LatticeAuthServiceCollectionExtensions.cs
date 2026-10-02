@@ -147,6 +147,17 @@ public static class LatticeAuthServiceCollectionExtensions
         // exactly as before; the tenancy add-on Replaces it.
         builder.Services.TryAddSingleton<ITenantRuleLayer, NullTenantRuleLayer>();
 
+        // The internal tenant-tier maintenance surface of the policy store, resolved
+        // by the tenancy add-on's tenant deletion pipeline to purge a deleted
+        // tenant's tenant-tier rules. Routed at the registered store, which must be
+        // the shipped implementation; a host that replaced the store fails loudly
+        // here rather than silently skipping the purge.
+        builder.Services.TryAddSingleton<ITenantPolicyRuleStore>(
+            sp => sp.GetRequiredService<ILatticeAuthorizationPolicyStore>() as ITenantPolicyRuleStore
+                ?? throw new InvalidOperationException(
+                    $"The registered {nameof(ILatticeAuthorizationPolicyStore)} does not support tenant-tier rule "
+                    + "maintenance; tenant deletion cannot purge tenant-tier rules."));
+
         // Enforcement wiring: replace the core default NullLatticeAccessGate
         // (registered by AddLattice via TryAddSingleton) with PolicyAccessGate,
         // so this add-on becomes the enforcement control point. Replace (not
