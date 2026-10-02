@@ -34,7 +34,7 @@ capabilities:
         hazard: "A stale router could read the pre-split value after new routers route to the target shard."
         source: "docs/lattice/shard-splitting.md"
     concurrency_rules:
-      - statement: "MaxConcurrentAutoSplits caps concurrent splits per tree."
+      - statement: "MaxConcurrentAutoSplits caps autonomic split admission per tree by counting shard migrations in flight on that tree, including adaptive split sources and consolidation fold donors."
         source: "docs/lattice/shard-splitting.md"
       - statement: "MaxClusterConcurrentAutoSplits, when set, adds a cluster-wide gate that can only reduce split admission."
         source: "docs/lattice/shard-splitting.md"
@@ -110,6 +110,8 @@ capabilities:
       - app-owned-tree
     guarantees:
       - statement: "Each bridge call validates the target, resolves the caller, applies rate limiting, and then authorizes the enabled install revision."
+        source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
+      - statement: "A bridge request over its rate-limit partition is refused as Unavailable before install-plan authorization or data access."
         source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
       - statement: "A bridge operation must be covered by both the consented bridge grants and the installed manifest's requested bridge grants."
         source: "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
@@ -509,6 +511,8 @@ capabilities:
         source: "docs/lattice.scaling/README.md"
       - statement: "The storage axis reports whether retained WAL bytes of trees declaring WalMaxRetainedBytes reached the configured fraction of those ceilings, the aggregate retained bytes, and an optional WAL rebalance recommendation."
         source: "docs/lattice.scaling/README.md"
+      - statement: "A positive storage advisory budget floors the retained-byte threshold at one byte."
+        source: "src/lattice.scaling/StoragePressureCollector.cs#StoragePressureCollector"
       - statement: "The signal can be exposed through HTTP and an ASP.NET Core health check."
         source: "docs/lattice.scaling/README.md"
       - statement: "The reference autoscaler drives the silo from a KEDA Prometheus scale rule over the silo scale-value series."
@@ -752,6 +756,10 @@ capabilities:
         source: "docs/lattice/state-primitives.md"
       - statement: "G-Counter and PN-Counter merge by per-replica maxima; a G-Counter value is the sum of the maxima and a PN-Counter value subtracts the decrement maxima from the increment maxima."
         source: "docs/crdt/readme.md"
+      - statement: "Every CRDT accessor TTL-taking write overload, GSetAccessor.AddAsync included, throws ArgumentOutOfRangeException for a ttl less than or equal to zero before applying its delta."
+        source: "src/lattice/BPlusTree/GSetAccessor.cs#GSetAccessor.AddAsync"
+      - statement: "Rga.InsertAfter mints a Lamport counter one greater than the highest counter observed for any replica."
+        source: "src/lattice/Primitives/Rga.cs#Rga.InsertAfter"
     non_guarantees:
       - statement: "Plain SetAsync is last-writer-wins and can silently discard a concurrent write."
         source: "docs/crdt/readme.md"
@@ -777,6 +785,8 @@ capabilities:
     concurrency_rules:
       - statement: "Each independent writer should use a stable distinct replica id."
         source: "docs/crdt/readme.md"
+      - statement: "EnableManyAsync and StageEnableManyAsync reject empty replica ids before minting OR-Flag deltas."
+        source: "src/lattice/BPlusTree/CrdtLatticeExtensions.cs#CrdtLatticeExtensions.EnableManyAsync"
       - statement: "Duplicate CRDT deliveries are harmless because merge is idempotent."
         source: "docs/crdt/readme.md"
       - statement: "OR-Set removes only tombstone observed dots, so a concurrent add survives."
@@ -813,6 +823,8 @@ capabilities:
       - statement: "Push, ExchangeContentManifest and GetPeerHighWaterMark refuse with PermissionDenied when the transport-stamped origin is missing or differs from the body-declared OriginClusterId."
         source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
       - statement: "With BindCredentialToOriginCluster at its default true, a peer credential must equal the outbound secret configured for the stamped origin before receiver-side origin checks run."
+        source: "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs#LatticeReplicationSecurityOptions.BindCredentialToOriginCluster"
+      - statement: "During single-secret rotation with origin binding enabled, peers that resolve different outbound secret values are refused until both sides resolve the same value again."
         source: "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs#LatticeReplicationSecurityOptions.BindCredentialToOriginCluster"
     non_guarantees:
       - statement: "A host without the replication package runs the core library alone."
@@ -876,6 +888,8 @@ capabilities:
       - statement: "Both shallow and deep diagnostics walk every shard's whole leaf chain."
         source: "docs/lattice/diagnostics.md"
       - statement: "RecentSplits is in-memory, best-effort, and not persisted."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "RecentSplits records adaptive split commits and growing-reshard split commits, but it does not record folds from shrinking reshard or shard healing."
         source: "docs/lattice/diagnostics.md"
       - statement: "A shallow report always reports zero tombstones."
         source: "docs/lattice/troubleshooting.md"
@@ -1796,7 +1810,7 @@ capabilities:
     non_guarantees:
       - statement: "The telemetry tool group exposes no write, delete, or control verbs."
         source: "docs/lattice.api.mcp.telemetry/README.md"
-      - statement: "The telemetry tools appear only when AddTelemetryTools is called and the caller holds a Telemetry grant."
+      - statement: "The telemetry tools appear only when AddTelemetryTools is called, the registered MCP authorizer admits them, and the caller holds a Telemetry grant."
         source: "docs/lattice.api.mcp.telemetry/README.md"
       - statement: "Admin does not confer the Telemetry capability."
         source: "docs/lattice.api.mcp.telemetry/README.md"
@@ -1995,7 +2009,7 @@ capabilities:
       - sequence:
           - "start ReshardAsync on a tree"
           - "start ResizeAsync on the same tree before reshard completes"
-        hazard: "The reshard is refused with InvalidOperationException while resize is in flight."
+        hazard: "The reshard is refused with InvalidOperationException while resize is in flight, for a target that needs a migration; an observably empty tree is re-pinned even while a resize runs."
         source: "docs/lattice/online-reshard.md"
       - sequence:
           - "start ReshardAsync with target A"
@@ -2414,6 +2428,8 @@ capabilities:
         source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus.GetPeerStatusAsync"
       - statement: "When the same link appears on more than one silo, the facade keeps the most recent contact whole."
         source: "docs/lattice.api.replication/README.md"
+      - statement: "A silo that fails to answer a peer-status read fails the whole read rather than producing a partial page."
+        source: "docs/lattice.api.replication/README.md"
     sources:
       - "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
       - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
@@ -2516,7 +2532,7 @@ capabilities:
       - sequence:
           - "start a resize"
           - "start a reshard before the resize completes"
-        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight and ResizeAsync throws while reshard is in flight."
+        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight for a target that needs a migration, and ResizeAsync throws while reshard is in flight."
         source: "docs/lattice/tree-sizing.md"
       - sequence:
           - "call ResizeAsync while a resize is in progress"
@@ -2701,11 +2717,11 @@ capabilities:
       - dead-letter
       - schema-version-policy
     guarantees:
-      - statement: "Schema enforcement validates every write to an opted-in tree against its per-tree policy."
+      - statement: "Schema enforcement validates the values an opted-in tree's checked write operations carry against its per-tree policy."
         source: "docs/lattice.schema/schema-enforcement.md"
       - statement: "A local write of a non-compliant value throws LatticeSchemaViolationException and is never persisted."
         source: "docs/lattice.schema/schema-enforcement.md"
-      - statement: "Strict ingest diverts a non-compliant replicated or restored item to the dead-letter queue instead of applying it."
+      - statement: "Strict ingest diverts a non-compliant replicated typed-CRDT entry or replicated atomic-batch entry that reaches the write interceptor to the dead-letter queue instead of applying it; backup restore, tree merge, and plain last-writer-wins replication apply outside atomic batch are stored unchecked."
         source: "docs/lattice.schema/schema-enforcement.md"
       - statement: "Schema versioning prepends a self-describing schema id and version envelope for opted-in trees."
         source: "docs/lattice.schema/schema-versioning.md"
@@ -2752,7 +2768,7 @@ capabilities:
         source: "docs/lattice.schema/schema-enforcement.md"
       - statement: "Version migrations reuse the same crash-safe shadow-build-and-cutover mechanism as enforcement remediation."
         source: "docs/lattice.schema/schema-versioning.md"
-      - statement: "Strict-ingest dead-lettering keeps replication or restore ingest from blocking on a schema violation."
+      - statement: "Strict-ingest dead-lettering keeps intercepted replicated typed-CRDT and replicated atomic-batch ingest from blocking on a schema violation."
         source: "docs/lattice.schema/dead-letter-queue.md"
       - statement: "A remediation pass holds the tree's alias reservation, so a delete of the tree is refused while it runs and a remediation of a deleted tree is refused."
         source: "docs/lattice.schema/schema-enforcement.md"
@@ -2959,6 +2975,12 @@ capabilities:
       - statement: "PurgeTreeAsync throws when the tree is not deleted; a call while a purge runs or after it completed returns without error."
         source: "docs/lattice/tree-deletion.md"
       - statement: "A provider may keep freed storage space until its own compaction runs even after grain records are deleted."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "A completed logical purge does not trim that tree's write-ahead log after its registry entry is removed, so WAL bytes not already trimmed remain in the WAL storage provider."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "After an online reshard re-pins an observably empty tree to a smaller count without raising the split-allocation high-water mark, the shards above the new count are outside every later delete, recover and purge walk, with whatever their leaves still hold."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "On an aliased tree, a shard that a split adds to the live copy after the alias is set is not marked deleted, recovered or purged: its keys stay readable and writable after DeleteTreeAsync and its state stays in storage after the purge."
         source: "docs/lattice/tree-deletion.md"
       - statement: "Failed shards during purge are retried once before being skipped, and a skipped shard is not revisited in that purge pass; a shard purge that does not answer within the response timeout is retried without spending that budget."
         source: "docs/lattice/tree-deletion.md"
@@ -3206,7 +3228,7 @@ capabilities:
         source: "docs/lattice.api.telemetry/README.md"
       - statement: "GetCatalogAsync returns an empty catalog for an unconfigured backend or a caller entitled to no query."
         source: "docs/lattice.api.telemetry/README.md"
-      - statement: "A telemetry tree filter matches the logical tree id in the metric tree dimension, so it keeps returning the tree's series after a resize, shadow-cutover restore or schema remediation."
+      - statement: "For most telemetry series, a tree filter matches the logical tree id in the metric tree dimension, so it keeps returning the tree's series after a resize, shadow-cutover restore or schema remediation; storage-usage and admission gauges can also appear under a physical copy id in unfiltered answers."
         source: "docs/lattice.api.telemetry/README.md"
     non_guarantees:
       - statement: "The facade is not a query proxy."
@@ -3244,6 +3266,8 @@ capabilities:
       - statement: "A single TombstoneCompactionGrain per tree owns the reminder and timer that drive passes."
         source: "docs/lattice/tombstone-compaction.md"
       - statement: "Each reaped tombstone or expired live entry is written to the WAL as a maintenance Tombstone mutation before in-memory removal."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "A bounded leaf compaction turn can stop on BackgroundDrainMaxDuration, report outcome partial, leave its compaction watermark unstamped, and be re-nominated by the next pass without losing already reaped entries."
         source: "docs/lattice/tombstone-compaction.md"
       - statement: "Compaction progress is persisted through NextShardIndex, the in-shard cursor, and InProgress."
         source: "docs/lattice/tombstone-compaction.md"
@@ -3421,6 +3445,8 @@ capabilities:
         source: "docs/lattice.vector/architecture.md"
       - statement: "Search reports whether the answer came from the exhaustive or approximate path."
         source: "docs/lattice.vector/api.md"
+      - statement: "VectorIndexHeader.Read throws VectorIndexFormatException for a header that declares more centroid chunks than chunks in total."
+        source: "src/lattice.vector/VectorIndexHeader.cs#VectorIndexHeader.Read"
       - statement: "The package publishes and tests recall floors for clustered and unclustered corpora."
         source: "docs/lattice.vector/recall.md"
       - statement: "Results are ordered by descending score and then ascending key."
@@ -3717,6 +3743,8 @@ capabilities:
         source: "docs/lattice.storage.file/architecture.md"
       - statement: "File WAL rejects a batch whose first offset is at or below the trim watermark, because recovery discards offsets through the watermark."
         source: "src/lattice.storage.file/FileWalShard.cs#FileWalShard.RejectOverlap"
+      - statement: "The built-in WAL providers reject a dense append batch that would run past long.MaxValue rather than wrapping offsets."
+        source: "src/lattice.storage.azuretable/AzureTableWalStorageProvider.cs#AzureTableWalStorageProvider.ThrowIfBatchRunsPastTheLastOffset"
     non_guarantees:
       - statement: "The in-memory WAL provider is process-local and lost on silo restart."
         source: "docs/lattice/wal-storage-providers.md"

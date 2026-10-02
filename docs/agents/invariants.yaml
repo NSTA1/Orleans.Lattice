@@ -1652,7 +1652,7 @@ invariants:
       - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - id: tree-resize-shadow-swap
     name: "Tree resize shadow swap"
-    description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves callers with at most one transparent retry."
+    description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves ordinary reads and writes with at most one transparent retry; bulk loads and appends are not retried across the rejecting window."
     scope:
       packages:
         - "Orleans.Lattice"

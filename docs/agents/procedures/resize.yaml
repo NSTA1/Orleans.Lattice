@@ -43,7 +43,7 @@ steps:
     expects: "Returns resize status after the undo request."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
 postconditions:
-  - check: "The tree keeps serving reads and writes while a shadow tree is built and swapped."
+  - check: "The tree keeps serving ordinary reads and writes while a shadow tree is built and swapped; bulk loads and appends are not retried across the rejecting window."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
   - check: "The logical registry entry keeps the live alias, sizing, configuration overrides, and tombstone compaction schedule after the old physical copy is retired."
     source: "docs/lattice/tree-sizing.md"
