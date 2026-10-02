@@ -155,7 +155,7 @@ app.MapLatticeTreeAdminApiGrpc();
 
 ## Client
 
-`LatticeTreeAdminApiGrpcClient` is created over a caller-supplied `CallInvoker` and an `IServiceProvider` with Orleans serialization registered, via `LatticeTreeAdminApiGrpcClient.Create(callInvoker, serializerProvider)`. The typed client carries no address, TLS, retry, deadline, or credential policy of its own. A call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error; the binding never issues `Unauthenticated`.
+`LatticeTreeAdminApiGrpcClient` is created over a caller-supplied `CallInvoker` and an `IServiceProvider` with Orleans serialization registered, via `LatticeTreeAdminApiGrpcClient.Create(callInvoker, serializerProvider)`. The typed client carries no address, TLS, retry, deadline, or credential policy of its own. A call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error; the binding never issues `Unauthenticated`. The client checks a subset of the facade's argument rules before sending - among them an empty tree id, a bulk-load operation id that is empty or contains `/`, a negative bulk-load chunk index, and a restore operation id that is supplied but empty - and refuses those with the same `ArgumentException` a local caller of the facade sees, without making the call; an argument the server refuses arrives as an `InvalidArgument` `RpcException`.
 
 ## Status mapping
 

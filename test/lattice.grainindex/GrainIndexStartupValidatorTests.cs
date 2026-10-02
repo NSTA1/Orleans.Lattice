@@ -73,6 +73,21 @@ public sealed class GrainIndexStartupValidatorTests
     }
 
     [Test]
+    public void Start_fails_for_an_index_name_containing_a_slash()
+    {
+        using var provider = Provider(static builder => builder
+            .AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("users").Include(x => x.Age))
+            .AddGrainIndex<ITestGuidKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("users/archive").Include(x => x.Country)));
+
+        Assert.That(
+            async () => await ValidatorFrom(provider).StartAsync(CancellationToken.None),
+            Throws.TypeOf<OptionsValidationException>().With.Message.Contains("contains '/'"),
+            "An index named 'users/archive' would share the 'users' registry scan ranges.");
+    }
+
+    [Test]
     public async Task Start_completes_when_no_index_is_declared()
     {
         using var provider = Provider(static _ => { });

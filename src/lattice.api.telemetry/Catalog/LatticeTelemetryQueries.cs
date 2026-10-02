@@ -326,7 +326,10 @@ public static class LatticeTelemetryQueries
             Bounds = LevelBounds,
             Instruments = [Instrument("orleans.lattice.storage.total_bytes", "By", TelemetryMeasurementSemantic.Level)],
         },
-        QueryTemplate = "sum by (tree) (orleans_lattice_storage_total_bytes{$scope$})",
+        // max, not sum: a tree's WAL-only and deep storage-usage aggregators are
+        // placed independently, so more than one silo can export the same tree's
+        // series, and summing them would double-count it.
+        QueryTemplate = "max by (tree) (orleans_lattice_storage_total_bytes{$scope$})",
     };
 
     private static TelemetryQueryDefinition StorageBytesTrend() => new()
@@ -346,7 +349,8 @@ public static class LatticeTelemetryQueries
             Bounds = LevelTrendBounds,
             Instruments = [Instrument("orleans.lattice.storage.total_bytes", "By", TelemetryMeasurementSemantic.Level)],
         },
-        QueryTemplate = "sum by (tree) (orleans_lattice_storage_total_bytes{$scope$})",
+        // max, not sum, for the same reason as 'tree.storage.bytes'.
+        QueryTemplate = "max by (tree) (orleans_lattice_storage_total_bytes{$scope$})",
     };
 
     private static TelemetryQueryDefinition AdmissionUtilization() => new()

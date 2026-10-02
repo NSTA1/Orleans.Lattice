@@ -53,8 +53,9 @@ namespace Orleans.Lattice.GrainIndex.Registry;
 /// scheme, so no key of one kind can ever prefix-match a scan of another. Within
 /// a kind, a range scan for one index runs from
 /// <see cref="SeenPrefix(string)"/> to <see cref="SeenPrefixEnd(string)"/>; that
-/// pairing assumes an index name contains no <c>/</c>, which is also what keeps
-/// an index's backing tree name a single segment under
+/// pairing assumes an index name contains no <c>/</c> - which
+/// <see cref="GrainIndexDeclarationOptionsValidator"/> enforces at startup - and
+/// that is also what keeps an index's backing tree name a single segment under
 /// <see cref="GrainIndexTreeNames.ReservedPrefix"/>.
 /// </para>
 /// </remarks>

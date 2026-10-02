@@ -990,7 +990,7 @@
     {
       "id": 23,
       "title": "Storage footprint by tree",
-      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. The snapshot and leaf-state series additionally report no data until the tree has had a deep storage-usage publish, which only an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call drives - the continuous background poller measures WAL bytes only. So a tree showing a WAL line and no snapshot or leaf-state line has not been measured on those surfaces; consult 'Storage usage measurement depth by tree' before reading their absence as emptiness (issue #2693). Each tree's footprint is published by a single per-tree aggregator on whichever one silo currently hosts it, so this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster - filtering by silo would hide every tree whose aggregator lives elsewhere.",
+      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. The snapshot and leaf-state series additionally report no data until the tree has had a deep storage-usage publish, which only an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call drives - the continuous background poller measures WAL bytes only. So a tree showing a WAL line and no snapshot or leaf-state line has not been measured on those surfaces; consult 'Storage usage measurement depth by tree' before reading their absence as emptiness (issue #2693). Each tree's footprint is published by its storage-usage aggregators on whichever silos currently host them, and a tree's WAL-only and deep aggregators are placed independently, so more than one silo can export the same tree's series. This panel therefore takes max by (tree) across silos rather than summing, which would double-count the tree, and deliberately ignores the $silo selector - filtering by silo would hide every tree whose aggregator lives elsewhere.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1001,17 +1001,17 @@
       "targets": [
         {
           "refId": "WAL",
-          "expr": "sum by (tree) (orleans_lattice_storage_wal_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "expr": "max by (tree) (orleans_lattice_storage_wal_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "{{tree}} wal"
         },
         {
           "refId": "SNAP",
-          "expr": "sum by (tree) (orleans_lattice_storage_snapshot_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "expr": "max by (tree) (orleans_lattice_storage_snapshot_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "{{tree}} snapshot"
         },
         {
           "refId": "LEAF",
-          "expr": "sum by (tree) (orleans_lattice_storage_leaf_state_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "expr": "max by (tree) (orleans_lattice_storage_leaf_state_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "{{tree}} leaf-state"
         }
       ]
@@ -1019,7 +1019,7 @@
     {
       "id": 24,
       "title": "Cluster total stored bytes",
-      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster. A tree contributes nothing here until it has had a deep storage-usage publish, because the total omits two of its three terms otherwise; check 'Storage usage measurement depth by tree' to tell an unmeasured tree from an empty one (issue #2693).",
+      "description": "Single stat totalling orleans_lattice_storage_total_bytes across every tree in the selected cluster: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. More than one silo can export the same tree's storage gauges (a tree's WAL-only and deep aggregators are placed independently), so each tree is first reduced with max by (tree) across silos and only then summed across trees; summing the raw series would double-count a tree. The stat ignores the $silo selector. A tree contributes nothing here until it has had a deep storage-usage publish, because the total omits two of its three terms otherwise; check 'Storage usage measurement depth by tree' to tell an unmeasured tree from an empty one (issue #2693).",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -1030,7 +1030,7 @@
       "targets": [
         {
           "refId": "TOTAL",
-          "expr": "sum(orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "expr": "sum(max by (tree) (orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\"}))",
           "legendFormat": "cluster total"
         }
       ]
@@ -1038,7 +1038,7 @@
     {
       "id": 67,
       "title": "Storage usage measurement depth by tree",
-      "description": "1 when the tree's last storage-usage report came from the deep path that actually measures snapshot and leaf-state bytes, 0 when only the cheap WAL-only background poller has reported (orleans.lattice.storage.usage_deep_published). Read this panel BEFORE reading the snapshot / leaf-state / total series above: those three report no data rather than a synthesised 0 until a deep publish has run, and the deep path runs only on an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call. A tree sitting at 0 here means those panels are 'not measured', not 'measured empty'. Before issue #2693 the poller seeded them to 0 without measuring them, and a reader took that zero as a measurement and concluded no leaf state or snapshots were ever written while 137 MB of snapshot state was on disk (issue #2692). Published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree and this panel ignores the $silo selector.",
+      "description": "1 when the tree's last storage-usage report came from the deep path that actually measures snapshot and leaf-state bytes, 0 when only the cheap WAL-only background poller has reported (orleans.lattice.storage.usage_deep_published). Read this panel BEFORE reading the snapshot / leaf-state / total series above: those three report no data rather than a synthesised 0 until a deep publish has run, and the deep path runs only on an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call. A tree sitting at 0 here means those panels are 'not measured', not 'measured empty'. Before issue #2693 the poller seeded them to 0 without measuring them, and a reader took that zero as a measurement and concluded no leaf state or snapshots were ever written while 137 MB of snapshot state was on disk (issue #2692). Published by the same storage-usage aggregators as the storage-footprint panels, which can export one tree's series from more than one silo, so this panel takes max by (tree) across silos and ignores the $silo selector.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1057,7 +1057,7 @@
     {
       "id": 25,
       "title": "Trees over advisory threshold",
-      "description": "Trees whose WAL occupancy (physical bytes on the provider, dead bytes included) currently breaches the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins. The over_threshold gauge is published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree; this panel deliberately ignores the $silo selector and evaluates across all silos in the selected cluster, otherwise a breaching tree would be hidden whenever its aggregator is placed on an unselected silo.",
+      "description": "Trees whose WAL occupancy (physical bytes on the provider, dead bytes included) currently breaches the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins. The over_threshold gauge is published by the same storage-usage aggregators as the storage-footprint panels (and by the WAL garbage collector), which can export one tree's series from more than one silo, so this panel takes max by (tree) across silos and deliberately ignores the $silo selector, otherwise a breaching tree would be hidden whenever its aggregator is placed on an unselected silo.",
       "type": "table",
       "datasource": {
         "type": "prometheus",
