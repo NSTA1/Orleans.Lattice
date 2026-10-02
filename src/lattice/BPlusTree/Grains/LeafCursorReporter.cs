@@ -61,7 +61,7 @@ internal sealed class LeafCursorReporter(
         new();
 
     /// <summary>
-    /// Test seam for the wall-clock source backing the durable-pin debounce
+    /// Test seam for the monotonic clock backing the durable-pin debounce
     /// (<see cref="MinDurableWriteSpacingMs"/>). Defaults to
     /// <see cref="TimeProvider.System"/>; unit tests substitute a controllable
     /// provider to drive the debounce deterministically instead of racing a
@@ -71,10 +71,13 @@ internal sealed class LeafCursorReporter(
 
     /// <summary>
     /// The current instant in the same millisecond-tick units the debounce
-    /// state stores, read from <see cref="Clock"/> so a test can drive it
-    /// deterministically.
+    /// state stores, read from <see cref="Clock.GetTimestamp"/> (not
+    /// <see cref="TimeProvider.GetUtcNow"/>) so this stays monotonic like the
+    /// <see cref="Environment.TickCount64"/> read it replaces: immune to
+    /// wall-clock adjustments (NTP steps, manual clock changes), which an
+    /// elapsed-spacing check must be.
     /// </summary>
-    private long NowTickMs() => Clock.GetUtcNow().UtcTicks / TimeSpan.TicksPerMillisecond;
+    private long NowTickMs() => (long)(Clock.GetTimestamp() * (1000.0 / Clock.TimestampFrequency));
 
     /// <summary>
     /// Per-durable-pin-shard-key mutual-exclusion gates for the teardown

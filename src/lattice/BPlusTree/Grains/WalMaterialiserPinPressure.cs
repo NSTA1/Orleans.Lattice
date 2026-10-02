@@ -51,7 +51,15 @@ internal static class WalMaterialiserPinPressure
     /// </summary>
     internal static TimeProvider Clock { get; set; } = TimeProvider.System;
 
-    private static long NowTickMs() => Clock.GetUtcNow().UtcTicks / TimeSpan.TicksPerMillisecond;
+    /// <summary>
+    /// The current instant in the same millisecond-tick units the shed-window
+    /// state stores, read from <see cref="Clock.GetTimestamp"/> (not
+    /// <see cref="TimeProvider.GetUtcNow"/>) so this stays monotonic like the
+    /// <see cref="Environment.TickCount64"/> read it replaces: immune to
+    /// wall-clock adjustments (NTP steps, manual clock changes), which a
+    /// shed-ceiling deadline must be.
+    /// </summary>
+    private static long NowTickMs() => (long)(Clock.GetTimestamp() * (1000.0 / Clock.TimestampFrequency));
     /// <summary>
     /// Multiple of the previous durable pin write's own measured duration for
     /// which subsequent <i>coalescible</i> reports to the same shard are shed
