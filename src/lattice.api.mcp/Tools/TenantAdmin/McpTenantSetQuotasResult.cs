@@ -32,4 +32,28 @@ internal sealed record McpTenantSetQuotasResult
 
     /// <summary><see langword="true"/> when every resource dimension is unbounded.</summary>
     public required bool IsUnbounded { get; init; }
+
+    /// <summary>
+    /// The maximum number of tenant groups, or <see langword="null"/> for the default cap.
+    /// Never unbounded.
+    /// </summary>
+    public long? MaxGroups { get; init; }
+
+    /// <summary>
+    /// The maximum number of tenant group membership edges, or <see langword="null"/> for the
+    /// default cap. Never unbounded.
+    /// </summary>
+    public long? MaxMembershipEdges { get; init; }
+
+    /// <summary>
+    /// The maximum number of tenant member-set entries, or <see langword="null"/> for the default
+    /// cap. Never unbounded.
+    /// </summary>
+    public long? MaxMemberSubjects { get; init; }
+
+    /// <summary>
+    /// The maximum number of tenant-tier authorization rules, or <see langword="null"/> for the
+    /// default cap. Never unbounded.
+    /// </summary>
+    public long? MaxTenantRules { get; init; }
 }
