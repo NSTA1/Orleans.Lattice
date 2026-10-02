@@ -14,11 +14,21 @@ namespace Orleans.Lattice.Apps;
 [GenerateSerializer, Alias(AppsTypeAliases.AppUiBridgeRequest), Immutable]
 public sealed class AppUiBridgeRequest : IEquatable<AppUiBridgeRequest>
 {
-    private static readonly IComparer<AppUiBridgeGrant> Order = Comparer<AppUiBridgeGrant>.Create(static (x, y) =>
+    /// <summary>
+    /// The ordinal grant ordering, held once as a <see cref="Comparison{T}"/> so
+    /// the sort and the binary searches share a single source of truth. The sort
+    /// takes the delegate directly: every <c>Sort</c> overload accepting an
+    /// <see cref="IComparer{T}"/> re-converts <c>Compare</c> to a
+    /// <see cref="Comparison{T}"/> internally and allocates one per call, whereas
+    /// <c>BinarySearch</c> has no delegate overload and needs the comparer.
+    /// </summary>
+    private static readonly Comparison<AppUiBridgeGrant> OrderComparison = static (x, y) =>
     {
         var byOperation = string.CompareOrdinal(x.Operation, y.Operation);
         return byOperation != 0 ? byOperation : string.CompareOrdinal(x.Tree, y.Tree);
-    });
+    };
+
+    private static readonly IComparer<AppUiBridgeGrant> Order = Comparer<AppUiBridgeGrant>.Create(OrderComparison);
 
     private AppUiBridgeRequest(ImmutableArray<AppUiBridgeGrant> grants) => Grants = grants;
 
@@ -59,7 +69,7 @@ public sealed class AppUiBridgeRequest : IEquatable<AppUiBridgeRequest>
             return Empty;
         set.RemoveWhere(grant => grant.Tree is not null && set.Contains(new(grant.Operation)));
         var sorted = set.ToArray();
-        Array.Sort(sorted, Order);
+        Array.Sort(sorted, OrderComparison);
         return new(ImmutableCollectionsMarshal.AsImmutableArray(sorted));
     }
 
