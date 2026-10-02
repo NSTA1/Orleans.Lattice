@@ -385,8 +385,8 @@ internal sealed class LatticeBackupRestoreService(
                 RoutingInfo shadowRouting;
                 using (LatticeAccessGateContext.EnterSystemOrigin())
                 {
-                    shadowRouting = await grainFactory.GetGrain<ILattice>(restore.ShadowPhysicalTreeId)
-                        .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+                    shadowRouting = await ResolveRetainedRoutingAsync(
+                        restore.ShadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
                 }
 
                 await MarkRetainedTreeRedirectAsync(
@@ -430,7 +430,11 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            routing = await lattice.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            // Forced (#4206): both apply paths below partition every record by this
+            // map and send it straight to a shard root, so a map or alias the target's
+            // stateless worker cached before a reshard or resize would land records
+            // on shards the live map no longer routes them to.
+            routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
         }
 
         // Fast path: a brand-new (never registered) target restored from a single
@@ -563,8 +567,8 @@ internal sealed class LatticeBackupRestoreService(
             // shadow tree and arm the wrong shards.
             if (armRedirect)
             {
-                retainedRouting = await grainFactory.GetGrain<ILattice>(previousPhysicalTreeId!)
-                    .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+                retainedRouting = await ResolveRetainedRoutingAsync(previousPhysicalTreeId!, cancellationToken)
+                    .ConfigureAwait(false);
             }
             await registry.SetAliasAsync(targetTreeId, shadowPhysicalTreeId).ConfigureAwait(false);
         }
@@ -798,8 +802,7 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            routing = await grainFactory.GetGrain<ILattice>(shadowPhysicalTreeId)
-                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            routing = await ResolveRetainedRoutingAsync(shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
         }
 
         // Every physical shard of the shadow is purged. Each call targets a
@@ -973,8 +976,8 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo retainedRouting;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            retainedRouting = await grainFactory.GetGrain<ILattice>(retainedPhysicalTreeId)
-                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            retainedRouting = await ResolveRetainedRoutingAsync(retainedPhysicalTreeId, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var indices = retainedRouting.Map.GetPhysicalShardIndices();
@@ -989,6 +992,33 @@ internal sealed class LatticeBackupRestoreService(
             }
             await Task.WhenAll(tasks).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Resolves the live routing of a physical tree a restore step retains,
+    /// builds, reverts or discards, for a step that enumerates its shards to arm or
+    /// clear redirects or to purge them. The caller supplies the system-origin scope.
+    /// <para>
+    /// Forced (#4206): the tree's stateless worker caches routing per activation and
+    /// nothing on these lifecycle paths routes a key, so an unforced read would keep
+    /// a map from before a reshard and skip the shards it added or name the ones it
+    /// folded away. The physical id is then pinned to <paramref name="physicalTreeId"/>:
+    /// on a never-aliased tree that id is also the logical name, and once a cutover
+    /// has swapped the alias a forced resolve of that name would follow it to the
+    /// destination, so a resumed step would act on the wrong tree. The map is read
+    /// under the addressed id either way, so pinning keeps the retained tree's own
+    /// map.
+    /// </para>
+    /// </summary>
+    private async Task<RoutingInfo> ResolveRetainedRoutingAsync(
+        string physicalTreeId,
+        CancellationToken cancellationToken)
+    {
+        var routing = await grainFactory.GetGrain<ILattice>(physicalTreeId)
+            .GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+        return string.Equals(routing.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+            ? routing
+            : routing with { PhysicalTreeId = physicalTreeId };
     }
 
     // ---- Apply seams -----------------------------------------------------

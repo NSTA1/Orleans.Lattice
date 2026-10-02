@@ -772,11 +772,17 @@ internal sealed class LatticeSchemaRemediationGrain(
         var sourcePhysical = state.State.SourcePhysicalTreeId!;
 
         // The destination is a fresh, never-aliased tree, so its physical id equals
-        // its logical id. Resolve the retained (source) routing by PHYSICAL id -
-        // alias-safe, so a resume after a partial cutover re-derives the same
-        // shards rather than following the just-installed alias to the destination.
+        // its logical id. Resolve the retained (source) routing by PHYSICAL id, forced
+        // (#4206): the tree's stateless worker caches routing per activation and this
+        // path routes no key, so an unforced read would keep a pre-reshard map and leave
+        // the shards a grow added unarmed. The physical id is pinned to the source's,
+        // so a resume after a partial cutover re-derives the same shards rather than
+        // following the just-installed alias to the destination (a never-aliased
+        // source's physical id is its logical name); the map is read under the
+        // addressed id, so pinning keeps the source's own map.
         var destinationPhysical = destinationTreeId;
-        var retainedRouting = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync();
+        var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync(forceRefresh: true);
+        var retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical };
 
         // Arm enforcement BEFORE the alias swap so there is no window in which the
         // remediated destination is live (logical-alias-routed) yet unenforced. The

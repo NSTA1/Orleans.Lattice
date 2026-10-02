@@ -66,8 +66,8 @@ public partial class ReplicationDigestProbeGrainTests
         var replicationTransport = Substitute.For<IReplicationTransport>();
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(shardCount));
+        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, shardCount).ToArray()));
 
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -307,6 +307,22 @@ public partial class ReplicationDigestProbeGrainTests
 
         await lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
         await lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_probes_the_shards_of_the_live_map_not_the_pinned_count()
+    {
+        // Issue #4206 (the #3753 class): an adaptive split or a reshard moves slots
+        // to a physical index above the pinned ShardCount, so enumerating
+        // 0..ShardCount-1 skipped shard 5 and probed shard 2, which owns nothing.
+        var (grain, _, lattice, _, shardCounts) = CreateProbeGrain();
+        shardCounts.GetShardIndicesAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<int>>([0, 1, 5]));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await lattice.Received(1).GetLeafProjectionDigestAsync(5, Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(2, Arg.Any<CancellationToken>());
     }
 
     [Test]

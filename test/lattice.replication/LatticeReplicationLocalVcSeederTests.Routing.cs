@@ -46,8 +46,8 @@ public partial class LatticeReplicationLocalVcSeederTests
         // The pinned count is 1, but the routing map reaches the restored
         // physical copy's shard 0 and the split target shard 5 above the pin.
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(1));
+        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, 1).ToArray()));
         shardCounts.GetShardRootKeysAsync(Tree, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>(
                 [$"{RestoredPhysicalTree}/0", $"{RestoredPhysicalTree}/5"]));
@@ -70,6 +70,6 @@ public partial class LatticeReplicationLocalVcSeederTests
             Assert.That(report.Frontier.Entries[OriginB], Is.EqualTo(Hlc(20)));
         });
         await retired.DidNotReceive().GetLeftmostLeafIdAsync();
-        await shardCounts.DidNotReceive().GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await shardCounts.DidNotReceive().GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

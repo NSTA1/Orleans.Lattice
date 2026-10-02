@@ -398,10 +398,11 @@ public static class LatticeExtensions
     /// stream preserves the relative order within each partition.
     /// </para>
     /// <para>
-    /// Routing is resolved up front via <see cref="ILattice.GetRoutingAsync"/>,
-    /// so entries are correctly partitioned by the tree's persisted
+    /// Routing is resolved up front, once, via
+    /// <see cref="ILattice.GetRoutingAsync(bool, CancellationToken)"/> with a forced
+    /// refresh, so entries are correctly partitioned by the tree's persisted
     /// <see cref="ShardMap"/> - including non-default maps produced by adaptive
-    /// shard splits.
+    /// shard splits, and a reshard or alias swap since the tree last routed.
     /// </para>
     /// </summary>
     /// <param name="lattice">The tree to load into.</param>
@@ -421,7 +422,11 @@ public static class LatticeExtensions
         ArgumentNullException.ThrowIfNull(grainFactory);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
+        // Forced, once per load (#4206): the shard-root bulk-append path checks no
+        // slot ownership, so routing the tree's stateless worker cached before a
+        // reshard or alias swap would append keys to shards the live map no longer
+        // routes them to, where no read would find them.
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         var physicalTreeId = routing.PhysicalTreeId;
         var shardMap = routing.Map;
         var physicalShards = shardMap.GetPhysicalShardIndices();
