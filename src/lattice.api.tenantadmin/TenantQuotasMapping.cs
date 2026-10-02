@@ -9,7 +9,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// (<c>Orleans.Lattice.Api.Abstractions</c>) does not reference the tenancy engine,
 /// so this facade - which references both - is the single seam that translates
 /// between the two. Both directions are struct-to-struct copies with no heap
-/// allocation.
+/// allocation. The delegated tenant access caps (<c>MaxGroups</c>,
+/// <c>MaxMembershipEdges</c>, <c>MaxMemberSubjects</c>, <c>MaxTenantRules</c>) are
+/// carried verbatim, so a <see langword="null"/> cap stays <see langword="null"/> and
+/// keeps meaning the built-in default on both sides, never unbounded.
 /// </summary>
 internal static class TenantQuotasMapping
 {
@@ -24,6 +27,10 @@ internal static class TenantQuotasMapping
         MaxTreeCount = quotas.MaxTreeCount,
         MaxOpsPerSecond = quotas.MaxOpsPerSecond,
         BurstPercent = quotas.BurstPercent,
+        MaxGroups = quotas.MaxGroups,
+        MaxMembershipEdges = quotas.MaxMembershipEdges,
+        MaxMemberSubjects = quotas.MaxMemberSubjects,
+        MaxTenantRules = quotas.MaxTenantRules,
     };
 
     /// <summary>Projects a control-API descriptor onto the engine <see cref="TenantQuotas"/> value.</summary>
@@ -37,5 +44,9 @@ internal static class TenantQuotasMapping
         MaxTreeCount = descriptor.MaxTreeCount,
         MaxOpsPerSecond = descriptor.MaxOpsPerSecond,
         BurstPercent = descriptor.BurstPercent,
+        MaxGroups = descriptor.MaxGroups,
+        MaxMembershipEdges = descriptor.MaxMembershipEdges,
+        MaxMemberSubjects = descriptor.MaxMemberSubjects,
+        MaxTenantRules = descriptor.MaxTenantRules,
     };
 }
