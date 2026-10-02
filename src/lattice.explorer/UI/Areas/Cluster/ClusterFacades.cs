@@ -16,6 +16,7 @@ internal sealed class ClusterFacades(IServiceProvider services)
 {
     private readonly Lazy<ILatticeTreeAdmin?> _treeAdmin = new(services.GetShellFacade<ILatticeTreeAdmin>);
     private readonly Lazy<ILatticeStorageUsageOperations?> _storageUsage = new(services.GetShellFacade<ILatticeStorageUsageOperations>);
+    private readonly Lazy<ILatticeWalReclamation?> _walReclamation = new(services.GetShellFacade<ILatticeWalReclamation>);
     private readonly Lazy<ILatticeReplicationStatus?> _replicationStatus = new(services.GetShellFacade<ILatticeReplicationStatus>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
     private readonly Lazy<ShellAssertedTenant> _tenant = new(() => services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None);
@@ -43,6 +44,9 @@ internal sealed class ClusterFacades(IServiceProvider services)
 
     /// <summary>The accept-then-poll fresh storage usage (#4126), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeStorageUsageOperations? StorageUsage => _storageUsage.Value;
+
+    /// <summary>Which durable pin holds a tree's WAL floor (#4195), or <see langword="null"/> when the head serves none.</summary>
+    public ILatticeWalReclamation? WalReclamation => _walReclamation.Value;
 
     /// <summary>The replication peer report (R1), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeReplicationStatus? ReplicationStatus => _replicationStatus.Value;

@@ -12,7 +12,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Core - Silos check that grain storage enforces ETags.** Lattice requires its grain storage provider to reject a write carrying a stale ETag. Each silo now probes this as it starts and warns, or fails start in `Reject` mode, when it does not. ([#4200](https://github.com/NSTA1/Orleans.Lattice/issues/4200)) (`Orleans.Lattice`)
+
 - **Admin - Compliance scans and fresh storage usage run in the background.** Start either and poll its progress in entries or trees; it outlives a caller timeout, and Explorer shows its progress. The blocking compliance scan is deprecated (`LATTICE0002`). ([#4126](https://github.com/NSTA1/Orleans.Lattice/issues/4126)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
+
+- **Schema - Accept-then-poll remediation and migration.** Remediations and migrations return a handle at once and run on in the background; follow the dry run, build and cutover in values processed, cancel before cutover, and find a run again after closing the Explorer tab. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Explorer.UI`)
+
+- **Admin - See when a tree's WAL reclamation is wedged.** A new read names the pin holding a tree's WAL floor, its leaf, pin offset and checkpoint, and flags a stranded pin that will not clear on its own. Explorer shows it on the WAL page and a tree's Storage tab. ([#4195](https://github.com/NSTA1/Orleans.Lattice/issues/4195)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Explorer.UI`)
 
 - **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
@@ -72,6 +78,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Online reshard shrinks.** `ReshardAsync` accepts a count below a populated tree's current one and folds adjacent shards together online, completing only once the retired shards' storage is released; the `shrink_unsupported` rejection reason is gone. ([#4059](https://github.com/NSTA1/Orleans.Lattice/issues/4059)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 ### Changed
+
+- **Performance - WAL batch buffer pooling.** The two leaf merge paths staged their record batch in a list, and the CRDT apply path copied its list to a fresh array before dispatch. All three take a threshold-gated pooled rental now: 82 KB to zero on a 256-record batch. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
+
+- **Performance - Set accessor key probes.** Two set accessors materialised a base64 string purely to probe a dictionary, then dropped it. Both encode into a stack or pooled span and probe through an alternate lookup now, allocating nothing on either side of the stack threshold. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
+
+- **Performance - Sort comparer sweep completed.** Sorting with an `IComparer<T>` still minted a delegate per call at the sites #4184 left behind. Two hot streaming scan paths, sixteen downstream ordinal sites and two custom comparers pass a cached comparison now. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Tenancy`)
 
 - **Performance - Sort comparer delegate trims.** Sorting with an `IComparer<T>` minted a fresh `Comparison<T>` delegate per call, as the runtime converts its method group rather than caching it. Thirty-six CRDT, primitive and grain sort sites pass a cached comparison now and allocate nothing. ([#4184](https://github.com/NSTA1/Orleans.Lattice/pull/4184)) (`Orleans.Lattice`)
 
@@ -133,6 +145,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Deprecated
 
+- **Schema - Blocking remediation and migration verbs.** `RemediateAsync`, `MigrateToTargetVersionAsync`, `AdvanceAndMigrateAsync` and their gRPC RPCs raise `LATTICE0002` and will be removed in the next major version; start the run as a schema operation instead. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema.Grpc`)
+
 - **Backup - Blocking backup verbs.** The blocking capture, restore, health-check and catalogue rebuild and scrub verbs, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122), [#4125](https://github.com/NSTA1/Orleans.Lattice/issues/4125)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
 - **Tree admin - Blocking maintenance verbs.** `RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` and their gRPC client methods raise `LATTICE0002` and will be removed in the next major version. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
@@ -146,7 +160,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - Resize, snapshot and restore no longer freeze while pointing the tree's name at the copy.** In a host with apps registered, an alias swap could deadlock the tree registry. The ownership check read a shard of `sys-app-trees` that had never been seeded, and that shard tried to register the tree while the swap held the registry. A shard root now registers only a tree that is not yet registered. A cold access gate no longer registers the never-written `sys-auth-policy` and `sys-membership-edges` trees from inside an alias change. On a host with an access gate, a resize swap driven by its own phase timer runs as system origin. It is no longer refused as an anonymous alias change on every tick. A swap that was stuck finishes when it is next driven. ([#4128](https://github.com/NSTA1/Orleans.Lattice/issues/4128)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
 
-- **Schema - Remediation status answers while a run is in progress.** Reading a tree's remediation or migration status no longer waits for a running remediate or migrate to finish, so the Explorer's Schema operation page shows the live phase and count instead of timing out. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
+- **Schema - Remediation status answers while a run is in progress, and long runs no longer time out.** A status read no longer waits for a running remediate or migrate, and a run is driven in resumable slices, so no single cluster call outlasts the response timeout. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`)
 
 - **WAL - A GC report field blamed a cause its own predicate excludes.** `LatticeWalGcReport.BytePressureOverThreshold` documented itself as a lagging consumer or pin holding bytes back. It is occupancy against the ceiling and nothing else, and the pass arm it drives reports only when the trim floor is clear. ([#3204](https://github.com/NSTA1/Orleans.Lattice/issues/3204)) (`Orleans.Lattice`)
 
@@ -318,6 +332,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Vector - A removed key mapping came back after a flush.** `VectorKeyDictionary.RemoveAsync` and `ClearAsync` left records buffered by `GetOrAddBufferedAsync`, so the next flush wrote them back and a reload mapped the removed ids again. Both now discard those records. ([#4074](https://github.com/NSTA1/Orleans.Lattice/issues/4074)) (`Orleans.Lattice.Vector`)
 
 - **Core - Tree admin acted on undefined modes.** An unknown `TreeSnapshotMode` ran an Offline snapshot that quiesced the source, and an unknown `TreeHistoryRetentionMode` cleared the retention override. Both are now rejected with `ArgumentOutOfRangeException` before any side effect. ([#4075](https://github.com/NSTA1/Orleans.Lattice/issues/4075)) (`Orleans.Lattice.Api.TreeAdmin`)
+
+- **WAL - A batch running past the last offset was accepted.** Every WAL provider's density check wrapped at `long.MaxValue`, so a batch whose offsets ran off the end of the offset space passed and was stored out of order. The file, in-memory and Azure Table providers now reject it. ([#4221](https://github.com/NSTA1/Orleans.Lattice/issues/4221)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Storage.AzureTable`)
+
+- **Storage - A sub-byte capacity threshold disagreed with itself.** When a ceiling times the advisory ratio fell below one byte, the threshold truncated to zero: the aggregate read over threshold with nothing retained and the account never did. The threshold is now at least one byte. ([#4222](https://github.com/NSTA1/Orleans.Lattice/issues/4222)) (`Orleans.Lattice.Scaling`)
+
+- **Vector - A header declaring more centroid chunks than chunks was believed.** `VectorIndexHeader.Read` and `TryRead` now refuse it as a format no build writes, so a durable index whose manifest carries one rebuilds instead of waiting on centroid chunks that cannot exist. ([#4223](https://github.com/NSTA1/Orleans.Lattice/issues/4223)) (`Orleans.Lattice.Vector`)
 
 ### Security
 

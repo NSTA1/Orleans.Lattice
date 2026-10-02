@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, identitydigestalloc, repocontexthashstaging, pooledreturntrims, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather, tenantgatesnapshot, aggkey, aggfoldwrite, vvpresize, digestappendfolds, sortcomparertrims
+// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, identitydigestalloc, repocontexthashstaging, pooledreturntrims, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather, tenantgatesnapshot, aggkey, aggfoldwrite, vvpresize, digestappendfolds, sortcomparertrims, walbatchbuffertrims, setkeytrims
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -201,6 +201,20 @@ if (string.Equals(suite, "pooledreturntrims", StringComparison.OrdinalIgnoreCase
     Console.WriteLine("[microbench] suite   -> pooledreturntrims (PooledReturnTrimBenchmarks)");
     var pooledReturnSummary = BenchmarkRunner.Run<PooledReturnTrimBenchmarks>(config);
     return pooledReturnSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "walbatchbuffertrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> walbatchbuffertrims (WalBatchBufferTrimBenchmarks)");
+    var walBatchBufferTrimSummary = BenchmarkRunner.Run<WalBatchBufferTrimBenchmarks>(config);
+    return walBatchBufferTrimSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "setkeytrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> setkeytrims (SetKeyTrimBenchmarks)");
+    var setKeyTrimSummary = BenchmarkRunner.Run<SetKeyTrimBenchmarks>(config);
+    return setKeyTrimSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "digestappendfolds", StringComparison.OrdinalIgnoreCase))

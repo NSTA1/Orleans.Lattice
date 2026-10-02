@@ -220,6 +220,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Requests cancellation of a storage-usage refresh. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeAdminStorageUsageOperationStatusResponse> CancelStorageUsageRefresh(TreeAdminStorageUsageOperationRequest request, ServerCallContext context);
 
+    /// <summary>Reads which durable pin holds a tree's WAL floor and whether it has wedged reclamation. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeWalReclamationReport> GetWalReclamation(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -303,6 +306,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.GetStorageUsageRefreshStatus, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
             binder.AddMethod(methods.ListStorageUsageRefreshes, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
             binder.AddMethod(methods.CancelStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
+            binder.AddMethod(methods.GetWalReclamation, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>?)null);
             return;
         }
 
@@ -370,6 +374,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.GetStorageUsageRefreshStatus, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.GetStorageUsageRefreshStatus));
         binder.AddMethod(methods.ListStorageUsageRefreshes, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListStorageUsageRefreshes));
         binder.AddMethod(methods.CancelStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.CancelStorageUsageRefresh));
+        binder.AddMethod(methods.GetWalReclamation, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>(serviceImpl.GetWalReclamation));
     }
 }
 
@@ -389,6 +394,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     private readonly IOptions<LatticeTreeAdminApiGrpcOptions> _options;
     private readonly ILogger<LatticeTreeAdminGrpcService> _logger;
     private readonly ILatticeStorageUsageOperations? _storageUsageOperations;
+    private readonly ILatticeWalReclamation? _walReclamation;
 
     /// <summary>
     /// Initialises the service. The <paramref name="methods"/> parameter is unused
@@ -408,7 +414,8 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         IOptions<LatticeTreeAdminApiGrpcOptions> options,
         ILogger<LatticeTreeAdminGrpcService> logger,
         ILatticeStorageUsageOperations? storageUsageOperations = null,
-        ILatticeTreeAdminOperations? operations = null)
+        ILatticeTreeAdminOperations? operations = null,
+        ILatticeWalReclamation? walReclamation = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -424,6 +431,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         _options = options;
         _logger = logger;
         _storageUsageOperations = storageUsageOperations;
+        _walReclamation = walReclamation;
     }
 
     /// <summary>
@@ -722,6 +730,15 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             {
                 Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
             });
+
+    /// <inheritdoc />
+    public override Task<TreeWalReclamationReport> GetWalReclamation(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(WalReclamation, request, context, static (reclamation, req, ct) => reclamation.GetWalReclamationAsync(req.TreeId, ct));
+
+    private ILatticeWalReclamation WalReclamation => _walReclamation
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented,
+            "This host registers no ILatticeWalReclamation, so the WAL reclamation read is unavailable."));
 
     private ILatticeStorageUsageOperations StorageUsageOperations => _storageUsageOperations
         ?? throw new RpcException(new Status(

@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -18,6 +19,12 @@ internal sealed record SchemaOperation(string TreeId, SchemaOperationKind Kind, 
 
     /// <summary>The terminal report, once the cluster returned one.</summary>
     public LatticeSchemaRemediationReport? Report { get; init; }
+
+    /// <summary>The cluster operation id, once the start has been accepted.</summary>
+    public string? OperationId { get; init; }
+
+    /// <summary>The latest cluster status this circuit read.</summary>
+    public LatticeOperationStatus? Status { get; init; }
 
     /// <summary>Why it failed, as a plain sentence, when it failed.</summary>
     public string? Failure { get; init; }

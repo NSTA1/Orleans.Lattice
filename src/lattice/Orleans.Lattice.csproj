@@ -70,6 +70,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Abstractions" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TreeAdmin.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin.Tests" />

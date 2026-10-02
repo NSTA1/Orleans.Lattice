@@ -74,7 +74,8 @@ public readonly record struct VectorIndexHeader(
     /// <param name="source">The persisted header bytes.</param>
     /// <exception cref="VectorIndexFormatException">
     /// The span is too short, the marker is wrong, the format version is
-    /// unsupported, or a field is out of range.
+    /// unsupported, a field is out of range, or more centroid chunks are
+    /// declared than chunks in total.
     /// </exception>
     public static VectorIndexHeader Read(ReadOnlySpan<byte> source)
     {
@@ -124,6 +125,13 @@ public readonly record struct VectorIndexHeader(
         {
             throw new VectorIndexFormatException(
                 "A vector index header declared a negative count, which no snapshot this build writes can contain.");
+        }
+
+        if (centroidChunkCount > chunkCount)
+        {
+            throw new VectorIndexFormatException(
+                $"A vector index header declared {centroidChunkCount} centroid chunks out of {chunkCount} chunks in total. "
+                + "The centroid chunks are part of the total, so no snapshot this build writes can contain that.");
         }
 
         return new VectorIndexHeader(

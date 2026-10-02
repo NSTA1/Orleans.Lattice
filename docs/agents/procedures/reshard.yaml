@@ -16,7 +16,7 @@ preconditions:
     check: "Target shard count is at least 2 and at most the smaller of 4096 and the tree's virtual slot count."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
   - id: no-resize
-    check: "No resize is already in flight."
+    check: "No resize is already in flight unless the target can be applied by the empty-tree re-pin fast path before migration starts."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
   - id: tree-lifecycle
     check: "Caller has whole-tree TreeLifecycle authority."
@@ -52,11 +52,11 @@ failure_modes:
     effect: "Existing reshard remains authoritative."
     response: "Poll status and retry after completion."
   - id: resize-conflict
-    signal: "InvalidOperationException when resize is in flight."
+    signal: "InvalidOperationException when resize is in flight and the target requires a migration."
     effect: "No reshard is started."
     response: "Wait for resize completion or undo."
   - id: out-of-range-target
-    signal: "ArgumentOutOfRangeException for a target below 2 or above the virtual slot space."
+    signal: "ArgumentOutOfRangeException for a target below 2 or above the smaller of 4096 and the tree's virtual slot count."
     effect: "No reshard is started."
     response: "Pick a target in range."
 rollback:

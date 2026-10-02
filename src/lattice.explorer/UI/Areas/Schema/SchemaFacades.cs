@@ -17,6 +17,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 internal sealed class SchemaFacades(IServiceProvider services)
 {
     private readonly Lazy<ILatticeSchemaControl?> _schema = new(services.GetShellFacade<ILatticeSchemaControl>);
+    private readonly Lazy<ILatticeSchemaOperations?> _schemaOperations = new(services.GetShellFacade<ILatticeSchemaOperations>);
     private readonly Lazy<ILatticeSchemaComplianceOperations?> _compliance = new(services.GetShellFacade<ILatticeSchemaComplianceOperations>);
     private readonly Lazy<ILatticeAppsControl?> _apps = new(services.GetShellFacade<ILatticeAppsControl>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
@@ -47,6 +48,9 @@ internal sealed class SchemaFacades(IServiceProvider services)
     /// <summary>The schema control facade (T1's adapter), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeSchemaControl? Schema => _schema.Value;
 
+    /// <summary>The schema operations facade, or <see langword="null"/> when the head serves none.</summary>
+    public ILatticeSchemaOperations? SchemaOperations => _schemaOperations.Value;
+
     /// <summary>The accept-then-poll compliance scans (#4126), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeSchemaComplianceOperations? Compliance => _compliance.Value;
 
@@ -64,6 +68,12 @@ internal sealed class SchemaFacades(IServiceProvider services)
     /// <exception cref="NotSupportedException">The head serves no schema administration.</exception>
     public ILatticeSchemaControl RequireSchema() =>
         Schema ?? throw new NotSupportedException("This Explorer does not serve schema administration.");
+
+    /// <summary>The schema operations facade, or an exception naming why there is none.</summary>
+    /// <returns>The facade.</returns>
+    /// <exception cref="NotSupportedException">The head serves no schema operations.</exception>
+    public ILatticeSchemaOperations RequireSchemaOperations() =>
+        SchemaOperations ?? throw new NotSupportedException("This Explorer does not serve schema operations.");
 
     /// <summary>The compliance-scan operations, or an exception naming why there are none.</summary>
     /// <returns>The facade.</returns>

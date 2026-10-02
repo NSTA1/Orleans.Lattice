@@ -631,7 +631,8 @@
         "SnapshotCursorOpen",
         "ReplayPermitAdmission",
         "SetManyFanOut",
-        "TxRegistryCapacity"
+        "TxRegistryCapacity",
+        "SetManyEnvelope"
       ],
       "source": "src/lattice/LatticeSaturationSource.cs#LatticeSaturationSource"
     },
@@ -5680,7 +5681,7 @@
         },
         {
           "error_id": "invalid-operation",
-          "condition": "A resize is in flight, or a different reshard target is already in progress."
+          "condition": "A resize is in flight and the target needs a migration (an observably empty tree is re-pinned before the resize interlock is checked), or a different reshard target is already in progress."
         }
       ],
       "retry": {
@@ -6069,7 +6070,7 @@
         },
         {
           "error_id": "saturated",
-          "condition": "The per-shard fan-out has not settled within LatticeOptions.SetManyFanOutBudget; already-committed branches are retained and in-flight branches are not cancelled."
+          "condition": "The per-shard fan-out has not settled within LatticeOptions.SetManyFanOutBudget, or the whole batch write has consumed LatticeOptions.SetManyEnvelopeBudget across gate, route, bucket and fan-out; already-committed branches are retained and in-flight branches are not cancelled."
         },
         {
           "error_id": "argument-exception",

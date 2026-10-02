@@ -174,6 +174,7 @@ internal static class TreeAdminSchemaToolHandlers
         return schema.AdvanceTargetVersionAsync(treeId, newTargetVersion, cancellationToken);
     }
 
+#pragma warning disable LATTICE0002 // These MCP tools still return the terminal report; moving them to start-and-poll tools is a follow-up to #4123.
     /// <summary>Advances a tree's target version and runs a background eager migration, returning the terminal report.</summary>
     public static Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
         ILatticeSchemaControl schema,
@@ -209,4 +210,5 @@ internal static class TreeAdminSchemaToolHandlers
         ArgumentNullException.ThrowIfNull(schema);
         return schema.RemediateAsync(treeId, transform, targetPolicy, cancellationToken);
     }
+#pragma warning restore LATTICE0002
 }

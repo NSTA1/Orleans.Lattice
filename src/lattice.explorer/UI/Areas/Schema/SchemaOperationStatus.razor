@@ -6,6 +6,7 @@
     re-reads on a cadence only while something is running. A physical tree id
     never appears: the remediation's destination copy is not shown.
 *@
+@using Orleans.Lattice.Explorer.UI.Operations
 
 @if (Workspace is not null)
 {
@@ -34,13 +35,19 @@
         else
         {
             <p class="lt-schema-status" role="status">@Headline</p>
+            @if (Status is { } status)
+            {
+                <div role="status" aria-live="polite">
+                    <LtOperationProgress Status="@status" Label="Remediation progress" PhaseName="SchemaFormat.OperationPhase" />
+                </div>
+            }
             <ol class="lt-schema-stages" aria-label="Stages">
-                @foreach (var (step, title) in Steps)
+                @foreach (var step in Steps)
                 {
                     var position = StepPosition(step);
                     <li class="lt-schema-stages__step" aria-current="@(position == 0 ? "step" : null)">
                         <LtNode Kind="@(position == 0 ? LtNodeKind.Join : position < 0 ? LtNodeKind.Filled : LtNodeKind.Hollow)" Size="LtNodeSize.Small" />
-                        <span class="lt-schema-stages__title">@title</span>
+                        <span class="lt-schema-stages__title">@step.Title</span>
                     </li>
                 }
             </ol>
@@ -55,7 +62,12 @@
                         <LtDefinition Term="Finished">@SchemaFormat.Time(finished)</LtDefinition>
                     }
                 }
-                @if (Report is { } report)
+                @if (Status is { } cluster)
+                {
+                    <LtDefinition Term="Phase">@SchemaFormat.OperationPhase(cluster.Phase)</LtDefinition>
+                    <LtDefinition Term="Operation id" Mono="true">@cluster.OperationId</LtDefinition>
+                }
+                @if (Status is null && Report is { } report)
                 {
                     <LtDefinition Term="Phase">@SchemaFormat.Phase(report.Phase)</LtDefinition>
                     <LtDefinition Term="Values checked">@report.ScannedCount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)</LtDefinition>
@@ -64,11 +76,19 @@
                         <LtDefinition Term="Operation id" Mono="true">@operationId</LtDefinition>
                     }
                 }
+                else if (Report is { } reportWithValues)
+                {
+                    <LtDefinition Term="Values checked">@reportWithValues.ScannedCount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)</LtDefinition>
+                }
             </LtDefinitionList>
 
             @if (_local?.Failure is { } failure)
             {
                 <p class="lt-schema-error" role="alert">@failure</p>
+            }
+            @if (_follower?.LastError is { } readError)
+            {
+                <p class="lt-schema-error" role="alert">The latest status could not be read: @SchemaFailure.Describe(readError, "read the operation status") The page keeps trying.</p>
             }
 
             @if (Report is { DidAbort: true } aborted)
@@ -89,11 +109,23 @@
 
             <div class="lt-toolbar lt-schema-actions">
                 <LtButton Variant="LtButtonVariant.Quiet" OnClick="RefreshAsync">Refresh status</LtButton>
+                @if (CanCancel)
+                {
+                    <LtButton OnClick="CancelAsync" Disabled="@_cancelling">Cancel operation</LtButton>
+                }
                 @if (_local is { IsActive: false })
                 {
                     <LtButton Variant="LtButtonVariant.Quiet" OnClick="Dismiss">Clear this result</LtButton>
                 }
             </div>
+            @if (Status is { IsTerminal: false } && CanCancel)
+            {
+                <p class="lt-schema-muted">A remediation can be cancelled until cutover starts. During cutover it runs to completion.</p>
+            }
+            @if (_cancelError is { } cancelError)
+            {
+                <p class="lt-schema-error" role="alert">@cancelError</p>
+            }
             @if (IsPolling)
             {
                 <p class="lt-schema-muted">Read again every @PollInterval.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture) seconds while it runs. You can leave this page; the operation keeps running.</p>

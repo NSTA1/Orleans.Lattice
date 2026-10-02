@@ -352,7 +352,7 @@ region diagram.
 | `/cluster/trees/{tree-path}/reshard` | Resumable online reshard status and staging. |
 | `/cluster/trees/{tree-path}/resize` | Resumable online resize status, staging and undo. |
 | `/cluster/trees/{tree-path}/snapshot` | Resumable snapshot status and staging. |
-| `/cluster/wal?tree=&partition=&target=` | WAL placement audit, move planning, execution and source reclaim. |
+| `/cluster/wal?tree=&partition=&target=` | WAL placement audit, [WAL reclamation](#wal-reclamation), move planning, execution and source reclaim. |
 | `/cluster/orphans?tree=` | Orphaned-leaf survey, audit and repair. |
 
 The route under `/cluster` accepts at most eight path segments after `cluster`.
@@ -418,7 +418,8 @@ Shards tab lists one row per physical shard the live shard map routes to; the
 diagnostics and hotness reads only fill in those rows, so a shard a shrink has
 retired, which a cached read can still name, never gains a row. Without the map,
 the rows are the shards those reports name. The tab can run a confirmed deep
-read to count tombstones because it walks every leaf. The Storage tab links to
+read to count tombstones because it walks every leaf. The Storage tab shows the
+tree's [WAL reclamation](#wal-reclamation) beside its retained WAL, and links to
 the WAL page.
 
 The tools page exposes only the tools the capability probe admits. Compaction
@@ -518,6 +519,31 @@ not know the tree; unserved operations say the cluster does not serve that
 operation; timeouts say the cluster did not answer in time. Pages show the
 fixed error sentence beside the surface that made the call, or keep the status
 that the cluster owns and let the caller return to the same address later.
+
+### WAL reclamation
+
+The WAL page, under the placement audit, and a tree's Storage tab show which
+durable pin holds the tree's write-ahead-log floor, read through
+`ILatticeWalReclamation` (see
+[WAL reclamation](../lattice.api.treeadmin/README.md#wal-reclamation)). A tree
+that reclaims nothing because one pin can never move reads, on its storage
+figures alone, exactly like a tree with nothing to reclaim; this section tells
+them apart. It names the floor-holding leaf, its partition, its pin offset, the
+leaf's persisted checkpoint and its state, and gives one verdict:
+
+| Verdict | When |
+| --- | --- |
+| **Blocked** | The holder carries a usable pin offset (`>= 0`) above a checkpoint the leaf never persisted (`-1`). The page says plainly that this does not clear on its own: the durable pin store cannot be lowered and the WAL GC will not drive a leaf with no proven checkpoint ([#4191](https://github.com/NSTA1/Orleans.Lattice/issues/4191), [#3258](https://github.com/NSTA1/Orleans.Lattice/issues/3258)). |
+| **Waiting for a checkpoint** | No pin reports a usable offset, and the one named reports `-1` from a leaf that has never checkpointed. This is the benign sentinel; it holds no offset floor and clears once the leaf checkpoints ([#4198](https://github.com/NSTA1/Orleans.Lattice/issues/4198)). |
+| **Not blocked** | The holder has checkpointed, or the tree holds no pin. WAL below the holder's offset can be reclaimed. |
+| **Not established** | The pin store did not answer, or the holder leaf's state could not be read. |
+
+The verdict is keyed on the holder's pin offset beside its state, never on
+growth or on the count of never-checkpointed pins: a wedged tree need not be
+growing, and a never-checkpointed pin at `-1` is the benign case. The section
+names the leaf, never the pin's consumer id, which carries the physical tree
+id. It is hidden when the Explorer serves no WAL reclamation read, and is a
+quiet note when the cluster does not answer it.
 
 ## See also
 

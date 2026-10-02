@@ -13,6 +13,8 @@
     "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs",
     "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
     "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations",
+    "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#ILatticeWalReclamation",
+    "src/lattice.api.treeadmin/LatticeTreeAdmin.WalReclamation.cs#GetWalReclamationAsync",
     "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations",
     "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs",
     "src/lattice.api.abstractions/Operations/ILatticeOperations.cs"
@@ -1994,6 +1996,85 @@
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalPlacementAudit.cs#TreeWalPlacementAudit"
     },
+    "TreeWalReclamationReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PinStoreReadable",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "PinCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PinsWithoutOffset",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "FloorHolder",
+          "type": "TreeWalFloorHolder",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalReclamationReport.cs#TreeWalReclamationReport"
+    },
+    "TreeWalFloorHolder": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ConsumerId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "LeafId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Partition",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PinOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "PersistedCheckpoint",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "State",
+          "type": "TreeWalFloorHolderState",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalFloorHolder.cs#TreeWalFloorHolder"
+    },
+    "TreeWalFloorHolderState": {
+      "kind": "enum",
+      "values": [
+        "CheckpointedUncovered",
+        "NeverCheckpointed",
+        "NoDurableState",
+        "Unreadable",
+        "Orphaned",
+        "CheckpointedCoverageUnknown"
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalFloorHolderState.cs#TreeWalFloorHolderState"
+    },
     "LatticeOperationHandle": {
       "kind": "record",
       "fields": [
@@ -3520,6 +3601,54 @@
       ]
     },
     {
+      "id": "get-wal-reclamation",
+      "in_process": "ILatticeWalReclamation.GetWalReclamationAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetWalReclamation",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeWalReclamationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeWalReclamation."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects; it never activates a leaf.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetWalReclamation"
+      ]
+    },
+    {
       "id": "inspect-shard-map",
       "in_process": "ILatticeTreeAdmin.InspectShardMapAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/InspectShardMap",
@@ -4185,7 +4314,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {
-        "rule": "A reshard with different target, or a resize, is rejected.",
+        "rule": "A reshard with a different target is rejected; a resize is rejected only when the requested reshard target requires a migration, because the empty-tree re-pin fast path runs before the resize interlock.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "sources": [

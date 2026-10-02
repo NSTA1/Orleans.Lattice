@@ -21,9 +21,11 @@ public class LatticeTagIndexReconcileProbeOnlyIntegrationTests
     public async Task OneTimeSetUp()
     {
         var builder = new TestClusterBuilder();
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<ProbeOnlyConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]
