@@ -54,6 +54,7 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     private readonly ITenantAdminClock _clock;
     private readonly ILatticeIdentityDirectory? _identityDirectory;
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
+    private readonly ITenantDirectoryStore? _tenantGroups;
     private readonly string? _writerId;
 
     /// <summary>
@@ -73,14 +74,20 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     /// The identity-directory options deciding whether validation is required, or
     /// <c>null</c> when none is registered.
     /// </param>
-    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="identityDirectory"/> or <paramref name="identityDirectoryOptions"/> is <c>null</c>.</exception>
+    /// <param name="tenantGroups">
+    /// The membership underlay used to verify that a tenant group named as an admin
+    /// entry exists, or <c>null</c> when none is supplied (a tenant-group admin entry
+    /// is then refused, fail-closed, because it cannot be verified).
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="identityDirectory"/>, <paramref name="identityDirectoryOptions"/> or <paramref name="tenantGroups"/> is <c>null</c>.</exception>
     public LatticeTenantAccessAdmin(
         ITenantRegistry registry,
         TenantRegionResidencyAuthorizer authorizer,
         ITenantAdminClock clock,
         IOptions<ClusterOptions> clusterOptions,
         ILatticeIdentityDirectory? identityDirectory = null,
-        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null)
+        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null,
+        ITenantDirectoryStore? tenantGroups = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -92,8 +99,15 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         _clock = clock;
         _identityDirectory = identityDirectory;
         _identityDirectoryOptions = identityDirectoryOptions;
+        _tenantGroups = tenantGroups;
         _writerId = clusterOptions.Value.ClusterId;
     }
+
+    /// <summary>
+    /// <see langword="true"/> when this instance can verify tenant-group admin
+    /// entries; the registration uses it to tell an upgraded instance apart.
+    /// </summary>
+    internal bool VerifiesTenantGroups => _tenantGroups is not null;
 
     /// <inheritdoc />
     public async Task<TenantAdminSubjectReport> ListAdminSubjectsAsync(
@@ -147,9 +161,15 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // live grant that whoever later registers it would inherit. The registered
         // tenant-create path applies the same directory validation to explicitly
         // seeded admin subjects before it writes the tenant. A tenant group lives in
-        // the membership directory, not the identity directory, so it is not
-        // resolved upstream.
-        if (!isOwnTenantGroup)
+        // the membership directory, not the identity directory, so it is checked
+        // there instead: it must exist, or a typo'd group would count as an admin
+        // entry that resolves to nobody (and that a later group of that name would
+        // silently inherit).
+        if (isOwnTenantGroup)
+        {
+            await RequireTenantGroupAsync(tenant, subjectId, cancellationToken).ConfigureAwait(false);
+        }
+        else
         {
             await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
         }
@@ -271,6 +291,30 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         {
             throw LatticeDirectoryValidationException.Unresolved(
                 subjectId, DirectoryPrincipalKind.User, "subjectId");
+        }
+    }
+
+    /// <summary>
+    /// Requires the tenant group named by an admin entry to exist in the membership
+    /// directory. Fails closed when no membership underlay was supplied, because the
+    /// entry could then never be verified.
+    /// </summary>
+    /// <exception cref="ArgumentException">The group does not exist, or cannot be verified.</exception>
+    private async Task RequireTenantGroupAsync(TenantId tenant, string groupId, CancellationToken cancellationToken)
+    {
+        if (_tenantGroups is null)
+        {
+            throw new ArgumentException(
+                $"Tenant group '{groupId}' cannot be verified on this silo, so it cannot be added to tenant "
+                    + $"'{tenant}''s admin set.",
+                "subjectId");
+        }
+
+        if (await _tenantGroups.GetGroupAsync(groupId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            throw new ArgumentException(
+                $"Tenant '{tenant}' has no group '{groupId}'. Create the group before adding it to the admin set.",
+                "subjectId");
         }
     }
 

@@ -67,6 +67,50 @@ public sealed class LatticeTenantDirectoryAdminRegistrationTests
     }
 
     [Test]
+    public void A_host_override_registered_after_the_built_in_one_survives_a_repeated_call()
+    {
+        var builder = NewBuilder();
+        builder.AddLatticeTenantAdminApi();
+        var hostAuthorizer = new TenantRegionResidencyAuthorizer(new FixedGate(true), new FakeTenantRegistry());
+        builder.Services.AddSingleton(hostAuthorizer);
+
+        builder.AddLatticeTenantAdminApi();
+
+        using var provider = builder.Services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<TenantRegionResidencyAuthorizer>(), Is.SameAs(hostAuthorizer));
+    }
+
+    [Test]
+    public void A_repeated_call_leaves_the_upgraded_registrations_unchanged()
+    {
+        var builder = NewBuilder();
+        builder.AddLatticeTenantAdminApi();
+        var authorizer = builder.Services.Single(d => d.ServiceType == typeof(TenantRegionResidencyAuthorizer));
+        var accessAdmin = builder.Services.Single(d => d.ServiceType == typeof(ILatticeTenantAccessAdmin));
+
+        builder.AddLatticeTenantAdminApi();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.Services.Single(d => d.ServiceType == typeof(TenantRegionResidencyAuthorizer)), Is.SameAs(authorizer));
+            Assert.That(builder.Services.Single(d => d.ServiceType == typeof(ILatticeTenantAccessAdmin)), Is.SameAs(accessAdmin));
+        });
+    }
+
+    [Test]
+    public void The_built_in_access_admin_is_upgraded_to_verify_tenant_group_admin_entries()
+    {
+        var builder = NewBuilder();
+        builder.Services.AddSingleton<ITenantDirectoryStore>(new DirectoryTestSupport.FakeTenantDirectoryStore());
+        builder.AddLatticeTenantAdminApi();
+
+        using var provider = builder.Services.BuildServiceProvider();
+        var admin = provider.GetRequiredService<ILatticeTenantAccessAdmin>();
+
+        Assert.That(((LatticeTenantAccessAdmin)admin).VerifiesTenantGroups, Is.True);
+    }
+
+    [Test]
     public void DelegatedAccessReader_fails_closed_without_a_tenancy_flag()
     {
         using var provider = new ServiceCollection().BuildServiceProvider();

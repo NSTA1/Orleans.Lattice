@@ -73,15 +73,27 @@ internal sealed partial class LatticeTenantDirectoryAdmin
                 .ConfigureAwait(false);
         }
 
+        var memberCap = record.Quotas.EffectiveMaxMemberSubjects;
         TenantAccessCaps.AdmitAddition(
             tenant,
             TenantTreeNames.RegistryTree,
             TenantAccessCaps.MemberSubjectsDimension,
             record.MemberSubjectCount,
-            record.Quotas.EffectiveMaxMemberSubjects);
+            memberCap);
 
         record.AddMemberSubject(storedId, _clock.Next(), _writerId);
-        await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+
+        // Verify-and-compensate on the committed join (see the type remarks):
+        // concurrent adds from stale reads can each pass the check above, and the
+        // registry's merge is the first point where the combined count is visible.
+        // Withdraw this entry at a later stamp, which supersedes only this call's add.
+        if (merged.MemberSubjectCount > memberCap)
+        {
+            merged.RemoveMemberSubject(storedId, _clock.Next(), _writerId);
+            await _registry.PutAsync(merged, cancellationToken).ConfigureAwait(false);
+            ThrowCapExceeded(tenant, TenantTreeNames.RegistryTree, TenantAccessCaps.MemberSubjectsDimension, memberCap);
+        }
 
         return MemberChange(tenant, subjectId, subjectKind, changed: true);
     }

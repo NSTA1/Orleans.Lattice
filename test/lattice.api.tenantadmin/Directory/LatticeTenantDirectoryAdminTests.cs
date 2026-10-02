@@ -58,20 +58,22 @@ public sealed partial class LatticeTenantDirectoryAdminTests
             LatticeSubject caller,
             bool enabled,
             ILatticeIdentityDirectory? identityDirectory,
-            bool validationRequired)
+            bool validationRequired,
+            AsyncBarrier? registryBarrier = null)
         {
             Registry.Seed(Record(Tenant, Alice));
             Registry.Seed(Record(OtherTenant, Gina));
             Registry.Seed(Record(TenantId.DefaultId, Operator));
             Flag = new SettableFlag(enabled);
+            ITenantRegistry registry = registryBarrier is null ? Registry : new BarrierTenantRegistry(Registry, registryBarrier);
 
             var authorizer = new TenantRegionResidencyAuthorizer(
-                new AdminSubjectGate(Operator), Registry, new FixedMembershipContext(caller), Flag.Read);
+                new AdminSubjectGate(Operator), registry, new FixedMembershipContext(caller), Flag.Read);
 
             Admin = new LatticeTenantDirectoryAdmin(
-                Registry,
+                registry,
                 authorizer,
-                new IncrementingClock(),
+                new LockedClock(),
                 Options.Create(new ClusterOptions { ClusterId = "region-a" }),
                 Store,
                 Rules,

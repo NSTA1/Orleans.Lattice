@@ -72,23 +72,31 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         var record = await AuthorizeAsync(tenant, "upsert-group", cancellationToken).ConfigureAwait(false);
 
         var groupId = LatticeTenantGroupId.Compose(tenant, group.Name).Value;
+        var cap = record.Quotas.EffectiveMaxGroups;
 
         // Only a new group counts against the cap; replacing an existing group's
         // display name never does.
-        if (await _store.GetGroupAsync(groupId, cancellationToken).ConfigureAwait(false) is null)
+        var isNew = await _store.GetGroupAsync(groupId, cancellationToken).ConfigureAwait(false) is null;
+        if (isNew)
         {
             var count = await _store.CountTenantGroupsAsync(tenant, cancellationToken).ConfigureAwait(false);
             TenantAccessCaps.AdmitAddition(
-                tenant,
-                MembershipConstants.GroupsTree,
-                TenantAccessCaps.GroupsDimension,
-                count,
-                record.Quotas.EffectiveMaxGroups);
+                tenant, MembershipConstants.GroupsTree, TenantAccessCaps.GroupsDimension, count, cap);
         }
 
         await _store
             .UpsertGroupAsync(new MembershipGroup(groupId, group.DisplayName), cancellationToken)
             .ConfigureAwait(false);
+
+        // Verify-and-compensate (see the type remarks): concurrent creators can all
+        // pass the check above, so re-count after the write and withdraw this
+        // group if the tenant is now over its cap.
+        if (isNew
+            && await _store.CountTenantGroupsAsync(tenant, cancellationToken).ConfigureAwait(false) > cap)
+        {
+            await _store.RemoveGroupCascadeAsync(groupId, cancellationToken).ConfigureAwait(false);
+            ThrowCapExceeded(tenant, MembershipConstants.GroupsTree, TenantAccessCaps.GroupsDimension, cap);
+        }
 
         return new TenantGroupDescriptor { Name = group.Name, DisplayName = group.DisplayName };
     }

@@ -1,4 +1,5 @@
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin.Tests.Directory;
 
@@ -31,6 +32,7 @@ internal static class DirectoryTestSupport
     {
         private readonly SortedDictionary<string, MembershipGroup> _groups = new(StringComparer.Ordinal);
         private readonly List<(string GroupId, string MemberId, MembershipMemberKind Kind)> _edges = [];
+        private readonly Lock _sync = new();
 
         public int Writes { get; private set; }
 
@@ -38,6 +40,9 @@ internal static class DirectoryTestSupport
 
         /// <summary>When set, the next <see cref="AddMemberAsync"/> throws it and writes nothing.</summary>
         public Exception? NextAddMemberFailure { get; set; }
+
+        /// <summary>When set, group and edge writes wait here, so concurrent callers all pass their pre-write checks first.</summary>
+        public AsyncBarrier? WriteBarrier { get; set; }
 
         public IReadOnlyList<(string GroupId, string MemberId, MembershipMemberKind Kind)> Edges => _edges;
 
@@ -49,25 +54,28 @@ internal static class DirectoryTestSupport
             _edges.Add((groupId, memberId, kind));
 
         public Task<MembershipGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken) =>
-            Task.FromResult(_groups.TryGetValue(groupId, out var group) ? group : null);
+            Locked(() => _groups.TryGetValue(groupId, out var group) ? group : null);
 
-        public Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken)
-        {
-            Writes++;
-            _groups[group.GroupId] = group;
-            return Task.CompletedTask;
-        }
+        public Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken) =>
+            WithBarrierAsync(() =>
+            {
+                lock (_sync)
+                {
+                    Writes++;
+                    _groups[group.GroupId] = group;
+                }
+            });
 
         public Task<int> CountTenantGroupsAsync(TenantId tenant, CancellationToken cancellationToken)
         {
             var prefix = Prefix(tenant);
-            return Task.FromResult(_groups.Keys.Count(k => k.StartsWith(prefix, StringComparison.Ordinal)));
+            return Locked(() => _groups.Keys.Count(k => k.StartsWith(prefix, StringComparison.Ordinal)));
         }
 
         public Task<int> CountTenantEdgesAsync(TenantId tenant, CancellationToken cancellationToken)
         {
             var prefix = Prefix(tenant);
-            return Task.FromResult(_edges.Count(e => e.GroupId.StartsWith(prefix, StringComparison.Ordinal)));
+            return Locked(() => _edges.Count(e => e.GroupId.StartsWith(prefix, StringComparison.Ordinal)));
         }
 
         public Task<DirectoryGroupSlice> ListTenantGroupsAsync(
@@ -85,10 +93,13 @@ internal static class DirectoryTestSupport
 
         public Task<int> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken)
         {
-            Cascades++;
-            var removed = _edges.RemoveAll(e => e.GroupId == groupId || e.MemberId == groupId);
-            _groups.Remove(groupId);
-            return Task.FromResult(removed);
+            return Locked(() =>
+            {
+                Cascades++;
+                var removed = _edges.RemoveAll(e => e.GroupId == groupId || e.MemberId == groupId);
+                _groups.Remove(groupId);
+                return removed;
+            });
         }
 
         public Task AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken cancellationToken)
@@ -99,24 +110,30 @@ internal static class DirectoryTestSupport
                 throw failure;
             }
 
-            Writes++;
-            if (!_edges.Any(e => e.GroupId == groupId && e.MemberId == memberId))
+            return WithBarrierAsync(() =>
             {
-                _edges.Add((groupId, memberId, memberKind));
-            }
-
-            return Task.CompletedTask;
+                lock (_sync)
+                {
+                    Writes++;
+                    if (!_edges.Any(e => e.GroupId == groupId && e.MemberId == memberId))
+                    {
+                        _edges.Add((groupId, memberId, memberKind));
+                    }
+                }
+            });
         }
 
         public Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken)
         {
-            Writes++;
-            _edges.RemoveAll(e => e.GroupId == groupId && e.MemberId == memberId);
-            return Task.CompletedTask;
+            return Locked(() =>
+            {
+                Writes++;
+                return _edges.RemoveAll(e => e.GroupId == groupId && e.MemberId == memberId);
+            });
         }
 
         public Task<IReadOnlyCollection<string>> MembersOfAsync(string groupId, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyCollection<string>>(_edges.Where(e => e.GroupId == groupId).Select(e => e.MemberId).ToList());
+            Locked<IReadOnlyCollection<string>>(() => _edges.Where(e => e.GroupId == groupId).Select(e => e.MemberId).ToList());
 
         public Task<IReadOnlyCollection<string>> GroupsOfAsync(string memberId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyCollection<string>>(Closure([memberId], includeSeeds: false));
@@ -158,7 +175,114 @@ internal static class DirectoryTestSupport
             return closure;
         }
 
+        private Task<T> Locked<T>(Func<T> read)
+        {
+            lock (_sync)
+            {
+                return Task.FromResult(read());
+            }
+        }
+
+        private async Task WithBarrierAsync(Action write)
+        {
+            if (WriteBarrier is { } barrier)
+            {
+                await barrier.ArriveAsync();
+            }
+
+            write();
+        }
+
         private static string Prefix(TenantId tenant) => $"t/{tenant.Value}/";
+    }
+
+    /// <summary>
+    /// A count-based rendezvous (no timing): each arrival waits until
+    /// <c>parties</c> callers have arrived, then all proceed (possibly concurrently,
+    /// so the doubles that use it serialize their own state). Once released, later
+    /// arrivals pass straight through.
+    /// </summary>
+    internal sealed class AsyncBarrier(int parties)
+    {
+        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _remaining = parties;
+
+        public Task ArriveAsync()
+        {
+            if (_released.Task.IsCompleted)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (Interlocked.Decrement(ref _remaining) <= 0)
+            {
+                _released.TrySetResult();
+                return Task.CompletedTask;
+            }
+
+            return _released.Task;
+        }
+    }
+
+    /// <summary>An <see cref="ITenantRegistry"/> whose puts wait at a barrier before delegating, so racers read before any writes. Serializes access to the (single-threaded) inner registry.</summary>
+    internal sealed class BarrierTenantRegistry(ITenantRegistry inner, AsyncBarrier barrier) : ITenantRegistry
+    {
+        private readonly Lock _sync = new();
+
+        public Task<TenantRecord?> GetAsync(TenantId tenant, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return inner.GetAsync(tenant, cancellationToken);
+            }
+        }
+
+        public Task<bool> ExistsAsync(TenantId tenant, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return inner.ExistsAsync(tenant, cancellationToken);
+            }
+        }
+
+        public IAsyncEnumerable<TenantRecord> ListAsync(CancellationToken cancellationToken = default) =>
+            inner.ListAsync(cancellationToken);
+
+        public async Task<TenantRecord> PutAsync(TenantRecord record, CancellationToken cancellationToken = default)
+        {
+            await barrier.ArriveAsync();
+            Task<TenantRecord> put;
+            lock (_sync)
+            {
+                put = inner.PutAsync(record, cancellationToken);
+            }
+
+            return await put;
+        }
+
+        public Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return inner.DeleteAsync(tenant, cancellationToken);
+            }
+        }
+    }
+
+    /// <summary>A strictly increasing clock that is safe for concurrent racers.</summary>
+    internal sealed class LockedClock : ITenantAdminClock
+    {
+        private readonly Lock _sync = new();
+        private HybridLogicalClock _previous = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+
+        public HybridLogicalClock Next()
+        {
+            lock (_sync)
+            {
+                _previous = HybridLogicalClock.Tick(_previous);
+                return _previous;
+            }
+        }
     }
 
     /// <summary>An in-memory tenant-tier rule cascade holding (rule id, subject group id) pairs.</summary>

@@ -3,6 +3,7 @@ using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Tenancy;
+using static Orleans.Lattice.Api.TenantAdmin.Tests.Directory.DirectoryTestSupport;
 using static Orleans.Lattice.Api.TenantAdmin.Tests.TenantAdminTestSupport;
 
 namespace Orleans.Lattice.Api.TenantAdmin.Tests.Directory;
@@ -19,8 +20,10 @@ public sealed class LatticeTenantAccessAdminAdminSetConfinementTests
 {
     private const string Tenant = "acme";
 
-    private static (LatticeTenantAccessAdmin Admin, FakeTenantRegistry Registry) Build(FakeIdentityDirectory? directory = null)
+    private static (LatticeTenantAccessAdmin Admin, FakeTenantRegistry Registry) Build(
+        FakeIdentityDirectory? directory = null, FakeTenantDirectoryStore? groups = null, bool withGroups = true)
     {
+        groups ??= new FakeTenantDirectoryStore();
         var registry = new FakeTenantRegistry();
         var record = TenantRecord.Create(
             TenantId.Parse(Tenant),
@@ -38,7 +41,8 @@ public sealed class LatticeTenantAccessAdminAdminSetConfinementTests
             new IncrementingClock(),
             Options.Create(new ClusterOptions { ClusterId = "region-a" }),
             directory,
-            new FixedOptionsMonitor<LatticeIdentityDirectoryOptions>(new LatticeIdentityDirectoryOptions { ValidationRequired = true }));
+            new FixedOptionsMonitor<LatticeIdentityDirectoryOptions>(new LatticeIdentityDirectoryOptions { ValidationRequired = true }),
+            withGroups ? groups : null);
         return (admin, registry);
     }
 
@@ -66,7 +70,9 @@ public sealed class LatticeTenantAccessAdminAdminSetConfinementTests
     public async Task AddAdminSubjectAsync_accepts_the_tenants_own_group_without_resolving_it_upstream()
     {
         var directory = new FakeIdentityDirectory(principal: null);
-        var (admin, registry) = Build(directory);
+        var groups = new FakeTenantDirectoryStore();
+        groups.SeedGroup("t/acme/admins");
+        var (admin, registry) = Build(directory, groups);
 
         var result = await admin.AddAdminSubjectAsync(Tenant, "t/acme/admins");
 
@@ -76,6 +82,42 @@ public sealed class LatticeTenantAccessAdminAdminSetConfinementTests
             Assert.That(result.Subjects, Is.EqualTo(new[] { "alice", "t/acme/admins" }));
             Assert.That(directory.Resolved, Is.Empty);
             Assert.That(registry.Puts, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task AddAdminSubjectAsync_refuses_a_tenant_group_that_does_not_exist_so_the_last_real_admin_stays()
+    {
+        // Review finding: a typo'd group admitted as an admin entry counted towards
+        // the last-admin guard, letting the only real admin remove itself and strand
+        // the tenant with an admin entry that resolves to nobody.
+        var groups = new FakeTenantDirectoryStore();
+        groups.SeedGroup("t/acme/admins");
+        var (admin, registry) = Build(groups: groups);
+
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () => await admin.AddAdminSubjectAsync(Tenant, "t/acme/admns"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.ParamName, Is.EqualTo("subjectId"));
+            Assert.That(registry.Puts, Is.Zero);
+            Assert.That(
+                async () => await admin.RemoveAdminSubjectAsync(Tenant, "alice"),
+                Throws.TypeOf<TenantLastAdminSubjectException>());
+        });
+        Assert.That((await admin.ListAdminSubjectsAsync(Tenant)).Subjects, Is.EqualTo(new[] { "alice" }));
+    }
+
+    [Test]
+    public void AddAdminSubjectAsync_refuses_a_tenant_group_fail_closed_when_groups_cannot_be_verified()
+    {
+        var (admin, registry) = Build(withGroups: false);
+
+        Assert.That(async () => await admin.AddAdminSubjectAsync(Tenant, "t/acme/admins"), Throws.ArgumentException);
+        Assert.Multiple(() =>
+        {
+            Assert.That(admin.VerifiesTenantGroups, Is.False);
+            Assert.That(registry.Puts, Is.Zero);
         });
     }
 

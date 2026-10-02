@@ -34,6 +34,24 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// call names and a local name, so a caller can never name another tenant's group.
 /// </para>
 /// <para>
+/// <b>Caps (D13): verify and compensate.</b> Each addition that a cap governs - a
+/// new group, a membership edge, a member-set entry - is checked against the
+/// tenant's current count before it is written, and that check alone is a
+/// read-check-write with no lock, so concurrent callers at one below the cap could
+/// all pass it. Each such addition is therefore verified after it is written: the
+/// group and edge counts are re-read, and the member set is read from the registry's
+/// committed merge. If the tenant is then over its cap, this call withdraws exactly
+/// the addition it made (a new group with its edges, the edge, or the member-set
+/// entry at a later stamp) and is refused with
+/// <see cref="LatticeQuotaExceededException"/>. Racers that interleave may all be
+/// refused, which is the fail-closed direction. The residual window is bounded and
+/// transient: between a racer's write and its withdrawal a reader can observe the
+/// tenant briefly over its cap, and a call interrupted between the two (a silo
+/// crash, a cancelled call, a failed compensating write) leaves the extra item in
+/// place until it is removed; the cap is then still enforced on every later
+/// addition, so the overshoot can never grow beyond the calls in flight.
+/// </para>
+/// <para>
 /// <b>Entry kinds.</b> The member set and group edges store plain ids, so a listing
 /// recovers each entry's <see cref="TenantSubjectKind"/>: an id in the reserved
 /// <c>t/</c> namespace is a tenant group, an id with a group record in the
@@ -217,6 +235,13 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
                 $"Tenant '{tenant}' has no group named '{localName}'.", paramName);
         }
     }
+
+    /// <summary>
+    /// Refuses an addition that the post-write verification found over
+    /// <paramref name="cap"/>, through the same exception path as the pre-write check.
+    /// </summary>
+    private static void ThrowCapExceeded(TenantId tenant, string treeId, string dimension, long cap) =>
+        TenantAccessCaps.AdmitAddition(tenant, treeId, dimension, cap, cap);
 
     private static TenantId ParseTenant(string tenantId)
     {
