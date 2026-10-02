@@ -55,6 +55,9 @@ public sealed class LatticeWalGcPinDeliveryTests
             .BuildServiceProvider();
         var gc = new LatticeWalGc(services, registry, monitor);
         var reporter = new LeafCursorReporter(registry, factory, monitor);
+        var clock = new ManualTimeProvider();
+        reporter.Clock = clock;
+        WalMaterialiserPinPressure.Clock = clock;
         var forced = 0L;
         using var listener = MeterListening.StartForInstrument(
             LatticeMetrics.MaterialiserPinShedForced,
@@ -135,13 +138,14 @@ public sealed class LatticeWalGcPinDeliveryTests
             await registry.ReportCursorAsync(Tree, "shipper", Hlc(100 + head));
             await reporter.ReportAsync(Tree, Consumer, Hlc(100 + head), CancellationToken.None);
 
-            // The reporter uses TickCount64, not TimeProvider. Cross its 1 s
-            // debounce so each wave genuinely attempts the production shed gate.
-            await Task.Delay(1100);
+            // The reporter's debounce is driven by the injected clock. Cross
+            // its 1 s debounce so each wave genuinely attempts the production
+            // shed gate, with no real delay.
+            clock.Advance(TimeSpan.FromMilliseconds(1100));
             reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100 + head), head - 2);
             // A successful force ends the run. The next shed opens a new one;
             // retry after its ceiling rather than assuming the run stayed open.
-            await Task.Delay(10);
+            clock.Advance(TimeSpan.FromMilliseconds(10));
             reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100 + head), head - 2);
         }
 

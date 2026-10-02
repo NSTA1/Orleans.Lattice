@@ -74,7 +74,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         VirtualTimeProvider time,
         int configured,
         int pinned,
-        string blockingConsumerId)
+        string blockingConsumerId,
+        Microsoft.Extensions.Logging.ILogger<LatticeWalGcScheduler>? logger = null)
     {
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -89,7 +90,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         var options = OrphanSweepOptions(walPartitions: configured);
         var resolver = new LatticeOptionsResolver(factory, Monitor(options));
-        return CreateScheduler(factory, gc, options, time, leafStateStorage: storage, optionsResolver: resolver);
+        return CreateScheduler(
+            factory, gc, options, time, logger: logger, leafStateStorage: storage, optionsResolver: resolver);
     }
 
     private sealed record PinnedSweepOutcome(
@@ -98,7 +100,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         long Live,
         long Unresolved,
         long NoDurableState,
-        IReadOnlyList<string?> ClassifiedPartitions);
+        IReadOnlyList<string?> ClassifiedPartitions,
+        long RefusedMalformedId = 0,
+        long RefusedAmbiguousPartition = 0,
+        long RetiredOrphaned = 0,
+        long RetiredNoDurableState = 0,
+        string? RefusedCause = null);
 
     private static async Task<PinnedSweepOutcome> SweepPinnedTreeAsync(
         int configured,
@@ -119,8 +126,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await StartAndRunFirstPassAsync(scheduler, time);
         await scheduler.StopAsync(CancellationToken.None);
 
-        long Sum(InstrumentRecorder recorder, string status) => (long)recorder.Measurements
+        long Sum(InstrumentRecorder recorder, string status, string? cause = null) => (long)recorder.Measurements
             .Where(m => (m.Tag(LatticeMetrics.TagStatus) as string) == status)
+            .Where(m => cause is null || (m.Tag(LatticeMetrics.TagPinRetirementCause) as string) == cause)
             .Sum(m => m.Value);
 
         return new PinnedSweepOutcome(
@@ -132,7 +140,15 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             states.Measurements
                 .Where(m => m.Value > 0)
                 .Select(m => m.Tag(LatticeMetrics.TagPartition) as string)
-                .ToArray());
+                .ToArray(),
+            Sum(sweep, "refused_malformed_id"),
+            Sum(sweep, "refused_ambiguous_partition"),
+            Sum(sweep, "retired", "orphaned"),
+            Sum(sweep, "retired", "no_durable_state"),
+            sweep.Measurements
+                .Where(m => m.Value > 0 && ((m.Tag(LatticeMetrics.TagStatus) as string)?.StartsWith("refused_", StringComparison.Ordinal) ?? false))
+                .Select(m => m.Tag(LatticeMetrics.TagPinRetirementCause) as string)
+                .SingleOrDefault());
     }
 
     // ------------------------------------------- the instance: partition source
@@ -278,8 +294,43 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         {
             Assert.That(outcome.Removed, Is.Empty, "an unrecognised leaf id must never authorise a removal.");
             Assert.That(outcome.Retired, Is.Zero);
-            Assert.That(outcome.Unresolved, Is.EqualTo(1),
-                "the refusal must be counted, so a parse defect shows up as unresolved rather than retired.");
+            Assert.That(outcome.RefusedMalformedId, Is.EqualTo(1),
+                "the refusal must be counted on its own arm (issue #4246), not as retired or unresolved.");
+            Assert.That(outcome.RefusedCause, Is.EqualTo("orphaned"), "a husk is a record with no tree id.");
+            Assert.That(outcome.Unresolved, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task The_gate_alone_refuses_the_4238_shape_when_the_partition_source_reads_one()
+    {
+        // Issue #4246 step 1: is the fail-safe sufficient on its own? Simulate
+        // the partition-source half of #4238 still being wrong - the count the
+        // scheduler resolves is 1 - against a pin a leaf of an 8-partition tree
+        // published on partition 3. The parse keeps the _3 suffix, so the
+        // storage read lands on the phantom grain "bplusleaf/<hex>_3", finds no
+        // record, and classifies no_durable_state: exactly the data-loss read.
+        // Only the gate stands between that read and the removal.
+        var leaf = GuidLeafGrainId(6);
+        var outcome = await SweepPinnedTreeAsync(
+            configured: 1,
+            pinned: 1,
+            PinnedConsumerId(leaf, partition: 3),
+            storage => storage.Put(leaf, LiveOnEveryPartition(PinnedTree, 8)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Removed, Is.Empty,
+                "the gate must refuse a suffixed id on a tree it believes is single-partition.");
+            Assert.That(outcome.Retired, Is.Zero);
+            Assert.That(outcome.Live, Is.Zero,
+                "the read must have reached the phantom grain, or the refusal below is vacuous.");
+            Assert.That(outcome.RefusedAmbiguousPartition, Is.EqualTo(1),
+                "issue #4246: the refusal is the #4238 signature and must be counted on its own arm.");
+            Assert.That(outcome.RefusedCause, Is.EqualTo("no_durable_state"),
+                "the phantom grain has no record at all, which is what a misresolved live leaf reads as.");
+            Assert.That(outcome.Unresolved, Is.Zero,
+                "a refusal must not vanish into unresolved, which means the id did not parse.");
         });
     }
 
@@ -300,7 +351,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         {
             Assert.That(outcome.Removed, Is.Empty);
             Assert.That(outcome.Retired, Is.Zero);
-            Assert.That(outcome.Unresolved, Is.EqualTo(1));
+            Assert.That(outcome.RefusedAmbiguousPartition, Is.EqualTo(1),
+                "an unsuffixed id on a partitioned tree does not say which partition it speaks for.");
+            Assert.That(outcome.Unresolved, Is.Zero);
         });
     }
 
@@ -319,6 +372,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Assert.That(outcome.Removed, Is.Empty,
                 "partition 9 does not exist on an 8-partition tree, so the suffix is not a partition.");
             Assert.That(outcome.Retired, Is.Zero);
+            Assert.That(outcome.Unresolved, Is.EqualTo(1),
+                "issue #4242: the parse no longer attributes an out-of-range suffix, so no leaf is read for it.");
         });
     }
 
@@ -338,6 +393,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         {
             Assert.That(outcome.Removed, Is.EqualTo(new[] { PinnedConsumerId(husk, partition: 3) }));
             Assert.That(outcome.Retired, Is.EqualTo(1));
+            Assert.That(outcome.RetiredOrphaned, Is.EqualTo(1), "issue #4246: a husk retirement is cause=orphaned.");
+            Assert.That(outcome.RetiredNoDurableState, Is.Zero);
         });
     }
 
@@ -361,6 +418,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             treeId: TreeId,
             cursorReporter: reporter);
 
+        using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         using (recorder)
         {
             await StartAndRunFirstPassAsync(scheduler, time);
@@ -370,6 +428,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Assert.That(Outcomes(recorder, "orphaned"), Is.GreaterThan(0),
                 "the drive must have reported NotDriven, or the non-removal below is vacuous.");
         }
+
+        // Issue #4246: the drive's refusal is counted on its own arm, with its cause.
+        Assert.Multiple(() =>
+        {
+            Assert.That(DriveDecisions(decisions, "refused_malformed_id", "not_driven"), Is.GreaterThan(0));
+            Assert.That(DriveDecisions(decisions, "retired"), Is.Zero);
+        });
 
         await reporter.DidNotReceive().UnregisterAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());

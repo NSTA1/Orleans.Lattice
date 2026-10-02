@@ -62,6 +62,17 @@ internal sealed partial class TreeDeletionGrain
         }
     }
 
+    /// <inheritdoc />
+    public Task<bool> HoldsCompletedPurgeAsync()
+    {
+        // From the persisted snapshot, so an interleaved call never reads a
+        // completion a failed write could still roll back. A retired copy whose
+        // id is also a live logical tree keeps its row and is not a purged id.
+        var d = Durable;
+        return Task.FromResult(
+            d.LogicalPurgeComplete || (d.IsDeleted && d.PurgeComplete && !d.RetainsRegistryEntry));
+    }
+
     /// <summary>
     /// Whether the id was registered again after its purge completed, so the
     /// deletion record describes a tree that no longer exists. Pure read.

@@ -62,6 +62,7 @@ public sealed class LatticeStateQueryOrderingTests
         public Task DiscardDerivedPhysicalTreeAsync() => throw new NotSupportedException();
         public Task<PhysicalTreeRetention> GetPhysicalRetentionAsync() => throw new NotSupportedException();
         public Task<bool> DiscardIfAbandonedDerivedCopyAsync() => throw new NotSupportedException();
+        public Task<bool> HoldsCompletedPurgeAsync() => Task.FromResult(false);
         public Task DeleteDelegatedAsync() => throw new NotSupportedException();
         public Task<bool> IsPhysicalDeletedAsync() => throw new NotSupportedException();
         public Task RecoverPhysicalAsync() => throw new NotSupportedException();

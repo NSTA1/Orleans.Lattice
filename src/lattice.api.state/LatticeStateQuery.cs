@@ -238,7 +238,9 @@ internal sealed class LatticeStateQuery(
         }
 
         var report = await tree.DiagnoseAsync(deep, cancellationToken).ConfigureAwait(false);
-        return TreeSummaryResult.Found(MapTree(treeId, report, BuildConfig(effectiveTreeId, report)));
+        var registry = _grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
+        return TreeSummaryResult.Found(MapTree(treeId, report, BuildConfig(effectiveTreeId, report, entry)));
     }
 
     public async Task<ShardSummariesResult> GetShardSummariesAsync(
@@ -2762,14 +2764,14 @@ internal sealed class LatticeStateQuery(
         };
     }
 
-    private TreeConfigSummary BuildConfig(string treeId, TreeDiagnosticReport report)
+    private TreeConfigSummary BuildConfig(string treeId, TreeDiagnosticReport report, TreeRegistryEntry? entry)
     {
         var opts = _options.Get(treeId);
         return new TreeConfigSummary
         {
             ShardCount = report.ShardCount,
             VirtualShardCount = report.VirtualShardCount,
-            WalPartitions = opts.WalPartitions,
+            WalPartitions = entry?.WalPartitions ?? opts.WalPartitions,
             SoftDeleteDuration = opts.SoftDeleteDuration,
         };
     }
