@@ -35,6 +35,8 @@
   <ItemGroup>
     <!-- Shared multi-silo WAL harness (issue #4196): one WAL store per test cluster. -->
     <Compile Include="..\lattice\Fakes\SharedInMemoryWal.cs" Link="Shared\SharedInMemoryWal.cs" />
+    <!-- Differential allocation probe (epic #4154): the flag-off active-tenant path must allocate exactly what it did before. -->
+    <Compile Include="..\lattice\Fakes\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
   </ItemGroup>
 
 </Project>

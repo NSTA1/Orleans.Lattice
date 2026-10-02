@@ -73,4 +73,29 @@ public sealed class LatticeTenancyOptions
     /// </para>
     /// </remarks>
     public TimeSpan PolicySnapshotLeaseDuration { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Whether delegated tenant access administration is enabled: tenant groups,
+    /// tenant member sets, group entries in a tenant's admin set, and tenant-tier
+    /// rules. Defaults to <c>false</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// While <c>false</c>, every one of those is inert: active-tenant validation is
+    /// exactly the exact-subject-id admin check it has always been (a member entry or
+    /// a group entry never admits anyone), the compiled tenant-policy snapshot builds
+    /// no member or group index, the authorization engine never enters the tenant
+    /// rule layer, and asserted tenant-group claims are not filtered. Turning the
+    /// flag off deletes nothing; existing member entries, groups and rules are
+    /// retained and become effective again when it is turned back on.
+    /// </para>
+    /// <para>
+    /// A change to this value, observed through the options monitor, invalidates
+    /// the silo's compiled tenant-policy snapshot and schedules a rebuild, so the
+    /// new posture applies without a restart. Until the rebuild lands, decisions
+    /// that consume an asserted active tenant are confirmed against the tenant
+    /// registry under the new value.
+    /// </para>
+    /// </remarks>
+    public bool DelegatedAccessAdministrationEnabled { get; set; }
 }

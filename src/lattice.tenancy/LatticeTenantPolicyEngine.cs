@@ -20,18 +20,26 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
     }
 
     /// <inheritdoc />
+    public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId, IReadOnlyCollection<string> groupIds) =>
+        maintainer.Current.ResolveAllowedTenants(subjectId, groupIds);
+
+    /// <inheritdoc />
     public TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant) =>
         ValidateActiveTenant(maintainer.Current, subjectId, activeTenant);
+
+    /// <inheritdoc />
+    public TenantAccessDecision ValidateActiveTenant(
+        string subjectId,
+        IReadOnlyCollection<string> groupIds,
+        TenantId activeTenant) =>
+        ValidateActiveTenant(maintainer.Current, subjectId, groupIds, activeTenant);
 
     /// <summary>
     /// Validates that <paramref name="subjectId"/> may act as
     /// <paramref name="activeTenant"/> against an explicit compiled
-    /// <paramref name="policy"/>: the tenant is registered, <see cref="TenantStatus.Active"/>,
-    /// and lists the subject as an admin. The single home of the active-tenant
-    /// rule: the engine applies it to the maintainer's current snapshot, and the
-    /// data-plane gate applies it to a policy compiled from the authoritative
-    /// registry record while that snapshot is not authoritative, so both answer by
-    /// the same rule (issue #4053).
+    /// <paramref name="policy"/>, without groups: exactly
+    /// <see cref="ValidateActiveTenant(CompiledTenantPolicy, string, IReadOnlyCollection{string}, TenantId)"/>
+    /// with an empty group set.
     /// </summary>
     /// <param name="policy">The compiled policy to validate against. Must not be <c>null</c>.</param>
     /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
@@ -41,10 +49,37 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
     internal static TenantAccessDecision ValidateActiveTenant(
         CompiledTenantPolicy policy,
         string subjectId,
+        TenantId activeTenant) =>
+        ValidateActiveTenant(policy, subjectId, Array.Empty<string>(), activeTenant);
+
+    /// <summary>
+    /// Validates that a subject may act as <paramref name="activeTenant"/> against
+    /// an explicit compiled <paramref name="policy"/>: the tenant is registered,
+    /// <see cref="TenantStatus.Active"/>, and admits the subject. A tenant compiled
+    /// with delegated access administration disabled admits exactly its admin
+    /// subjects by id; a group-aware one also admits its member entries and any
+    /// subject one of whose <paramref name="groupIds"/> is an admin or member entry
+    /// (<see cref="CompiledTenant.IsMember"/>). The single home of the active-tenant
+    /// rule: the engine applies it to the maintainer's current snapshot, and the
+    /// data-plane gate applies it to a policy compiled from the authoritative
+    /// registry record while that snapshot is not authoritative, so both answer by
+    /// the same rule (issue #4053).
+    /// </summary>
+    /// <param name="policy">The compiled policy to validate against. Must not be <c>null</c>.</param>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <param name="groupIds">The subject's resolved transitive group ids. Must not be <c>null</c>.</param>
+    /// <param name="activeTenant">The asserted active tenant.</param>
+    /// <returns>An allow decision when the subject may act as the tenant, or a denial carrying the reason.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="policy"/>, <paramref name="subjectId"/> or <paramref name="groupIds"/> is <c>null</c>.</exception>
+    internal static TenantAccessDecision ValidateActiveTenant(
+        CompiledTenantPolicy policy,
+        string subjectId,
+        IReadOnlyCollection<string> groupIds,
         TenantId activeTenant)
     {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(subjectId);
+        ArgumentNullException.ThrowIfNull(groupIds);
 
         if (activeTenant.Value is null)
         {
@@ -61,9 +96,17 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
             return TenantAccessDecision.Deny($"Tenant '{activeTenant}' is not active (status '{tenant.Status}').");
         }
 
-        if (!tenant.IsAdmin(subjectId))
+        if (!tenant.IsGroupAware)
         {
-            return TenantAccessDecision.Deny($"Subject '{subjectId}' is not an admin of tenant '{activeTenant}'.");
+            if (!tenant.IsAdmin(subjectId))
+            {
+                return TenantAccessDecision.Deny($"Subject '{subjectId}' is not an admin of tenant '{activeTenant}'.");
+            }
+        }
+        else if (!tenant.IsMember(subjectId, groupIds))
+        {
+            return TenantAccessDecision.Deny(
+                $"Subject '{subjectId}' is not an admin or member of tenant '{activeTenant}', directly or through a group.");
         }
 
         return TenantAccessDecision.Allow();

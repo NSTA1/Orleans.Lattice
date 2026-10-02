@@ -117,6 +117,27 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton<TenantRegistryInitializer>();
         builder.Services.TryAddSingleton<ITenantRegistry, LatticeTenantRegistry>();
 
+        // Delegated tenant access administration (epic #4154). One per-silo live
+        // view of the opt-in flag, read by the compiled snapshot maintainer below
+        // (which rebuilds when it flips) and by the two active seams that Replace
+        // the null defaults auth and membership registered with TryAdd: the tenant
+        // rule layer, and membership's tenant group claim filter, which strips
+        // asserted t/ group ids. Both answer IsActive from the flag, so with it off
+        // the authorization engine never enters the tenant rule layer and claim
+        // resolution does no tenant-group filtering, exactly as with the null
+        // seams. Replace (not TryAdd) deterministically supersedes them regardless
+        // of order. The filter's delegate is a method group bound once at
+        // registration, so each IsActive read is one field read and allocates
+        // nothing.
+        builder.Services.TryAddSingleton<DelegatedTenantAccessFlag>();
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantRuleLayer, TenancyTenantRuleLayer>());
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantGroupClaimFilter>(sp =>
+                new TenantGroupClaimFilter(sp.GetRequiredService<DelegatedTenantAccessFlag>().ReadIsEnabled)));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenancyPostureLogger>());
+
         // The compiled tenant-policy snapshot maintainer: a per-silo singleton
         // registered twice at the same instance - once as the concrete singleton
         // and once as an IMutationObserver - so a sys-tenant-registry write
