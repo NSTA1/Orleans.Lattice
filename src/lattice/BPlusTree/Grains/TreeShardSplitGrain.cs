@@ -62,6 +62,15 @@ internal sealed class TreeShardSplitGrain(
     /// <inheritdoc />
     protected override string MetricsTreeId => TreeId;
 
+    /// <inheritdoc />
+    protected override bool AbandonsSagaOnPurgedTree => true;
+
+    /// <inheritdoc />
+    protected override Task<bool> IsTreePurgedAsync() => PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId);
+
+    /// <inheritdoc />
+    protected override Task ClearSagaStateForPurgedTreeAsync() => state.ClearStateAsync();
+
     /// <summary>
     /// Parses the grain key as <c>{treeId}/{sourceShardIndex}</c>. The trailing
     /// integer suffix is the source shard; everything before the final '/' is
@@ -385,6 +394,8 @@ internal sealed class TreeShardSplitGrain(
         }
         catch (Exception ex)
         {
+            if (await TryAbandonSagaOnPurgedTreeAsync()) return;
+
             Logger.LogWarning(ex, "Shard-split phase {Phase} failed for tree {TreeId}",
                 state.State.Phase, TreeId);
         }

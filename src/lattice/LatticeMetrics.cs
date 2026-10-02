@@ -1608,6 +1608,27 @@ public static class LatticeMetrics
             description: "Coordinator phase-timer ticks whose phase step threw and was swallowed, tagged by coordinator kind and tree. Zero-primed when a coordinator arms its phase timer, so zero on a live series is a reading rather than an absence.");
 
     /// <summary>
+    /// Counter incremented once per in-flight saga a coordinator abandoned because
+    /// a phase tick faulted and the tree it serves turned out to be purged (issue
+    /// #4271). Before this, a split, consolidation or reshard whose tree was purged
+    /// mid-flight faulted on every tick and kept its keepalive reminder for as long
+    /// as the cluster ran. Tagged identically to
+    /// <see cref="CoordinatorPhaseTickFailures"/> - <see cref="TagKind"/> = the
+    /// coordinator's keepalive reminder name (<c>shard-split-keepalive</c>,
+    /// <c>shard-consolidation-keepalive</c>, <c>reshard-keepalive</c>),
+    /// <see cref="TagTree"/>, and the tenant label - so the two series join.
+    /// <para>
+    /// <b>Zero-primed</b> when a coordinator that can abandon on purge arms its
+    /// phase timer, so zero on a live series is a reading. A tree that is deleted
+    /// but not yet purged never counts here: its saga keeps retrying, because the
+    /// tree can still be recovered.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> CoordinatorPurgedTreeAbandonments =
+        Meter.CreateCounter<long>("orleans.lattice.coordinator.purged_tree_abandonments", unit: "{operation}",
+            description: "In-flight coordinator sagas abandoned because a phase tick faulted and the tree was found purged, tagged by coordinator kind and tree. Zero-primed when such a coordinator arms its phase timer.");
+
+    /// <summary>
     /// The name of the observable gauge reporting, per coordinator kind and tree,
     /// the length of the <i>current run</i> of consecutive failed phase ticks.
     /// </summary>

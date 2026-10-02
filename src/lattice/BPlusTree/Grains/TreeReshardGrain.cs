@@ -62,6 +62,15 @@ internal sealed class TreeReshardGrain(
     protected override string LogContext => $"tree {TreeId}";
 
     /// <inheritdoc />
+    protected override bool AbandonsSagaOnPurgedTree => true;
+
+    /// <inheritdoc />
+    protected override Task<bool> IsTreePurgedAsync() => PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId);
+
+    /// <inheritdoc />
+    protected override Task ClearSagaStateForPurgedTreeAsync() => state.ClearStateAsync();
+
+    /// <inheritdoc />
     public async Task ReshardAsync(int newShardCount)
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
