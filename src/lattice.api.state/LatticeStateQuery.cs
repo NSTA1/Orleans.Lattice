@@ -534,7 +534,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            buffered!.Sort(StringComparer.Ordinal);
+            buffered!.Sort(OrdinalStringOrder.Comparison);
             ordered = buffered;
         }
 
@@ -866,7 +866,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            buffered!.Sort(StringComparer.Ordinal);
+            buffered!.Sort(OrdinalStringOrder.Comparison);
             ordered = buffered;
         }
 
@@ -1101,7 +1101,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            buffered!.Sort(StringComparer.Ordinal);
+            buffered!.Sort(OrdinalStringOrder.Comparison);
             ordered = buffered;
         }
 

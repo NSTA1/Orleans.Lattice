@@ -1,3 +1,4 @@
+using System.Buffers;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
@@ -155,30 +156,49 @@ public readonly record struct OrSetAccessor
     /// <summary>Mints the remove delta tombstoning every dot observed for <paramref name="element"/> in <paramref name="set"/>.</summary>
     private static OrSetDelta RemoveDelta(OrSet set, byte[] element)
     {
-        var key = Convert.ToBase64String(element);
-        OrSetDeltaDot[] observed;
-        if (set.Adds.TryGetValue(key, out var dots) && dots.Count > 0)
+        // The base64 encoding is wanted only to index Adds, so it is built
+        // into a stack or pooled span and probed through the dictionary's
+        // alternate lookup rather than materialised as a string that is
+        // dead the moment TryGetValue returns. OrSet itself keys every one
+        // of its own reads this way.
+        var charCount = OrSet.Base64CharCount(element.Length);
+        var rented = charCount > OrSet.MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        try
         {
-            observed = new OrSetDeltaDot[dots.Count];
-            for (var i = 0; i < dots.Count; i++)
+            Span<char> buffer = rented ?? stackalloc char[OrSet.MaxStackBase64Chars];
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var adds = set.Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+            OrSetDeltaDot[] observed;
+            if (adds.TryGetValue(buffer[..written], out var dots) && dots.Count > 0)
             {
-                observed[i] = new OrSetDeltaDot
+                observed = new OrSetDeltaDot[dots.Count];
+                for (var i = 0; i < dots.Count; i++)
                 {
-                    Element = element,
-                    ReplicaId = dots[i].ReplicaId,
-                    Counter = dots[i].Counter,
-                };
+                    observed[i] = new OrSetDeltaDot
+                    {
+                        Element = element,
+                        ReplicaId = dots[i].ReplicaId,
+                        Counter = dots[i].Counter,
+                    };
+                }
+            }
+            else
+            {
+                observed = Array.Empty<OrSetDeltaDot>();
+            }
+            return new OrSetDelta
+            {
+                Adds = Array.Empty<OrSetDeltaDot>(),
+                Removes = observed,
+            };
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<char>.Shared.Return(rented);
             }
         }
-        else
-        {
-            observed = Array.Empty<OrSetDeltaDot>();
-        }
-        return new OrSetDelta
-        {
-            Adds = Array.Empty<OrSetDeltaDot>(),
-            Removes = observed,
-        };
     }
 
     /// <summary>Returns <c>true</c> when <paramref name="element"/> is currently a member of the set.</summary>

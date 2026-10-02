@@ -173,7 +173,7 @@ internal sealed class RepoContextBootstrapPlan
             return new RepoContextBootstrapPlan(added, updated, unchanged, metadataChanged, []);
         }
 
-        removed.Sort(StringComparer.Ordinal);
+        removed.Sort(OrdinalStringOrder.Comparison);
         return new RepoContextBootstrapPlan(added, updated, unchanged, metadataChanged, removed);
     }
 

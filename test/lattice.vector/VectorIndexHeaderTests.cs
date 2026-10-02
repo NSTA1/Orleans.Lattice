@@ -116,6 +116,43 @@ public sealed class VectorIndexHeaderTests
     }
 
     [Test]
+    public void Read_rejects_more_centroid_chunks_than_chunks_in_total()
+    {
+        // The centroid chunks are a subset of the chunks, so every snapshot this
+        // build writes has CentroidChunkCount <= ChunkCount. A durable consumer
+        // sizes its centroid bookkeeping from this field, so a contradictory
+        // header must be refused at the parse boundary, not believed.
+        var buffer = new byte[VectorIndexHeader.Size];
+        (Sample() with { ChunkCount = 2, CentroidChunkCount = 3 }).Write(buffer);
+
+        var thrown = Assert.Throws<VectorIndexFormatException>(() => VectorIndexHeader.Read(buffer));
+
+        Assert.That(thrown!.Message, Does.Contain("3 centroid chunks out of 2 chunks"));
+    }
+
+    [Test]
+    public void Read_accepts_a_header_whose_every_chunk_is_a_centroid_chunk()
+    {
+        // The boundary of the check above: an index with no vectors yet holds
+        // only its centroid chunks, so equality must still read.
+        var buffer = new byte[VectorIndexHeader.Size];
+        var header = Sample() with { Count = 0, ChunkCount = 3, CentroidChunkCount = 3 };
+        header.Write(buffer);
+
+        Assert.That(VectorIndexHeader.Read(buffer), Is.EqualTo(header));
+    }
+
+    [Test]
+    public void TryRead_reports_failure_for_more_centroid_chunks_than_chunks_in_total()
+    {
+        var buffer = new byte[VectorIndexHeader.Size];
+        (Sample() with { ChunkCount = 0, CentroidChunkCount = int.MaxValue }).Write(buffer);
+
+        Assert.That(VectorIndexHeader.TryRead(buffer, out var read), Is.False);
+        Assert.That(read, Is.EqualTo(default(VectorIndexHeader)));
+    }
+
+    [Test]
     public void TryRead_returns_the_header_for_a_readable_form()
     {
         var buffer = new byte[VectorIndexHeader.Size];

@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Scaling.Tests;
 /// <see cref="IWalStorageStateSource"/> so no cluster is required.
 /// </summary>
 [TestFixture]
-public sealed class StoragePressureCollectorTests
+public sealed partial class StoragePressureCollectorTests
 {
     private const string AcctA = "acct-a";
     private const string AcctB = "acct-b";
