@@ -118,14 +118,14 @@ public partial class SchemaRemediationPanel : IDisposable
 
         try
         {
-            var schema = Facades.RequireSchema();
+            var schema = Facades.RequireSchemaOperations();
             var tree = workspace.TreeId;
             var steps = SchemaFormat.Count(_draft.Steps.Count, "step");
             Operations.Start(
                 tree,
                 SchemaOperationKind.Remediate,
                 $"Remediating every value through {steps}",
-                ct => schema.RemediateAsync(tree, transform, policy, ct));
+                ct => schema.StartRemediationAsync(tree, transform, policy, cancellationToken: ct));
             _draft.Clear();
             _startError = null;
         }

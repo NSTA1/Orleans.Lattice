@@ -58,14 +58,65 @@ internal sealed partial class FakeBackupControl : ILatticeBackupOperations
     /// <param name="operationId">The operation id.</param>
     /// <param name="backupId">The captured backup id.</param>
     public void SucceedCapture(string operationId, string backupId) =>
+        Succeed(operationId, backupId, new Dictionary<string, string> { [BackupOperationResultKeys.BackupId] = backupId });
+
+    /// <summary>Finishes operation <paramref name="operationId"/> as succeeded with <paramref name="result"/>.</summary>
+    /// <param name="operationId">The operation id.</param>
+    /// <param name="reference">The result reference, or <see langword="null"/>.</param>
+    /// <param name="result">The result map.</param>
+    public void Succeed(string operationId, string? reference, IReadOnlyDictionary<string, string> result) =>
         Move(operationId, status => status with
         {
             State = LatticeOperationState.Succeeded,
             Phase = "Completed",
+            PhaseIndex = null,
             FinishedAtUtc = status.StartedAtUtc.AddMinutes(1),
-            ResultReference = backupId,
-            Result = new Dictionary<string, string> { [BackupOperationResultKeys.BackupId] = backupId },
+            ResultReference = reference,
+            Result = result,
         });
+
+    /// <summary>A catalogue scrub's result map.</summary>
+    /// <param name="scanned">Rows scanned.</param>
+    /// <param name="pruned">Whether orphans were removed.</param>
+    /// <param name="orphans">The orphan backup ids.</param>
+    /// <returns>The map.</returns>
+    public static IReadOnlyDictionary<string, string> ScrubResult(long scanned, bool pruned, params string[] orphans) =>
+        new Dictionary<string, string>
+        {
+            [BackupOperationResultKeys.ScannedCount] = scanned.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.OrphanCount] = orphans.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.RemovedCount] = (pruned ? orphans.Length : 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.Pruned] = pruned ? "True" : "False",
+            [BackupOperationResultKeys.OrphanBackupIds] = string.Join(',', orphans),
+        };
+
+    /// <summary>A catalogue rebuild's result map.</summary>
+    /// <param name="scanned">Manifests scanned.</param>
+    /// <param name="registered">Manifests added.</param>
+    /// <param name="reconciled">Manifests reconciled.</param>
+    /// <returns>The map.</returns>
+    public static IReadOnlyDictionary<string, string> RebuildResult(long scanned, long registered, long reconciled) =>
+        new Dictionary<string, string>
+        {
+            [BackupOperationResultKeys.ScannedCount] = scanned.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.RegisteredCount] = registered.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.ReconciledCount] = reconciled.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+    /// <summary>A health check's result map.</summary>
+    /// <param name="backupId">The checked backup.</param>
+    /// <param name="verdict">The verdict.</param>
+    /// <param name="missing">Missing artifacts.</param>
+    /// <param name="mismatched">Hash mismatches.</param>
+    /// <returns>The map.</returns>
+    public static IReadOnlyDictionary<string, string> HealthResult(string backupId, BackupHealthStatus verdict, int missing = 0, int mismatched = 0) =>
+        new Dictionary<string, string>
+        {
+            [BackupOperationResultKeys.BackupId] = backupId,
+            [BackupOperationResultKeys.HealthStatus] = verdict.ToString(),
+            [BackupOperationResultKeys.MissingArtifactCount] = missing.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.HashMismatchArtifactCount] = mismatched.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
 
     /// <summary>Finishes operation <paramref name="operationId"/> as a succeeded restore with <paramref name="restore"/>.</summary>
     /// <param name="operationId">The operation id.</param>
@@ -142,7 +193,7 @@ internal sealed partial class FakeBackupControl : ILatticeBackupOperations
     public Task<LatticeOperationHandle> StartBackupHealthCheckAsync(string backupId, string? operationId = null, CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(StartBackupHealthCheckAsync), backupId));
-        return StartAsync(operationId, BackupOperationKinds.HealthCheck, "captured");
+        return StartAsync(operationId, BackupOperationKinds.HealthCheck, Catalogue.Find(manifest => manifest.Id == backupId)?.Scope.TreeId ?? "captured");
     }
 
     /// <inheritdoc />

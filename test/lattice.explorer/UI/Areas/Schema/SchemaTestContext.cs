@@ -31,6 +31,7 @@ public abstract class SchemaTestContext : ShellChromeTestContext
         Schema = new FakeSchemaControl();
         Apps = new FakeSchemaAppsControl();
         Services.AddKeyedSingleton<ILatticeSchemaControl>(ShellFacades.Key, Schema);
+        Services.AddKeyedSingleton<ILatticeSchemaOperations>(ShellFacades.Key, Schema);
         Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Apps);
         Data = new FakeSchemaDataReader();
         Services.AddSingleton<Orleans.Lattice.Explorer.Core.Data.IDataReader>(Data);

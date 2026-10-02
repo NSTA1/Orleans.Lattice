@@ -57,6 +57,9 @@ internal static class SchemaTypeAliases
     /// <summary>Alias for <see cref="SchemaRemediationMode"/>.</summary>
     internal const string SchemaRemediationMode = "ols.rm";
 
+    /// <summary>Alias for <see cref="SchemaRemediationSlice"/>.</summary>
+    internal const string SchemaRemediationSlice = "ols.sl";
+
     /// <summary>Alias for <see cref="LatticeSchemaComplianceReport"/>.</summary>
     internal const string LatticeSchemaComplianceReport = "ols.cr";
 

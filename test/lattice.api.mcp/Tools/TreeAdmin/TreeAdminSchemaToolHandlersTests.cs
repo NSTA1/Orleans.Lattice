@@ -3,8 +3,8 @@ using NSubstitute;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Schema;
 
-// These tests exercise the deprecated blocking compliance scan (LATTICE0002) on purpose:
-// it is still served, unchanged, until the next major version removes it (#4126).
+// The deprecated blocking compliance scan (LATTICE0002, #4126) is exercised on purpose
+// until its removal.
 #pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -215,48 +215,8 @@ public sealed class TreeAdminSchemaToolHandlersTests
     }
 
     [Test]
-    public async Task AdvanceAndMigrateAsync_forwards_the_new_target()
-    {
-        var schema = Schema();
-        var report = LatticeSchemaRemediationReport.Completed(3, "orders#v4", "op-2");
-        schema.AdvanceAndMigrateAsync("orders", 4, Arg.Any<CancellationToken>()).Returns(report);
-
-        var result = await TreeAdminSchemaToolHandlers.AdvanceAndMigrateAsync(schema, "orders", 4, CancellationToken.None);
-
-        Assert.That(result, Is.EqualTo(report));
-    }
-
-    [Test]
-    public async Task MigrateToTargetVersionAsync_forwards_to_the_facade()
-    {
-        var schema = Schema();
-        var report = LatticeSchemaRemediationReport.Idle;
-        schema.MigrateToTargetVersionAsync("orders", Arg.Any<CancellationToken>()).Returns(report);
-
-        var result = await TreeAdminSchemaToolHandlers.MigrateToTargetVersionAsync(schema, "orders", CancellationToken.None);
-
-        Assert.That(result, Is.EqualTo(report));
-    }
-
-    [Test]
-    public async Task RemediateAsync_forwards_the_transform_and_target_policy()
-    {
-        var schema = Schema();
-        var transform = LatticeValueTransform.Passthrough(LatticeValueTransform.DropMember("legacy"));
-        var policy = new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() });
-        var report = LatticeSchemaRemediationReport.Completed(5, "orders#r1", "op-3");
-        schema.RemediateAsync("orders", transform, policy, Arg.Any<CancellationToken>()).Returns(report);
-
-        var result = await TreeAdminSchemaToolHandlers.RemediateAsync(schema, "orders", transform, policy, CancellationToken.None);
-
-        Assert.That(result, Is.EqualTo(report));
-        await schema.Received(1).RemediateAsync("orders", transform, policy, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public void Handlers_reject_a_null_facade()
     {
-        var transform = LatticeValueTransform.Passthrough();
         var policy = new LatticeSchemaPolicy(Array.Empty<LatticeSchemaRule>());
 
         Assert.Multiple(() =>
@@ -273,9 +233,6 @@ public sealed class TreeAdminSchemaToolHandlersTests
             Assert.That(() => TreeAdminSchemaToolHandlers.SetVersionConfigAsync(null!, "t", 1, 1), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.ClearVersionConfigAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.AdvanceTargetVersionAsync(null!, "t", 2), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminSchemaToolHandlers.AdvanceAndMigrateAsync(null!, "t", 2), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminSchemaToolHandlers.MigrateToTargetVersionAsync(null!, "t"), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminSchemaToolHandlers.RemediateAsync(null!, "t", transform, policy), Throws.ArgumentNullException);
         });
     }
 

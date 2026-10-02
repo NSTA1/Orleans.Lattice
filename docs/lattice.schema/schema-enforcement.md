@@ -215,25 +215,35 @@ on the source while it runs, so run a remediation while the tree is
 write-quiescent: a write accepted after the dry-run scan but before cutover is not
 carried into the destination and is superseded by the alias swap.
 
-Remediation is idempotent and resumable: it persists its intent and each phase
-transition before acting, so re-issuing the same `RemediateAsync` call (the same
-transform and target policy) after a silo failover resumes from the last persisted
-phase. Nothing resumes it on its own - an interrupted remediation stays in flight
-until it is requested again - and a call with different parameters while one is in
-flight throws `InvalidOperationException`.
+Remediation is idempotent and resumable. It persists its intent and then works in
+bounded slices of values, each resuming strictly after the last value the phase
+durably recorded; a slice interrupted by a fault records the values it had already
+processed before the fault surfaces. Re-issuing the same `RemediateAsync` call (the
+same transform and target policy) after a silo failover therefore resumes from the
+last recorded slice rather than from the start. Nothing resumes it on its own - an
+interrupted remediation stays in flight until it is requested again - and a call
+with different parameters while one is in flight throws
+`InvalidOperationException`.
 
 `RemediateAsync` drives the remediation to a terminal state before it returns its
-`LatticeSchemaRemediationReport`; poll a running or last-known remediation with
+`LatticeSchemaRemediationReport`, one slice per call into the cluster, so no single
+call runs for the whole remediation. To start one without waiting, and to follow
+its phase and values processed or cancel it before cutover, use the
+[schema operations](../lattice.api.schema/operations.md) of the control facade.
+Poll a running or last-known remediation with
 `ILatticeSchemaRemediationAdmin.GetRemediationStatusAsync`. The status read never
 waits behind a running remediation or migration: it answers at once with the last
 phase and count the run has durably recorded, never one it is still persisting. The report carries the
-`Phase` (`Idle`, `DryRun`, `Build`, `Cutover`, `Completed`, or `Aborted`, with
-`Succeeded` and `DidAbort` as shorthands), `InProgress`, `ScannedCount`,
-`DestinationTreeId`, and `OperationId`, and - on an abort - the first
+`Phase` (`Idle`, `DryRun`, `Build`, `Cutover`, `Completed`, `Aborted` or
+`Cancelled`, with `Succeeded`, `DidAbort` and `WasCancelled` as shorthands),
+`InProgress`, `ScannedCount` (the values the current phase has processed; the whole
+tree once completed), `DestinationTreeId`, and `OperationId` (the tracked
+operation's id when a schema operation started the run), and - on an abort - the first
 `OffendingKey`, the `Reason` (the policy violation, or the transform's failure
 message), and `OffendingValuePreview`: at most `DeadLetterPreviewMaxBytes` leading
 bytes of the transformed value, or of the original value when the transform itself
-threw.
+threw. A remediation cancelled before cutover discards its partial destination and
+leaves the original tree untouched; one already cutting over cannot be cancelled.
 
 To measure compliance without rewriting anything, call
 `ILatticeSchemaComplianceAdmin.ScanComplianceAsync(treeId, cancellationToken)`. It is a

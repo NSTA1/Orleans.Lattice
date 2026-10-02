@@ -25,29 +25,48 @@ public sealed class BackupOperationPageTests : BackupsTestContext
     [Test]
     public void A_staged_operation_redraws_each_stage_as_it_moves()
     {
-        var rebuild = new TaskCompletionSource<BackupCatalogRebuildReport>();
-        Backups.Rebuild = () => rebuild.Task;
-        var operation = Actions.RebuildCatalogue();
+        var revert = new TaskCompletionSource();
+        Backups.Revert = _ => revert.Task;
+        var restore = FakeBackupControl.RestoreResult(new LatticeRestoreRequest("b1", "orders", mode: LatticeRestoreMode.ShadowCutover));
+        var operation = Actions.Revert("op-r", restore);
 
         var cut = RenderAt<BackupOperationPage>("backups/operations/" + operation.Id);
 
         cut.WaitUntil(() =>
         {
             var stages = cut.FindAll(".lt-backups-stages__stage");
-            Assert.That(stages.Select(stage => stage.QuerySelector(".lt-backups-stages__state")!.TextContent), Is.EqualTo(new[] { "Under way", "Waiting" }));
-            Assert.That(stages[0].GetAttribute("aria-current"), Is.EqualTo("step"));
+            Assert.That(stages.Select(stage => stage.QuerySelector(".lt-backups-stages__state")!.TextContent), Is.EqualTo(new[] { "Done", "Under way", "Waiting" }));
+            Assert.That(stages[1].GetAttribute("aria-current"), Is.EqualTo("step"));
             Assert.That(cut.Find("[role=status] .lt-pill").TextContent.Trim(), Is.EqualTo("Running"));
-            Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Rebuild the catalogue from the backup store"));
+            Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Revert the restore of orders"));
         });
 
-        rebuild.SetResult(new BackupCatalogRebuildReport(10, 3, 7));
+        revert.SetResult();
 
         cut.WaitUntil(() =>
         {
             Assert.That(cut.FindAll(".lt-backups-stages__state").Select(state => state.TextContent), Has.All.EqualTo("Done"));
             Assert.That(cut.Find("[role=status]").TextContent, Does.Contain("Succeeded"));
-            Assert.That(cut.FindAll(".lt-dl__term").Select(term => term.TextContent), Does.Contain("Manifests scanned"));
+            Assert.That(cut.FindAll("a").Select(a => a.TextContent), Does.Contain("The reverted restore"));
             Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Does.Contain("finished"));
+        });
+    }
+
+    [Test]
+    public void A_started_rebuild_hands_the_page_to_the_cluster_operation_with_its_counts()
+    {
+        var operation = Actions.RebuildCatalogue();
+        var cut = RenderAt<BackupOperationPage>("backups/operations/" + operation.Id);
+
+        cut.WaitUntil(() => Assert.That(CurrentPath, Is.EqualTo("/backups/operations/op-1")));
+        Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RebuildCatalogFromSinkAsync)), Is.Zero, "the blocking verb is not called");
+
+        Backups.Succeed("op-1", null, FakeBackupControl.RebuildResult(10, 3, 7));
+        var followed = RenderAt<BackupOperationPage>("backups/operations/op-1");
+        followed.WaitUntil(() =>
+        {
+            Assert.That(followed.Find("h1").TextContent, Is.EqualTo("Rebuild the catalogue from the backup store"));
+            Assert.That(followed.FindAll(".lt-dl__term").Select(term => term.TextContent), Is.EqualTo(new[] { "Manifests scanned", "Added to the catalogue", "Reconciled in place" }));
         });
     }
 
@@ -307,12 +326,30 @@ public sealed class BackupOperationPageTests : BackupsTestContext
     [Test]
     public void A_scrub_lists_its_orphan_rows()
     {
-        Backups.Scrub = _ => Task.FromResult(new BackupCatalogScrubReport(5, 1, 0, false, ["orphan-1"]));
-        var scrub = Actions.ScrubCatalogue(pruneOrphans: false);
+        Backups.Statuses["op-5"] = FakeBackupControl.Running("op-5", BackupOperationKinds.CatalogScrub, "sys-backup-catalog");
+        Backups.Succeed("op-5", null, FakeBackupControl.ScrubResult(5, false, "orphan-1"));
 
-        var cut = RenderAt<BackupOperationPage>("backups/operations/" + scrub.Id);
+        var cut = RenderAt<BackupOperationPage>("backups/operations/op-5");
 
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-backups-list__item").TextContent, Is.EqualTo("orphan-1")));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-backups-list__item").TextContent, Is.EqualTo("orphan-1"));
+            Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Check the catalogue against the backup store"));
+        });
+    }
+
+    [Test]
+    public void A_running_maintenance_operation_names_its_phase_in_the_areas_words()
+    {
+        Backups.Statuses["op-6"] = Phase(FakeBackupControl.Running("op-6", BackupOperationKinds.CatalogScrub, "sys-backup-catalog"), BackupOperationPhases.PruningOrphans, 1, 1, 2, BackupOperationUnits.Manifests);
+
+        var cut = RenderAt<BackupOperationPage>("backups/operations/op-6");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-progress__phase").TextContent, Is.EqualTo("Removing orphan rows"));
+            Assert.That(cut.Find(".lt-progress__detail").TextContent, Is.EqualTo("1 of 2 manifests"));
+        });
     }
 
     private BackupActions Actions => Services.GetRequiredService<BackupActions>();

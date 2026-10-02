@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// <c>GrpcSchemaAdminClient</c>. Faults map through <see cref="ShellTransportFaults"/>.
 /// </summary>
 /// <param name="channel">The circuit's transport channel.</param>
-internal sealed class ShellSchemaControlTransport(ShellTransportChannel channel)
+internal sealed partial class ShellSchemaControlTransport(ShellTransportChannel channel)
     : ShellTransportAdapter<LatticeSchemaApiGrpcClient>(channel, LatticeSchemaApiGrpcClient.Create), ILatticeSchemaControl
 {
     /// <inheritdoc />
@@ -85,6 +85,10 @@ internal sealed class ShellSchemaControlTransport(ShellTransportChannel channel)
             cancellationToken);
     }
 
+    // The shipped ILatticeSchemaControl still carries the deprecated blocking verbs
+    // (LATTICE0002), so this adapter forwards them to the client's deprecated calls.
+    // Nothing in the Explorer calls them: it starts tracked operations instead.
+#pragma warning disable LATTICE0002
     /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
         string treeId,
@@ -128,6 +132,7 @@ internal sealed class ShellSchemaControlTransport(ShellTransportChannel channel)
             null,
             cancellationToken);
     }
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)

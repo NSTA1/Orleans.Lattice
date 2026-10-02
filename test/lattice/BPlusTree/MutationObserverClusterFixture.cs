@@ -5,6 +5,7 @@ using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -32,9 +33,11 @@ public sealed class MutationObserverClusterFixture
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
 
         var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(TreeName, new TreeRegistryEntry

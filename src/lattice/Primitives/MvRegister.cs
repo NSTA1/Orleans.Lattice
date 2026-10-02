@@ -318,8 +318,10 @@ public sealed class MvRegister : ICrdt<MvRegister>
         for (var i = 0; i < localCount; i++)
         {
             var entry = localEntries[i];
-            if (FindDot(otherEntries, entry.ReplicaId, entry.Counter) is { } dup)
+            var dupIndex = IndexOfDot(otherEntries, entry.ReplicaId, entry.Counter);
+            if (dupIndex >= 0)
             {
+                var dup = otherEntries[dupIndex];
                 var kept = CompareValueBytes(dup.Value, entry.Value) > 0 ? Adopt(dup) : entry;
                 if (survivors is not null)
                 {
@@ -441,30 +443,71 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
     private static bool ContainsDot(List<MvRegisterEntry> entries, string replicaId, long counter)
     {
-        foreach (var entry in entries)
+        var span = CollectionsMarshal.AsSpan(entries);
+        for (var i = 0; i < span.Length; i++)
         {
+            ref readonly var entry = ref span[i];
             if (entry.Counter == counter && entry.ReplicaId == replicaId) return true;
         }
         return false;
     }
 
-    private static MvRegisterEntry? FindDot(List<MvRegisterEntry> entries, string replicaId, long counter)
+    /// <summary>
+    /// Returns the index of the entry carrying <paramref name="replicaId"/> /
+    /// <paramref name="counter"/>, or <c>-1</c> when no entry does.
+    /// </summary>
+    /// <remarks>
+    /// Returning the index rather than <c>MvRegisterEntry?</c> is the point.
+    /// The nullable form copies the whole 24-byte entry into a
+    /// <see cref="Nullable{T}"/> wrapper on every hit and the caller's
+    /// <c>is { } dup</c> copies it straight back out, so the probe paid two
+    /// struct copies to answer a question the miss path does not even need an
+    /// entry for - and both merge loops run this probe once per local entry,
+    /// so the copies scale with the product of the two entry counts. The
+    /// caller now reads the matched entry by reference, and only on the hit
+    /// path.
+    /// <para>
+    /// The scan walks <see cref="CollectionsMarshal.AsSpan"/> with
+    /// <c>ref readonly</c> rather than the list's struct enumerator, so a
+    /// probed entry is compared in place instead of being copied per
+    /// iteration. The list is never mutated while the span is alive: both
+    /// callers append to a separate <c>survivors</c> list.
+    /// </para>
+    /// </remarks>
+    private static int IndexOfDot(List<MvRegisterEntry> entries, string replicaId, long counter)
     {
-        foreach (var entry in entries)
+        var span = CollectionsMarshal.AsSpan(entries);
+        for (var i = 0; i < span.Length; i++)
         {
-            if (entry.Counter == counter && entry.ReplicaId == replicaId) return entry;
+            ref readonly var entry = ref span[i];
+            if (entry.Counter == counter && entry.ReplicaId == replicaId) return i;
         }
-        return null;
+        return -1;
     }
 
-    private static MvRegisterEntry? FindDot(IReadOnlyList<MvRegisterEntry> entries, string replicaId, long counter)
+    /// <inheritdoc cref="IndexOfDot(List{MvRegisterEntry}, string, long)"/>
+    private static int IndexOfDot(IReadOnlyList<MvRegisterEntry> entries, string replicaId, long counter)
     {
-        for (var i = 0; i < entries.Count; i++)
+        // The delta side arrives as IReadOnlyList, so resolve the backing span
+        // where the concrete shape allows it and fall back to the indexer
+        // otherwise. foreach here would bind IEnumerable<T>.GetEnumerator and
+        // heap-allocate a boxed enumerator per probe.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(entries, out var span);
+        var count = entries.Count;
+        for (var i = 0; i < count; i++)
         {
-            var entry = entries[i];
-            if (entry.Counter == counter && entry.ReplicaId == replicaId) return entry;
+            if (spanned)
+            {
+                ref readonly var entry = ref span[i];
+                if (entry.Counter == counter && entry.ReplicaId == replicaId) return i;
+            }
+            else
+            {
+                var entry = entries[i];
+                if (entry.Counter == counter && entry.ReplicaId == replicaId) return i;
+            }
         }
-        return null;
+        return -1;
     }
 
     // Lexicographic byte-order comparison used to break a same-dot value
@@ -545,9 +588,10 @@ public sealed class MvRegister : ICrdt<MvRegister>
         for (var i = 0; i < localCount; i++)
         {
             var entry = localEntries[i];
-            var dup = hasEntries ? FindDot(otherEntries!, entry.ReplicaId, entry.Counter) : null;
-            if (dup is { } match)
+            var dupIndex = hasEntries ? IndexOfDot(otherEntries!, entry.ReplicaId, entry.Counter) : -1;
+            if (dupIndex >= 0)
             {
+                var match = otherEntries![dupIndex];
                 var kept = CompareValueBytes(match.Value, entry.Value) > 0 ? Adopt(match) : entry;
                 if (survivors is not null)
                 {

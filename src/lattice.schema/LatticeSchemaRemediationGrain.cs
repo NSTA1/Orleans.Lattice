@@ -96,6 +96,16 @@ internal sealed class LatticeSchemaRemediationGrain(
         catch { state.State.AliasReservationId = id; throw; }
     }
 
+    /// <summary>The number of values one <see cref="RunSliceAsync"/> processes before it persists its progress and returns.</summary>
+    internal const int DefaultSliceSize = 512;
+
+    /// <summary>
+    /// The number of values one slice processes. Defaults to
+    /// <see cref="DefaultSliceSize"/>; unit tests lower it to drive a tree across
+    /// several slices.
+    /// </summary>
+    internal int SliceSize { get; set; } = DefaultSliceSize;
+
     /// <inheritdoc />
     public async Task<LatticeSchemaRemediationReport> StartAsync(
         LatticeValueTransform transform,
@@ -104,25 +114,8 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         ArgumentNullException.ThrowIfNull(targetPolicy);
         EnsureControlPlaneOrigin();
-
-        // Reject an uncompilable / non-linear regex here rather than mid-build.
-        _ = CompiledSchemaPolicy.Compile(targetPolicy);
-
-        if (state.State.InProgress)
-        {
-            if (IsSameParameters(transform, targetPolicy))
-            {
-                // Idempotent resume: drive the in-flight remediation to completion.
-                await RunRemediationPassAsync();
-                return GetStatus();
-            }
-
-            throw new InvalidOperationException(
-                $"A schema remediation is already in progress for tree '{TreeId}' with different parameters.");
-        }
-
-        await InitiateAsync(transform, targetPolicy);
-        await RunRemediationPassAsync();
+        await AcceptCoreAsync(transform, targetPolicy, operationId: null);
+        await DriveToTerminalAsync();
         return GetStatus();
     }
 
@@ -131,6 +124,115 @@ internal sealed class LatticeSchemaRemediationGrain(
         uint schemaId, uint targetVersion, CancellationToken cancellationToken = default)
     {
         EnsureControlPlaneOrigin();
+        await AcceptVersionMigrationCoreAsync(schemaId, targetVersion, operationId: null);
+        await DriveToTerminalAsync();
+        return GetStatus();
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeSchemaRemediationReport> AcceptAsync(
+        LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, string operationId)
+    {
+        ArgumentNullException.ThrowIfNull(targetPolicy);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        EnsureControlPlaneOrigin();
+        return AcceptCoreAsync(transform, targetPolicy, operationId);
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeSchemaRemediationReport> AcceptVersionMigrationAsync(
+        uint schemaId, uint targetVersion, string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        EnsureControlPlaneOrigin();
+        return AcceptVersionMigrationCoreAsync(schemaId, targetVersion, operationId);
+    }
+
+    /// <inheritdoc />
+    public async Task<SchemaRemediationSlice> RunSliceAsync()
+    {
+        EnsureControlPlaneOrigin();
+        await RunSliceCoreAsync();
+        return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
+    }
+
+    /// <inheritdoc />
+    public async Task RunRemediationPassAsync()
+    {
+        EnsureControlPlaneOrigin();
+        if (!state.State.InProgress)
+        {
+            await ReleaseAliasAsync();
+            return;
+        }
+
+        await DriveToTerminalAsync();
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeSchemaRemediationReport> CancelAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        EnsureControlPlaneOrigin();
+
+        // Cutover is the point of no return: the target policy may already be
+        // installed and the alias swapped, so a cancel there is declined and the
+        // remediation runs on to completion.
+        if (!state.State.InProgress
+            || !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal)
+            || state.State.Phase is not (LatticeSchemaRemediationPhase.DryRun or LatticeSchemaRemediationPhase.Build))
+        {
+            return GetStatus();
+        }
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            try
+            {
+                if (state.State.Phase == LatticeSchemaRemediationPhase.Build)
+                {
+                    await DiscardDestinationAsync(grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!));
+                }
+
+                await FinishCancelledAsync();
+            }
+            finally
+            {
+                if (!state.State.InProgress)
+                    await ReleaseAliasAsync();
+            }
+        }
+
+        return GetStatus();
+    }
+
+    private async Task<LatticeSchemaRemediationReport> AcceptCoreAsync(
+        LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, string? operationId)
+    {
+        // Reject an uncompilable / non-linear regex here rather than mid-build.
+        _ = CompiledSchemaPolicy.Compile(targetPolicy);
+
+        if (state.State.InProgress)
+        {
+            if (IsSameParameters(transform, targetPolicy))
+            {
+                // Idempotent: the in-flight remediation is the one requested.
+                return GetStatus();
+            }
+
+            throw new InvalidOperationException(
+                $"A schema remediation is already in progress for tree '{TreeId}' with different parameters.");
+        }
+
+        await InitiateCoreAsync(
+            SchemaRemediationMode.Transform, transform, targetPolicy, migrationSchemaId: 0, migrationTargetVersion: 0,
+            operationId);
+        return GetStatus();
+    }
+
+    private async Task<LatticeSchemaRemediationReport> AcceptVersionMigrationCoreAsync(
+        uint schemaId, uint targetVersion, string? operationId)
+    {
         if (schemaRegistry is null)
         {
             throw new InvalidOperationException(
@@ -142,8 +244,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             if (IsSameMigration(schemaId, targetVersion))
             {
-                // Idempotent resume: drive the in-flight migration to completion.
-                await RunRemediationPassAsync();
+                // Idempotent: the in-flight migration is the one requested.
                 return GetStatus();
             }
 
@@ -161,15 +262,26 @@ internal sealed class LatticeSchemaRemediationGrain(
             return GetStatus();
         }
 
-        await InitiateMigrationAsync(schemaId, targetVersion);
-        await RunRemediationPassAsync();
+        await InitiateMigrationAsync(schemaId, targetVersion, operationId);
         return GetStatus();
     }
 
-    /// <inheritdoc />
-    public async Task RunRemediationPassAsync()
+    /// <summary>
+    /// Runs slices until the remediation is terminal, all within the current turn.
+    /// Serves the in-turn <see cref="StartAsync"/>, <see cref="StartVersionMigrationAsync"/>
+    /// and <see cref="RunRemediationPassAsync"/> verbs; a caller that must not hold
+    /// one call open for the whole run drives <see cref="RunSliceAsync"/> instead.
+    /// </summary>
+    private async Task DriveToTerminalAsync()
     {
-        EnsureControlPlaneOrigin();
+        while (state.State.InProgress)
+        {
+            await RunSliceCoreAsync();
+        }
+    }
+
+    private async Task RunSliceCoreAsync()
+    {
         if (!state.State.InProgress)
         {
             await ReleaseAliasAsync();
@@ -185,28 +297,22 @@ internal sealed class LatticeSchemaRemediationGrain(
             await ReserveAliasAsync();
             try
             {
-                if (state.State.Phase == LatticeSchemaRemediationPhase.DryRun)
+                switch (state.State.Phase)
                 {
-                    if (!await RunDryRunGateAsync())
-                    {
-                        return;
-                    }
+                    case LatticeSchemaRemediationPhase.DryRun:
+                        await RunDryRunSliceAsync();
+                        break;
+                    case LatticeSchemaRemediationPhase.Build:
+                        await RunBuildSliceAsync();
+                        break;
+                    case LatticeSchemaRemediationPhase.Cutover:
+                        await CutoverAsync();
+                        await CompleteAsync();
+                        break;
+                    default:
+                        throw new InvalidOperationException(
+                            $"The schema remediation of tree '{TreeId}' is in flight in the unexpected phase {state.State.Phase}.");
                 }
-
-                if (state.State.Phase == LatticeSchemaRemediationPhase.Build)
-                {
-                    if (!await BuildDestinationAsync())
-                    {
-                        return;
-                    }
-                }
-
-                if (state.State.Phase == LatticeSchemaRemediationPhase.Cutover)
-                {
-                    await CutoverAsync();
-                }
-
-                await CompleteAsync();
             }
             finally
             {
@@ -215,7 +321,6 @@ internal sealed class LatticeSchemaRemediationGrain(
             }
         }
     }
-
     /// <inheritdoc />
     /// <remarks>
     /// Interleaved (<see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> on the
@@ -269,9 +374,6 @@ internal sealed class LatticeSchemaRemediationGrain(
         return state.State.LastReport ?? LatticeSchemaRemediationReport.Idle;
     }
 
-    private Task InitiateAsync(LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy) =>
-        InitiateCoreAsync(SchemaRemediationMode.Transform, transform, targetPolicy, migrationSchemaId: 0, migrationTargetVersion: 0);
-
     /// <summary>
     /// Reads the tree's current enforcement policy (when it has one) and starts a
     /// schema-version migration against it. The policy, if present, is validated
@@ -279,7 +381,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// keyed by the logical tree id, so the alias flip leaves it governing the tree
     /// unchanged - tightening a policy is the separate enforcement-remediation path).
     /// </summary>
-    private async Task InitiateMigrationAsync(uint schemaId, uint targetVersion)
+    private async Task InitiateMigrationAsync(uint schemaId, uint targetVersion, string? operationId)
     {
         LatticeSchemaPolicy? existingPolicy;
         using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -297,7 +399,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
 
         await InitiateCoreAsync(
-            SchemaRemediationMode.SchemaVersionMigration, transform: default, existingPolicy, schemaId, targetVersion);
+            SchemaRemediationMode.SchemaVersionMigration, transform: default, existingPolicy, schemaId, targetVersion,
+            operationId);
     }
 
     /// <summary>
@@ -306,15 +409,23 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// transient <c>WriteStateAsync</c> failure cannot leak in-memory mutations past
     /// the <see cref="SchemaRemediationState.InProgress"/> guard.
     /// </summary>
+    /// <remarks>
+    /// The destination tree id always takes a fresh suffix, never a caller-supplied
+    /// <paramref name="operationId"/>: an operation id can be chosen by a caller and
+    /// reused once its record is pruned, and a reused id must never name the
+    /// physical tree an earlier remediation cut the tree over to.
+    /// </remarks>
     private async Task InitiateCoreAsync(
         SchemaRemediationMode mode,
         LatticeValueTransform transform,
         LatticeSchemaPolicy? targetPolicy,
         uint migrationSchemaId,
-        uint migrationTargetVersion)
+        uint migrationTargetVersion,
+        string? operationId)
     {
-        var operationId = Guid.NewGuid().ToString("N");
-        var destinationTreeId = $"{TreeId}/remediated/{operationId}";
+        var destinationSuffix = Guid.NewGuid().ToString("N");
+        operationId ??= destinationSuffix;
+        var destinationTreeId = $"{TreeId}/remediated/{destinationSuffix}";
 
         // Resolve the source tree's physical id BEFORE any alias swap, so cutover
         // can arm the correct (source) shards even on a resume after a partial
@@ -341,6 +452,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         var prevMode = state.State.Mode;
         var prevMigrationSchemaId = state.State.MigrationSchemaId;
         var prevMigrationTargetVersion = state.State.MigrationTargetVersion;
+        var prevScanCursor = state.State.ScanCursor;
+        var prevPhaseTotal = state.State.PhaseTotal;
 
         // Persist intent BEFORE any external side effect.
         state.State.InProgress = true;
@@ -355,6 +468,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         state.State.Mode = mode;
         state.State.MigrationSchemaId = migrationSchemaId;
         state.State.MigrationTargetVersion = migrationTargetVersion;
+        state.State.ScanCursor = null;
+        state.State.PhaseTotal = null;
         try
         {
             await WriteAndPublishStateAsync();
@@ -373,86 +488,215 @@ internal sealed class LatticeSchemaRemediationGrain(
             state.State.Mode = prevMode;
             state.State.MigrationSchemaId = prevMigrationSchemaId;
             state.State.MigrationTargetVersion = prevMigrationTargetVersion;
+            state.State.ScanCursor = prevScanCursor;
+            state.State.PhaseTotal = prevPhaseTotal;
             throw;
         }
     }
 
     /// <summary>
-    /// Runs the read-only dry-run gate. Returns <c>true</c> to advance to the build
-    /// phase, <c>false</c> when the remediation aborted (no destination was built;
-    /// the original tree is untouched).
+    /// Runs one slice of the read-only dry-run gate: up to <see cref="SliceSize"/>
+    /// values after the durable cursor, each rewritten and revalidated. Aborts on the
+    /// first offender with no destination built and the original tree untouched;
+    /// advances to the build once the source is exhausted, recording the dry run's
+    /// count as the build's total; otherwise records how far it got.
     /// </summary>
-    private async Task<bool> RunDryRunGateAsync()
+    private async Task RunDryRunSliceAsync()
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
-        var outcome = await LatticeSchemaRemediation.DryRunCoreAsync(
-            source.ScanEntriesAsync(),
-            CreateRewrite(),
-            PolicyViewOrNull(),
-            CompiledPolicyOrNull(),
-            _previewMaxBytes,
-            CancellationToken.None);
+        var rewrite = CreateRewrite();
+        var policyView = PolicyViewOrNull();
+        var compiled = CompiledPolicyOrNull();
+        var sliceSize = Math.Max(1, SliceSize);
+        var done = 0;
+        string? lastKey = null;
+        Offender? offender = null;
 
-        if (!outcome.Succeeded)
+        try
         {
-            await AbortAsync(outcome.ScannedCount, outcome.OffendingKey!, outcome.Reason!, outcome.OffendingValuePreview!)
-                ;
-            return false;
+            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            {
+                byte[] rewritten;
+                try
+                {
+                    rewritten = rewrite(entry.Value);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+                {
+                    offender = new Offender(entry.Key, ex.Message, Preview(entry.Value));
+                    break;
+                }
+
+                var validated = policyView is null ? rewritten : policyView(rewritten);
+                if (compiled?.Validate(validated) is { } reason)
+                {
+                    offender = new Offender(entry.Key, reason, Preview(validated));
+                    break;
+                }
+
+                done++;
+                lastKey = entry.Key;
+                if (done == sliceSize)
+                {
+                    break;
+                }
+            }
+        }
+        catch
+        {
+            await BankSliceProgressAsync(done, lastKey);
+            throw;
         }
 
-        await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Build, outcome.ScannedCount);
-        return true;
+        var scanned = state.State.ScannedCount + done;
+        if (offender is { } failed)
+        {
+            await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
+        }
+        else if (done < sliceSize)
+        {
+            await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Build, scannedCount: 0, phaseTotal: scanned);
+        }
+        else
+        {
+            await RecordSliceProgressAsync(scanned, lastKey);
+        }
     }
 
     /// <summary>
-    /// Populates the destination physical tree with rewritten, revalidated values.
-    /// Returns <c>true</c> to advance to cutover, <c>false</c> when the remediation
-    /// aborted (the partial destination is discarded).
+    /// Runs one slice of the destination build: up to <see cref="SliceSize"/> values
+    /// after the durable cursor, each rewritten, revalidated and written to the
+    /// destination. Aborts on the first offender, discarding the partial destination;
+    /// advances to cutover once the source is exhausted; otherwise records how far it
+    /// got. A slice re-run after a fault rewrites at most the values the fault
+    /// interrupted, and a destination write is idempotent.
     /// </summary>
-    private async Task<bool> BuildDestinationAsync()
+    private async Task RunBuildSliceAsync()
     {
-        await grainFactory.GetLatticeRegistry().RegisterAsync(
-            state.State.DestinationTreeId!,
-            new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId });
+        if (state.State.ScanCursor is null)
+        {
+            await grainFactory.GetLatticeRegistry().RegisterAsync(
+                state.State.DestinationTreeId!,
+                new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId });
+        }
+
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
         var compiled = CompiledPolicyOrNull();
         var policyView = PolicyViewOrNull();
         var rewrite = CreateRewrite();
-        var scanned = 0;
+        var sliceSize = Math.Max(1, SliceSize);
+        var done = 0;
+        string? lastKey = null;
+        Offender? offender = null;
 
-        await foreach (var entry in source.ScanEntriesAsync())
+        try
         {
-            scanned++;
-
-            byte[] rewritten;
-            try
+            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
             {
-                rewritten = rewrite(entry.Value);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
-            {
-                await DiscardDestinationAsync(destination);
-                await AbortAsync(scanned, entry.Key, ex.Message, Preview(entry.Value));
-                return false;
-            }
+                byte[] rewritten;
+                try
+                {
+                    rewritten = rewrite(entry.Value);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+                {
+                    offender = new Offender(entry.Key, ex.Message, Preview(entry.Value));
+                    break;
+                }
 
-            var validated = policyView is null ? rewritten : policyView(rewritten);
-            var reason = compiled?.Validate(validated);
-            if (reason is not null)
-            {
-                await DiscardDestinationAsync(destination);
-                await AbortAsync(scanned, entry.Key, reason, Preview(validated));
-                return false;
-            }
+                var validated = policyView is null ? rewritten : policyView(rewritten);
+                if (compiled?.Validate(validated) is { } reason)
+                {
+                    offender = new Offender(entry.Key, reason, Preview(validated));
+                    break;
+                }
 
-            await destination.SetAsync(entry.Key, rewritten);
+                await destination.SetAsync(entry.Key, rewritten);
+                done++;
+                lastKey = entry.Key;
+                if (done == sliceSize)
+                {
+                    break;
+                }
+            }
+        }
+        catch
+        {
+            await BankSliceProgressAsync(done, lastKey);
+            throw;
         }
 
-        await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Cutover, scanned);
-        return true;
+        var scanned = state.State.ScannedCount + done;
+        if (offender is { } failed)
+        {
+            await DiscardDestinationAsync(destination);
+            await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
+        }
+        else if (done < sliceSize)
+        {
+            await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Cutover, scanned, phaseTotal: null);
+        }
+        else
+        {
+            await RecordSliceProgressAsync(scanned, lastKey);
+        }
     }
 
+    /// <summary>
+    /// The smallest key strictly after <paramref name="cursor"/> in ordinal order, or
+    /// <c>null</c> to start at the beginning: appending U+0000 yields the immediate
+    /// successor, so a resumed scan neither repeats nor skips a key.
+    /// </summary>
+    private static string? After(string? cursor) => cursor is null ? null : cursor + '\0';
+
+    /// <summary>The first value a slice found it could not remediate.</summary>
+    private readonly record struct Offender(string Key, string Reason, byte[] Preview);
+
+    /// <summary>Persists a slice's progress within the current phase.</summary>
+    private async Task RecordSliceProgressAsync(int scannedCount, string? lastKey)
+    {
+        var prevScannedCount = state.State.ScannedCount;
+        var prevScanCursor = state.State.ScanCursor;
+
+        state.State.ScannedCount = scannedCount;
+        state.State.ScanCursor = lastKey;
+        try
+        {
+            await WriteAndPublishStateAsync();
+        }
+        catch
+        {
+            state.State.ScannedCount = prevScannedCount;
+            state.State.ScanCursor = prevScanCursor;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Banks the values a faulted slice had already processed (issue #2545's
+    /// coalesced-durable-state rule), so the next slice resumes after them instead
+    /// of repeating them. Called only from a slice's fault path, which rethrows the
+    /// slice's own fault once this returns; a failure to bank is therefore logged
+    /// and swallowed here rather than allowed to mask that fault.
+    /// </summary>
+    private async Task BankSliceProgressAsync(int done, string? lastKey)
+    {
+        if (done == 0 || lastKey is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await RecordSliceProgressAsync(state.State.ScannedCount + done, lastKey);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "Schema remediation for tree '{TreeId}' could not bank the progress of a faulted slice.", TreeId);
+        }
+    }
     /// <summary>
     /// Snapshots the current build mode and its parameters from durable state (on the
     /// activation thread) into a <b>pure</b> per-value rewrite delegate that is safe to
@@ -594,13 +838,22 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
     }
 
-    private async Task AdvancePhaseAsync(LatticeSchemaRemediationPhase phase, int scannedCount)
+    /// <summary>
+    /// Moves to <paramref name="phase"/>, which starts from the beginning of the
+    /// source: the scan cursor is cleared and <paramref name="phaseTotal"/> becomes
+    /// the new phase's total.
+    /// </summary>
+    private async Task AdvancePhaseAsync(LatticeSchemaRemediationPhase phase, int scannedCount, int? phaseTotal)
     {
         var prevPhase = state.State.Phase;
         var prevScannedCount = state.State.ScannedCount;
+        var prevScanCursor = state.State.ScanCursor;
+        var prevPhaseTotal = state.State.PhaseTotal;
 
         state.State.Phase = phase;
         state.State.ScannedCount = scannedCount;
+        state.State.ScanCursor = null;
+        state.State.PhaseTotal = phaseTotal;
         try
         {
             await WriteAndPublishStateAsync();
@@ -609,6 +862,31 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             state.State.Phase = prevPhase;
             state.State.ScannedCount = prevScannedCount;
+            state.State.ScanCursor = prevScanCursor;
+            state.State.PhaseTotal = prevPhaseTotal;
+            throw;
+        }
+    }
+
+    private async Task FinishCancelledAsync()
+    {
+        var prevInProgress = state.State.InProgress;
+        var prevPhase = state.State.Phase;
+        var prevLastReport = state.State.LastReport;
+
+        state.State.InProgress = false;
+        state.State.Phase = LatticeSchemaRemediationPhase.Cancelled;
+        state.State.LastReport = LatticeSchemaRemediationReport.Cancelled(
+            state.State.ScannedCount, state.State.OperationId!);
+        try
+        {
+            await WriteAndPublishStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.LastReport = prevLastReport;
             throw;
         }
     }

@@ -73,6 +73,10 @@ public static class LatticeApiTreeAdminServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeTreeAdmin>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
         builder.Services.TryAddSingleton<ILatticeTreeAdminOperations>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
 
+        // The read-only WAL reclamation diagnostics (#4195), on the same singleton so
+        // it shares the facade's tenant composition and authorization seam.
+        builder.Services.TryAddSingleton<ILatticeWalReclamation>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
+
         // Accept-then-poll fresh storage usage (#4126), run on the core operation
         // coordinator that AddLattice registers.
         builder.Services.TryAddSingleton<ILatticeStorageUsageOperations, LatticeStorageUsageOperations>();

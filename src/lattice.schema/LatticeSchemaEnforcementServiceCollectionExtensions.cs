@@ -101,6 +101,10 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
         // Orleans from this assembly; only the admin object needs wiring here.
         builder.Services.TryAddSingleton<ILatticeSchemaRemediationAdmin, LatticeSchemaRemediationAdmin>();
 
+        // Remediations and migrations as tracked long-running operations (#4123):
+        // the schema client of the shared coordinator AddLattice registers.
+        builder.Services.TryAddSingleton<SchemaOperationService>();
+
         // The read-only compliance-audit control plane: scans a tree's values
         // against its cached compiled policy. Reuses the enforcement policy-provider
         // cache and the ILattice read seam; never mutates data.

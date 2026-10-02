@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
 /// <summary>
 /// A tree's storage tab: the bytes it holds by surface (leaf state, snapshots,
-/// retained WAL), and which storage provider backs each WAL partition, linking to
-/// the WAL page to audit and move them.
+/// retained WAL), which durable pin holds its WAL floor and whether that pin has
+/// wedged reclamation (#4195), and which storage provider backs each WAL partition,
+/// linking to the WAL page to audit and move them.
 /// </summary>
 public partial class ClusterTreeStorage : IDisposable
 {

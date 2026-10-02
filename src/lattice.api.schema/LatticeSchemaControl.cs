@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.Schema;
 /// a version operation invoked on a silo without versioning registered throws a
 /// clear <see cref="InvalidOperationException"/> rather than a DI resolution failure.
 /// </remarks>
-internal sealed class LatticeSchemaControl : ILatticeSchemaControl
+internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILatticeSchemaOperations
 {
     private readonly ILatticeSchemaAdmin _admin;
     private readonly ILatticeSchemaRemediationAdmin _remediation;
@@ -26,6 +26,7 @@ internal sealed class LatticeSchemaControl : ILatticeSchemaControl
     private readonly SchemaAccessAuthorizer _authorizer;
     private readonly ILatticeSchemaVersionAdmin? _versionAdmin;
     private readonly ITenantContextResolver _tenantResolver;
+    private readonly SchemaOperationService? _operations;
 
     /// <summary>Initializes a new <see cref="LatticeSchemaControl"/>.</summary>
     /// <param name="admin">The schema policy / dead-letter admin. Must not be <c>null</c>.</param>
@@ -63,6 +64,7 @@ internal sealed class LatticeSchemaControl : ILatticeSchemaControl
         _compliance = compliance;
         _authorizer = authorizer;
         _versionAdmin = services.GetService<ILatticeSchemaVersionAdmin>();
+        _operations = services.GetService<SchemaOperationService>();
         _tenantResolver = tenantResolver;
     }
 

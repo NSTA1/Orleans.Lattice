@@ -254,3 +254,10 @@
   color: var(--lt-ink-3);
   font-size: var(--lt-text-sm);
 }
+
+/* The health page's live check: its progress, then the link to the check's own page. */
+.lt-backups-last-run {
+    display: grid;
+    gap: var(--lt-space-2);
+    margin: var(--lt-space-4) 0 0;
+}

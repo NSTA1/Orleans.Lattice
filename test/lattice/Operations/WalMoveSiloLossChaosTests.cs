@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Operations;
 using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.Operations;
 
@@ -39,6 +40,7 @@ public sealed class WalMoveSiloLossChaosTests
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]

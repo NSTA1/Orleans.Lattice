@@ -1,11 +1,14 @@
 @page "/backups/maintenance"
 @page "/t/{tenant}/backups/maintenance"
 @inherits ExplorerPage
+@using Orleans.Lattice.Explorer.UI.Operations
 @*
     /backups/maintenance: rebuild the catalogue from the backup store, and scrub
     the catalogue against it. Both are high-privilege administrative actions the
-    server authorizes; a connection that does not serve them says so instead of
-    offering them.
+    server authorizes, and both run on the cluster as tracked operations (#4125):
+    each section shows its latest run with real progress, which survives a closed
+    tab or a reload. A connection that does not serve backup operations says so
+    instead of offering them.
 *@
 
 <PageTitle>Backup maintenance - Orleans.Lattice Explorer</PageTitle>
@@ -25,13 +28,18 @@ else
         <p class="lt-backups-note" role="status">@BackupsFaults.NotServed</p>
     }
 
+    @if (_readError is { } readError)
+    {
+        <p class="lt-backups-note" role="alert">The last runs could not be read: @readError</p>
+    }
+
     <section class="lt-backups-section" aria-labelledby="lt-backups-rebuild-title">
         <h2 id="lt-backups-rebuild-title" class="lt-backups-section__title">Rebuild the catalogue</h2>
         <p class="lt-backups-note">Scans every manifest in the backup store and records it in the catalogue. A backup already catalogued is reconciled in place; nothing is duplicated or removed. Safe to run again.</p>
         <LtButton Disabled="@(_served == false)" OnClick="() => _confirmRebuild = true">Rebuild catalogue...</LtButton>
-        @if (Latest(BackupOperationKind.RebuildCatalogue) is { } rebuild)
+        @if (_rebuild?.Status is { } rebuild)
         {
-            <p class="lt-backups-note">Last run: <a class="lt-backups-link" href="@Href(rebuild)">@(rebuild.Message ?? "under way")</a></p>
+            @LastRun(rebuild, "Rebuild progress")
         }
     </section>
 
@@ -39,10 +47,10 @@ else
         <h2 id="lt-backups-scrub-title" class="lt-backups-section__title">Check the catalogue against the store</h2>
         <p class="lt-backups-note">Finds catalogue rows whose backup is gone from the store. An orphan row is never offered as a restore point. The check changes nothing.</p>
         <LtButton Disabled="@(_served == false)" OnClick="CheckAsync">Check catalogue</LtButton>
-        @if (Latest(BackupOperationKind.ScrubCatalogue) is { } scrub)
+        @if (_scrub?.Status is { } scrub)
         {
-            <p class="lt-backups-note">Last run: <a class="lt-backups-link" href="@Href(scrub)">@(scrub.Message ?? "under way")</a></p>
-            @if (scrub.Status == BackupOperationStatus.Succeeded && scrub.Items.Count > 0 && _served != false)
+            @LastRun(scrub, "Check progress")
+            @if (BackupClusterOperation.HasOrphansToRemove(scrub) && _served != false)
             {
                 <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmPrune = true">Remove orphan rows...</LtButton>
             }
@@ -67,4 +75,16 @@ else
                           OnConfirm="PruneAsync">
         <p>Every catalogue row whose backup is gone from the store is removed. The store itself is not touched, and a rebuild restores any row whose backup reappears.</p>
     </LtConfirmDestructive>
+}
+
+@code {
+    // One maintenance run as the cluster reports it: the shared progress, a
+    // sentence for its outcome, and a link to its own status page.
+    private RenderFragment LastRun(Orleans.Lattice.Api.Operations.LatticeOperationStatus status, string label) => __builder =>
+    {
+        <div class="lt-backups-last-run" role="status" aria-live="polite">
+            <LtOperationProgress Status="@status" Label="@label" PhaseName="BackupClusterOperation.PhaseName" />
+            <p class="lt-backups-note">Last run: <a class="lt-backups-link" href="@Href(status.OperationId)">@BackupClusterOperation.Summary(status)</a></p>
+        </div>
+    };
 }

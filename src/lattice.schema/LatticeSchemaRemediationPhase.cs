@@ -45,4 +45,11 @@ public enum LatticeSchemaRemediationPhase
     /// destination was discarded.
     /// </summary>
     Aborted = 5,
+
+    /// <summary>
+    /// The remediation was cancelled before cutover. As with an abort, the original
+    /// tree was left untouched and any partial destination was discarded. A
+    /// remediation that has reached <see cref="Cutover"/> cannot be cancelled.
+    /// </summary>
+    Cancelled = 6,
 }

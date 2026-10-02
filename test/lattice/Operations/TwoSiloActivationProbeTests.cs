@@ -28,9 +28,11 @@ public sealed class TwoSiloActivationProbeTests
     public async Task OneTimeSetUp()
     {
         var builder = new TestClusterBuilder(2);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]

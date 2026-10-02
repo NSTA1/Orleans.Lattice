@@ -21,4 +21,7 @@ internal enum SchemaOperationStage
 
     /// <summary>The cluster refused or could not run it.</summary>
     Failed = 4,
+
+    /// <summary>The cluster cancelled it before cutover.</summary>
+    Cancelled = 5,
 }

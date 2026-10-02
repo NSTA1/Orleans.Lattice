@@ -225,42 +225,37 @@ public sealed class BackupOperationsTests : BackupsTestContext
         });
     }
     [Test]
-    public void Catalogue_rebuild_and_scrub_report_their_figures()
+    public void Catalogue_rebuild_and_scrub_start_on_the_cluster_and_hand_off()
     {
-        Backups.Rebuild = () => Task.FromResult(new BackupCatalogRebuildReport(10, 3, 7));
-        Backups.Scrub = prune => Task.FromResult(new BackupCatalogScrubReport(10, 2, prune ? 2 : 0, prune, ["o1", "o2"]));
-
         var rebuild = Actions.RebuildCatalogue();
         var check = Actions.ScrubCatalogue(pruneOrphans: false);
         var prune = Actions.ScrubCatalogue(pruneOrphans: true);
 
         Assert.Multiple(() =>
         {
-            Assert.That(rebuild.Facts.Select(fact => fact.Value), Is.EqualTo(new[] { "10", "3", "7" }));
-            Assert.That(check.Items, Is.EqualTo(new[] { "o1", "o2" }));
-            Assert.That(check.Message, Does.StartWith("Found 2 orphan rows"));
-            Assert.That(prune.Message, Is.EqualTo("Removed 2 orphan rows from the catalogue."));
+            Assert.That(rebuild.ClusterOperationId, Is.EqualTo("op-1"));
+            Assert.That(check.ClusterOperationId, Is.EqualTo("op-2"));
+            Assert.That(prune.ClusterOperationId, Is.EqualTo("op-3"));
+            Assert.That(Backups.Statuses["op-1"].Kind, Is.EqualTo(BackupOperationKinds.CatalogRebuild));
+            Assert.That(Backups.Calls.Where(call => call.Verb == nameof(ILatticeBackupOperations.StartCatalogScrubAsync)).Select(call => call.Argument), Is.EqualTo(new object[] { false, true }));
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RebuildCatalogFromSinkAsync)) + Backups.CountOf(nameof(ILatticeBackupControl.ScrubCatalogAgainstSinkAsync)), Is.Zero);
             Assert.That(Operations.Latest(BackupOperationKind.ScrubCatalogue), Is.SameAs(prune));
-            Assert.That(Operations.Recent.First(), Is.SameAs(prune));
         });
     }
 
     [Test]
-    public void A_clean_scrub_says_so_and_unserved_maintenance_withdraws_the_extensions()
+    public void Unserved_maintenance_fails_its_start_but_leaves_the_extensions_alone()
     {
-        Backups.Scrub = _ => Task.FromResult(new BackupCatalogScrubReport(4, 0, 0, false, []));
-        Assert.That(Actions.ScrubCatalogue(false).Message, Is.EqualTo("Every catalogue row has its backup in the store."));
+        Backups.StartFault = new NotSupportedException();
 
-        Backups.Rebuild = () => Task.FromException<BackupCatalogRebuildReport>(new NotSupportedException());
         var rebuild = Actions.RebuildCatalogue();
-        Backups.Scrub = _ => Task.FromException<BackupCatalogScrubReport>(new NotSupportedException());
         var scrub = Actions.ScrubCatalogue(true);
 
         Assert.Multiple(() =>
         {
             Assert.That(rebuild.Message, Is.EqualTo(BackupsFaults.NotServed));
             Assert.That(scrub.Message, Is.EqualTo(BackupsFaults.NotServed));
-            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.False);
+            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.Null, "the inventory's answer is its own");
         });
     }
 

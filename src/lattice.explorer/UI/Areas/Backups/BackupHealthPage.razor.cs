@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Operations;
 using Orleans.Lattice.Explorer.UI.Transport;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
@@ -13,7 +15,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// it (elsewhere the address is not found). Lists the newest backups' latest
 /// health; for one backup reads the latest report, checks it now, and
 /// configures its periodic monitoring, when the capability probe allows reading
-/// its scope.
+/// its scope. A check runs on the cluster as a tracked operation (#4125) and is
+/// followed here with real progress; a check still running when the page is
+/// reopened - after a reload, in another tab, or after the tab was closed - is
+/// picked up rather than started twice.
 /// </summary>
 public partial class BackupHealthPage : IDisposable
 {
@@ -31,7 +36,9 @@ public partial class BackupHealthPage : IDisposable
     private BackupHealthReport? _focusReport;
     private bool _focusAllowed;
     private string? _focusError;
-    private bool _checking;
+    private bool _starting;
+    private OperationFollower? _check;
+    private string? _reportReadFor;
     private string? _checkError;
     private bool _monitor = true;
     private TimeSpan? _interval = TimeSpan.FromHours(24);
@@ -41,6 +48,15 @@ public partial class BackupHealthPage : IDisposable
 
     [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
+
+    [Inject(Key = ShellFacades.Key)]
+    internal ILatticeBackupOperations ClusterOperations { get; set; } = default!;
+
+    [Inject]
+    internal BackupOperationList List { get; set; } = default!;
+
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
 
     [Inject]
     internal BackupsAccess Access { get; set; } = default!;
@@ -52,10 +68,14 @@ public partial class BackupHealthPage : IDisposable
         ? id.Trim()
         : null;
 
+    /// <summary>Whether a check is being started or is still running on the cluster.</summary>
+    private bool Checking => _starting || _check?.Status is { IsTerminal: false };
+
     /// <inheritdoc />
     public void Dispose()
     {
         _load.Leave();
+        ReleaseCheck();
         GC.SuppressFinalize(this);
     }
 
@@ -70,6 +90,7 @@ public partial class BackupHealthPage : IDisposable
 
         _loadedFor = address;
         var cancellationToken = _load.Renew();
+        ReleaseCheck();
 
         _ready = false;
         bool available;
@@ -199,38 +220,144 @@ public partial class BackupHealthPage : IDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // A newer load replaced this one.
+            return;
         }
         catch (Exception exception)
         {
             _focusError = BackupsFaults.Describe(exception);
+            return;
+        }
+
+        if (_focusAllowed)
+        {
+            await ResumeRunningCheckAsync(backupId, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Picks up a check of <paramref name="backupId"/> still running on the cluster -
+    /// started before a reload, in another tab, or before the tab was closed - so it
+    /// is followed here rather than started twice. A listing that cannot be read
+    /// only means none is shown.
+    /// </summary>
+    private async Task ResumeRunningCheckAsync(string backupId, CancellationToken cancellationToken)
+    {
+        LatticeOperationStatus? running;
+        try
+        {
+            running = (await List.LatestAsync([status => BackupClusterOperation.IsHealthCheckOf(status, backupId)], cancellationToken))[0];
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
+        {
+            return;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (running is { IsTerminal: false } && !cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await FollowCheckAsync(running.OperationId, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Replaced by a newer load, or the page went away.
+            }
         }
     }
 
     private async Task CheckNowAsync()
     {
-        if (_focus is not { } manifest || _checking)
+        if (_focus is not { } manifest || Checking)
         {
             return;
         }
 
-        _checking = true;
+        _starting = true;
         _checkError = null;
+        var cancellationToken = _load.Token;
         try
         {
-            // Still the deprecated blocking verb (LATTICE0002); #4125 PR-2 moves this
-            // page onto StartBackupHealthCheckAsync and the shared progress follower.
-#pragma warning disable LATTICE0002
-            _focusReport = await Control.CheckBackupHealthAsync(manifest.Id, _load.Token);
-#pragma warning restore LATTICE0002
+            var operationId = BackupClusterOperation.HealthCheckId(manifest.Id, Time.GetUtcNow());
+            var handle = await ClusterOperations.StartBackupHealthCheckAsync(manifest.Id, operationId, cancellationToken);
+            List.Forget();
+            await FollowCheckAsync(handle.OperationId, cancellationToken);
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
             _checkError = BackupsFaults.Describe(exception);
         }
+        catch (OperationCanceledException)
+        {
+            // The page moved on or went away while the check was being started; the
+            // check itself, once accepted, keeps running on the cluster.
+        }
         finally
         {
-            _checking = false;
+            _starting = false;
         }
+    }
+
+    private async Task FollowCheckAsync(string operationId, CancellationToken cancellationToken)
+    {
+        ReleaseCheck();
+        var follower = new OperationFollower(Time);
+        _check = follower;
+        follower.Changed += OnCheckChanged;
+        await follower.StartAsync(ct => ClusterOperations.GetOperationStatusAsync(operationId, ct), cancellationToken);
+    }
+
+    private void OnCheckChanged()
+    {
+        if (_check?.Status is { State: LatticeOperationState.Succeeded } status
+            && _focus is { } manifest
+            && !string.Equals(_reportReadFor, status.OperationId, StringComparison.Ordinal))
+        {
+            // The check persisted a fresh report: read it once, then redraw.
+            _reportReadFor = status.OperationId;
+            _ = InvokeAsync(() => ReadReportAsync(manifest.Id));
+            return;
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ReadReportAsync(string backupId)
+    {
+        var cancellationToken = _load.Token;
+        try
+        {
+            var report = await Control.GetBackupHealthAsync(backupId, cancellationToken);
+            if (_focus is { } manifest && string.Equals(manifest.Id, backupId, StringComparison.Ordinal))
+            {
+                _focusReport = report;
+            }
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
+        {
+            _checkError = BackupsFaults.Describe(exception);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        StateHasChanged();
+    }
+
+    private void ReleaseCheck()
+    {
+        if (_check is { } check)
+        {
+            check.Changed -= OnCheckChanged;
+            check.Dispose();
+            _check = null;
+        }
+
+        _reportReadFor = null;
     }
 
     private async Task ConfigureAsync()

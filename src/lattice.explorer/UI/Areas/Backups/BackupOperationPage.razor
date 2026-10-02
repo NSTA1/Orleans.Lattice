@@ -4,12 +4,12 @@
 @using Orleans.Lattice.Explorer.UI.Operations
 @*
     /backups/operations/{id}: one backup operation's status page.
-    A capture or restore is the cluster's tracked operation (#4122): its progress
-    is read from the cluster, so the page survives a closed tab or a reload, and a
-    running one can be cancelled. Revert and catalogue maintenance are staged in
-    the session (epic E15) and can be left and resumed for as long as it lasts. A
-    finished point-in-time restore offers its revert here, behind a
-    type-the-name confirmation.
+    A capture, restore, health check, catalogue rebuild or scrub is the cluster's
+    tracked operation (#4122, #4125): its progress is read from the cluster, so the
+    page survives a closed tab or a reload, and a running one can be cancelled. A
+    revert is staged in the session (epic E15) and can be left and resumed for as
+    long as it lasts. A finished point-in-time restore offers its revert here,
+    behind a type-the-name confirmation.
 *@
 
 <PageTitle>@PageTitleText - Orleans.Lattice Explorer</PageTitle>
@@ -52,7 +52,7 @@ else if (_follower?.Status is { } status)
     <BackupsNav />
 
     <div role="status" aria-live="polite">
-        <LtOperationProgress Status="@status" Label="Operation progress" />
+        <LtOperationProgress Status="@status" Label="Operation progress" PhaseName="BackupClusterOperation.PhaseName" />
     </div>
 
     @if (_follower.LastError is { } readError)
@@ -72,7 +72,7 @@ else if (_follower?.Status is { } status)
         <p class="lt-backups-note" role="alert">@cancelError</p>
     }
 
-    @Outcome(BackupClusterOperation.Facts(status), BackupClusterOperation.Links(status), [])
+    @Outcome(BackupClusterOperation.Facts(status), BackupClusterOperation.Links(status), BackupClusterOperation.Items(status))
 
     @if (Operations.RevertOf(status.OperationId) is { } revert)
     {

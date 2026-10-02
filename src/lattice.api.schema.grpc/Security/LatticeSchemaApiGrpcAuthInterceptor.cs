@@ -201,6 +201,12 @@ internal sealed class LatticeSchemaApiGrpcAuthInterceptor : Interceptor
             LatticeSchemaGrpcMethods.GetComplianceScanStatusMethodName => LatticeSchemaApiOperation.GetComplianceScanStatus,
             LatticeSchemaGrpcMethods.ListComplianceScansMethodName => LatticeSchemaApiOperation.ListComplianceScans,
             LatticeSchemaGrpcMethods.CancelComplianceScanMethodName => LatticeSchemaApiOperation.CancelComplianceScan,
+            LatticeSchemaGrpcMethods.StartRemediationMethodName => LatticeSchemaApiOperation.StartRemediation,
+            LatticeSchemaGrpcMethods.StartMigrationMethodName => LatticeSchemaApiOperation.StartMigration,
+            LatticeSchemaGrpcMethods.StartAdvanceAndMigrateMethodName => LatticeSchemaApiOperation.StartAdvanceAndMigrate,
+            LatticeSchemaGrpcMethods.GetSchemaOperationStatusMethodName => LatticeSchemaApiOperation.GetSchemaOperationStatus,
+            LatticeSchemaGrpcMethods.ListSchemaOperationsMethodName => LatticeSchemaApiOperation.ListSchemaOperations,
+            LatticeSchemaGrpcMethods.CancelSchemaOperationMethodName => LatticeSchemaApiOperation.CancelSchemaOperation,
             _ => LatticeSchemaApiOperation.Unknown,
         };
 
@@ -212,10 +218,12 @@ internal sealed class LatticeSchemaApiGrpcAuthInterceptor : Interceptor
             RemediateRequest r => r.TreeId,
             SchemaTreeRequest t => t.TreeId,
             SchemaComplianceScanStartRequest s => s.TreeId,
+            SchemaMigrationStartRequest m => m.TreeId,
 
             // A tracked-operation status or cancel names an operation, not a tree,
             // so it carries no target; the facade scopes it to the caller.
             SchemaComplianceOperationRequest => null,
+            SchemaOperationRequest => null,
             _ => null,
         };
 

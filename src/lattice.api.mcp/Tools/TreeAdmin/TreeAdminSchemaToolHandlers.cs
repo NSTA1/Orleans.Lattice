@@ -173,40 +173,4 @@ internal static class TreeAdminSchemaToolHandlers
         ArgumentNullException.ThrowIfNull(schema);
         return schema.AdvanceTargetVersionAsync(treeId, newTargetVersion, cancellationToken);
     }
-
-    /// <summary>Advances a tree's target version and runs a background eager migration, returning the terminal report.</summary>
-    public static Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
-        ILatticeSchemaControl schema,
-        string treeId,
-        [Description("The new target version. Must be strictly greater than the tree's current target.")]
-        uint newTargetVersion,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(schema);
-        return schema.AdvanceAndMigrateAsync(treeId, newTargetVersion, cancellationToken);
-    }
-
-    /// <summary>Re-stamps every existing value of a tree to its current target version, returning the terminal report.</summary>
-    public static Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
-        ILatticeSchemaControl schema,
-        string treeId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(schema);
-        return schema.MigrateToTargetVersionAsync(treeId, cancellationToken);
-    }
-
-    /// <summary>Starts (or idempotently resumes) a background remediation of a tree, returning the terminal report.</summary>
-    public static Task<LatticeSchemaRemediationReport> RemediateAsync(
-        ILatticeSchemaControl schema,
-        string treeId,
-        [Description("The per-value remediation transform IR that rewrites each stored value (for example a Passthrough pipeline of SetMember / DropMember / RenameMember operations).")]
-        LatticeValueTransform transform,
-        [Description("The enforcement policy the transformed values must satisfy for the remediation to cut over. The remediation aborts on the first value the transform cannot make compliant.")]
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(schema);
-        return schema.RemediateAsync(treeId, transform, targetPolicy, cancellationToken);
-    }
 }
