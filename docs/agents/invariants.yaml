@@ -600,6 +600,36 @@ invariants:
       - "docs/lattice.backup/architecture.md"
       - "docs/lattice.backup/api.md"
       - "docs/lattice.backup/observability.md"
+  - id: backup-operation-runner-liveness
+    name: "Backup operation runner liveness"
+    description: "A tracked backup or restore operation runs on the accepting silo, heartbeats while active, and is marked Failed rather than left Running when that silo is lost or its lease lapses."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Backup"
+        - "Orleans.Lattice.Backup"
+      components:
+        - "ILatticeBackupOperations"
+        - "LatticeOperationStatus"
+        - "LatticeOperationRunner"
+    violation_modes:
+      - "An operation remains Running after the accepting silo is declared dead."
+      - "A background backup or restore silently resumes without a caller starting a new operation."
+      - "A failure reason omits that the runner silo was lost or stopped heartbeating."
+    detection_signals:
+      - type: status
+        name: "LatticeOperationStatus.State"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+      - type: status
+        name: "LatticeOperationStatus.FailureReason"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+    remediation:
+      - step: "Treat Failed after silo loss as terminal and start a new tracked operation if the backup or restore is still needed."
+        source: "docs/lattice.api.abstractions/operations.md"
+      - step: "Use the previous status and backup catalog to decide whether partial work produced an artifact before retrying."
+        source: "docs/lattice.api.backup/operations.md"
+    sources:
+      - "docs/lattice.api.abstractions/operations.md"
+      - "docs/lattice.api.backup/operations.md"
   - id: backup-restore-coordinated-cutover
     name: "Coordinated restore cutover"
     description: "A restore of any currently replicated tree or backup set with a replicated member commits the restored cut on every current peer or compensates everywhere."
@@ -639,66 +669,6 @@ invariants:
     sources:
       - "docs/lattice.replication/coordinated-restore.md"
       - "docs/lattice.backup/architecture.md"
-  - id: backup-operation-runner-liveness
-    name: "Backup operation runner liveness"
-    description: "A tracked backup or restore operation runs on the accepting silo, heartbeats while active, and is marked Failed rather than left Running when that silo is lost or its lease lapses."
-    scope:
-      packages:
-        - "Orleans.Lattice.Api.Backup"
-        - "Orleans.Lattice.Backup"
-      components:
-        - "ILatticeBackupOperations"
-        - "LatticeOperationStatus"
-        - "LatticeOperationRunner"
-    violation_modes:
-      - "An operation remains Running after the accepting silo is declared dead."
-      - "A background backup or restore silently resumes without a caller starting a new operation."
-      - "A failure reason omits that the runner silo was lost or stopped heartbeating."
-    detection_signals:
-      - type: status
-        name: "LatticeOperationStatus.State"
-        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
-      - type: status
-        name: "LatticeOperationStatus.FailureReason"
-        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
-    remediation:
-      - step: "Treat Failed after silo loss as terminal and start a new tracked operation if the backup or restore is still needed."
-        source: "docs/lattice.api.abstractions/operations.md"
-      - step: "Use the previous status and backup catalog to decide whether partial work produced an artifact before retrying."
-        source: "docs/lattice.api.backup/operations.md"
-    sources:
-      - "docs/lattice.api.abstractions/operations.md"
-      - "docs/lattice.api.backup/operations.md"
-  - id: treeadmin-operation-cancel-before-flip
-    name: "Tree-admin WAL-move cancel before flip"
-    description: "Cancelling a tracked WAL move before its placement flip leaves the partition on its source provider and unfenced; a tracked tree-admin operation is never resumed after accepting-silo loss."
-    scope:
-      packages:
-        - "Orleans.Lattice.Api.TreeAdmin"
-        - "Orleans.Lattice"
-      components:
-        - "ILatticeTreeAdminOperations"
-        - "LatticeOperationStatus"
-        - "LatticeOperationRunner"
-    violation_modes:
-      - "A cancelled WAL move flips the partition placement after cancellation was observed."
-      - "A cancelled or failed WAL move leaves the source partition fenced against writes."
-      - "A tree-admin operation remains Running after the accepting silo is declared dead."
-    detection_signals:
-      - type: status
-        name: "LatticeOperationStatus.State"
-        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
-      - type: status
-        name: "LatticeOperationStatus.Phase"
-        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
-    remediation:
-      - step: "Inspect the WAL placement after a Cancelled or Failed move and start a new move if it is still needed."
-        source: "docs/lattice.api.treeadmin/operations.md"
-      - step: "Treat Failed after silo loss as terminal and start a new tracked operation."
-        source: "docs/lattice.api.abstractions/operations.md"
-    sources:
-      - "docs/lattice.api.treeadmin/operations.md"
-      - "docs/lattice.api.abstractions/operations.md"
   - id: crdt-buffer-ownership
     name: "CRDT byte-buffer ownership"
     description: "Registers and sequences store caller-authored byte arrays by handoff, set primitives encode them instead of retaining them, peer-folded winners are copied, and every public egress projection is copied."
@@ -876,6 +846,43 @@ invariants:
         source: ".github/instructions/grains.instructions.md"
     sources:
       - ".github/instructions/grains.instructions.md"
+  - id: grain-storage-etag-fencing
+    name: "Grain storage ETag fencing"
+    description: "The grain storage provider registered by AddLattice must reject writes that carry a stale ETag; otherwise stale duplicate activations or direct pin writes can overwrite newer durable state while WAL pins retain newer offsets."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "LatticeServiceCollectionExtensions"
+        - "LatticeGrainStorageFencingOptions"
+        - "GrainStorageFencingCheck"
+        - "GrainStorageFencingProbe"
+    violation_modes:
+      - "The provider accepts a stale ETag write and an older checkpoint overwrites a newer one."
+      - "A stale duplicate activation persists grain state during membership churn."
+      - "A direct durable WAL pin write from outside a grain overwrites a newer pin row."
+    detection_signals:
+      - type: source
+        name: "GrainStorageFencingProbeResult.Verdict"
+        source: "src/lattice/Storage/GrainStorageFencingProbeResult.cs#GrainStorageFencingProbeResult"
+      - type: exception
+        name: "OrleansConfigurationException"
+        source: "src/lattice/Storage/GrainStorageFencingCheck.cs#GrainStorageFencingCheck.RunAsync"
+      - type: log
+        name: "Lattice grain-storage fencing check"
+        source: "src/lattice/Storage/GrainStorageFencingCheck.cs#GrainStorageFencingCheck.RunAsync"
+    remediation:
+      - step: "Use a grain storage provider that enforces ETags, such as Orleans memory, Azure Table, Azure Blob, Cosmos DB, or ADO.NET storage."
+        source: "src/lattice/LatticeServiceCollectionExtensions.cs#LatticeServiceCollectionExtensions.AddLattice"
+      - step: "Set LatticeGrainStorageFencingOptions.Mode to Reject to fail silo start when the provider accepts a stale ETag."
+        source: "src/lattice/Storage/LatticeGrainStorageFencingMode.cs#LatticeGrainStorageFencingMode.Reject"
+      - step: "Leave Disabled only for deliberately non-durable deployments where the probe writes are unwanted."
+        source: "src/lattice/Storage/LatticeGrainStorageFencingMode.cs#LatticeGrainStorageFencingMode.Disabled"
+    sources:
+      - "src/lattice/LatticeServiceCollectionExtensions.cs#LatticeServiceCollectionExtensions.AddLattice"
+      - "src/lattice/Storage/LatticeGrainStorageFencingOptions.cs#LatticeGrainStorageFencingOptions"
+      - "src/lattice/Storage/GrainStorageFencingCheck.cs#GrainStorageFencingCheck"
+      - "src/lattice/Storage/GrainStorageFencingProbe.cs#GrainStorageFencingProbe"
   - id: hlc-monotonic-successor
     name: "Hybrid logical clock successor"
     description: "A local tick or merge returns an HLC that is strictly greater than the event inputs while LWW state compares HLC values without advancing them."
@@ -907,6 +914,37 @@ invariants:
     sources:
       - "docs/lattice/state-primitives.md"
       - ".github/instructions/primitives.instructions.md"
+  - id: mcp-caller-error-text-sanitized
+    name: "MCP caller error text is sanitized"
+    description: "Caller-controlled MCP rejection text is classified as a client error or sanitized before echoing or logging, so CR/LF and overlong values cannot forge logs or leak raw input."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Mcp"
+        - "Orleans.Lattice.Api.Mcp.RepoContext"
+      components:
+        - "McpToolClientErrors"
+        - "CredentialStampingTool"
+        - "RepoContextToolInvocationLogger"
+    violation_modes:
+      - "A caller-supplied argument name, region id, record key, field value, or link target reaches the caller or a log without SanitizeForEcho."
+      - "A tool-level McpException is attached to a repo-context warning log, causing raw exception text and stack output to be rendered."
+      - "A caller mistake escapes as an unhandled tool exception instead of an MCP error result marked as a client error."
+    detection_signals:
+      - type: source
+        name: "McpToolClientErrors.SanitizeForEcho"
+        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors.SanitizeForEcho"
+      - type: source
+        name: "CredentialStampingTool.ReportClientError"
+        source: "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs#CredentialStampingTool.ReportClientError"
+    remediation:
+      - step: "Route caller mistakes through McpToolClientErrors.InvalidArgument, RejectedContent, NotFound, or ReportClientError so they are sanitized, capped, counted, and returned as MCP error results."
+        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
+      - step: "When logging repo-context tool-level McpException failures before the outer client-error seam runs, log SanitizeForEcho(ex.Message) without attaching the exception."
+        source: "src/lattice.api.mcp.repocontext/Logging/RepoContextToolInvocationLogger.cs#RepoContextToolInvocationLogger"
+    sources:
+      - "src/lattice.api.mcp/Tools/McpToolClientErrors.cs"
+      - "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs"
+      - "src/lattice.api.mcp.repocontext/Logging/RepoContextToolInvocationLogger.cs"
   - id: mcp-region-catalog-validated-tenant-scope
     name: "MCP region catalog honours only a validated tenant assertion"
     description: "With tenancy active, a tenant-asserted region discovery call is scoped to the asserted tenant only when ITenantContextResolver resolves that same tenant; otherwise it advertises the current region alone with no tenantScope annotation."
@@ -1634,6 +1672,43 @@ invariants:
       - "docs/lattice/ttl.md"
       - "docs/lattice/tombstone-compaction.md"
       - "docs/lattice/consistency.md"
+  - id: tracked-operation-terminal-state
+    name: "Tracked operation terminal state is final"
+    description: "A tracked operation reaches at most one terminal state; once terminal, completion writes are ignored, progress stops moving it, and later status reads return that terminal record until retention prunes it."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Api.Abstractions"
+      components:
+        - "LatticeOperationGrain"
+        - "LatticeOperationRunner"
+        - "LatticeOperationIndexGrain"
+    violation_modes:
+      - "A terminal Succeeded, Failed or Cancelled operation later returns Running."
+      - "A duplicate start with the same tenant and operation id starts a second runner for the same kind."
+      - "A stale completion overwrites a previously recorded terminal outcome."
+      - "A lost runner remains Running after the runner silo is dead or the heartbeat lease lapses."
+    detection_signals:
+      - type: status
+        name: "LatticeOperationStatus.State"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs#LatticeOperationStatus.State"
+      - type: status
+        name: "LatticeOperationStatus.IsTerminal"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs#LatticeOperationStatus.IsTerminal"
+      - type: source
+        name: "LatticeOperationGrain.CompleteAsync"
+        source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain.CompleteAsync"
+    remediation:
+      - step: "Use the same caller-chosen operation id when retrying a start after an ambiguous client-side failure."
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationHandle.cs#LatticeOperationHandle.Created"
+      - step: "Treat Failed after silo loss or heartbeat lapse as terminal and start a new operation only after inspecting the previous status."
+        source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain.DescribeLoss"
+      - step: "Keep operation-specific work idempotent under same-id reattachment and do not infer absence once retention can prune the record."
+        source: "src/lattice/Operations/LatticeOperationIndexGrain.cs#LatticeOperationIndexGrain.Prune"
+    sources:
+      - "src/lattice/Operations/LatticeOperationGrain.cs"
+      - "src/lattice/Operations/LatticeOperationRunner.cs"
+      - "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
   - id: tree-alias-ownership-bounded
     name: "Tree aliasing is bounded by ownership"
     description: "Every alias assignment, including system-origin resize, restore and remediation, is decided by the registered ITreeOwnershipGuard before the registry writes or publishes it, and a denial or guard failure leaves the alias unwritten."
@@ -1712,7 +1787,7 @@ invariants:
       - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - id: tree-resize-shadow-swap
     name: "Tree resize shadow swap"
-    description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves ordinary reads and writes with at most one transparent retry; bulk loads and appends are not retried across the rejecting window."
+    description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves ordinary reads and writes with at most one transparent retry; bulk loads and appends are not retried across the rejecting window, so a call made after the swap reaches the destination but one already in flight when the alias swaps lands on the old physical tree and is removed by its purge."
     scope:
       packages:
         - "Orleans.Lattice"
@@ -1749,9 +1824,39 @@ invariants:
       - "docs/lattice/tree-sizing.md"
       - "docs/lattice/consistency.md"
       - "docs/lattice/ttl.md"
+  - id: treeadmin-operation-cancel-before-flip
+    name: "Tree-admin WAL-move cancel before flip"
+    description: "Cancelling a tracked WAL move before its placement flip leaves the partition on its source provider and unfenced; a tracked tree-admin operation is never resumed after accepting-silo loss."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.TreeAdmin"
+        - "Orleans.Lattice"
+      components:
+        - "ILatticeTreeAdminOperations"
+        - "LatticeOperationStatus"
+        - "LatticeOperationRunner"
+    violation_modes:
+      - "A cancelled WAL move flips the partition placement after cancellation was observed."
+      - "A cancelled or failed WAL move leaves the source partition fenced against writes."
+      - "A tree-admin operation remains Running after the accepting silo is declared dead."
+    detection_signals:
+      - type: status
+        name: "LatticeOperationStatus.State"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+      - type: status
+        name: "LatticeOperationStatus.Phase"
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs"
+    remediation:
+      - step: "Inspect the WAL placement after a Cancelled or Failed move and start a new move if it is still needed."
+        source: "docs/lattice.api.treeadmin/operations.md"
+      - step: "Treat Failed after silo loss as terminal and start a new tracked operation."
+        source: "docs/lattice.api.abstractions/operations.md"
+    sources:
+      - "docs/lattice.api.treeadmin/operations.md"
+      - "docs/lattice.api.abstractions/operations.md"
   - id: wal-append-durability-boundary
     name: "WAL append durability boundary"
-    description: "A foreground write mutates the in-memory projection only after the per-shard WAL append succeeds, making the WAL the commit linearization point."
+    description: "A foreground write mutates the in-memory projection only after its WAL partition append succeeds, making the WAL the commit linearization point."
     scope:
       packages:
         - "Orleans.Lattice"
@@ -1809,6 +1914,12 @@ invariants:
       - type: metric
         name: "orleans.lattice.wal.gc.passes"
         source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.wal.gc.orphan_pin_sweep"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.wal.gc.drive_orphan_pin_retirement"
+        source: "src/lattice/LatticeMetrics.cs"
     remediation:
       - step: "Report each consumer cursor monotonically after successfully applying a batch."
         source: "docs/lattice/wal.md"
@@ -1816,6 +1927,8 @@ invariants:
         source: "docs/lattice/wal.md"
       - step: "Use bootstrap or projection rebuild when a consumer falls off the retained log."
         source: "docs/lattice.replication/snapshot-bootstrap.md"
+      - step: "Use the WAL reclamation read to identify a stranded floor holder before intervening; refuse to retire a durable pin whose consumer id is malformed or ambiguous rather than treating it as safe to remove."
+        source: "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
     sources:
       - "docs/lattice/wal.md"
       - "docs/lattice/verified-wal.md"

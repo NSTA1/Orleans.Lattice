@@ -28,15 +28,15 @@ steps:
     expects: "Returns backing tree, covered trees, shard count, and reconcile state."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
   - n: 2
-    action: "Trigger reconcile for the index name."
-    api: "ILatticeTreeAdmin.ReconcileTagIndexAsync / ReconcileTagIndex"
-    expects: "Removes orphaned membership rows and returns counts."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+    action: "Start tracked reconcile for the index name."
+    api: "ILatticeTreeAdminOperations.StartTagIndexReconcileAsync / StartTagIndexReconcile / lattice_treeadmin_tag_index_reconcile_start"
+    expects: "Returns an operation handle; poll tree-admin operation status for covered tree and orphan row counts."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartTagIndexReconcileAsync"
   - n: 3
-    action: "Read status again to confirm background reconcile is idle."
-    api: "ILatticeTreeAdmin.GetTagIndexStatusAsync / GetTagIndexStatus"
-    expects: "Reports whether the background reconcile sweep is idle."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
+    action: "Read status again to confirm background reconcile is idle, or list operations to recover a lost handle."
+    api: "ILatticeTreeAdmin.GetTagIndexStatusAsync / GetTagIndexStatus and ILatticeTreeAdminOperations.ListOperationsAsync"
+    expects: "Reports whether the background reconcile sweep is idle and exposes visible tracked reconcile operations newest-first."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartTagIndexReconcileAsync"
 postconditions:
   - check: "Reconcile writes only to the backing membership tree."
     source: "docs/lattice.api.treeadmin/README.md"
@@ -47,6 +47,10 @@ failure_modes:
     signal: "InvalidOperationException if the tag-index factory invariant is broken."
     effect: "No reconcile is performed."
     response: "Fix host registration."
+  - id: operation-runner-lost
+    signal: "Tracked tag-index operation status becomes Failed after the accepting silo is lost or stops heartbeating."
+    effect: "The background reconcile is not resumed."
+    response: "Start a new tracked reconcile after confirming the previous status."
   - id: missing-backing-tree
     signal: "Facade rejects an index whose backing tree is not registered."
     effect: "No reconcile is performed."
