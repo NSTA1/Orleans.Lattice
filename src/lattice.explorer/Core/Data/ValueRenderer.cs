@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace Orleans.Lattice.Explorer.Core.Data;
@@ -44,7 +45,15 @@ public static class ValueRenderer
 
     private const string TruncatedNote = "Preview only - the full value is larger than the fetched bytes.";
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    // The relaxed encoder keeps non-ASCII text and < > & ' + as written, so the
+    // value shown is the value stored. The result is only ever rendered as text,
+    // which HTML-encodes it, so the default encoder's HTML-safety escaping buys
+    // nothing here.
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
@@ -71,7 +72,12 @@ internal static class AppConsentAnalysis
             string.Equals(grant.Operation, requested.Operation, StringComparison.Ordinal)
             && (grant.Tree is null || string.Equals(grant.Tree, requested.Tree, StringComparison.Ordinal)));
 
-    /// <summary>Whether <paramref name="approved"/> covers <paramref name="required"/>: a whole-tree approval covers any extent of that tree.</summary>
+    /// <summary>
+    /// Whether <paramref name="approved"/> covers <paramref name="required"/>, by the rule the
+    /// cluster's role compiler applies: a whole-tree approval covers any extent of that tree, a
+    /// prefix approval covers any key or narrower prefix that starts with it, and a key approval
+    /// covers only that key.
+    /// </summary>
     /// <param name="approved">The approved scopes.</param>
     /// <param name="required">The required scope.</param>
     public static bool Covers(IEnumerable<AppExceptionScope> approved, AppExceptionScope required) =>
@@ -79,8 +85,7 @@ internal static class AppConsentAnalysis
             string.Equals(scope.AdoptedTreeId, required.AdoptedTreeId, StringComparison.Ordinal)
             && string.Equals(scope.App, required.App, StringComparison.Ordinal)
             && string.Equals(scope.Tree, required.Tree, StringComparison.Ordinal)
-            && (scope.Kind == Orleans.Lattice.Auth.LatticeScopeKind.Tree
-                || (scope.Kind == required.Kind && string.Equals(scope.KeyOrPrefix, required.KeyOrPrefix, StringComparison.Ordinal))));
+            && CoversExtent(scope, required));
 
     /// <summary>
     /// The failures an install or activation of <paramref name="app"/> under
@@ -181,6 +186,20 @@ internal static class AppConsentAnalysis
 
     private static bool SameRole(AppRoleDescriptor a, AppRoleDescriptor b) =>
         a.Operations == b.Operations && a.Scopes.SequenceEqual(b.Scopes);
+
+    // Mirrors AppRoleCompiler.IsCovered in Orleans.Lattice.Apps: the review previews the
+    // cluster's decision, so it must be neither stricter nor looser than it.
+    private static bool CoversExtent(AppExceptionScope approved, AppExceptionScope required) => approved.Kind switch
+    {
+        LatticeScopeKind.Tree => true,
+        LatticeScopeKind.Prefix => required.Kind != LatticeScopeKind.Tree
+            && approved.KeyOrPrefix is { } prefix
+            && required.KeyOrPrefix is { } wanted
+            && wanted.StartsWith(prefix, StringComparison.Ordinal),
+        LatticeScopeKind.Key => required.Kind == LatticeScopeKind.Key
+            && string.Equals(approved.KeyOrPrefix, required.KeyOrPrefix, StringComparison.Ordinal),
+        _ => false,
+    };
 
     private static void Add(List<AppExceptionScope> scopes, AppExceptionScope scope)
     {

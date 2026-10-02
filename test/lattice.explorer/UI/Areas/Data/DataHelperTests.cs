@@ -124,6 +124,21 @@ public sealed class DataHelperTests
     }
 
     [Test]
+    public void Json_renderers_show_text_as_written_rather_than_escaped()
+    {
+        // #4325: the forced JSON view and the inline preview escaped every non-ASCII and < > & ' + character.
+        const string Text = "caf\u00e9 <b> & it's +44 \u4e2d\u6587";
+        var bytes = Encoding.UTF8.GetBytes("{ \"name\" : \"" + Text + "\" }");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DataValueRendering.Render(bytes, false, DataValueRenderer.Json).Content, Does.Contain("\"name\": \"" + Text + "\""));
+            Assert.That(DataValueRendering.Render(bytes, false, DataValueRenderer.Auto).Content, Does.Contain("\"name\": \"" + Text + "\""));
+            Assert.That(DataValueRendering.Inline(bytes, false), Is.EqualTo("{\"name\":\"" + Text + "\"}"));
+        });
+    }
+
+    [Test]
     public void Formats_and_tabs_are_fixed_and_culture_invariant()
     {
         Assert.Multiple(() =>

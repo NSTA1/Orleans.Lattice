@@ -86,6 +86,39 @@ public class ValueRendererTests
     }
 
     [Test]
+    public void Render_json_keeps_non_ascii_and_html_sensitive_characters_as_written()
+    {
+        // #4325: the default encoder showed this as caf\u00E9 \u003Cb\u003E \u0026 it\u0027s \u002B44 ...
+        const string Text = "caf\u00e9 <b> & it's +44 \u4e2d\u6587";
+        var bytes = Encoding.UTF8.GetBytes("{\"name\":\"" + Text + "\"}");
+
+        var rendered = ValueRenderer.Render(bytes);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered.Format, Is.EqualTo(ValueFormat.Json));
+            Assert.That(rendered.Content, Does.Contain("\"name\": \"" + Text + "\""));
+            Assert.That(rendered.Content, Does.Not.Contain("\\u"));
+        });
+    }
+
+    [Test]
+    public void Render_json_still_escapes_what_json_requires_and_reads_back_unchanged()
+    {
+        const string Text = "say \"hi\" \\ then\nnext";
+        var bytes = Encoding.UTF8.GetBytes("""{"q":"say \"hi\" \\ then\nnext"}""");
+
+        var rendered = ValueRenderer.Render(bytes);
+
+        using var reparsed = System.Text.Json.JsonDocument.Parse(rendered.Content);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered.Format, Is.EqualTo(ValueFormat.Json));
+            Assert.That(reparsed.RootElement.GetProperty("q").GetString(), Is.EqualTo(Text));
+        });
+    }
+
+    [Test]
     public void HexDump_FormatsOffsetAndAscii()
     {
         var dump = ValueRenderer.HexDump(Encoding.ASCII.GetBytes("AB"));

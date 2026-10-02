@@ -62,6 +62,64 @@ public sealed class AppConsentAnalysisTests
     }
 
     [Test]
+    public void A_prefix_approval_covers_any_key_or_narrower_prefix_under_it_as_the_cluster_does()
+    {
+        // #4326: the cluster's AppRoleCompiler.IsCovered accepts these; the review must not report them as gaps.
+        var prefix = new AppExceptionScope { App = "crm", Tree = "contacts", Kind = LatticeScopeKind.Prefix, KeyOrPrefix = "eu-" };
+        var key = prefix with { Kind = LatticeScopeKind.Key, KeyOrPrefix = "eu-123" };
+        var narrower = prefix with { KeyOrPrefix = "eu-west-" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppConsentAnalysis.Covers([prefix], key), Is.True);
+            Assert.That(AppConsentAnalysis.Covers([prefix], narrower), Is.True);
+            Assert.That(AppConsentAnalysis.Covers([narrower], prefix), Is.False, "a narrower prefix does not cover a wider one");
+            Assert.That(AppConsentAnalysis.Covers([prefix], key with { KeyOrPrefix = "us-1" }), Is.False);
+            Assert.That(AppConsentAnalysis.Covers([prefix], prefix with { Kind = LatticeScopeKind.Tree, KeyOrPrefix = null }), Is.False);
+            Assert.That(AppConsentAnalysis.Covers([prefix], key with { Tree = "leads" }), Is.False, "coverage never crosses trees");
+            Assert.That(AppConsentAnalysis.Covers([prefix with { KeyOrPrefix = "EU-" }], key), Is.False, "prefixes compare ordinally");
+        });
+    }
+
+    [Test]
+    public void A_key_approval_covers_only_that_key()
+    {
+        var key = new AppExceptionScope { App = "crm", Tree = "contacts", Kind = LatticeScopeKind.Key, KeyOrPrefix = "eu-123" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppConsentAnalysis.Covers([key], key), Is.True);
+            Assert.That(AppConsentAnalysis.Covers([key], key with { KeyOrPrefix = "eu-1234" }), Is.False);
+            Assert.That(AppConsentAnalysis.Covers([key], key with { Kind = LatticeScopeKind.Prefix }), Is.False, "a key does not cover the prefix spelled the same");
+        });
+    }
+
+    [Test]
+    public void A_wider_recorded_prefix_neither_blocks_activation_nor_reads_as_drift_or_reconsent()
+    {
+        var app = AppsTestData.TaskBoard(crossApp: true);
+        var wider = new AppExceptionScope { App = "crm", Tree = "contacts", Kind = LatticeScopeKind.Prefix, KeyOrPrefix = "e" };
+        var consent = new AppConsentReport
+        {
+            Slug = app.Slug,
+            Version = app.Version,
+            Ceiling = new AppCapabilityCeilingDescriptor
+            {
+                AllowedOperations = AppConsentAnalysis.RequiredOperations(app),
+                ApprovedExceptionScopes = [wider],
+            },
+            BridgeGrants = app.Ui!.Bridge,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppConsentAnalysis.Preview(app, AppConsentDraft.FromReport(consent)), Is.Empty);
+            Assert.That(AppConsentAnalysis.Drift(app, consent), Is.Empty);
+            Assert.That(AppConsentAnalysis.Diff(app, AppsTestData.TaskBoard("1.0.1", crossApp: true), consent).ScopesAdded, Is.Empty);
+        });
+    }
+
+    [Test]
     public void The_requested_consent_would_activate()
     {
         var app = AppsTestData.TaskBoard(crossApp: true, adopted: true);
