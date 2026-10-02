@@ -55,7 +55,10 @@ public class LatticeGrainIdempotencyRetryPolicyTests
         LatticeHlcOverrideContext.Current = null;
     }
 
-    private static LatticeGrain CreateGrain(ILatticeRetryPolicy? retryPolicy)
+    private static LatticeGrain CreateGrain(ILatticeRetryPolicy? retryPolicy) =>
+        CreateGrain(retryPolicy, out _);
+
+    private static LatticeGrain CreateGrain(ILatticeRetryPolicy? retryPolicy, out IShardRootGrain shardRoot)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", TreeId));
@@ -71,7 +74,7 @@ public class LatticeGrainIdempotencyRetryPolicyTests
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 4 }));
 
-        var shardRoot = Substitute.For<IShardRootGrain>();
+        shardRoot = Substitute.For<IShardRootGrain>();
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
 
         var services = Substitute.For<IServiceProvider>();
@@ -194,5 +197,118 @@ public class LatticeGrainIdempotencyRetryPolicyTests
         await grain.GetOrSetAsync("k", [1]);
 
         Assert.That(policy.ObservedHlcOverride, Is.EqualTo(callerHlc));
+    }
+
+    /// <summary>
+    /// A policy that leaves the caller's scheduler before every attempt, the way
+    /// any policy that resumes with <c>ConfigureAwait(false)</c> after a delay does.
+    /// </summary>
+    private sealed class SchedulerHoppingRetryPolicy : ILatticeRetryPolicy
+    {
+        public async Task ExecuteAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken)
+        {
+            await Task.Run(static () => { }, cancellationToken).ConfigureAwait(false);
+            await operation(cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+        {
+            await Task.Run(static () => { }, cancellationToken).ConfigureAwait(false);
+            return await operation(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> as a turn on <paramref name="turn"/>, standing in
+    /// for the activation scheduler Orleans runs every grain turn on.
+    /// </summary>
+    private static Task RunOnTurnAsync(TaskScheduler turn, Func<Task> body) =>
+        Task.Factory.StartNew(body, CancellationToken.None, TaskCreationOptions.DenyChildAttach, turn).Unwrap();
+
+    [Test]
+    public async Task A_retried_SetAsync_runs_its_retry_on_the_scheduler_of_the_turn_that_started_it()
+    {
+        // The shipped policy resumes after its back-off with ConfigureAwait(false),
+        // so without re-entering the turn the retry ran the grain's mutation code on
+        // a thread-pool thread, outside the activation's turn.
+        var turn = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        var policy = new BoundedExponentialRetryPolicy(
+            maxAttempts: 2, initialDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(1));
+        var grain = CreateGrain(policy, out var shardRoot);
+
+        var observed = new System.Collections.Concurrent.ConcurrentQueue<TaskScheduler>();
+        var attempts = 0;
+        shardRoot.SetAsync("k", Arg.Any<byte[]>()).Returns(_ =>
+        {
+            observed.Enqueue(TaskScheduler.Current);
+            return Interlocked.Increment(ref attempts) == 1
+                ? Task.FromException(new TimeoutException("transient response timeout"))
+                : Task.CompletedTask;
+        });
+
+        await RunOnTurnAsync(turn, async () =>
+        {
+            using var scope = LatticeIdempotencyContext.With(LatticeIdempotencyKey.Fresh());
+            await grain.SetAsync("k", [1]);
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempts, Is.EqualTo(2), "the first attempt must fail and the policy must retry it");
+            Assert.That(observed, Has.All.SameAs(turn),
+                "every attempt, including the retry, must run on the turn's scheduler");
+        });
+    }
+
+    [Test]
+    public async Task GetOrSetAsync_runs_on_the_turn_scheduler_under_a_policy_that_leaves_it()
+    {
+        var turn = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        var grain = CreateGrain(new SchedulerHoppingRetryPolicy(), out var shardRoot);
+
+        TaskScheduler? observed = null;
+        shardRoot.GetOrSetAsync("k", Arg.Any<byte[]>()).Returns(_ =>
+        {
+            observed = TaskScheduler.Current;
+            return Task.FromResult<byte[]?>(null);
+        });
+
+        await RunOnTurnAsync(turn, async () =>
+        {
+            using var scope = LatticeIdempotencyContext.With(LatticeIdempotencyKey.Fresh());
+            await grain.GetOrSetAsync("k", [1]);
+        });
+
+        Assert.That(observed, Is.SameAs(turn));
+    }
+
+    [Test]
+    public async Task A_mutation_already_on_its_turn_scheduler_is_not_rescheduled()
+    {
+        // The common first attempt is invoked by the policy while still on the
+        // turn: it must run inline (one invocation, same scheduler), not be queued
+        // behind the turn that is waiting for it.
+        var turn = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        var policy = new RecordingRetryPolicy();
+        var grain = CreateGrain(policy, out var shardRoot);
+
+        TaskScheduler? observed = null;
+        shardRoot.SetAsync("k", Arg.Any<byte[]>()).Returns(_ =>
+        {
+            observed = TaskScheduler.Current;
+            return Task.CompletedTask;
+        });
+
+        await RunOnTurnAsync(turn, async () =>
+        {
+            using var scope = LatticeIdempotencyContext.With(LatticeIdempotencyKey.Fresh());
+            await grain.SetAsync("k", [1]);
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.UntypedInvocations, Is.EqualTo(1));
+            Assert.That(observed, Is.SameAs(turn));
+        });
     }
 }

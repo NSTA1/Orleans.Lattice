@@ -49,7 +49,8 @@ internal sealed partial class LatticeGrain
             return;
         }
 
-        await policy.ExecuteAsync(operation, cancellationToken);
+        var turn = TaskScheduler.Current;
+        await policy.ExecuteAsync(ct => OnTurn(turn, operation, ct), cancellationToken);
     }
 
     /// <summary>
@@ -78,8 +79,41 @@ internal sealed partial class LatticeGrain
             return await operation(cancellationToken);
         }
 
-        return await policy.ExecuteAsync(operation, cancellationToken);
+        var turn = TaskScheduler.Current;
+        return await policy.ExecuteAsync(ct => OnTurn(turn, operation, ct), cancellationToken);
     }
+
+    /// <summary>
+    /// Runs one attempt the retry policy drives on <paramref name="turn"/>, the
+    /// activation scheduler captured when the mutation began. A policy is free to
+    /// resume with <c>ConfigureAwait(false)</c> - the shipped
+    /// <see cref="BoundedExponentialRetryPolicy"/> does, after its back-off delay -
+    /// so a retry would otherwise run the grain's own mutation code on a thread-pool
+    /// thread, outside the activation's turn and in parallel with any interleaved
+    /// request the activation admits meanwhile. Re-entering the captured scheduler
+    /// keeps every attempt inside the turn whatever the policy does; an attempt
+    /// already on it (the first, in the common case) runs inline.
+    /// </summary>
+    private static Task OnTurn(TaskScheduler turn, Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
+        TaskScheduler.Current == turn
+            ? operation(cancellationToken)
+            : Task.Factory.StartNew(
+                () => operation(cancellationToken),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                turn).Unwrap();
+
+    /// <summary>
+    /// Typed sibling of <see cref="OnTurn(TaskScheduler, Func{CancellationToken, Task}, CancellationToken)"/>.
+    /// </summary>
+    private static Task<T> OnTurn<T>(TaskScheduler turn, Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken) =>
+        TaskScheduler.Current == turn
+            ? operation(cancellationToken)
+            : Task.Factory.StartNew(
+                () => operation(cancellationToken),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                turn).Unwrap();
 
     private sealed class NullScope : IDisposable
     {
