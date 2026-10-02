@@ -71,6 +71,10 @@ else if (_explanation is { } explanation)
             {
                 <LtDefinition Term="Reason">@explanation.Reason</LtDefinition>
             }
+            @if (DecidedBy(explanation) is { } decidedBy)
+            {
+                <LtDefinition Term="Decided by"><span data-lt-decided-by="@(explanation.DecidingLayer is { } layer ? (layer == TenantRuleLayer.Platform ? "platform" : "tenant") : "default")">@decidedBy</span></LtDefinition>
+            }
             <LtDefinition Term="With no matching rule">@AccessRuleFormat.EffectLabel(explanation.DefaultEffect)</LtDefinition>
             @if (explanation.Filtered)
             {
@@ -80,7 +84,7 @@ else if (_explanation is { } explanation)
         <h3 class="lt-access-section__title">Groups</h3>
         @GroupLinks(explanation.GroupIds)
         <p class="lt-access-caveat">Groups are resolved from the membership directory alone. Groups a live caller's token asserts are not included, so a real caller's decision can differ.</p>
-        <AccessRuleTable Rules="_matched" Caption="Matched rules, in precedence order" EmptyText="No rule matched; the default applied." Tenant="@Address.Tenant" />
+        <AccessRuleTable Rules="_matched" Caption="Matched rules, in precedence order" EmptyText="No rule matched; the default applied." Tenant="@Address.Tenant" DecidingRuleId="@explanation.DecidingRuleId" />
     </section>
 }
 else if (_permissions is { } permissions)

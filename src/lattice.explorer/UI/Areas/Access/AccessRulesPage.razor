@@ -58,7 +58,7 @@ else if (_rules is null)
 }
 else
 {
-    <AccessRuleTable Rules="Visible" Caption="Authorization rules" CaptionHidden="true" EmptyText="@EmptyText" Tenant="@Scope" />
+    <AccessRuleTable Rules="Visible" Caption="Authorization rules" CaptionHidden="true" EmptyText="@EmptyText" Tenant="@Scope" TenantRules="_tenantRules" />
     @if (ClusterWideText is { } wide)
     {
         <p class="lt-access-caveat" data-lt-cluster-wide-rules="true">@wide <a href="@ClusterWideHref">See every rule on the cluster</a>.</p>
