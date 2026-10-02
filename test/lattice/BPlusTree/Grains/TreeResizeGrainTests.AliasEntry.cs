@@ -144,17 +144,42 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
-    public async Task SwapAlias_falls_back_to_the_captured_entry_when_the_registry_has_none()
+    public async Task SwapAlias_marks_the_map_carry_so_an_in_flight_split_cannot_commit_onto_it()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
-        PrepareSwap(state, $"{TreeId}/resized/op1");
+        var snapshotTreeId = $"{TreeId}/resized/op1";
+        PrepareSwap(state, snapshotTreeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { ShardCount = ShardCount }));
+
+        await grain.SwapAliasAsync();
+
+        // The map carry and the alias flip are two registry calls; the marker
+        // fences the gap between them (issue #4264). The flip clears it.
+        Received.InOrder(() =>
+        {
+            registry.UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e => e.AliasCutoverTarget == snapshotTreeId));
+            registry.SetAliasAsync(TreeId, snapshotTreeId);
+        });
+    }
+
+    [Test]
+    public async Task SwapAlias_refuses_a_logical_tree_with_no_registry_row()
+    {
+        // Issue #4270: the swap used to fall back to the captured entry, or an
+        // empty one, and upsert it - recreating a purged tree's row.
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var snapshotTreeId = $"{TreeId}/resized/op1";
+        PrepareSwap(state, snapshotTreeId);
         state.State.OldRegistryEntry = new TreeRegistryEntry { ShardCount = ShardCount, PublishEvents = true };
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(null));
 
-        await grain.SwapAliasAsync();
+        var ex = Assert.ThrowsAsync<LatticeTreeNotRegisteredException>(() => grain.SwapAliasAsync());
 
-        await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
-            e.PublishEvents == true && e.MaxLeafKeys == 256 && e.ShardCount == ShardCount));
+        Assert.That(ex!.TreeId, Is.EqualTo(TreeId));
+        await registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+        await registry.DidNotReceive().SetAliasAsync(TreeId, snapshotTreeId);
     }
 }

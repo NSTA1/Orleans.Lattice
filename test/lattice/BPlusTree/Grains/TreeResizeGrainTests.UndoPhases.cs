@@ -236,6 +236,28 @@ public partial class TreeResizeGrainTests
 
     // --- Retryability ---
     [Test]
+    public async Task UndoResize_after_swap_refuses_a_logical_tree_with_no_registry_row()
+    {
+        // Issue #4270: restoring the captured entry is an unconditional upsert,
+        // so undo against a purged logical tree recreated its row. It must fail
+        // closed before any compensation runs.
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        SeedInFlightResize(state, ResizePhase.Swap);
+        SetupOldTreeDeletion(grainFactory, isDeleted: false);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(null));
+
+        var ex = Assert.ThrowsAsync<LatticeTreeNotRegisteredException>(() => grain.UndoResizeAsync());
+
+        Assert.That(ex!.TreeId, Is.EqualTo(TreeId));
+        await registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+        await registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());
+        await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
+            .DidNotReceive().DiscardDerivedPhysicalTreeAsync();
+        Assert.That(state.State.InProgress, Is.True, "a refused undo leaves the resize as it found it");
+    }
+
+    [Test]
     public async Task UndoResize_at_swap_phase_is_idempotent_across_repeated_calls()
     {
         // The original defect made undo permanently unretryable: it threw on

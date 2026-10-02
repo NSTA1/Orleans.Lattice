@@ -229,6 +229,7 @@ src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainingRuns	unresolved	reaso
 src/lattice/LatticeMetrics.cs#ConfigChanged	primed	
 src/lattice/LatticeMetrics.cs#CoordinatorCompleted	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#CoordinatorPhaseTickFailures	unresolved	reason=dimension (unread-tag-argument:PhaseTickFailureTags()): tag argument(s) PhaseTickFailureTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#CoordinatorPurgedTreeAbandonments	unresolved	reason=dimension (unread-tag-argument:PhaseTickFailureTags()): tag argument(s) PhaseTickFailureTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteCompleted	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteDuration	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteParticipants	unresolved	reason=dimension outcome: no declaration found for outcomeTag

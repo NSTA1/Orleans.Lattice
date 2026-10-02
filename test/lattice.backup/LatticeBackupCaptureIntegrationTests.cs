@@ -302,6 +302,76 @@ public sealed class LatticeBackupCaptureIntegrationTests
         Assert.That(catalogued, Is.Zero);
     }
 
+    // ---- Prefix scope authorization (issue #4278) ------------------------
+
+    [Test]
+    public async Task CaptureAsync_prefix_scope_over_a_deny_carve_out_is_refused_and_captures_nothing()
+    {
+        await _fixture.InitializeAsync();
+        var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
+        await tree.SetAsync("x/name", Bytes("alice"));
+        await tree.SetAsync("x/ssn", Bytes("123-45-6789"));
+
+        // Tree-wide Backup allow with a carve-out on x/ssn: a whole-tree capture is
+        // refused, and asking for Prefix("x") instead must be refused too rather
+        // than capturing the carved-out key under system origin.
+        var gate = new CarveOutAccessGate("x/ssn");
+        var gated = _fixture.CreateCaptureServiceWith(new BackupAccessAuthorizer(gate, membership: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await gated.CaptureAsync(
+                    new LatticeBackupCaptureRequest("whole", BackupScopeSelector.WholeTree(Tree))),
+                Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await gated.CaptureAsync(
+                    new LatticeBackupCaptureRequest("prefix", BackupScopeSelector.Prefix(Tree, "x"))),
+                Throws.InstanceOf<LatticeAuthorizationDeniedException>(),
+                "a prefix scope must not skip a carve-out the whole-tree scope honours");
+        });
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await CountCatalogAsync(), Is.Zero, "fail closed: nothing was catalogued");
+            Assert.That(gate.Requests.Any(r => r.Key is null && r.RangeStart == "x" && r.RangeEnd == "y"), Is.True,
+                "the prefix scope reached the gate as a range over the whole prefix");
+        });
+    }
+
+    [Test]
+    public async Task CaptureAsync_prefix_scope_under_a_uniform_range_allow_captures_the_prefix()
+    {
+        await _fixture.InitializeAsync();
+        var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
+        await tree.SetAsync("a/1", Bytes("v"));
+        await tree.SetAsync("b/1", Bytes("v"));
+
+        var gated = _fixture.CreateCaptureServiceWith(
+            new BackupAccessAuthorizer(new UniformRangeAllowGate(), membership: null));
+
+        var result = await gated.CaptureAsync(
+            new LatticeBackupCaptureRequest("prefix", BackupScopeSelector.Prefix(Tree, "a/")));
+
+        var entries = await DecodeAsync(result.Manifest);
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "a/1" }));
+    }
+
+    /// <summary>
+    /// A gate that returns a plain (unfiltered) allow for a range request and denies
+    /// every other shape, so a prefix capture succeeds only when it is authorized as
+    /// a range.
+    /// </summary>
+    private sealed class UniformRangeAllowGate : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request,
+            CancellationToken cancellationToken = default) =>
+            new(request.Key is null && request.RangeStart is not null
+                ? LatticeAccessDecision.Allow()
+                : LatticeAccessDecision.Deny("only a range request is granted"));
+    }
+
     // ---- Helpers --------------------------------------------------------
 
     private async Task<List<LwwEntry>> DecodeAsync(BackupManifest manifest)

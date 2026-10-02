@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Tests;
 /// and system-origin scope) are covered too.
 /// </summary>
 [TestFixture]
-public class LatticeAccessGateEnforcementTests
+public partial class LatticeAccessGateEnforcementTests
 {
     private const string Tree = "tree-1";
 

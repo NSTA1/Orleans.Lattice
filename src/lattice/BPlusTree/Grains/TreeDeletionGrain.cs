@@ -377,8 +377,16 @@ internal sealed partial class TreeDeletionGrain(
 
         if (state.State.PurgeComplete && state.State.Delegated)
         {
-            await UnregisterPurgedTreeAsync();
+            await SettleRegistryEntryAsync();
             await DeregisterLeafCursorsAsync();
+            return;
+        }
+        if (state.State.PurgeComplete && state.State.RegistryUnregisterPending)
+        {
+            // An earlier attempt recorded the purge complete but its registry
+            // removal threw (issue #4265): finish it rather than refusing.
+            await FinishCompletedPurgeAsync();
+            this.DeactivateOnIdle();
             return;
         }
         if (state.State.PurgeComplete)
@@ -402,28 +410,30 @@ internal sealed partial class TreeDeletionGrain(
         var shardRetriesSnapshot = state.State.ShardRetries;
         var purgeRequestedSnapshot = state.State.PurgeRequested;
         var purgeShardCountSnapshot = state.State.PurgeShardCount;
+        var unregisterPendingSnapshot = state.State.RegistryUnregisterPending;
 
-        // Mark complete and clean up.
+        // Mark complete and clean up. The registry removal is recorded as owed
+        // in the same write, so it is re-driven if it throws (issue #4265).
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PurgeRequested = false;
         state.State.PurgeShardCount = shardCount;
-        _finalisingPurge = true;
+        state.State.RegistryUnregisterPending = PurgeUnregistersTree;
         try
         {
             await PersistAsync();
         }
         catch
         {
-            _finalisingPurge = false;
             state.State.PurgeInProgress = purgeInProgressSnapshot;
             state.State.PurgeComplete = purgeCompleteSnapshot;
             state.State.NextShardIndex = nextShardIndexSnapshot;
             state.State.ShardRetries = shardRetriesSnapshot;
             state.State.PurgeRequested = purgeRequestedSnapshot;
             state.State.PurgeShardCount = purgeShardCountSnapshot;
+            state.State.RegistryUnregisterPending = unregisterPendingSnapshot;
             throw;
         }
 
@@ -432,21 +442,10 @@ internal sealed partial class TreeDeletionGrain(
         _purgeTimer = null;
 
         // Remove the tree from the registry so TreeExistsAsync immediately
-        // returns false. The reminder-driven CompletePurgeAsync path does
-        // the same (line 250-254) - keep the synchronous PurgeNowAsync path
-        // in lockstep so callers of the public PurgeTreeAsync API observe a
-        // fully purged tree on return. A discarded copy's log is trimmed
-        // again first, while its registry entry still resolves the partition
-        // count and placement, to release anything the discard itself could
-        // not.
-        if (state.State.Discarded)
-            await TrimDiscardedWalAsync();
-        await UnregisterPurgedTreeAsync();
-        _finalisingPurge = false;
-
-        await DeregisterLeafCursorsAsync();
-        await UnregisterAllRemindersAsync();
-        await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+        // returns false. The reminder-driven CompletePurgeAsync path does the
+        // same - keep the synchronous PurgeNowAsync path in lockstep so callers
+        // of the public PurgeTreeAsync API observe a fully purged tree on return.
+        await FinishCompletedPurgeAsync();
         this.DeactivateOnIdle();
     }
 
@@ -486,6 +485,26 @@ internal sealed partial class TreeDeletionGrain(
 
         if (state.State.PurgeComplete)
         {
+            if (state.State.RegistryUnregisterPending)
+            {
+                // The purge's registry removal threw (issue #4265). Re-drive it;
+                // the reminders stay registered until it lands.
+                try
+                {
+                    await FinishCompletedPurgeAsync();
+                }
+                catch (Exception fault)
+                {
+                    logger.LogWarning(fault,
+                        "Tree {TreeId}: removing the purged tree's registry entry failed; it is retried on the next reminder tick.",
+                        TreeId);
+                    return;
+                }
+
+                DeactivateUnlessLogicalPurgePending();
+                return;
+            }
+
             // Already done - unregister all reminders and deactivate. This is the
             // single teardown guard for both reminders; nothing below it can
             // observe PurgeComplete == true.
@@ -715,36 +734,101 @@ internal sealed partial class TreeDeletionGrain(
         // completion that never reached storage. PurgeShardCount is kept, as the
         // number of shards the finished purge walked.
         var snapshot = (state.State.PurgeInProgress, state.State.PurgeComplete, state.State.NextShardIndex,
-            state.State.ShardRetries, state.State.PurgeRequested);
+            state.State.ShardRetries, state.State.PurgeRequested, state.State.RegistryUnregisterPending);
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PurgeRequested = false;
-        _finalisingPurge = true;
+        state.State.RegistryUnregisterPending = PurgeUnregistersTree;
         try
         {
             await PersistAsync();
         }
         catch
         {
-            _finalisingPurge = false;
             (state.State.PurgeInProgress, state.State.PurgeComplete, state.State.NextShardIndex,
-                state.State.ShardRetries, state.State.PurgeRequested) = snapshot;
+                state.State.ShardRetries, state.State.PurgeRequested, state.State.RegistryUnregisterPending) = snapshot;
             throw;
         }
 
-        // Remove the tree from the registry, trimming a discarded copy's log
-        // first for the reason PurgePhysicalAsync gives.
+        await FinishCompletedPurgeAsync();
+        DeactivateUnlessLogicalPurgePending();
+    }
+
+    /// <summary>
+    /// Whether this tree's purge removes its registry entry: not for a system
+    /// tree, nor for a retired physical copy whose id is also a live logical
+    /// tree (<see cref="TreeDeletionState.RetainsRegistryEntry"/>).
+    /// </summary>
+    private bool PurgeUnregistersTree =>
+        !state.State.RetainsRegistryEntry
+        && !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Finishes a purge whose completion is persisted: trims a discarded copy's
+    /// log while its registry entry still resolves the partition count and
+    /// placement, removes the registry entry, then retires the cursors and
+    /// reminders and publishes the purge. Safe to re-drive after a failure: a
+    /// removal still owed is recorded in
+    /// <see cref="TreeDeletionState.RegistryUnregisterPending"/> (issue #4265).
+    /// </summary>
+    private async Task FinishCompletedPurgeAsync()
+    {
         if (state.State.Discarded)
             await TrimDiscardedWalAsync();
-        await UnregisterPurgedTreeAsync();
-        _finalisingPurge = false;
+        await SettleRegistryEntryAsync();
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
-        DeactivateUnlessLogicalPurgePending();
+    }
+
+    /// <summary>
+    /// Removes a purged tree's registry entry and clears the durable record that
+    /// the removal is owed. On failure the record stays set and the keepalive
+    /// reminder is armed, so the removal is re-driven rather than lost
+    /// (issue #4265).
+    /// </summary>
+    private async Task SettleRegistryEntryAsync()
+    {
+        try
+        {
+            await UnregisterPurgedTreeAsync();
+            if (state.State.RegistryUnregisterPending)
+            {
+                state.State.RegistryUnregisterPending = false;
+                try { await PersistAsync(); }
+                catch { state.State.RegistryUnregisterPending = true; throw; }
+            }
+        }
+        catch
+        {
+            await ArmKeepaliveForOwedUnregisterAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Arms the keepalive reminder that re-drives an owed registry removal. The
+    /// synchronous purge never registered it, and the soft-delete reminder's
+    /// period can be days. Best-effort: a later purge call re-drives the
+    /// removal too.
+    /// </summary>
+    private async Task ArmKeepaliveForOwedUnregisterAsync()
+    {
+        if (!state.State.RegistryUnregisterPending) return;
+        try
+        {
+            await reminderRegistry.RegisterOrUpdateReminder(
+                context.GrainId, KeepaliveReminderName, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Tree {TreeId}: failed to arm the keepalive reminder for an owed registry removal; the next purge call re-drives it.",
+                TreeId);
+        }
     }
 
     /// <summary>
@@ -768,8 +852,7 @@ internal sealed partial class TreeDeletionGrain(
     /// </summary>
     private async Task UnregisterPurgedTreeAsync()
     {
-        if (state.State.RetainsRegistryEntry) return;
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)) return;
+        if (!PurgeUnregistersTree) return;
 
         var registry = grainFactory.GetLatticeRegistry();
         await registry.UnregisterAsync(TreeId);
@@ -822,18 +905,43 @@ internal sealed partial class TreeDeletionGrain(
     /// after <see cref="DeleteTreeAsync"/> and its state behind after a purge.
     /// The walk is contiguous rather than the map's current physical set so a
     /// retired donor, or the target of an abandoned split, is purged too.
+    /// <para>
+    /// On a copy a logical tree's alias currently targets, a split the tree
+    /// makes after the alias was set is recorded against the logical tree's
+    /// registry entry while its shards live under this copy, so that entry's
+    /// pin, map and high-water mark are folded in as well (issue #4234). The
+    /// owner is the copy's <see cref="TreeRegistryEntry.DerivedFrom"/>, the
+    /// only tree an aliased delete may act through.
+    /// </para>
     /// </summary>
     internal async Task<int> ResolveAllocatedShardCountAsync()
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var highest = resolved.ShardCount - 1;
 
-        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
-        if (entry?.NextShardIndex is { } allocated && allocated > highest)
+        var registry = grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(TreeId);
+        highest = Math.Max(highest, HighestRecordedShardIndex(entry));
+
+        if (entry?.DerivedFrom is { } owner
+            && !string.Equals(owner, TreeId, StringComparison.Ordinal)
+            && await registry.GetEntryAsync(owner) is { } ownerEntry
+            && string.Equals(ownerEntry.PhysicalTreeId, TreeId, StringComparison.Ordinal))
         {
-            highest = allocated;
+            highest = Math.Max(highest, (ownerEntry.ShardCount ?? 0) - 1);
+            highest = Math.Max(highest, HighestRecordedShardIndex(ownerEntry));
         }
 
+        return highest + 1;
+    }
+
+    /// <summary>
+    /// The highest physical shard index a registry entry's split-allocation
+    /// high-water mark or shard map records, or <c>-1</c> when it records none.
+    /// </summary>
+    private static int HighestRecordedShardIndex(TreeRegistryEntry? entry)
+    {
+        var highest = entry?.NextShardIndex ?? -1;
         if (entry?.ShardMap is { } map)
         {
             foreach (var index in map.GetPhysicalShardIndices())
@@ -842,7 +950,7 @@ internal sealed partial class TreeDeletionGrain(
             }
         }
 
-        return highest + 1;
+        return highest;
     }
 
     private async Task PurgeShardAsync(int shardIndex)

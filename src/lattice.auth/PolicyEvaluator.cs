@@ -21,8 +21,8 @@ internal static class PolicyEvaluator
     /// whole-tree) request whose per-key admission is expressed as a
     /// <see cref="LatticeAccessDecision.KeyFilter"/>.
     /// </param>
-    /// <param name="rangeStart">The inclusive range start, or <c>null</c>. Used only in the reason text.</param>
-    /// <param name="rangeEnd">The exclusive range end, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="rangeStart">The inclusive range start of a collection request, or <c>null</c> for the start of the keyspace. Decides whether the range is uniformly governed (see <see cref="CompiledTree.TryResolveUniformRange"/>) and appears in the reason text.</param>
+    /// <param name="rangeEnd">The exclusive range end of a collection request, or <c>null</c> for the end of the keyspace. Used as <paramref name="rangeStart"/> is.</param>
     /// <returns>The access decision.</returns>
     public static LatticeAccessDecision Evaluate(
         CompiledPolicy policy,
@@ -50,8 +50,8 @@ internal static class PolicyEvaluator
     /// <param name="treeId">The target tree id.</param>
     /// <param name="operation">The requested operation.</param>
     /// <param name="key">The exact key for a point request, or <c>null</c> for a collection request.</param>
-    /// <param name="rangeStart">The inclusive range start, or <c>null</c>. Used only in the reason text.</param>
-    /// <param name="rangeEnd">The exclusive range end, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="rangeStart">The inclusive range start of a collection request, or <c>null</c> for the start of the keyspace. Decides whether the range is uniformly governed (see <see cref="CompiledTree.TryResolveUniformRange"/>) and appears in the reason text.</param>
+    /// <param name="rangeEnd">The exclusive range end of a collection request, or <c>null</c> for the end of the keyspace. Used as <paramref name="rangeStart"/> is.</param>
     /// <param name="match">The winning rule match, or a default (unmatched) value.</param>
     /// <returns>The access decision.</returns>
     public static LatticeAccessDecision Evaluate(
@@ -198,16 +198,33 @@ internal static class PolicyEvaluator
             return FromMatch(uniform, options.DefaultEffect, subject, treeId);
         }
 
-        // The tree carries per-key rules, so the decision can vary key-by-key.
+        // The tree carries per-key rules, so the decision can vary key-by-key - but
+        // not necessarily inside the requested range. When every key of the range
+        // resolves to the same rule (for example a prefix range under the matching
+        // prefix grant) and that shared verdict is an allow, return it as a plain
+        // allow: an all-or-nothing operation over exactly a granted prefix is then
+        // authorized, while an exact key or a narrower prefix inside the range keeps
+        // the decision filtered (issue #4278). A uniform deny keeps the filtered
+        // shape below, which rejects every key exactly as before.
+        var allTreesMatch = allTreesBucket is null
+            ? default
+            : ResolveAllTrees(allTreesBucket, subject, operation, userBeatsGroup);
+        if (tree!.TryResolveUniformRange(subject, operation, rangeStart, rangeEnd, userBeatsGroup, out var rangeMatch))
+        {
+            var uniformRange = allTreesBucket is null ? rangeMatch : ResolveTiered(rangeMatch, allTreesMatch);
+            if (TieredEffect(uniformRange, default, options.DefaultEffect) == LatticeEffect.Allow)
+            {
+                match = uniformRange;
+                return FromMatch(uniformRange, options.DefaultEffect, subject, treeId);
+            }
+        }
+
         // Return a Filtered decision whose predicate applies the identical tiered
         // algorithm per candidate key. The all-trees verdict is whole-tree, hence
         // uniform across keys, so it is resolved once outside the closure alongside
         // the existing captures and folded into each per-key decision.
-        var allTreesMatch = allTreesBucket is null
-            ? default
-            : ResolveAllTrees(allTreesBucket, subject, operation, userBeatsGroup);
         return OperatorFiltered(
-            tree!,
+            tree,
             subject,
             operation,
             userBeatsGroup,
@@ -296,6 +313,22 @@ internal static class PolicyEvaluator
             if (tenantTree is null || !tenantTree.HasPerKeyRules)
             {
                 match = ResolveTenant(tenantTree, tenantWideMatch, subject, operation, key: null, userBeatsGroup);
+                return FromMatch(match, options.DefaultEffect, subject, treeId);
+            }
+        }
+
+        // A matched operator verdict is final (D8), so when the operator layer
+        // resolves every key of the range to the same allowing rule (#4278), the
+        // tenant layer cannot change any key's decision and the collection is a plain
+        // allow, exactly as on an operator-only tree.
+        if (hasTree
+            && tree!.HasPerKeyRules
+            && tree.TryResolveUniformRange(subject, operation, rangeStart, rangeEnd, userBeatsGroup, out var operatorRange))
+        {
+            var operatorUniformRange = ResolveTiered(operatorRange, allTreesMatch);
+            if (operatorUniformRange.Matched && operatorUniformRange.Effect == LatticeEffect.Allow)
+            {
+                match = operatorUniformRange;
                 return FromMatch(match, options.DefaultEffect, subject, treeId);
             }
         }

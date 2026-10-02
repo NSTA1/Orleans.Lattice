@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Auth.Tests;
 /// range-read key-filter correctness, and the default effect.
 /// </summary>
 [TestFixture]
-public sealed class CompiledPolicyEvaluationTests
+public sealed partial class CompiledPolicyEvaluationTests
 {
     private const string Tree = "t";
 

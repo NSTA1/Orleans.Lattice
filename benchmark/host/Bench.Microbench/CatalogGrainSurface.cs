@@ -235,6 +235,13 @@ internal sealed class CatalogGrainSurface
             int targetShardIndex,
             ShardMap fallbackMap) => throw NotDriven();
 
+        public Task<ShardMap?> ReassignSlotsAsync(
+            string treeId,
+            int[] slots,
+            int targetShardIndex,
+            ShardMap fallbackMap,
+            string boundPhysicalTreeId) => throw NotDriven();
+
         public Task SetPublishEventsAsync(string treeId, bool? enabled) => throw NotDriven();
 
         public Task SetHistoryRetentionAsync(string treeId, HistoryRetentionMode? mode, TimeSpan? window) =>
