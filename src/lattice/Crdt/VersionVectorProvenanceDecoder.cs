@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -30,6 +31,14 @@ public sealed class VersionVectorProvenanceDecoder : ICrdtProvenanceDecoder
 {
     /// <summary>A shared, stateless instance. The decoder holds no per-call state.</summary>
     public static VersionVectorProvenanceDecoder Instance { get; } = new();
+
+    /// <summary>
+    /// Orders frontier pairs by replica id, identically to sorting the keys
+    /// alone with <see cref="OrdinalStringOrder.Comparison"/>. Held in a static
+    /// field so the sort below does not mint a closure-free delegate per call.
+    /// </summary>
+    private static readonly Comparison<KeyValuePair<string, HybridLogicalClock>> PairByOrdinalKey =
+        static (x, y) => OrdinalStringOrder.Comparison(x.Key, y.Key);
 
     /// <inheritdoc />
     public LatticeMergeMode Mode => LatticeMergeMode.VersionVector;
@@ -115,23 +124,44 @@ public sealed class VersionVectorProvenanceDecoder : ICrdtProvenanceDecoder
         var entries = vector.Entries;
         if (entries.Count == 0) return Array.Empty<CrdtMemberValue>();
 
-        var replicas = new List<string>(entries.Count);
-        foreach (var replicaId in entries.Keys) replicas.Add(replicaId);
-        replicas.Sort(OrdinalStringOrder.Comparison);
-
-        var result = new List<CrdtMemberValue>(replicas.Count);
-        foreach (var replicaId in replicas)
+        // Take key and value together in the one pass, sort the pairs, and read
+        // the clock straight off the pair. Collecting the keys alone forces the
+        // emit loop to re-probe the dictionary once per replica - a full string
+        // hash, a bucket walk and an ordinal compare - for a value the first
+        // pass already held. The pair window is scratch that never escapes, so
+        // it is rented rather than allocated: the key list it replaces cost one
+        // array per call, and this costs none once the pool is warm. Only the
+        // written prefix is cleared on return, because the rented array is at
+        // least the requested length and clearing the whole of it would memset
+        // past what was used.
+        var count = entries.Count;
+        var pairs = ArrayPool<KeyValuePair<string, HybridLogicalClock>>.Shared.Rent(count);
+        try
         {
-            var clock = entries[replicaId];
-            result.Add(new CrdtMemberValue
-            {
-                Element = Encoding.UTF8.GetBytes(replicaId),
-                ReplicaId = replicaId,
-                Ordinal = clock.Counter,
-            });
-        }
+            var next = 0;
+            foreach (var entry in entries) pairs[next++] = entry;
 
-        return result;
+            var window = pairs.AsSpan(0, count);
+            window.Sort(PairByOrdinalKey);
+
+            var result = new List<CrdtMemberValue>(count);
+            foreach (var (replicaId, clock) in window)
+            {
+                result.Add(new CrdtMemberValue
+                {
+                    Element = Encoding.UTF8.GetBytes(replicaId),
+                    ReplicaId = replicaId,
+                    Ordinal = clock.Counter,
+                });
+            }
+
+            return result;
+        }
+        finally
+        {
+            Array.Clear(pairs, 0, count);
+            ArrayPool<KeyValuePair<string, HybridLogicalClock>>.Shared.Return(pairs);
+        }
     }
 
     private static void Emit(List<CrdtMemberChange> sink, Dictionary<string, HybridLogicalClock>? entries)

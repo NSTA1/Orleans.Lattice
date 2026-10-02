@@ -57,9 +57,16 @@ public sealed class GSetProvenanceDecoder : ICrdtProvenanceDecoder
             var delta = (GSetDelta)entry.Delta;
             var adds = delta.Adds;
             if (adds is not { Count: > 0 }) continue;
-            for (var j = 0; j < adds.Count; j++)
+            // The delta DTO declares IReadOnlyList<T> because it is serialised
+            // public surface, so the indexer below dispatches through an
+            // interface. CrdtDeltaListSpan resolves the array and List<T> cases
+            // to a span; anything else keeps the interface walk. Nothing in
+            // this loop changes the scanned collection, so the span stays valid.
+            var addsSpanned = CrdtDeltaListSpan.TryGetSpan(adds, out var addsSpan);
+            var addCount = adds.Count;
+            for (var j = 0; j < addCount; j++)
             {
-                var element = adds[j];
+                var element = addsSpanned ? addsSpan[j] : adds[j];
                 if (element is null) continue;
                 result.Add(new CrdtMemberChange
                 {
