@@ -28,6 +28,7 @@
          confinement checks. -->
     <InternalsVisibleTo Include="Orleans.Lattice.Tenancy" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth" />
     <!-- The microbench host builds a real PolicyAccessGate (via the internal
          decision engine, snapshot maintainer and decision observer) to measure
          the enforcement cost of the opt-in auth layer with Membership + Auth

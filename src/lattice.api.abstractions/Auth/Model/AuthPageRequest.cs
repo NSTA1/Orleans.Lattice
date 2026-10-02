@@ -60,6 +60,19 @@ public sealed record AuthPageRequest
     /// </remarks>
     [Id(2)] public bool ActiveTenantOnly { get; init; }
 
+    /// <summary>
+    /// Whether a group listing (<see cref="ILatticeAuthAdmin.ListGroupsAsync"/>) also
+    /// lists every tenant's tenant groups: the groups in the reserved
+    /// <c>t/{tenant}/{name}</c> grammar that a tenant's own administrators manage.
+    /// <see langword="false"/> (the default) lists cluster groups only.
+    /// </summary>
+    /// <remarks>
+    /// Paging is unchanged: the narrowing to cluster groups happens before the page
+    /// is cut, so every page but the last is full. A server that predates this
+    /// member ignores it and lists every group. Ignored by the rule listings.
+    /// </remarks>
+    [Id(3)] public bool IncludeTenantGroups { get; init; }
+
     /// <summary>The effective, clamped page size derived from <see cref="PageSize"/>.</summary>
     public int EffectivePageSize => PageSize switch
     {
