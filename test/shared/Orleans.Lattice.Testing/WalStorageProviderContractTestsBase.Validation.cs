@@ -76,6 +76,38 @@ public abstract partial class WalStorageProviderContractTestsBase
         });
     }
 
+    /// <summary>
+    /// A batch is dense when each offset is its predecessor plus one, and that
+    /// sum wraps to <see cref="long.MinValue"/> at <see cref="long.MaxValue"/>.
+    /// A batch that runs off the end of the offset space must be rejected whole
+    /// on both append paths rather than stored out of offset order.
+    /// </summary>
+    [Test]
+    public async Task Append_whose_offsets_run_past_long_MaxValue_is_rejected_and_writes_nothing()
+    {
+        await using var probe = await CreateProbeAsync();
+        var wrapping = Entries(long.MaxValue, 2);
+        Assert.That(
+            Offsets(wrapping),
+            Is.EqualTo(new[] { long.MaxValue, long.MinValue }),
+            "Precondition: the second offset is the wrapped successor of the first.");
+
+        Assert.That(
+            async () => await probe.AppendAsync(TreeId, Shard, wrapping, CancellationToken.None),
+            Throws.InstanceOf<InvalidOperationException>().Or.InstanceOf<ArgumentException>(),
+            "An entry append whose offsets wrap past long.MaxValue is not dense and must be rejected.");
+        Assert.That(
+            async () => await probe.AppendEncodedAsync(TreeId, Shard, wrapping, CancellationToken.None),
+            Throws.InstanceOf<InvalidOperationException>().Or.InstanceOf<ArgumentException>(),
+            "An encoded append whose offsets wrap past long.MaxValue is not dense and must be rejected.");
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await ReadAllAsync(probe), Is.Empty, "A rejected batch must write nothing.");
+            Assert.That(await probe.GetHighestOffsetAsync(TreeId, Shard, CancellationToken.None), Is.EqualTo(-1L));
+        });
+    }
+
     private static Task InvokeAsync(
         IWalStorageProviderContractProbe probe,
         string operation,

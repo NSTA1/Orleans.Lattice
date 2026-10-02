@@ -325,6 +325,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - Tree admin acted on undefined modes.** An unknown `TreeSnapshotMode` ran an Offline snapshot that quiesced the source, and an unknown `TreeHistoryRetentionMode` cleared the retention override. Both are now rejected with `ArgumentOutOfRangeException` before any side effect. ([#4075](https://github.com/NSTA1/Orleans.Lattice/issues/4075)) (`Orleans.Lattice.Api.TreeAdmin`)
 
+- **WAL - A batch running past the last offset was accepted.** Every WAL provider's density check wrapped at `long.MaxValue`, so a batch whose offsets ran off the end of the offset space passed and was stored out of order. The file, in-memory and Azure Table providers now reject it. ([#4221](https://github.com/NSTA1/Orleans.Lattice/issues/4221)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Storage.AzureTable`)
+
+- **Storage - A sub-byte capacity threshold disagreed with itself.** When a ceiling times the advisory ratio fell below one byte, the threshold truncated to zero: the aggregate read over threshold with nothing retained and the account never did. The threshold is now at least one byte. ([#4222](https://github.com/NSTA1/Orleans.Lattice/issues/4222)) (`Orleans.Lattice.Scaling`)
+
+- **Vector - A header declaring more centroid chunks than chunks was believed.** `VectorIndexHeader.Read` and `TryRead` now refuse it as a format no build writes, so a durable index whose manifest carries one rebuilds instead of waiting on centroid chunks that cannot exist. ([#4223](https://github.com/NSTA1/Orleans.Lattice/issues/4223)) (`Orleans.Lattice.Vector`)
+
 ### Security
 
 - **Apps - An install consented to a manifest nobody reviewed.** The commit re-read the manifest, so a source could add a bridge operation after review. A description now reports `ManifestDigest`; an install sending it as `ExpectedManifestDigest` is refused if it changed. The Explorer sends it. ([#4021](https://github.com/NSTA1/Orleans.Lattice/issues/4021)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.UI`)
