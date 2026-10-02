@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Schema;
@@ -6,12 +7,13 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// Remote-host adapter that implements the schema-management control facade
-/// (<see cref="ILatticeSchemaControl"/>) by delegating to the schema-API gRPC
-/// client (<see cref="LatticeSchemaApiGrpcClient"/>), so the topology-agnostic
-/// tree-administration schema tools work unchanged against a cluster reached over
-/// gRPC. Every facade member has full gRPC parity, so this adapter is a pure
-/// pass-through: each call forwards its arguments and returns the client result
-/// verbatim, and cancellation flows through every call.
+/// (<see cref="ILatticeSchemaControl"/>) and the accept-then-poll schema remediation
+/// and migration facade (<see cref="ILatticeSchemaOperations"/>) by delegating to the
+/// schema-API gRPC client (<see cref="LatticeSchemaApiGrpcClient"/>), so the
+/// topology-agnostic tree-administration schema tools work unchanged against a
+/// cluster reached over gRPC. Every facade member has full gRPC parity, so this
+/// adapter is a pure pass-through: each call forwards its arguments and returns the
+/// client result verbatim, and cancellation flows through every call.
 /// </summary>
 /// <remarks>
 /// The adapter adds no authorization of its own: the caller credential is stamped
@@ -21,7 +23,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// authority for an inspect). The gRPC client already projects the wire messages
 /// back onto the abstractions DTOs, so no per-member marshalling is needed here.
 /// </remarks>
-internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl
+internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl, ILatticeSchemaOperations
 {
     private readonly LatticeSchemaApiGrpcClient _client;
 
@@ -108,4 +110,35 @@ internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl
     public Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(
         string treeId, CancellationToken cancellationToken = default)
         => _client.ProbeCapabilitiesAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartRemediationAsync(
+        string treeId,
+        LatticeValueTransform transform,
+        LatticeSchemaPolicy targetPolicy,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+        => _client.StartRemediationAsync(treeId, transform, targetPolicy, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartMigrationAsync(
+        string treeId, string? operationId = null, CancellationToken cancellationToken = default)
+        => _client.StartMigrationAsync(treeId, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartAdvanceAndMigrateAsync(
+        string treeId, uint newTargetVersion, string? operationId = null, CancellationToken cancellationToken = default)
+        => _client.StartAdvanceAndMigrateAsync(treeId, newTargetVersion, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)
+        => _client.GetSchemaOperationStatusAsync(operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationPage> ListOperationsAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)
+        => _client.ListSchemaOperationsAsync(request, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationStatus?> CancelOperationAsync(string operationId, CancellationToken cancellationToken = default)
+        => _client.CancelSchemaOperationAsync(operationId, cancellationToken);
 }

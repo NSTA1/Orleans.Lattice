@@ -2330,6 +2330,196 @@
       ]
     },
     {
+      "id": "lattice_backup_start_health_check",
+      "in_process": "BackupToolInvocations.StartHealthCheckAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-backup-health-check",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartHealthCheckTool"
+      },
+      "request": [
+        {
+          "name": "backupId",
+          "type": "string",
+          "required": true,
+          "notes": "The content-addressed id of the backup to verify."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupHealthCheckAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported. On success the fresh report is persisted as the backup's latest health state.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartHealthCheckTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_catalog_rebuild",
+      "in_process": "BackupToolInvocations.StartCatalogRebuildAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-catalog-rebuild",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogRebuildTool"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogRebuildAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogRebuildTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_catalog_scrub",
+      "in_process": "BackupToolInvocations.StartCatalogScrubAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-catalog-scrub",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogScrubTool"
+      },
+      "request": [
+        {
+          "name": "pruneOrphans",
+          "type": "bool",
+          "required": false,
+          "default": "false",
+          "notes": "When true, remove the orphan rows found; when false (the default), only flag them."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogScrubAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported. PruneOrphans false only flags orphan rows; true removes them.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogScrubTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
       "id": "lattice_backup_start_incremental",
       "in_process": "BackupToolInvocations.StartIncrementalBackupAsync",
       "grpc_method": null,
@@ -7991,26 +8181,34 @@
     },
     {
       "id": "lattice_treeadmin_schema_advance_and_migrate",
-      "in_process": "TreeAdminSchemaToolHandlers.AdvanceAndMigrateAsync",
+      "in_process": "TreeAdminSchemaOperationTools.StartAdvanceAndMigrateAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
-      "facade_operation": "api/schema.json#advance-and-migrate",
+      "facade_operation": "api/schema.json#start-advance-and-migrate",
       "tool_annotations": {
         "read_only": false,
         "destructive": true,
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
       "request": [
         {
           "name": "treeId",
           "type": "string",
-          "required": true
+          "required": true,
+          "notes": "The governed tree."
         },
         {
           "name": "newTargetVersion",
           "type": "uint",
           "required": true,
           "notes": "The new target version. Must be strictly greater than the tree's current target."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
         },
         {
           "name": "region",
@@ -8020,8 +8218,8 @@
         }
       ],
       "response": {
-        "type": "LatticeSchemaRemediationReport",
-        "shape": "Structured JSON projection of LatticeSchemaRemediationReport returned by the handler."
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON operation handle returned by the deprecated alias."
       },
       "errors": [
         {
@@ -8034,22 +8232,97 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "Do not retry blindly after success because the target version must strictly advance.",
-        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A fresh start whose target no longer advances fails the operation in its first phase.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartAdvanceAndMigrateAsync"
       },
       "idempotency": {
-        "idempotent": false,
-        "basis": "The operation first advances a monotonic target version; repeating the same target no longer advances.",
-        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
       },
       "concurrency": {
-        "rule": "Target version must be strictly greater than the current target; eager migration aborts without data cutover on the first value that cannot be upcast, and the committed target advance is not rolled back.",
-        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
       },
       "sources": [
-        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#TreeAdminSchemaToolHandlers.AdvanceAndMigrateAsync",
-        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ],
+      "deprecated": {
+        "replacement": "lattice_treeadmin_schema_advance_and_migrate_start",
+        "removal": "will be removed in the next major version"
+      }
+    },
+    {
+      "id": "lattice_treeadmin_schema_advance_and_migrate_start",
+      "in_process": "TreeAdminSchemaOperationTools.StartAdvanceAndMigrateAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#start-advance-and-migrate",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The governed tree."
+        },
+        {
+          "name": "newTargetVersion",
+          "type": "uint",
+          "required": true,
+          "notes": "The new target version. Must be strictly greater than the tree's current target."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A fresh start whose target no longer advances fails the operation in its first phase.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartAdvanceAndMigrateAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
+      },
+      "concurrency": {
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
       ]
     },
     {
@@ -8763,20 +9036,28 @@
     },
     {
       "id": "lattice_treeadmin_schema_migrate_to_target",
-      "in_process": "TreeAdminSchemaToolHandlers.MigrateToTargetVersionAsync",
+      "in_process": "TreeAdminSchemaOperationTools.StartMigrationAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
-      "facade_operation": "api/schema.json#migrate-to-target-version",
+      "facade_operation": "api/schema.json#start-migration",
       "tool_annotations": {
         "read_only": false,
         "destructive": true,
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
       "request": [
         {
           "name": "treeId",
           "type": "string",
-          "required": true
+          "required": true,
+          "notes": "The governed tree."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
         },
         {
           "name": "region",
@@ -8786,8 +9067,8 @@
         }
       ],
       "response": {
-        "type": "LatticeSchemaRemediationReport",
-        "shape": "Structured JSON projection of LatticeSchemaRemediationReport returned by the handler."
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON operation handle returned by the deprecated alias."
       },
       "errors": [
         {
@@ -8801,21 +9082,272 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Runs, idempotently resumes, or no-ops the eager migration.",
-        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#MigrateToTargetVersionAsync"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A tree already fully migrated finishes at once, having done nothing.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartMigrationAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "No-op success when already migrated and idempotent resume when in flight.",
-        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#MigrateToTargetVersionAsync"
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
       },
       "concurrency": {
-        "rule": "Aborts on the first value that cannot be upcast and leaves tree data untouched.",
-        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#MigrateToTargetVersionAsync"
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
       },
       "sources": [
-        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#TreeAdminSchemaToolHandlers.MigrateToTargetVersionAsync",
-        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ],
+      "deprecated": {
+        "replacement": "lattice_treeadmin_schema_migration_start",
+        "removal": "will be removed in the next major version"
+      }
+    },
+    {
+      "id": "lattice_treeadmin_schema_migration_start",
+      "in_process": "TreeAdminSchemaOperationTools.StartMigrationAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#start-migration",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The governed tree."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A tree already fully migrated finishes at once, having done nothing.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartMigrationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
+      },
+      "concurrency": {
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_operation_cancel",
+      "in_process": "LatticeOperationToolInvocations.CancelAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#cancel-schema-operation",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id to cancel."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.remediation, schema.migration and schema.advance-and-migrate kinds, the caller's tenant and trees the caller may read, and return null for invisible operations. Cancelling requires schema management over the tree and takes effect only before cutover; a cancel during cutover is declined.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_operation_list",
+      "in_process": "LatticeOperationToolInvocations.ListAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#list-schema-operations",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateReadTools"
+      },
+      "request": [
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "Maximum operations per page; <= 0 uses the server default (50, at most 500)."
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Continuation cursor from a previous page's nextPageToken; null starts at the newest."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationPage",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.remediation, schema.migration and schema.advance-and-migrate kinds, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_operation_status",
+      "in_process": "LatticeOperationToolInvocations.GetStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#get-schema-operation-status",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateReadTools"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string",
+          "required": true,
+          "notes": "The operation id from a start tool handle."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationResult",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.remediation, schema.migration and schema.advance-and-migrate kinds, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
       ]
     },
     {
@@ -8877,20 +9409,21 @@
     },
     {
       "id": "lattice_treeadmin_schema_remediate",
-      "in_process": "TreeAdminSchemaToolHandlers.RemediateAsync",
+      "in_process": "TreeAdminSchemaOperationTools.StartRemediationAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
-      "facade_operation": "api/schema.json#remediate",
+      "facade_operation": "api/schema.json#start-remediation",
       "tool_annotations": {
         "read_only": false,
         "destructive": true,
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
       "request": [
         {
           "name": "treeId",
           "type": "string",
-          "required": true
+          "required": true,
+          "notes": "The governed tree."
         },
         {
           "name": "transform",
@@ -8902,7 +9435,14 @@
           "name": "targetPolicy",
           "type": "LatticeSchemaPolicy",
           "required": true,
-          "notes": "The enforcement policy the transformed values must satisfy for the remediation to cut over. The remediation aborts on the first value the transform cannot make compliant."
+          "notes": "The enforcement policy the transformed values must satisfy for the remediation to cut over. The remediation fails on the first value the transform cannot make compliant."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
         },
         {
           "name": "region",
@@ -8912,8 +9452,8 @@
         }
       ],
       "response": {
-        "type": "LatticeSchemaRemediationReport",
-        "shape": "Structured JSON projection of LatticeSchemaRemediationReport returned by the handler."
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON operation handle returned by the deprecated alias."
       },
       "errors": [
         {
@@ -8927,21 +9467,102 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Safe only for the same transform and target policy because a different in-flight remediation is rejected.",
-        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#RemediateAsync"
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A start with the same parameters as an in-flight remediation follows it; different parameters fail the new operation in-band.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartRemediationAsync"
       },
       "idempotency": {
-        "idempotent": "conditional",
-        "basis": "Starts or idempotently resumes the same remediation; different parameters fail while one is in flight.",
-        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#RemediateAsync"
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
       },
       "concurrency": {
-        "rule": "Dry-run gate aborts before cutover on the first value that cannot satisfy the target policy; different in-flight parameters fail.",
-        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#RemediateAsync"
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
       },
       "sources": [
-        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#TreeAdminSchemaToolHandlers.RemediateAsync",
-        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
+      ],
+      "deprecated": {
+        "replacement": "lattice_treeadmin_schema_remediation_start",
+        "removal": "will be removed in the next major version"
+      }
+    },
+    {
+      "id": "lattice_treeadmin_schema_remediation_start",
+      "in_process": "TreeAdminSchemaOperationTools.StartRemediationAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#start-remediation",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The governed tree."
+        },
+        {
+          "name": "transform",
+          "type": "LatticeValueTransform",
+          "required": true,
+          "notes": "The per-value remediation transform IR that rewrites each stored value (for example a Passthrough pipeline of SetMember / DropMember / RenameMember operations)."
+        },
+        {
+          "name": "targetPolicy",
+          "type": "LatticeSchemaPolicy",
+          "required": true,
+          "notes": "The enforcement policy the transformed values must satisfy for the remediation to cut over. The remediation fails on the first value the transform cannot make compliant."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpLatticeOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A start with the same parameters as an in-flight remediation follows it; different parameters fail the new operation in-band.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartRemediationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
+      },
+      "concurrency": {
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools",
+        "src/lattice.api.mcp/Tools/Operations/LatticeOperationToolInvocations.cs"
       ]
     },
     {

@@ -110,6 +110,17 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_operation_status",
     ];
 
+    /// <summary>
+    /// The schema remediation and migration operation reads (#4209) every host
+    /// advertises. Their starts, cancel and the deprecated aliases need the
+    /// schema-control opt-in, which stays off here.
+    /// </summary>
+    private static readonly string[] SchemaOperationReadTools =
+    [
+        "lattice_treeadmin_schema_operation_list",
+        "lattice_treeadmin_schema_operation_status",
+    ];
+
     private string _root = null!;
     private WebApplication _app = null!;
 
@@ -186,6 +197,11 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// which the lifecycle opt-in contributes (its set grows from 26 to 33). The
     /// total is 96.
     /// </para>
+    /// <para>
+    /// The accept-then-poll schema remediation and migration (#4209) add the 2 reads in
+    /// <see cref="SchemaOperationReadTools"/>; everything else it adds is schema-control
+    /// gated. The total is 98.
+    /// </para>
     /// </remarks>
     [Test]
     public void The_advertised_surface_is_the_measured_size()
@@ -204,9 +220,10 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(admitted, Is.Unique, "A duplicate tool name would make the count meaningless.");
             Assert.That(
-                admitted, Has.Count.EqualTo(96),
-                "53 before the lifecycle opt-in plus the 33 verbs it contributes, plus the 8 #4126 operation tools "
-                + "and the 2 #4124 operation reads. Add the two meta tools for the 98 a client sees, against 55 before.");
+                admitted, Has.Count.EqualTo(98),
+                "53 before the lifecycle opt-in plus the 33 verbs it contributes, plus the 8 #4126 operation tools, "
+                + "the 2 #4124 operation reads and the 2 #4209 schema operation reads. Add the two meta tools for the "
+                + "100 a client sees, against 55 before.");
         });
     }
 
@@ -217,6 +234,10 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(TreeAdminToolNames(), Is.SupersetOf(OperationTools));
             Assert.That(TreeAdminToolNames(), Is.SupersetOf(MaintenanceOperationReadTools));
+            Assert.That(TreeAdminToolNames(), Is.SupersetOf(SchemaOperationReadTools));
+            Assert.That(
+                _app.Services.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaOperations>(), Is.Not.Null,
+                "An advertised schema operation tool needs the facade it invokes.");
             Assert.That(
                 _app.Services.GetService<Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdminOperations>(), Is.Not.Null,
                 "An advertised tree-maintenance operation tool needs the facade it invokes.");
@@ -344,7 +365,8 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
             Has.None.StartsWith("lattice_treeadmin_schema_set")
                 .And.None.StartsWith("lattice_treeadmin_schema_clear")
                 .And.None.StartsWith("lattice_treeadmin_schema_advance")
-                .And.None.StartsWith("lattice_treeadmin_schema_migrate")
-                .And.None.EqualTo("lattice_treeadmin_schema_remediate"),
+                .And.None.StartsWith("lattice_treeadmin_schema_migrat")
+                .And.None.StartsWith("lattice_treeadmin_schema_remediat")
+                .And.None.EqualTo("lattice_treeadmin_schema_operation_cancel"),
             "Advertising a call that can only be denied is worse than not advertising it.");
 }
