@@ -80,12 +80,15 @@ await tree.BulkLoadAsync(entries);
 
 It is a **one-shot initial-import primitive**: every shard must be empty when
 it is called. The call fans out to every physical shard, including shards this
-load has no entries for, and a shard that already has a root node rejects it
-with `InvalidOperationException` while the shards without one still load their
-share. A shard gains its root node the first time a data operation reaches
-it - a read, a count or a warm-up as well as a write (a `DiagnoseAsync` report
-does not create one) - and keeps it even after every key has been deleted, so
-a tree that has only ever been read from can already refuse a bulk load. It is
+load has no entries for, and a shard that holds data rejects it with
+`InvalidOperationException` while the empty shards still load their share. A
+shard is empty while it holds no entry at all, live or deleted: a tree that has
+only ever been read from - including the emptiness probe an empty-tree reshard
+or resize runs, a count or a warm-up - still accepts a bulk load, and the empty
+root leaf that first read seeded is retired once the load has published its own
+root. A shard keeps refusing once it has held any key, even after every key has
+been deleted, because its tombstones are data a bulk load must not be stamped
+under. It is
 **not** re-drivable: each call mints a
 fresh operation id, so re-issuing a load after it (or part of it) has
 completed fails on the shards that already hold data. Only the per-shard retry
