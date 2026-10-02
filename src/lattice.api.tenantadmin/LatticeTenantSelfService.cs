@@ -98,13 +98,16 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
             accessible.Add(current.Value);
         }
 
-        // Tenants the caller administers, scoped to its resolved subject. An
-        // anonymous or unresolved subject administers nothing, so it fails closed
-        // to an empty set.
+        // Tenants the caller may act as, scoped to its resolved subject and the
+        // groups it resolves to: under delegated tenant access administration a
+        // member through a tenant group (or a group entry in an admin set) is
+        // admitted, and with the feature off the engine answers the exact-id admin
+        // set alone. An anonymous or unresolved subject administers nothing, so it
+        // fails closed to an empty set.
         var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
         if (!subject.IsAnonymous && !string.IsNullOrEmpty(subject.SubjectId))
         {
-            foreach (var tenant in _policyEngine.ResolveAllowedTenants(subject.SubjectId))
+            foreach (var tenant in _policyEngine.ResolveAllowedTenants(subject.SubjectId, subject.GroupIds ?? Array.Empty<string>()))
             {
                 accessible.Add(tenant.Value);
             }
@@ -173,7 +176,7 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
             return false;
         }
 
-        foreach (var allowed in _policyEngine.ResolveAllowedTenants(subject.SubjectId))
+        foreach (var allowed in _policyEngine.ResolveAllowedTenants(subject.SubjectId, subject.GroupIds ?? Array.Empty<string>()))
         {
             if (string.Equals(allowed.Value, tenant.Value, StringComparison.Ordinal))
             {
