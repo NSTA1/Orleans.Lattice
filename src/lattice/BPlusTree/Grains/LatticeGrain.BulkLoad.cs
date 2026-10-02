@@ -44,7 +44,7 @@ internal sealed partial class LatticeGrain
         }
 
         // Fan out to *every* physical shard, including those whose bucket
-        // is empty. Each shard's own `RootNodeId is not null` guard inside
+        // is empty. Each shard's own emptiness guard inside
         // `ShardRootGrain.BulkLoadAsync` fires before the empty-list
         // short-circuit, so a shard that already contains data on this
         // tree (from a prior `SetAsync` or earlier bulk load) rejects the

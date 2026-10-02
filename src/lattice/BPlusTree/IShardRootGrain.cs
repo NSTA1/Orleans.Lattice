@@ -688,7 +688,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Bulk-loads pre-sorted key-value pairs into this shard, building leaves and
-    /// internal nodes bottom-up. The shard must be empty (no root node).
+    /// internal nodes bottom-up. The shard must be empty: no root node, or only
+    /// the seeded root leaf with no entry, live or tombstoned.
     /// Entries must already be sorted in ascending key order.
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
