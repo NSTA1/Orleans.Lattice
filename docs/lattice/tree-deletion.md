@@ -154,7 +154,7 @@ byte[]? value = await tree.GetAsync("customer-123");
 | Purge in progress | Throws `InvalidOperationException` - too late to recover safely |
 | Purge complete | Throws `InvalidOperationException` - data is gone |
 
-On an aliased tree these results describe the logical tree: a live resized tree is not deleted, so recovering it throws. A tree re-created under a purged tree's ID is live, not purged, and recovers as any live tree does - see [Reusing a purged tree ID](#reusing-a-purged-tree-id).
+On an aliased tree these results describe the logical tree: a live resized tree is not deleted, so recovering it throws. A tree re-created under a purged tree's ID is live, not purged: a `RecoverTreeAsync` that is the first lifecycle call on the ID clears the purged tree's record and returns without error, and any later one throws as for any tree that is not deleted - see [Reusing a purged tree ID](#reusing-a-purged-tree-id).
 
 ### Repairing an unbound node
 

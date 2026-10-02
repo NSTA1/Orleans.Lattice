@@ -238,7 +238,7 @@ param(
     # UPN / email, which is resolved to its object id. When Entra is enabled and
     # this is left empty, the deploying (currently signed-in) user is used, so
     # only that operator can reach the estate after the first deploy; further
-    # administrators are then granted at runtime through the Explorer Access tab.
+    # administrators are then granted at runtime through the Explorer Access area.
     [string]$SecurityAdmin = '',
     # Explorer web reply URIs. Defaults are derived from the deployed FQDNs.
     [string[]]$ExplorerRedirectUris = @(),
@@ -484,7 +484,7 @@ if ($EntraEnabled -and [string]::IsNullOrWhiteSpace($EntraTenantId)) {
 # the silo matches against Auth:BootstrapAdministrators - the oid claim, ordinal).
 # When Entra is enabled the estate is deny-by-default with this principal as the
 # only seeded administrator; every other caller is refused until this admin grants
-# them access through the Explorer Access tab. Empty means "the deploying user".
+# them access through the Explorer Access area. Empty means "the deploying user".
 $securityAdminObjectId = ''
 if ($EntraEnabled) {
     $guidRef = [ref]([guid]::Empty)
@@ -981,7 +981,7 @@ try {
         Write-Host '  Grant a subject MCP access (deny-by-default: a signed-in caller sees no tools until granted):'
         Write-Host "    1. Sign in to the Explorer console at $explorerUrl as the security administrator"
         Write-Host "       (object id $securityAdminObjectId)."
-        Write-Host '    2. Open the Access tab and grant the subject - identified by their Entra object id (oid) -'
+        Write-Host '    2. Open the Access area and grant the subject - identified by their Entra object id (oid) -'
         Write-Host '       the access they need (State read, plus Data / Backup / Replication as applicable).'
         Write-Host '    3. The subject connects from their MCP client; discovery advertises only the tool groups'
         Write-Host '       they hold grants for, and every forwarded call is re-authorized at the silo.'

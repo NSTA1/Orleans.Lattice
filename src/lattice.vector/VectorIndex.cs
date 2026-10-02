@@ -29,8 +29,8 @@ namespace Orleans.Lattice.Vector;
 /// written into a caller-owned span, the probe scratch is stack-allocated for
 /// ordinary probe counts and pooled beyond them, and no metric needs a normalised
 /// copy of the query. The insert path allocates only the cell blocks (nothing at
-/// all after <see cref="EnsureCapacity"/>), and training rents its scratch from
-/// the array pool.
+/// all after <see cref="EnsureCapacity"/> on an untrained index), and training
+/// rents its scratch from the array pool.
 /// </para>
 /// <para>
 /// <b>Determinism.</b> A result set is totally ordered by descending score with

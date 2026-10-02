@@ -1775,8 +1775,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// stream pre-encoded segments straight into the outbound framing
     /// encoder without an intermediate strongly-typed materialisation.
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree (not a tree shard index).</param>
     /// <param name="fromOffsetExclusive">Strict lower-bound offset; pass <c>-1</c> to read from the start of the log.</param>
     /// <param name="maxEntries">Maximum number of entries to yield; must be at least <c>1</c>.</param>
     /// <param name="encoder">Ignored on this override; the provider holds the encoded bytes verbatim. The argument is preserved on the signature to keep parity with the default fallback. Must not be <see langword="null"/>.</param>
@@ -1888,9 +1888,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// <para>
     /// The fold degrades to the persisted value alone whenever this
     /// provider instance has no live worker for the shard - a fresh
-    /// activation, another silo, or
-    /// <c>PipelinePhaseTwoCommits = false</c> - and <c>TAIL</c> keeps
-    /// its exact former meaning everywhere else, including on the
+    /// activation or another silo. With
+    /// <c>PipelinePhaseTwoCommits = false</c> the worker is still live,
+    /// but every append waits for its own phase 2, so the fold can add
+    /// only batches whose appends have not yet returned. <c>TAIL</c>
+    /// keeps its exact former meaning everywhere else, including on the
     /// <see cref="ReconcileAsync"/> path, which continues to read the
     /// persisted row and only the persisted row.
     /// </para>

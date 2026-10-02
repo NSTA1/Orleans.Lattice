@@ -8,8 +8,8 @@
 # provider has no such dependency and the silo container names resolve
 # over the shared us-net bridge network.
 #
-# Two routers share the same backend pool but with different LB
-# strategies:
+# Four routers share the same silo backend pool family, with different
+# matching rules and LB strategies:
 #   - us-replicate     PathPrefix(`/orleans.lattice.replication.`)
 #                      Round-robin, no sticky cookie. Priority 200 so
 #                      it wins decisively against the / catch-all.
@@ -84,8 +84,9 @@ http:
       loadBalancer:
         # No sticky cookie: replication pushes are stateless and both
         # silos share the same Azure Table Storage and lattice trees,
-        # so any silo can apply an inbound batch. Round-robin + active
-        # health check gives automatic per-silo failover within ~2s.
+        # so any silo can apply an inbound batch. There is deliberately
+        # no active health check on this gRPC route; failed pushes are
+        # observed by the replication transport and retried with backoff.
         # `h2c://` upstream tells Traefik to speak HTTP/2 cleartext to
         # the silo - required for gRPC. Port 8081 is a dedicated h2c
         # listener (Program.cs ConfigureKestrel) since plaintext Kestrel

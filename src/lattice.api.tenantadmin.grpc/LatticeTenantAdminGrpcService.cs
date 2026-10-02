@@ -264,7 +264,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// opt-in registration (and the usage facade may also be absent on a host
     /// running an older facade package), so a host that binds tenant
     /// administration without any of them must keep working exactly as it did
-    /// before those RPCs existed: the binding still serves every lifetime and
+    /// before those RPCs existed: the binding still serves every lifecycle and
     /// self-service RPC, and the RPCs of an absent facade answer
     /// <see cref="StatusCode.Unimplemented"/> rather than failing container
     /// construction at startup.

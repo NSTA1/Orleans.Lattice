@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <list type="bullet">
 ///   <item>retry policy never invoked (caller sees the injected exception),</item>
 ///   <item>retry policy invoked but exhausts its budget (caller still sees the injected exception),</item>
-///   <item>retries succeed but produce N distinct mutations because the idempotency key did not collapse them (PnCounter double-count, multiple stored HLCs).</item>
+///   <item>retries succeed but apply the same mutation more than once (a PnCounter double-count).</item>
 /// </list>
 /// </summary>
 [TestFixture]
@@ -220,12 +220,12 @@ public class RetryPolicyChaosTests
     [Test]
     public async Task PnCounter_IncrementAsync_under_retry_policy_collapses_retries_to_single_advance()
     {
-        // Strong end-to-end semantic check: the PnCounter pre-CAS
-        // dedup guard depends on the foreground write re-stamping
-        // the same HLC. If the retry policy were to retry under a
-        // FRESH idempotency key (the regression mode this feature
-        // is designed to prevent), the counter would double-count
-        // every retried increment. We arm faults aggressively
+        // Strong end-to-end semantic check: a retried increment must not
+        // double-count. IncrementAsync reads once and applies a delta
+        // carrying this replica's resulting total, which the leaf folds by
+        // a per-replica maximum, so re-running the same delta apply - what
+        // the retry policy does under an idempotency scope - cannot advance
+        // the counter twice. We arm faults aggressively
         // while issuing increments, then verify the counter
         // advanced by exactly the number of caller-visible commits.
         var treeId = $"rpchaos-pn-{Guid.NewGuid():N}";

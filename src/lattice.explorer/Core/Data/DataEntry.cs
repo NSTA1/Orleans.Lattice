@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Explorer.Core.Data;
 /// <summary>
 /// The explorer's view of a single entry, projected from the state-API
 /// <see cref="EntryRecord"/>. Carries the (possibly truncated) value bytes plus
-/// the metadata the Data tab surfaces.
+/// the metadata the Data area surfaces.
 /// </summary>
 public sealed record DataEntry
 {

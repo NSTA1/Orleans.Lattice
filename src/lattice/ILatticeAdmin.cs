@@ -135,10 +135,11 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// </para>
     /// <para>
     /// The figure is derived from the per-tree migration footprints each autonomic
-    /// monitor publishes every sampling pass, so it trails real activity by at most one
-    /// <see cref="LatticeOptions.HotShardSampleInterval"/> and is a lower bound
-    /// rather than an instantaneous truth. Footprints expire, so a silo lost
-    /// mid-migration cannot pin the count above zero indefinitely. A deployment with
+    /// monitor publishes every sampling pass, so it trails real activity by about one
+    /// <see cref="LatticeOptions.HotShardSampleInterval"/>. It can briefly under-count
+    /// newly-started work that has not been published yet, or over-count work that
+    /// finished or was rejected after the last footprint. Footprints expire, so a silo
+    /// lost mid-migration cannot pin the count above zero indefinitely. A deployment with
     /// autonomic splitting disabled always reports zero.
     /// </para>
     /// </summary>

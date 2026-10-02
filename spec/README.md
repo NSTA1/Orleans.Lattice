@@ -72,7 +72,7 @@ Safety invariants (checked at every reachable state):
 | `LinearizedTerminals` | No leaf applies a commit / abort terminal before the registry recorded that decision (decision-before-broadcast). |
 | `NoMixedTerminals` | A saga never applies commit on one leaf and abort on another. |
 
-Liveness / temporal properties:
+Action / temporal properties:
 
 | Property | Meaning |
 |----------|---------|

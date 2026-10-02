@@ -7,7 +7,7 @@ snapshot. Two seams collaborate to detect and react to this condition:
 
 | Seam | Side | Default | Purpose |
 |------|------|---------|---------|
-| `ILatticeWalIntrospection` | sender | Built-in | Returns the oldest still-available WAL entry HLC for a tree by walking each per-shard WAL grain and taking the minimum head timestamp. |
+| `ILatticeWalIntrospection` | sender | Built-in | Returns the oldest still-available WAL entry HLC for a tree by reading the head of each of the tree's WAL partitions and taking the minimum head timestamp. |
 | `ILatticeFallOffLogDetector` | receiver | Built-in | Compares the receiver's per-origin high-water-mark against the sender's oldest-available HLC, records the `peer.fell_off_log` metric on detection, and (when configured) invokes `ILatticeBootstrapCoordinator.BootstrapAsync`. |
 
 ## Detection rule
@@ -44,11 +44,11 @@ co-located callers can use `ILatticeWalIntrospection` directly.
 
 The per-tree replication maintenance pass also runs the check on its own
 cadence, every `LatticeReplicationOptions.MaintenanceFallOffCheckInterval`
-(default 30 seconds): for each current peer it takes the oldest retained entry
-that peer authored in the local WAL
-(`ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync`) and passes it to
-`CheckAndTriggerAsync`. A peer with no authored entries in the local WAL is
-skipped, and the local cluster is never probed against its own origin.
+(default 30 seconds): it reads a bounded window at the head of each local WAL
+partition, takes the oldest retained entry each current peer authored in that
+window (`ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync`), and
+passes it to `CheckAndTriggerAsync`. A peer with no authored entry in that
+window is skipped, and the local cluster is never probed against its own origin.
 
 `ILatticeWalIntrospection` addresses the WAL partitions by the tree id it is
 given and, like the [change feed](change-feed.md), does not follow a tree's

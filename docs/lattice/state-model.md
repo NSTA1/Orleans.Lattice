@@ -141,17 +141,22 @@ is required. See [Projection Rebuild](projection-rebuild.md).
 
 For CRDT keys (any CRDT merge mode), the WAL record carries the producer's
 **typed delta bytes** in `WalRecord.Delta` and omits the full-state `Value`
-slot. The receiver-side `ReplicationApplier` decodes the delta and
-folds it into the receiver's prior observed state via the
+slot. On a receiving cluster the replication package hands those bytes to
+the same CRDT apply path a local write takes, where the receiver's leaf
+decodes the delta and folds it into its prior observed state via the
 registered `CrdtShape`'s `MergeDelta`.
 
-`ILattice.ApplyCrdtDeltaAsync(key, mode, deltaBytes)` is the
-public surface. The typed CRDT accessors wrap this surface and are
-the recommended caller-facing seam; for most mutations they read the
-key's current state and mint the typed delta from it. A mutation
-whose delta does not depend on that state - a G-Set add, a Max- or
-Min-Register write, or a sequence remove by dot - sends its delta
-without reading.
+`ILattice.ApplyCrdtDeltaAsync(key, mode, deltaBytes)` - where
+`deltaBytes` is the JSON-serialised typed delta DTO for `mode`, such as
+a `PnCounterDelta` - is the public surface, with a time-to-live overload
+and a batched `ApplyCrdtDeltaManyAsync`. The typed CRDT accessors wrap
+this surface and are the recommended caller-facing seam; for most
+mutations they read the key's current state once and mint the typed
+delta from it, with no compare-and-swap retry loop. A G-Set add, a Max-
+or Min-Register write and a sequence remove by dot - whose delta does
+not depend on that state - send their delta without reading, as does
+`MergeAsync` on a G-Set, a bounded register or a sequence; every other
+accessor's `MergeAsync` still reads the key once first.
 
 `LwwRegister` keys remain a full-state model: the WAL carries the
 canonical post-merge `byte[]` payload in `Value`. Concurrent writers

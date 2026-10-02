@@ -153,7 +153,7 @@ For day-to-day use and operations:
 
 For internals (the "how"):
 
-- [Change Feed](change-feed.md) - `IChangeFeed` seam, per-shard cursor, async enumerable shape.
+- [Change Feed](change-feed.md) - `IChangeFeed` seam, per-partition offset cursor, async enumerable shape.
 - [Anti-entropy digest probe](anti-entropy-digest-probe.md) - the detection stage: a low-frequency, read-only pass comparing the content digest of each shard the tree's live shard map routes to against every peer's.
 - [Anti-entropy Merkle walk](anti-entropy-merkle-walk.md) - the localisation stage: a read-only top-down descent that narrows a shard mismatch to the diverged leaves and their covering ranges.
 - [Anti-entropy leaf re-replay](anti-entropy-leaf-rereplay.md) - the repair stage: re-ships the retained WAL entries covering those ranges down the ordinary TX-aware apply path, de-duplicated at the receiver.
@@ -166,4 +166,4 @@ For internals (the "how"):
 - [Receiver Flow Control](receiver-flow-control.md) - `IReceiverFlowControlPolicy` seam, ack-stamped hints, sender clamping / pause composition.
 - [Wire Format](wire-format.md) - `ReplicationBatchEnvelope`, `IReplicationBatchEncoder`, wire version negotiation.
 - [Deltas](deltas.md) - typed CRDT delta records on the wire.
-- [WAL](wal.md) - per-shard replication write-ahead log, turn-safe batching, causal+ entry schema.
+- [WAL](wal.md) - partitioned replication write-ahead log, turn-safe batching, causal+ entry schema.

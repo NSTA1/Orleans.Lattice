@@ -38,7 +38,7 @@ These three properties make `LwwValue` a join-semilattice - two divergent replic
 
 Deletes are represented as **tombstones** (an `LwwValue` with `IsTombstone = true` and a timestamp). A tombstone with a higher timestamp than a live value wins; a live value with a higher timestamp than a tombstone "resurrects" the key.
 
-When two entries carry exactly the same timestamp, the merge falls back to a fixed order that reads the same on every replica - a tombstone beats a live value, then the later expiry wins, then the larger value bytes, with the writing cluster's identity and a migration marker as the final tie-breaks - so replicas converge whatever order they observe the writes in.
+When two entries carry exactly the same timestamp, the merge falls back to a fixed order over facts that read the same on every replica - a tombstone beats a live value, then the later expiry wins, then the larger value bytes - so replicas converge whatever order they observe the writes in. The writing cluster's identity and then a migration marker break any tie that remains. The cluster identity ranks below the value because it is observer-relative - a cluster stores its own writes with no origin while its peers stamp the same write with the authoring cluster - so by the time it decides anything the candidates already agree on everything a read can see.
 
 **Example use case:** a user-profile store where each field (display name, avatar URL, theme) is overwritten by the most recent edit and you are happy to drop a losing concurrent write rather than show the user a conflict prompt. This is the default semantics for plain `SetAsync` / `GetAsync` on the tree.
 
@@ -58,7 +58,7 @@ The merge operation is `max()` - once a node reaches `SplitComplete`, no message
 
 - Because the state only ever advances, a node that has completed one split reads complete for the rest of its life, so the state alone cannot say whether a *later* split was interrupted. Each node therefore also persists an in-flight marker beside its split intent (on a leaf, a dedicated flag; on an internal node, the right half of the children it is handing over), cleared only when that split completes. A node that crashes mid-split finds the marker on its next write (leaf) or next accepted promotion (internal node) and resumes the cross-grain phase instead of starting a second split. The sibling seeding and entry transfer are idempotent, and a parent skips a duplicate `(separatorKey, childId)` pair it is asked to accept.
 - If two messages arrive out of order (one carrying `SplitInProgress`, one carrying `SplitComplete`), the result is simply `SplitComplete`.
-- After recovery, the caller's original operation (a write for leaves, a split promotion for internal nodes) is routed to the correct node based on the split key - ensuring no operations are silently dropped.
+- After recovery, the caller's original operation is routed to the correct node - a leaf routes the write by the key range it now declares, an internal node routes the split promotion by the split key - ensuring no operations are silently dropped.
 
 **Example use case:** internal bookkeeping for the tree itself. When a leaf grows past its key budget and splits in two, the silo can crash partway through the split and still come back to a consistent tree on reactivation - no operator intervention, no manual repair. Application code does not interact with this primitive directly.
 
@@ -70,7 +70,7 @@ Each leaf node maintains a `VersionVector` - a map from replica ID (the grain's 
 VersionVector = { "grain/abc" -> HLC(100:3), "grain/def" -> HLC(95:0) }
 ```
 
-The version vector is ticked on every write (insert, update, or delete). This enables **delta extraction**: a consumer can present its own version vector and ask "give me everything that changed since this point." The leaf compares each entry's timestamp against the consumer's clock for the relevant replica and returns only the newer entries.
+The leaf's own entry advances on every write (insert, update, or delete) to the timestamp that write was stamped with. This enables **delta extraction**: a consumer can present its own version vector and ask "give me everything that changed since this point." The leaf compares each entry's timestamp against the consumer's clock for the relevant replica and returns only the newer entries.
 
 Merge is **pointwise-max** across all replica IDs:
 
@@ -182,7 +182,7 @@ A Max-register keeps the candidate with the greatest `OrderKey`; a Min-register 
 
 ## Observed-Remove Set (OR-Set)
 
-`OrSet` is an **add-wins, observed-remove set** of `byte[]` elements. Every `Add(element, replicaId, counter)` mints a fresh causal dot `(replicaId, counter)` and attaches it to the element under `Adds`; `Remove(element)` moves every currently-observed dot for that element into `Tombstones`. An element is present in the set whenever its `Adds` set contains at least one dot that is not in `Tombstones`:
+`OrSet` is an **add-wins, observed-remove set** of `byte[]` elements. Every `Add(element, replicaId, counter)` mints a fresh causal dot `(replicaId, counter)` and attaches it to the element under `Adds`; `Remove(element)` copies every currently-observed dot for that element into `Tombstones` (the add dots themselves are kept). An element is present in the set whenever its `Adds` set contains at least one dot that `Tombstones` does not cancel (cancellation is coverage-based; see [Dot-history compaction](#dot-history-compaction-bounded-state-under-re-assertion)):
 
 ```
 OrSet = {
@@ -206,10 +206,10 @@ OrFlag = {
     Enables:    [OrSetDot(replicaId, counter)]   // each Enable() mints a fresh dot
     Tombstones: [OrSetDot]                        // dots observed-and-disabled
 }
-IsEnabled = at least one dot in Enables is not in Tombstones
+IsEnabled = at least one dot in Enables is not cancelled by Tombstones
 ```
 
-`Enable(replicaId, counter)` mints a fresh causal dot and appends it to `Enables`; `Disable()` moves every currently-observed enable dot into `Tombstones`. Merge is the union of `Enables` and the union of `Tombstones` on both sides, after which membership is recomputed - commutative, associative, and idempotent.
+`Enable(replicaId, counter)` mints a fresh causal dot and appends it to `Enables`; `Disable()` copies every currently-observed enable dot into `Tombstones`. Merge is the union of `Enables` and the union of `Tombstones` on both sides, after which membership is recomputed - commutative, associative, and idempotent.
 
 Because a `Disable()` only tombstones the dots the local replica has actually observed, a concurrent `Enable()` from another replica that the disabler never saw **survives** the merge - hence "enable-wins". This is exactly the OR-Set add-wins rule narrowed to a single logical element.
 
@@ -272,7 +272,7 @@ RwFlag = {
     Disables:   [OrSetDot(replicaId, counter)]   // each Disable() mints a fresh dot
     Tombstones: [OrSetDot]                        // disable dots an observed Enable() has cancelled
 }
-liveDisable = Disables \ Tombstones
+liveDisable = Disables not cancelled by Tombstones
 IsEnabled   = Enables is non-empty AND liveDisable is empty
 ```
 
@@ -317,7 +317,7 @@ MvRegister      = { Entries: [MvRegisterEntry], Context: { replicaId -> highestC
 
 The `Context` map records the highest counter each replica has minted, so a write that observed `r1:5` and overwrote it can safely supersede `r1:5` on merge but **must not** drop a concurrent `r2:3` it never observed. The merge rule is:
 
-- Keep every entry whose `(replicaId, counter)` pair is **not** subsumed by the other side's context.
+- Keep every entry that the other side still holds (the same dot) or whose `(replicaId, counter)` pair is **not** subsumed by the other side's context - an entry is dropped only once the other side has observed and replaced it.
 - Take the pointwise-max of the two contexts.
 
 This is commutative, associative, and idempotent.
@@ -354,7 +354,7 @@ Every built-in primitive implements `ICrdt<TSelf>` so they can compose recursive
 ```
 OrMapEntry<TValue> = (ReplicaId, Counter, Value)
 OrMap<TKey, TValue> = {
-    Adds:       { TKey -> { OrMapEntry<TValue> } },   // surviving dots and their values
+    Adds:       { TKey -> { OrMapEntry<TValue> } },   // every dot and its value snapshot, tombstoned ones included
     Tombstones: { TKey -> { OrSetDot } },             // observed-and-removed dots
     Context:    { replicaId -> highestCounter }       // cache for minting the next local dot; merge ignores it
 }
@@ -363,7 +363,7 @@ OrMap<TKey, TValue> = {
 `TValue` must satisfy `ICrdt<TValue>` and have a parameterless constructor. The merge rule is:
 
 - For each key, union the two sides' `Adds` and `Tombstones`.
-- Drop any add whose dot is in either side's tombstone set.
+- An add whose dot is in either side's tombstone set stops contributing: it stays in `Adds` but is no longer live.
 - For surviving dots that appear on both sides with the same `(ReplicaId, Counter)`, recursively `TValue.MergeFrom` the two snapshots.
 - A key is observable iff at least one of its `Adds` entries survived; otherwise the key is absent.
 - `Get(key)` folds every surviving entry's `Value` through `MergeFrom` to produce a single converged `TValue`.

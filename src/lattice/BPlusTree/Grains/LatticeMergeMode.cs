@@ -20,8 +20,10 @@ namespace Orleans.Lattice;
 public enum LatticeMergeMode
 {
     /// <summary>
-    /// Last-writer-wins on the value bytes, ordered by
-    /// <c>(HybridLogicalClock, OriginClusterId)</c>. Concurrent writes from
+    /// Last-writer-wins on the value bytes, ordered first by
+    /// <see cref="Orleans.Lattice.HybridLogicalClock"/>, then by tombstone bit,
+    /// expiry, payload bytes, origin cluster id and migration provenance. Origin
+    /// ranks late because it is observer-relative. Concurrent writes from
     /// different clusters silently drop the loser - safe only when the
     /// application maintains single-writer-per-key discipline (each key has
     /// one authoritative cluster at any given time, e.g. a routed-by-tenant
@@ -31,43 +33,39 @@ public enum LatticeMergeMode
     LwwRegister = 0,
 
     /// <summary>
-    /// Observed-remove set. Receivers merge the full <see cref="Orleans.Lattice.OrSet"/>
-    /// state carried by the value bytes (the producer authored the value
-    /// through <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/>,
-    /// which serialises the post-write set state). State-based merge is
-    /// commutative, associative, and idempotent - concurrent active-active
+    /// Observed-remove set. Receivers fold the typed <see cref="OrSetDelta"/>
+    /// carried in <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Orleans.Lattice.OrSet"/>. Delta merge is commutative,
+    /// associative, and idempotent - concurrent active-active
     /// adds and removes from multiple clusters survive convergence with
     /// their causal dot context preserved.
     /// </summary>
     OrSet = 1,
 
     /// <summary>
-    /// Positive-negative counter. Receivers merge the full
-    /// <see cref="Orleans.Lattice.PnCounter"/> state carried by the value bytes
-    /// (the producer authored the value through
-    /// <see cref="CrdtLatticeExtensions.PnCounter(ILattice, string)"/>) by
-    /// pointwise-max on each replica's positive and negative components.
+    /// Positive-negative counter. Receivers fold the typed
+    /// <see cref="PnCounterDelta"/> carried in <see cref="WalRecord.Delta"/> into
+    /// the loaded <see cref="Orleans.Lattice.PnCounter"/> by pointwise-max on each
+    /// replica's positive and negative components.
     /// Concurrent active-active increments and decrements from multiple
     /// clusters sum correctly without per-replica rendezvous.
     /// </summary>
     PnCounter = 2,
 
     /// <summary>
-    /// Version vector. Receivers merge the full
-    /// <see cref="Orleans.Lattice.VersionVector"/> state carried by the value
-    /// bytes (the producer authored the value through
-    /// <see cref="CrdtLatticeExtensions.VersionVector(ILattice, string)"/>)
-    /// by pointwise-max on each replica's <see cref="Orleans.Lattice.HybridLogicalClock"/>
+    /// Version vector. Receivers fold the typed
+    /// <see cref="VersionVectorDelta"/> carried in <see cref="WalRecord.Delta"/>
+    /// into the loaded <see cref="Orleans.Lattice.VersionVector"/> by pointwise-max
+    /// on each replica's <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// entry. Late or duplicate delivery is a no-op.
     /// </summary>
     VersionVector = 3,
 
     /// <summary>
-    /// Multi-value register. Receivers merge the full
-    /// <see cref="Orleans.Lattice.MvRegister"/> state carried by the value bytes
-    /// (the producer authored the value through
-    /// <see cref="CrdtLatticeExtensions.MvRegister{T}(ILattice, string, ILatticeSerializer{T}?)"/>)
-    /// by keeping entries whose dots are not dominated by the other side's
+    /// Multi-value register. Receivers fold the typed
+    /// <see cref="MvRegisterDelta"/> carried in <see cref="WalRecord.Delta"/> into
+    /// the loaded <see cref="Orleans.Lattice.MvRegister"/> by keeping entries
+    /// whose dots are not dominated by the other side's
     /// dot context and taking the pointwise-max of the two contexts.
     /// Concurrent active-active writes from different clusters survive the
     /// merge as distinct dot-tagged values so application code can resolve

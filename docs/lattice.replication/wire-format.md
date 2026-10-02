@@ -246,11 +246,11 @@ siloBuilder.AddLatticeReplication(o =>
     o.ClusterId = "site-a";
     o.WireVersionNegotiationEnabled = true;
     o.MinimumSupportedWireVersion = 1;
-    o.UnknownPeerWireVersionFloor = 1;
+    o.UnknownPeerWireVersionFloor = 4;
 });
 ```
 
-Startup options validation rejects a `MinimumSupportedWireVersion` outside `[1, EncodedBatchHeader.CurrentWireVersion]` and an `UnknownPeerWireVersionFloor` outside `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]` at first-resolve time.
+Startup options validation rejects a `MinimumSupportedWireVersion` outside `[1, EncodedBatchHeader.CurrentWireVersion]` and an `UnknownPeerWireVersionFloor` outside `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]` at first-resolve time. It does not reject an `UnknownPeerWireVersionFloor` below `WireVersionDownEncoder.MinimumDownEncodableWireVersion` (`4`), which is why the example stops at `4`: a floor below it cannot be down-stamped, so until a peer advertises its capability every batch to it - and every liveness probe - is blocked as `blocked_unsupported_version`, and because nothing ships, no ack ever arrives to advertise one. On a CRDT-mode tree any floor below `EncodedBatchHeader.CurrentWireVersion` - the example's `4` included - blocks the same way, because a CRDT-mode batch cannot be down-stamped at all.
 
 ### Scope and current posture
 

@@ -880,8 +880,8 @@ services:
       # the client register individual repositories under it with
       # repocontext_add_repo. Override with REPO_PATH; defaults to this repo's
       # parent directory (so this repo is one registerable child, added at
-      # /workspace/<repo>). Note ../../.. resolves this compose file's grandparent
-      # (the repo root's parent), NOT the repo root itself.
+      # /workspace/<repo>). Note ../../.. resolves three levels above this compose
+      # file's directory (the repo root's parent), NOT the repo root itself.
       - ${REPO_PATH:-../../..}:/workspace:ro
     # Grain-liveness healthcheck (issue #2666). Before this, the repocontext
     # service PUBLISHED no healthcheck at all while CONSUMING service_healthy
@@ -1007,9 +1007,10 @@ services:
     # BEFORE a run's T0 and ALONE, or not at all. This knob exists unset so that
     # enabling it is an ACT, on the record, at a moment somebody chose.
     #
-    # WHAT IT FIXES. A container given a fractional CPU quota (`cpus: 4.0`, in
-    # docker-compose.tuning.yml) and no cpuset is ENTITLED to 4 CPUs but VISIBLE
-    # on all of them - 16 on the host this was measured on. CFS bandwidth
+    # WHAT IT FIXES. A container given a fractional CPU quota (a `cpus` grant
+    # such as 4.0, which docker-compose.tuning.yml reads from `.env`) and no
+    # cpuset is ENTITLED to 4 CPUs but VISIBLE on all of them - 16 on the host
+    # this was measured on. CFS bandwidth
     # control vends that quota to per-CPU run queues in 5 ms slices, and a
     # thread waking on a run queue draws a whole slice whether it then runs for
     # 5 ms or 5 us; the unused remainder is returned only lazily. Threads
@@ -1042,13 +1043,17 @@ services:
     # "CPU scatter under a fractional quota".
     #
     # HOW TO DERIVE A VALUE. One range per service, sized to the CEILING of that
-    # service's `cpus` grant, and the ranges must NOT overlap each other or you
-    # trade throttling for contention. On the 16-CPU host the tuning overlay was
-    # measured on, that is REPOCONTEXT_CPUSET=0-5 (6 cores for `cpus: 6.0`) and
-    # EMBEDDER_CPUSET=6-9 (4 cores for `cpus: 4.0`), leaving 10-15 for the host.
-    # These are NOT portable: Docker refuses to start a container whose cpuset
-    # names a CPU the host does not have, so a copied value fails loudly on a
-    # smaller machine. Set them in `.env` beside REPO_PATH; see .env.example.
+    # service's ACTUAL `cpus` grant in `.env` (REPOCONTEXT_CPUS / EMBEDDER_CPUS,
+    # which docker-compose.tuning.yml reads), and the ranges must NOT overlap
+    # each other or you trade throttling for contention. Their sum must also fit
+    # the host's logical CPU count: grants whose ceilings sum past it cannot both
+    # be pinned (issue #4188), and raising EMBEDDER_CPUS above what
+    # New-TuningEnv.ps1 derives means re-sizing EMBEDDER_CPUSET to match. On the
+    # 16-CPU host the tuning overlay was measured on, with grants of 6.0 and 4.0,
+    # that was REPOCONTEXT_CPUSET=0-5 and EMBEDDER_CPUSET=6-9, leaving 10-15 for
+    # the host. These are NOT portable: Docker refuses to start a container whose
+    # cpuset names a CPU the host does not have, so a copied value fails loudly
+    # on a smaller machine. Set them in `.env` beside REPO_PATH; see .env.example.
     #
     # NOT CHANGED BY THIS KNOB, AND NO LONGER PRESENT: DOTNET_PROCESSOR_COUNT in
     # docker-compose.tuning.yml was a number above the effective grant and the

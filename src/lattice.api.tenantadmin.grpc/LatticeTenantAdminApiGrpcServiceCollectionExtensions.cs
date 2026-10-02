@@ -96,9 +96,10 @@ public static class LatticeTenantAdminApiGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps the tenant-administration control-API RPC routes (the four tenant
-    /// lifecycle operations and the unauthenticated auth-scheme discovery RPC) on
-    /// the supplied <paramref name="endpoints"/>. The host must have called
+    /// Maps the tenant-administration control-API RPC routes: lifecycle and quota,
+    /// quota usage, region residency, admin-subject, cross-tenant grant, read-only
+    /// self-service, and unauthenticated auth-scheme discovery RPCs on the supplied
+    /// <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeTenantAdminApiGrpc"/> and must expose
     /// <c>Orleans.Lattice.Api.TenantAdmin.ILatticeTenantAdmin</c> (via
     /// <c>AddLatticeTenantAdminApi</c>) in the same service provider before this call.

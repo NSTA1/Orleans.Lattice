@@ -84,8 +84,9 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(5)] public HybridLogicalClock Clock { get; set; }
 
     /// <summary>
-    /// Version vector tracking causal history. Each write ticks the local
-    /// replica entry, enabling delta extraction for replication.
+    /// Version vector tracking causal history. Each write advances the local
+    /// replica entry to the timestamp stamped on that write, enabling delta
+    /// extraction for replication.
     /// </summary>
     [Id(6)] public VersionVector Version { get; set; } = new();
 

@@ -119,10 +119,10 @@ public sealed class VectorIndexOptions
     }
 
     /// <summary>
-    /// The smallest corpus worth partitioning. Below it, training is a no-op and
-    /// the index stays in <see cref="VectorIndexState.Building"/>, where an
-    /// exhaustive scan of the contiguous block is both exact and faster than
-    /// probing. Defaults to 1024.
+    /// The smallest corpus worth partitioning. Below it, training builds no
+    /// partitioning and drops any previous one, and the index stays in
+    /// <see cref="VectorIndexState.Building"/>, where an exhaustive scan of the
+    /// contiguous block is both exact and faster than probing. Defaults to 1024.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
     public int MinimumTrainingCount

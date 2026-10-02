@@ -10,8 +10,8 @@ namespace Orleans.Lattice.Membership;
 /// (a forward row keyed by member and a reverse row keyed by group) so both
 /// <see cref="GroupsOfAsync"/> and <see cref="MembersOfAsync"/> are prefix
 /// scans. Every mutation runs through the standard write path, so it is
-/// observed by the resolution-cache invalidator and captured by the per-key
-/// history view.
+/// observed by the resolution-cache invalidator on the silo that commits it and
+/// captured by the per-key history view.
 /// </summary>
 internal sealed class LatticeMembershipDirectory(
     IGrainFactory grainFactory,

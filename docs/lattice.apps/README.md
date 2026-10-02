@@ -146,7 +146,7 @@ properties are rejected.
 | `roles` | A role name, its `operations` as an array of `LatticeOperation` member names, and one or more scope templates. |
 | `replication` | Optional per-tree merge mode. Each install enrols these trees in the runtime replication configuration when it is activated - see [Replication intent](#replication-intent). |
 | `schema` | Optional per-tree schema family, envelope version and `strictIngest` flag. Validated and reported by the control facade's describe; activation does not apply it to the tree. |
-| `subscriptions` | Change-feed observations of the app's own trees or another app's trees. |
+| `subscriptions` | Change-feed observations of the app's own trees or another app's trees, each optionally narrowed to a `keyPrefix`. |
 | `mcpTools` | App-local MCP tool names, descriptions, and the role each tool requires. |
 | `presentation` | Optional display metadata: a display name, summary, description, icon, categories, documentation URL and publisher display name - see [Presentation and UI](#presentation-and-ui). |
 | `ui` | An optional untrusted UI bundle - entry fragment, styles, scripts and digest-pinned assets - and the bridge operations it requests - see [Presentation and UI](#presentation-and-ui). |
@@ -221,7 +221,9 @@ An install is recorded in the **app registry**, a reserved system tree
 uses the default tenant, which is the per-cluster behaviour. Each record carries the
 app's slug, version, provenance, isolation context (tenant and cluster), the
 capability ceiling and the version it was consented for, the role-to-group bindings,
-and the lifecycle state.
+the consented UI bridge grants, the consenting principal, the lifecycle state, a
+revision that every applied transition advances, and install, consent and state-change
+timestamps.
 
 - **Role bindings** (`AppRoleBinding`) map each manifest role to one membership group
   id.
@@ -348,7 +350,8 @@ Replacing the owned rule set withdraws stale rules before writing new ones, so a
 policy-store fault part-way through never keeps a grant the current consent revoked.
 When the installed version itself cannot be activated - its manifest cannot be resolved
 or validated, its roles exceed the consented ceiling, a binding names an undeclared
-role, or it has a tree ownership conflict - any rules left from an earlier
+role, its UI requests a bridge grant that was never consented, or it has a tree
+ownership conflict - any rules left from an earlier
 activation are withdrawn; a replication, tree-provisioning or rule-write failure
 keeps the existing rules, so a retry is not an outage.
 
@@ -489,11 +492,12 @@ Sources are **named and enumerable**. `IAppCatalogSource` (namespace
 
 `AddLatticeApps()` composes every registered catalogue source into an `AppSourceSet`,
 which is registered as the single `IAppSource`. Register further sources with
-`AddLatticeAppSource<TSource>()`. `AppSourceSet` has these rules:
+`AddLatticeAppSource<TSource>()`, or an instance with `AddLatticeAppSource(instance)`.
+`AppSourceSet` has these rules:
 
 - A resolution **without** a source key succeeds only when exactly one source offers
-  the slug. Otherwise it returns `Ambiguous` with the offering source keys, and never
-  picks one.
+  the slug. When several do, it returns `Ambiguous` with the offering source keys,
+  and never picks one; when none does, it returns `NotFound`.
 - Activation re-resolves an install through the source key recorded in its
   provenance, so a second source offering the same slug cannot disturb an installed
   app.
@@ -518,6 +522,8 @@ container registry) is a provider swap. The XML documentation on `IAppSource` an
 
 - signature verification against a pinned publisher key;
 - allow-listing by slug, version and digest;
+- provenance derived from that verification, never copied from the manifest's
+  self-declared provenance;
 - manifest before code;
 - bounded, cancellable acquisition;
 - asset digests re-verified at every open.
@@ -577,6 +583,8 @@ The bundle rules:
   JavaScript, SVG, PNG, WebP, WOFF2 and JSON.
 - **Bundle digest.** `bundleDigest` is the SHA-256 over the sorted `path` and
   `digest` pairs (`AppUiBundle.ComputeBundleDigest`). The validator recomputes it.
+- **Protocol.** `minProtocol` (default 1) must be between 1 and the current frame
+  protocol version, which is 1.
 
 `bridge` requests operations from the closed vocabulary in `AppUiBridgeOperations`:
 
@@ -589,13 +597,15 @@ covers every declared tree. Only data operations may name trees, and an empty
 list is rejected.
 
 The requested grants are part of what an install consents to. When a fresh install
-records its consent, it records `AppUiBridgeRequest.FromManifest` of the manifest
-resolved at commit; an install that carries the reviewed manifest digest is refused
-if that manifest changed after the review (see
+through the [control facade](../lattice.api.apps/README.md) records its consent, it
+records `AppUiBridgeRequest.FromManifest` of the manifest resolved at commit; an install
+that carries the reviewed manifest digest is refused if that manifest changed after the
+review (see
 [pinning the reviewed manifest](../lattice.api.apps/README.md#pinning-the-reviewed-manifest)).
-An upgrade that
-**adds** a grant fails activation with `BridgeConsentRequired` until the consent is
-updated. Removing a grant never needs consent. The grants gate the
+An install made directly through
+`IAppRegistry` records the `AppRegistryInstallRequest.BridgeConsent` it is given, and
+no grants when that is `null`. An upgrade that **adds** a grant fails activation with
+`BridgeConsentRequired` until the consent is updated. Removing a grant never needs consent. The grants gate the
 [bridge](../lattice.api.apps/README.md#the-bridge), and the cluster enforces them
 there, never in the browser.
 ## Change-feed subscriptions
@@ -626,8 +636,10 @@ Subscriptions are realised through the core `IMutationObserver` seam. A routing
 table from tree id to subscribers is rebuilt whenever the app registry changes, so
 a mutation on a tree no app observes allocates nothing. Handlers run inline on the
 write path; a handler that throws is logged and skipped, and the write is never
-failed. Delivery is at-most-once and covers user writes only (library maintenance
-writes are never delivered). A newly enabled app starts receiving once the rebuild
+failed. Delivery is at-most-once and covers every mutation the core change feed
+publishes on the observed tree except library maintenance writes (tombstone
+compaction), which are never delivered; a write that replication applies to the
+tree is delivered as well as one made through the data path. A newly enabled app starts receiving once the rebuild
 lands; a disabled or uninstalled app stops receiving as soon as the silo's registry
 snapshot reflects the change, shortly after it commits, without waiting for the
 rebuild. A subscription the manifest declares with no registered handler, or with
@@ -681,8 +693,8 @@ composed for its own install's tenant.
 | Option | Default | Meaning |
 |---|---|---|
 | `ReconcileOnStartup` | `true` | Reconcile every enabled app once, in the background, when the silo starts. |
-| `StartupRetryDelay` | 250 ms | Initial delay before retrying the startup registry read while the silo cannot yet serve it; doubles on each retry. Must be positive. |
-| `StartupRetryMaxDelay` | 30 s | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. Every retry delay is held to the timer ceiling (about 49.7 days), so `TimeSpan.MaxValue` leaves the doubling uncapped up to it. |
+| `StartupRetryDelay` | 250 ms (`DefaultStartupRetryDelay`) | Initial delay before retrying the startup registry read while the silo cannot yet serve it; doubles on each retry. Must be positive. |
+| `StartupRetryMaxDelay` | 30 s (`DefaultStartupRetryMaxDelay`) | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. Every retry delay is held to the timer ceiling (about 49.7 days), so `TimeSpan.MaxValue` leaves the doubling uncapped up to it. |
 
 ### `InImageAppSourceOptions`
 

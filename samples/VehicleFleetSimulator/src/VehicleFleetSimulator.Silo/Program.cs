@@ -43,7 +43,7 @@ builder.UseOrleans(silo =>
         opts.ServiceId = serviceId;
     });
 
-    // M7: Azure Storage clustering, grain storage, reminders, and PubSub store on Azurite.
+    // M7: Azure Storage clustering and reminders on Azurite; grain state stays in memory and no streams are configured.
     silo.UseAzureStorageClustering(options =>
     {
         options.TableServiceClient = new TableServiceClient(azuriteConnection);

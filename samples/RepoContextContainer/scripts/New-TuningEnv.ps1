@@ -47,8 +47,9 @@
     still reports the container healthy.
 
 .PARAMETER WorkspacePath
-    The corpus root to measure. Defaults to the repository root, this file's
-    grandparent, rather than the base compose file's REPO_PATH.
+    The corpus root to measure. Defaults to the repository root - two levels above
+    the compose directory, three above this script's own folder - rather than the
+    base compose file's REPO_PATH.
 
 .PARAMETER OutFile
     Where to write. Defaults to .env beside the compose files.
@@ -528,9 +529,10 @@ if (-not $OutFile) {
 }
 
 if (-not $WorkspacePath) {
-    # THE REPOSITORY ROOT - this file's grandparent. An earlier revision of this comment
-    # claimed it was the repository root's PARENT, emphatically and wrongly, while the
-    # code did what it does now. Recorded because the comment was the confident half.
+    # THE REPOSITORY ROOT - two levels above the compose directory, three above this
+    # script's own folder. An earlier revision of this comment claimed it was the
+    # repository root's PARENT, emphatically and wrongly, while the code did what it
+    # does now. Recorded because the comment was the confident half.
     #
     # This is deliberately NOT the base compose file's REPO_PATH, which on the reference
     # deployment is C:\dev and mounts every sibling checkout and all 215 worktrees at
@@ -1022,9 +1024,9 @@ or merge the values above by hand.
     # #4188: a derived key already on disk with a DIFFERENT value is not covered by the
     # REPO_PATH-style warning above - that one is about keys this script never derives at
     # all. A differing derived key (EMBEDDER_CPUS raised from a 4-core default to a
-    # measured 12, say) is silent today: nothing here or in Assert-TuningEnv.ps1 reports
-    # it, so an operator can run this script, see no refusal, and reasonably conclude the
-    # .env on disk already matches what would be derived.
+    # measured 12, say) was silent before #4188: nothing here or in Assert-TuningEnv.ps1
+    # reported it, so an operator could run this script, see no refusal, and reasonably
+    # conclude the .env on disk already matched what would be derived.
     $existingTextForDrift = [System.IO.File]::ReadAllText($OutFile)
     $drift = Get-TuningEnvDrift -Existing $existingTextForDrift -Derived $content
 
@@ -1036,9 +1038,9 @@ or merge the values above by hand.
             (($drift | ForEach-Object { "  $($_.Key): existing=$($_.Existing) derived=$($_.Derived)" }) -join "`n") +
             "`n`nThis is informational only - the file on disk is untouched. A differing " +
             "existing value may be a deliberate, measured operator override rather than " +
-            "drift to correct; verify before changing it by hand. -Force would silently " +
-            "replace every one of these with the derived value above and would NOT print " +
-            "this comparison again."
+            "drift to correct; verify before changing it by hand. -Force would " +
+            "replace every one of these with the derived value above, warning once " +
+            "more with the same comparison before it does."
         )
     }
 

@@ -13,7 +13,7 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// Per-silo bridge from the canonical <see cref="LatticeReplicationMetrics.MeterName"/>
 /// meter into a <see cref="ReplicationActivitySnapshot"/>, plus a
 /// background loop that pushes that snapshot to the cluster-wide
-/// <see cref="IClusterReplicationActivityGrain"/> every two seconds.
+/// <see cref="IClusterReplicationActivityGrain"/> every 500 ms.
 /// </summary>
 /// <remarks>
 /// <para>

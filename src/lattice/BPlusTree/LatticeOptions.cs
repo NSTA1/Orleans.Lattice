@@ -226,8 +226,8 @@ public class LatticeOptions
     /// has accumulated tombstones (even at low ratio) is reaped through
     /// this trigger. Like the ratio trigger it is evaluated only after a
     /// point or range delete on the leaf. Only fires when the leaf actually contains at least
-    /// one tombstone or expired entry. Set to <c>0</c> (the default) to
-    /// disable size-based pre-emption.
+    /// one tombstone. Set to <c>0</c> (the default) to disable size-based
+    /// pre-emption.
     /// </summary>
     public int MaxLeafEntriesBeforeForcedCompaction { get; set; } = DefaultMaxLeafEntriesBeforeForcedCompaction;
 
@@ -285,10 +285,10 @@ public class LatticeOptions
 
     /// <summary>
     /// Per-shard tick interval used by <c>TombstoneCompactionGrain</c>'s
-    /// internal grain timer when walking a compaction pass. The compactor
-    /// processes one shard per tick and waits this long between ticks so
-    /// the grain returns control to the Orleans scheduler between shards
-    /// (avoiding a long-running grain call that could hit Orleans timeouts
+    /// internal grain timer when walking a compaction pass. Each tick processes
+    /// at most one leaf batch from one shard, then waits this long before the
+    /// next tick so the grain returns control to the Orleans scheduler between
+    /// batches (avoiding a long-running grain call that could hit Orleans timeouts
     /// and starve concurrent <c>RequestCompactionAsync</c> callers). The
     /// interval is a **scheduler-fairness knob, not a grain-deactivation
     /// knob** - leaf activation lifetime is governed by the silo's
@@ -363,18 +363,17 @@ public class LatticeOptions
     /// Every routed <c>Delete</c> stamps the destination leaf into an
     /// in-memory pending-marks map; a grain timer on the shard root drains
     /// the map and calls <c>WriteStateAsync</c> exactly once per interval,
-    /// regardless of how many distinct leaves were dirtied. Snapshot and
-    /// drain calls from the compaction coordinator
-    /// (<c>GetDirtyLeavesSinceLastCompactionAsync</c> /
-    /// <c>ClearDirtyLeavesUpToAsync</c>) and clean deactivation also flush
-    /// pending marks, so persistence is best-effort-coalesced rather than
-    /// best-effort-lost.
+    /// regardless of how many distinct leaves were dirtied. Snapshot reads from
+    /// the compaction coordinator (<c>GetDirtyLeavesSinceLastCompactionAsync</c>)
+    /// read the in-memory marks directly rather than flushing them first; drain
+    /// calls (<c>ClearDirtyLeavesUpToAsync</c>) and clean deactivation flush pending
+    /// marks, so persistence is best-effort-coalesced rather than best-effort-lost.
     /// <para>
     /// Default <c>50 ms</c> trades at most one flush-interval of dirty
     /// signal against eliminating the per-Delete storage write from the
-    /// shard-root hot path. Set to <c>0</c> to disable coalescing (every
-    /// first-call-per-leaf-per-window persists synchronously, matching
-    /// pre-U9h-B behaviour).
+    /// shard-root hot path. Set to <c>0</c> to disable timer coalescing: every
+    /// first-call-per-leaf-per-window starts a best-effort flush immediately,
+    /// without awaiting it on the write path.
     /// </para>
     /// </summary>
     public int DirtyLeafFlushIntervalMs { get; set; } = DefaultDirtyLeafFlushIntervalMs;
@@ -870,9 +869,10 @@ public class LatticeOptions
     /// single tree exceeds its own cap. The cluster ceiling is enforced
     /// <em>in addition to</em> each tree's <see cref="MaxConcurrentAutoSplits"/>
     /// and can only ever <em>lower</em> the number of splits a tree triggers,
-    /// never raise it. Admission is granted through lease-based, time-bounded
-    /// permits so a crashed or abandoned split releases its slot within the lease
-    /// window rather than wedging splitting cluster-wide.
+    /// never raise it. Admission records heartbeat footprints with a time-to-live
+    /// of about three <see cref="HotShardSampleInterval"/> samples. A crashed or
+    /// abandoned split stops refreshing its footprint, so its slot ages out rather
+    /// than wedging splitting cluster-wide.
     /// </para>
     /// <para>
     /// Mirrors the <c>null</c> = disabled, zero-overhead-when-unset idiom used by
@@ -890,9 +890,10 @@ public class LatticeOptions
     /// concurrently. Each split drains one physical shard's upper-half
     /// virtual slots into a newly allocated target shard; running several
     /// in parallel shortens total reshard time at the cost of proportionally
-    /// higher background drain I/O. Splits dispatched by the reshard
-    /// coordinator operate independently of those triggered autonomically
-    /// by <c>HotShardMonitorGrain</c> - the two caps compose additively.
+    /// higher background drain I/O. A growing reshard counts every in-flight
+    /// per-shard migration on the tree against this cap before dispatching more;
+    /// autonomic splitting stands down while a reshard is running. A shrinking
+    /// reshard keeps up to this many consolidation folds in flight.
     /// </summary>
     public int MaxConcurrentMigrations { get; set; } = DefaultMaxConcurrentMigrations;
 
@@ -4419,7 +4420,11 @@ public class LatticeOptions
     /// durable outcome is therefore identical to the one an unbounded wait
     /// would have produced; the budget changes when the caller learns, not what
     /// is written. Callers that need all-or-nothing semantics across shards
-    /// must use the atomic write surface, which is unaffected by this option.
+    /// must account for this option too: the atomic-write saga dispatches its
+    /// batched shard writes through <c>SetManyAsync</c>, so a breached budget
+    /// surfaces as <see cref="LatticeSaturatedException"/> with source
+    /// <see cref="LatticeSaturationSource.AtomicWriteSaga"/> and leaves the
+    /// saga resumable on the caller's retry with the same operation id.
     /// </para>
     /// <para>
     /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> is the default
@@ -4440,9 +4445,10 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultSetManyFanOutBudget = Timeout.InfiniteTimeSpan;
 
     /// <summary>
-    /// Wall-clock budget for the <b>whole</b> batched write, measured from the
-    /// first statement of <c>SetManyAsync</c> and covering every stage it runs:
-    /// <c>gate</c>, <c>route</c>, <c>bucket</c> and <c>fanout</c>.
+    /// Wall-clock budget for the <b>whole</b> measured batched-write envelope. The
+    /// clock starts after argument validation, admission, authorization and write
+    /// interception, at the same stamp as <c>orleans.lattice.set_many.duration</c>;
+    /// it covers <c>gate</c>, <c>route</c>, <c>bucket</c> and <c>fanout</c>.
     /// <para>
     /// <b>What it bounds that <see cref="SetManyFanOutBudget"/> cannot.</b> A
     /// per-stage budget can only ever observe one stage, so it is blind to a
@@ -4490,9 +4496,13 @@ public class LatticeOptions
     /// across shards; branches that already committed stay committed and
     /// branches still in flight are left running rather than cancelled, so the
     /// durable outcome is the one an unbounded wait would have produced. The
-    /// budget changes when the caller learns and what it is told, not what is
-    /// written. Callers needing all-or-nothing semantics use the atomic write
-    /// surface, which is unaffected.
+    /// budget is enforced on the fan-out wait; the post-commit event-publication
+    /// stage is outside it. Callers needing all-or-nothing semantics must account
+    /// for this budget too: the atomic-write saga dispatches batched shard writes
+    /// through <c>SetManyAsync</c>, so a breached budget surfaces as
+    /// <see cref="LatticeSaturatedException"/> with source
+    /// <see cref="LatticeSaturationSource.AtomicWriteSaga"/> and leaves the saga
+    /// resumable on the caller's retry with the same operation id.
     /// </para>
     /// <para>
     /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> is the default

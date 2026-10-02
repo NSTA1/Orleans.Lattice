@@ -89,8 +89,8 @@ These are non-negotiable. Each encodes a specific failure mode.
    then write.
 
 6. **Resume is a decision, not a continuation.** `lastLocation` and `resumeNote`
-   are trustworthy as to **authorship** - fencing means only the then-current
-   holder could have written them - and merely **advisory as to content**. The
+   are trustworthy as to **authorship** - fencing means a superseded holder
+   cannot have written them - and merely **advisory as to content**. The
    branch survives a killed session; the reasoning does not. Read the note,
    re-derive the situation from the branch, the pull request and the
    specification, and only then choose to continue, restart or park. Collapsing
@@ -162,12 +162,14 @@ These are non-negotiable. Each encodes a specific failure mode.
     use it. There is no message to your manager for which the default lane is
     the right choice.
 
-    **The failure is omitting the parameter, not choosing the wrong value.** It
-    defaults to `enqueue`, and no worker ever deliberately selects `enqueue` -
-    there is no reason to want it. So a rule phrased as "prefer immediate over
-    enqueue" is nearly a no-op: it offers a choice between two options the
-    worker was never consciously choosing between. Pass it explicitly, so the
-    choice is visible in what you wrote rather than inherited from a default.
+    **The failure is omitting the parameter, not choosing the wrong value.** Its
+    default has not been stable across harness versions - `enqueue` in earlier
+    ones, `immediate` in the current tool description - and no worker ever
+    deliberately selects `enqueue` - there is no reason to want it. So a rule
+    phrased as "prefer immediate over enqueue" is nearly a no-op: it offers a
+    choice between two options the worker was never consciously choosing
+    between. Pass it explicitly, so the choice is visible in what you wrote
+    rather than inherited from a default.
 
     A message landing on the queued lane at the instant the recipient's turn
     ends has been observed to **wedge that session**: it never finalises as
@@ -541,9 +543,9 @@ makes principle 1 survivable.
 ## Phase 5 - Resume or start fresh
 
 If the item's `body` carries a resume block (`lastLocation`, `resumeNote`), a
-previous holder got part-way. Fencing guarantees **who** wrote it: only the
-then-current claim holder could have, because a superseded holder cannot
-overwrite the body. Fencing guarantees nothing about **whether it is still
+previous holder got part-way. Fencing guarantees **who** could not have written
+it: a superseded holder cannot overwrite the body, so a worker fenced out of the
+item has not replaced it. Fencing guarantees nothing about **whether it is still
 true**: that holder may have died one instruction after writing it.
 
 So re-derive before you act:

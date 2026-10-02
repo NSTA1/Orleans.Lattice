@@ -33,6 +33,7 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 | Incremental capture | `ILatticeBackupIncrementalCaptureService.CaptureIncrementalAsync` | Forward-WAL differential layered on a base backup, with full-capture fallback. |
 | Restore | `ILatticeBackupRestoreService.RestoreAsync` | Mode-faithful, validated, idempotent replay of a manifest chain. |
 | Revert | `ILatticeBackupRestoreService.RevertRestoreAsync` | Undoes a shadow-cutover restore by swapping the registry alias back. |
+| Backup-set restore | `ILatticeBackupRestoreService.RestoreSetAsync` | Restores every member tree of a multi-tree backup set as one unit via shadow-cutover, as a single all-or-nothing coordinated saga when any member is replicated. |
 | Trigger / schedule / prune | `ILatticeBackupScheduler` | On-demand triggers, recurring schedules, and chain-aware retention per scope. |
 | Catalog | `ILatticeBackupCatalogStore` | Durable, introspectable index of manifests keyed by backup id. |
 | Catalog rebuild / scrub | `ILatticeBackupCatalogRebuildService.RebuildFromSinkAsync` / `ILatticeBackupCatalogScrubService.ScrubAsync` (on the control facade: `ILatticeBackupControl.RebuildCatalogFromSinkAsync` / `ScrubCatalogAgainstSinkAsync`) | Re-derive the catalog from the sink, or reconcile and prune rows whose sink payload is gone. |
@@ -40,6 +41,7 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 | Health monitoring | `ILatticeBackupHealthService` / `ILatticeBackupControl` health ops | Periodic presence + content-hash verification of each backup's durable sink payload, gated on a durable sink. |
 | Sink | `ILatticeBackupSink` | Pluggable streamed-artifact + manifest storage. |
 | Reserved-namespace guard | `LatticeBackupReservedTrees` | Lets an application validate its own tree ids against the reserved `sys-backup-*` namespace. |
+| Replication and tenancy seams | `IRestoreSagaDispatcher`, `IReplicatedTreeMembership`, `IBackupSinkSharingProbe`, `ILatticeBackupTenantScope` | Inert by default; the replication package supplies the coordinated-restore dispatch, the replicated-tree membership, and the cross-cluster sink-sharing probe, and the tenancy add-on confines capture and restore to the active tenant's namespace and quota. |
 | Observability | `BackupMetrics` / `LatticeBackupMetrics` | A dedicated `orleans.lattice.backup` meter for space, throughput, failures, and inventory. |
 
 ## Quick Start
@@ -102,7 +104,7 @@ siloBuilder.ConfigureLatticeBackupSchedule("orders-scope-key", options =>
 });
 ```
 
-The scope key passed to `ConfigureLatticeBackupSchedule` is the value returned by `BackupScopeKey.For(scope)`.
+The scope key passed to `ConfigureLatticeBackupSchedule` is the value returned by `BackupScopeKey.For(scope)`. Configuring the schedule alone registers no reminder: call `ILatticeBackupScheduler.EnsureScheduleAsync(scope)` to register (or update) the scope's schedule reminders from these options.
 
 ## Migration note
 

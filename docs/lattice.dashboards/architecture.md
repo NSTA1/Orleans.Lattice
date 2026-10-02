@@ -7,7 +7,7 @@ This document describes how the dashboards package is built and kept honest. It 
 Each dashboard is authored once as a Grafana dashboard model and compiled into the assembly as an embedded resource. The public accessor maps a `LatticeDashboardKind` to the matching resource and returns its bytes as a UTF-8 string. Because the JSON travels inside the assembly:
 
 - Retrieval is a synchronous in-process read - no network call, no file-system dependency, and no external service to provision before a dashboard can be fetched.
-- The dashboards are version-pinned to the library. A given package version always returns dashboards whose panels reference exactly the instruments that version emits.
+- The dashboards are version-pinned to the library. A given package version always returns dashboards whose panels reference only instruments that version emits.
 
 The panels reference instruments by the Prometheus series name that a host exporting through `.AddPrometheusExporter()` derives from each instrument name (for example `orleans.lattice.leaf.write.duration` is read as `orleans_lattice_leaf_write_duration_milliseconds_bucket`), not by any internal handle, so a dashboard works against any Prometheus-compatible backend that scrapes that exposition. An exposition that names series differently - the repository-context container's own, which appends no unit suffix and publishes no histogram buckets - leaves the affected panels empty; see [What these dashboards assume about the exposition](README.md#what-these-dashboards-assume-about-the-exposition).
 

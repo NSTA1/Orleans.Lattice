@@ -99,7 +99,11 @@ The script writes only the knobs it derives. `REPO_PATH` and
 [Where the setting actually lives](#where-the-setting-actually-lives)), and the base
 compose file refuses to start without the second. When `.env` already exists the script
 leaves it untouched and only adjudicates it; `-Force` replaces the derived knobs and
-carries every other key in the file across.
+carries every other key in the file across. Either way it lists every derived key whose
+value on disk differs from this run's derivation (#4188) - informationally when it
+leaves the file alone, and as a warning before `-Force` replaces it - because a
+differing value may be a deliberate, measured override, such as a raised
+`EMBEDDER_CPUS`, that `-Force` discards.
 
 The script can also refuse. It refuses when the host cannot offer even the 6 GiB
 floor - its ceiling is 45% of host memory less 5 GiB for the embedder - and when the
@@ -712,7 +716,7 @@ matters more than anything below: a wrong `cpus` makes the box slow, a wrong
 | `azurite-backup-sink` | `image` | `mcr.microsoft.com/azure-storage/azurite:latest` | The backup sink, added by the memory-backup work in this bucket. Its storage is a **host bind mount**, deliberately not a compose-managed volume, so `docker compose down -v` cannot reach it. See [container.md](container.md) for what that does and does not survive. |
 | `embedder` | `EMBED_PROVIDER` | `cpu` | Base default. `cpu`, or `cuda` on an NVIDIA host started with a device reservation. See the [sample README](../../samples/RepoContextContainer/README.md). |
 | `embedder` | `DOTNET_gcServer` | `0` | Workstation GC. Server GC allocates a heap and a dedicated GC thread per core, which on a 16-core host is the main driver of resident set for a latency-insensitive background service. This service also has little managed heap worth collecting in parallel: its footprint is dominated by the resident ONNX model, which is native. |
-| `embedder` | `EMBED_INTRA_THREADS` | `derived` | Pins the ONNX intra-op thread pool to the `cpus` grant below. ONNX Runtime sizes that pool from host cores and does not consult the cgroup quota, so under a 4.0-CPU grant on a 16-core host it ran 4x oversubscribed and the kernel throttled it in 296 of 298 consecutive scheduling periods during vectorising. #2610 derives this from the cgroup automatically, but the deployed image predates that change, so the value is still set explicitly. Derived from `EMBEDDER_CPUS` by [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779), so the explicit value cannot drift from the grant it restates. See [The pool-sizing class](#the-pool-sizing-class). |
+| `embedder` | `EMBED_INTRA_THREADS` | `derived` | Pins the ONNX intra-op thread pool to the `cpus` grant below. ONNX Runtime sizes that pool from host cores and does not consult the cgroup quota, so under a 4.0-CPU grant on a 16-core host it ran 4x oversubscribed and the kernel throttled it in 296 of 298 consecutive scheduling periods during vectorising. #2610 derives this from the cgroup automatically, but the deployed image predates that change, so the value is still set explicitly. Derived from the same number as `EMBEDDER_CPUS` by [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779), so a derived `.env` cannot carry the two apart. They remain two `.env` keys and nothing cross-checks them, so an `EMBEDDER_CPUS` raised by hand (the override #4188 describes) leaves this at the old count until it is raised with it or set to `auto`. See [The pool-sizing class](#the-pool-sizing-class). |
 | `embedder` | `cpus` | `derived` | Reduced from an unlimited grant that measured 1014% CPU (about 10 of 16 cores) and made the host unusable for interactive work. The ONNX intra-op pool is sized against this grant, so `EMBED_INTRA_THREADS` above is derived from the same number rather than restated by hand. Set `EMBEDDER_CPUS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
 | `embedder` | `mem_limit` | `derived` | Measured at 4.08 GiB with no limit, and pinned at 2.486 GiB of a 2560m cap (99.4%) while essentially idle at 0.01% CPU, holding the resident ONNX model at its ceiling with no room to work. This grant is **workload**-derived rather than corpus-derived: it is dominated by the model resident in the image, so it does not grow with the repository. Set `EMBEDDER_MEM_LIMIT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
 | `repocontext` | `image` | `repocontext-mcp:local` | The base file declares `build:` and no `image:`, so `up -d --no-build` cannot resolve an image without this pin. The tag is moved between builds; see [Pin and roll back](#pin-and-roll-back). |
@@ -740,7 +744,7 @@ matters more than anything below: a wrong `cpus` makes the box slow, a wrong
 | `repocontext` | `LATTICE_FULL_WALK_INTERVAL_SECONDS` | `3600` | Tuned from `120`. The full re-stat of every file, and the single heaviest operation. Counted in passes, not wall clock, so it moves with the reconcile interval and jitter above. |
 | `repocontext` | `LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS` | `3600` | Tuned from `300` when each scan cost two membership reads per indexed source; detection now reads the fixed 257-row vector-coverage digest instead (see [container.md](container.md)). Costs no healing latency: an actual gap forces an immediate in-pass scan regardless. |
 | `repocontext` | `DOTNET_gcServer` | `1` | Server GC, restored in #2596. It was `0`, to hold down resident set. That trade went unmeasured until gate run 2, which put it at 283 whole-process silence gaps of 5s or more, longest 29.3s, totalling 20.9% of wall-clock against a 30s Orleans request timeout; all 127 timed-out calls began executing within 0.5s of enqueue and then froze, so it was stop-the-world pausing rather than queueing. The footprint concern is now addressed by the explicit heap count below instead of by giving up parallel collection. |
-| `repocontext` | `DOTNET_GCHeapCount` | `derived` | Decouples the collector from the reported processor count, so Server GC does not allocate one heap per host core under a fractional CPU grant. It matches the `cpus` cap, and under #2779 it does so by construction: both read the same derived number, so two independently-edited literals can no longer drift apart. Set `REPOCONTEXT_GC_HEAP_COUNT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
+| `repocontext` | `DOTNET_GCHeapCount` | `derived` | Decouples the collector from the reported processor count, so Server GC does not allocate one heap per host core under a fractional CPU grant. It matches the `cpus` cap, and under #2779 a derived `.env` does so by construction: both are written from the same derived number. They are still two `.env` keys and nothing cross-checks them, so a `REPOCONTEXT_CPUS` edited by hand must be matched here by hand. Set `REPOCONTEXT_GC_HEAP_COUNT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
 | `repocontext` | `DOTNET_PROCESSOR_COUNT` | `unset` | Declared by NAME with no value, so it is ABSENT from the container unless the environment or `.env` supplies one (#2931). The `16` pin that used to be here is gone and is not coming back: it oversubscribed the replay gate 2.67x and resized every other processor-count consumer as a side effect. Deleting it removed the pin AND the name, which cost attribution rather than tuning - run 9's predicate bound it to run 8's grants including this variable, by which time it was absent rather than equal, so a replay-gate ceiling moving 16 -> 6 had two sufficient causes and no way to separate them. The bare declaration restores the ability to set it deliberately for a controlled comparison without editing a tracked file, while changing nothing today. Setting it remains an oversubscription hazard: it overrides `Environment.ProcessorCount` process-wide and wins over the cgroup quota. [`Assert-DeployManifest.ps1`](../../samples/RepoContextContainer/scripts/Assert-DeployManifest.ps1) reports the resolved count and where it came from on every deploy, so neither a set value nor an unset one can be silent. |
 | `repocontext` | `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` | `derived` | Sizes the WAL replay concurrency gate explicitly (#2279), replacing a `DOTNET_PROCESSOR_COUNT: 16` pin removed in #2779. That pin overrode a cgroup-aware default and held the gate at 16 permits against a 6.0-CPU quota - a 2.67x oversubscription measured on the live deployment, and the deployment half of the root cause in #2692. This knob has one job, where the pin also resized the GC, the thread pool, and every other processor-count consumer in the process. Set `REPOCONTEXT_MAX_CONCURRENT_REPLAYS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
 | `repocontext` | `cpus` | `derived` | Bounds a runaway without starving normal operation. This service measured about 92% of one core in steady state before any limit, so the grant is headroom rather than a working limit. It is also the source the heap count and the replay gate above are derived from. Set `REPOCONTEXT_CPUS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
@@ -807,8 +811,10 @@ halves are now closed, and from opposite directions. The gate's default is the
 **lesser** of `Environment.ProcessorCount` and the enforced cgroup grant, read the same
 way the embedder reads it, so the library no longer depends on an operator knowing the
 knob exists. Where the deployment does set it explicitly, #2779 derives it from the
-same `cpus` grant rather than restating it by hand, so the drift this paragraph warns
-about cannot open. `DOTNET_PROCESSOR_COUNT` is no longer set on either service (#2779)
+same `cpus` grant rather than restating it by hand, so a derived `.env` cannot open the
+drift this paragraph warns about; a grant later edited by hand still has to be matched
+by hand, because nothing cross-checks the two.
+`DOTNET_PROCESSOR_COUNT` is no longer set on either service (#2779)
 and so decouples nothing now; `DOTNET_GCHeapCount` is derived from the grant directly
 instead, which is the same protection without the second effect. The
 resolved ceiling, the configured option, the processor count, and the grant are now
@@ -1036,15 +1042,17 @@ cold-start rig measures.
 
 On SIGTERM the host flips readiness to not-ready **first**, then drains: the silo
 deactivates and the WAL commit log flushes buffered records before exit, within the
-`LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` budget above. Verify in this order:
+host shutdown budget derived from `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` above (180s
+at the declared `240s`). Verify in this order:
 
 ```bash
 # 1. Liveness: process and silo host alive.
 curl -fsS http://localhost:8080/health/live
 
 # 2. Readiness: silo joined, activation-time WAL replay done, durable stores proven
-#    reachable, MCP serving. 503 during startup replay AND during drain, so a 503
-#    immediately after a restart is expected, not a fault.
+#    reachable, MCP serving, and the vector plane able to serve retrieval. 503
+#    during startup replay AND during drain, so a 503 immediately after a restart
+#    is expected, not a fault; one that persists names its component in the body.
 curl -fsS http://localhost:8080/health/ready
 
 # 3. Provenance: what this container actually received. See the warning at the top.

@@ -32,8 +32,9 @@ public enum ReplicationContactDirection
 /// <summary>
 /// Per-peer replication telemetry state. Backs the observable gauges declared
 /// on <see cref="LatticeReplicationMetrics"/>:
-/// <c>entries_behind</c> and <c>bytes_behind</c> (outbound-only - the
-/// receiver does not track a per-peer backlog into itself), plus
+/// <c>entries_behind</c>, <c>bytes_behind</c>, and
+/// <c>ship_in_flight</c> (outbound-only - the receiver does not track a
+/// per-peer backlog or sender pipeline into itself), plus
 /// <c>consecutive_errors</c> and <c>last_contact_seconds</c>
 /// (bidirectional, tagged with <see cref="LatticeReplicationMetrics.TagDirection"/>).
 /// Instances are designed to be registered as a singleton by
@@ -50,7 +51,7 @@ public enum ReplicationContactDirection
 /// </remarks>
 public partial class ReplicationPeerStats
 {
-    // The four observable gauges declared on LatticeReplicationMetrics.Meter
+    // The five observable gauges declared on LatticeReplicationMetrics.Meter
     // are registered exactly once per process. Their callbacks read from the
     // single _current slot below, which is updated by every constructor.
     // This avoids leaking gauge registrations (and the closures bound to a

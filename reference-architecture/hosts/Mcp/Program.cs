@@ -340,7 +340,7 @@ if (entraEnabled)
             // Bicep preAuthorizedMcpClientIds list to pre-consent a new client
             // (for example the GitHub Copilot app, whose first-party id is not
             // otherwise easy to obtain); the subject oid is what an admin grants
-            // MCP access to via the Explorer Access tab.
+            // MCP access to via the Explorer Access area.
             options.Events = new JwtBearerEvents
             {
                 OnTokenValidated = context =>

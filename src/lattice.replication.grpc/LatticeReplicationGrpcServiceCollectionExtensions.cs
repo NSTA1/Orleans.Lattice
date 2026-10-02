@@ -36,16 +36,17 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// maps the live-push and digest-probe, snapshot, and saga-control routes on the endpoint
 /// builder. Active-active
 /// is the zero-ceremony default: a silo that registers the binding is
-/// both a sender (peer receivers can pull live pushes and snapshot
-/// streams from it) and a receiver (the silo can dial peer endpoints
-/// listed in <see cref="LatticeReplicationGrpcOptions.Peers"/> to ship
-/// outbound batches and to bootstrap from a peer).
+/// both a sender (it dials the endpoints listed in
+/// <see cref="LatticeReplicationGrpcOptions.Peers"/> to push live batches, and
+/// serves snapshot pulls on its mapped endpoint) and a receiver (peers push
+/// live batches to its mapped endpoint, and it dials a peer listed in
+/// <see cref="LatticeReplicationGrpcOptions.Peers"/> to bootstrap from it).
 /// </para>
 /// <para>
 /// Push-only deployments (a silo that ships outbound but never expects
 /// peers to dial it) omit the endpoint-mapping call;
 /// receiver-only deployments (a silo that accepts inbound pushes /
-/// snapshot pulls but never bootstraps from a peer) leave
+/// snapshot pulls but never pushes to or bootstraps from a peer) leave
 /// <see cref="LatticeReplicationGrpcOptions.Peers"/> empty. The
 /// composition is registration-driven, not role-flag-driven.
 /// </para>

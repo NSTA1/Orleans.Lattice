@@ -44,9 +44,9 @@ fast.
 | `DisableAsync(slug)` | Withdraws the app's grants; trees and data stay. |
 | `UninstallAsync(slug)` | Withdraws the app's grants, unenrols the replication it enrolled and soft-deletes its structural trees; adopted trees are untouched, and their ownership claims are released. It never purges data itself, but each soft-deleted tree is purged by the core once its soft-delete window elapses, unless the app is installed and enabled again first. |
 | `ListAsync()` | Summaries of the installs in the caller's tenant, including uninstalled records. |
-| `DescribeAsync(slug, version?)` | The manifest's requested capabilities (trees, roles with operations and scopes, subscriptions, MCP tools, replication and schema declarations) plus the install's state, provenance, bindings and ceiling. Works before installation, without loading app code; returns `null` for an unknown app or version. Its `ManifestDigest` identifies the described manifest for an install to pin. |
-| `GetConsentAsync(slug)` | The ceiling pinned to the installed version, or `null` when the app is not installed. |
-| `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. If that re-application fails, the failure is thrown with a note that the consent itself was recorded; a failure the consent or manifest causes, such as a ceiling excess, also withdraws the app's grants. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
+| `DescribeAsync(slug, version?)` | The manifest's requested capabilities (trees, roles with operations and scopes, subscriptions, MCP tools, replication and schema declarations) and its presentation and UI declarations, plus the install's state, provenance, bindings and ceiling. Works before installation, without loading app code; returns `null` for an unknown app or version. Its `ManifestDigest` identifies the described manifest for an install to pin. |
+| `GetConsentAsync(slug)` | The ceiling pinned to the installed version and the consented bridge grants, or `null` when the app is not installed. |
+| `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, and the consented bridge grants too when `BridgeGrants` is set (`null` leaves them unchanged), then re-applies an enabled app so a reduced ceiling cannot leave stale authority. If that re-application fails, the failure is thrown with a note that the consent itself was recorded; a failure the consent or manifest causes, such as a ceiling excess, also withdraws the app's grants. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
 
 ### Pinning the reviewed manifest
@@ -233,8 +233,9 @@ accepts a physical tree id. Each call runs these steps in order, and each fails
 closed:
 
 1. **The install.** It must be enabled in the caller's active tenant with its
-   ceiling pinned to its version, and `InstallRevision` must match. A frame
-   launched before an upgrade, a disable or an uninstall therefore stops working,
+   ceiling pinned to its version, and `InstallRevision` must match. Every recorded
+   transition advances the revision, so a frame launched before an upgrade, a consent
+   update, a role re-binding, a disable or an uninstall stops working,
    and the call is denied exactly as for an app that does not exist.
 2. **Bridge consent.** The operation must be covered for the logical tree both by
    the install's **consented** bridge grants (see

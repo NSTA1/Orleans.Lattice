@@ -91,6 +91,13 @@ namespace Orleans.Lattice;
 ///   stay committed, and an immediate retry re-fans the batch into the same
 ///   regime, so back off first. Reported as
 ///   <see cref="LatticeSaturationSource.SetManyFanOut"/>.</description></item>
+///   <item><description>The <c>SetManyAsync</c> whole-call envelope refusal,
+///   raised when the call exceeds <see cref="LatticeOptions.SetManyEnvelopeBudget"/>
+///   across its gate, route, bucket and fan-out stages. It rolls nothing back:
+///   branches already committed stay committed and branches still in flight are
+///   left to finish, so the budget changes when the caller learns and what it is
+///   told, not what is written. Reported as
+///   <see cref="LatticeSaturationSource.SetManyEnvelope"/>.</description></item>
 /// </list>
 /// <para>
 /// The typed slot lets callers that care about the saturation

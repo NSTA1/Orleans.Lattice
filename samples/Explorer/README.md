@@ -390,7 +390,7 @@ console's sign-in. See
 | `ReplicationWriter.cs` | The bounded background writer. |
 | `DemoBasicAuthenticator.cs` | The trusted-token authenticator behind the Basic sign-in. |
 | `SampleCircuitDiagnostics.cs` | The console region's terminal log of circuit faults, and `DetailedErrors` in Development. |
-| `test/` | `Explorer.Tests`: option parsing and the sample's parts, plus smoke tests that start the sample in-process and check every area is visible to the bootstrap administrator. |
+| `test/` | `Explorer.Tests`: option parsing and the sample's parts, plus smoke tests that start the sample in-process and check that every area but Telemetry (and, with `--minimal`, Tenancy) is visible to the bootstrap administrator. |
 
 The smoke tests run in the samples CI lane:
 

@@ -161,7 +161,9 @@ publishes onto another class's meter does not need a `Meter` field of its own -
 it inherits that meter's guarantees. The repository-context package is the one
 exception: each of its reporters constructs its own instance `Meter` named
 `Orleans.Lattice.Api.Mcp.RepoContext` rather than publishing onto a static
-`*Metrics` class.
+`*Metrics` class. Outside `src/`, the repository-context container host under
+`apps/repocontext/` does the same under its own meter name,
+`orleans.lattice.repocontext.host`.
 
 ### Declare the `Meter` field above every instrument
 
@@ -619,4 +621,4 @@ The testing policy (every public type needs a test; exclude the chaos suite in t
 
 ## Security
 
-Load-bearing security invariants for the auth, membership, replication, telemetry, MCP, Explorer, and installable-app surfaces (fail-closed gates, never trusting peer/wire-supplied classification, enforcing at the single narrowest seam, per-circuit credential isolation, no dead security config) live in `.github/instructions/security.instructions.md`, which auto-attaches when you edit those packages. Read it before changing any authorization, enrollment, allow-list, credential-scoping, or validation seam on those surfaces.
+Load-bearing security invariants for the auth, membership, replication, telemetry, MCP, Explorer, and installable-app surfaces (fail-closed gates, never trusting peer/wire-supplied classification, enforcing at the single narrowest seam, per-circuit credential isolation, no dead security config, the allocation bar on security hot paths) live in `.github/instructions/security.instructions.md`, which auto-attaches when you edit those packages. Read it before changing any authorization, enrollment, allow-list, credential-scoping, or validation seam on those surfaces.

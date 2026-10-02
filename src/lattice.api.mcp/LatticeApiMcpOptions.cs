@@ -12,8 +12,12 @@ namespace Orleans.Lattice.Api.Mcp;
 /// default <c>DenyAllMcpAuthorizer</c> rejects every call until a host registers
 /// <c>AllowAllMcpAuthorizer</c> or a custom authorizer; setting
 /// <see cref="RequireAuthorization"/> to <see langword="false"/> does not lift
-/// that gate. Every per-facade tool-module flag is <see langword="false"/> by
-/// default, so a freshly registered server exposes no tools.
+/// that gate. No facade tool group is contributed until the host calls the
+/// matching <c>Add*Tools</c> registration: the six per-facade
+/// <c>Enable*Tools</c> markers only record those registrations and are never
+/// read, whereas the control flags (for example
+/// <see cref="EnableBackupControlTools"/>) do decide whether a registered module
+/// also contributes its mutating tools.
 /// </remarks>
 public sealed class LatticeApiMcpOptions
 {
@@ -80,23 +84,27 @@ public sealed class LatticeApiMcpOptions
     public string ActiveTenantHeaderName { get; set; } = "lattice-active-tenant";
 
     /// <summary>
-    /// Whether the read-only state facade contributes tools. Defaults to
-    /// <see langword="false"/>. Set to <see langword="true"/> by
-    /// <c>AddStateTools</c> when the host opts the state tool module in.
+    /// Records that the read-only state tool module was registered. Defaults to
+    /// <see langword="false"/>; <c>AddStateTools</c> sets it to
+    /// <see langword="true"/>. Informational only: nothing reads it, and setting
+    /// it does not contribute the module - the registration does.
     /// </summary>
     public bool EnableStateTools { get; set; }
 
     /// <summary>
-    /// Whether the read/write data facade contributes tools. Defaults to
-    /// <see langword="false"/>. Reserved for hosts that bind options directly; the
-    /// current data tool registration contributes its group by registering the tool module.
+    /// Records that the read/write data tool module was registered. Defaults to
+    /// <see langword="false"/>. Informational only: nothing reads it, the data
+    /// tool registration does not set it, and setting it does not contribute the
+    /// module - the current data tool registration contributes its group by
+    /// registering the tool module.
     /// </summary>
     public bool EnableDataTools { get; set; }
 
     /// <summary>
-    /// Whether the backup control facade contributes tools. Defaults to
-    /// <see langword="false"/>. Set to <see langword="true"/> by
-    /// <c>AddBackupTools</c> when the host opts the backup tool module in.
+    /// Records that the backup tool module was registered. Defaults to
+    /// <see langword="false"/>; <c>AddBackupTools</c> sets it to
+    /// <see langword="true"/>. Informational only: nothing reads it, and setting
+    /// it does not contribute the module - the registration does.
     /// </summary>
     public bool EnableBackupTools { get; set; }
 
@@ -114,10 +122,11 @@ public sealed class LatticeApiMcpOptions
     public bool EnableBackupControlTools { get; set; }
 
     /// <summary>
-    /// Whether the auth-admin control facade contributes tools. Defaults to
+    /// Records that the auth tool module was registered. Defaults to
     /// <see langword="false"/>. Set by
     /// <see cref="LatticeMcpServiceCollectionExtensions.AddAuthTools"/> for host
-    /// diagnostics; the current auth tool module is contributed by its DI registration.
+    /// diagnostics only: nothing reads it, and the auth tool module is contributed
+    /// by its DI registration.
     /// </summary>
     public bool EnableAuthTools { get; set; }
 
@@ -134,11 +143,11 @@ public sealed class LatticeApiMcpOptions
     public bool EnableAuthAdministration { get; set; }
 
     /// <summary>
-    /// Whether the replication control facade contributes tools. Defaults to
-    /// <see langword="false"/>. Set to <see langword="true"/> by
-    /// <c>AddReplicationTools</c> when the host opts the replication tool module
-    /// in. When set, the module contributes the read-only
-    /// <c>lattice_replication_get_config</c> inspect tool.
+    /// Records that the replication tool module was registered. Defaults to
+    /// <see langword="false"/>; <c>AddReplicationTools</c> sets it to
+    /// <see langword="true"/>. Informational only: nothing reads it, and a
+    /// registered replication module always contributes the read-only
+    /// <c>lattice_replication_get_config</c> inspect tool whatever its value.
     /// </summary>
     public bool EnableReplicationTools { get; set; }
 

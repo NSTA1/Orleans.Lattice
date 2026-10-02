@@ -19,7 +19,7 @@ namespace Orleans.Lattice;
 /// </summary>
 public readonly record struct OrFlagAccessor
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;

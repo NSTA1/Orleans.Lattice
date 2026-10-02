@@ -20,7 +20,8 @@ of each run, with drain tails excluded. Cold starts, JIT warm-up, grain
 activation storms, and bursty offered load can all introduce variance,
 sometimes dramatically: a 10x latency spike on the first call to a freshly
 activated grain is normal, as is a multi-second pause during a hot-shard
-split or a tree-registry leader handover. The headline cells should be read
+split or while the tree registry re-activates on another silo. The
+headline cells should be read
 as "what the silo settles into once the cluster is warm", not as "what
 every individual call will look like".
 
@@ -257,7 +258,7 @@ shapes on one account adds their offered loads and can climb into that
 saturation regime - see [WAL Tuning](wal-tuning.md) for the back-pressure
 manifestations and the partition-the-storage recovery path. The binding
 constraint inside the silo (independent of the account ceiling) is
-per-shard WAL-flush concurrency, and for `SetManyAsync` specifically,
+per-partition WAL-flush concurrency, and for `SetManyAsync` specifically,
 per-call transaction submission against a single Azure batch partition.
 
 **A note on entities vs transactions vs keys.** Three different
@@ -287,9 +288,9 @@ for `SetManyAsync`-shaped traffic, but for `SetAsync`-shaped traffic
 The `SetManyAtomicAsync` row reflects the cost of all-or-nothing
 semantics across multiple keys via the atomic-write saga: one saga
 durably commits the configured key batch with cross-shard isolation.
-It is the slowest of the write rows in per-saga latency, because the
-saga pays multiple WAL round-trips (candidate, decision, per-leaf apply)
-per commit; and, like the per-key path at the measured revision, it held
+Each saga pays a chain of serial durable writes per commit (a per-leaf
+prepare and terminal WAL write, the decision record, and the saga's own
+checkpoints); and, like the per-key path at the measured revision, it held
 a WAL partition's append turn for the whole commit round-trip, so its
 sustainable key-write rate
 is a small fraction of the non-atomic batched path and it is offered a

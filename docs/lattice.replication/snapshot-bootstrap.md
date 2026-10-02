@@ -415,8 +415,8 @@ preserving the source HLC, and pins the snapshot's causal-stable
 frontier on the per-tree high-water-mark grain ships as the public
 `ILatticeBootstrapCoordinator` seam. Triggered by the fall-off
 detector (when the per-tree maintenance pass finds a peer's per-origin
-high-water mark behind the oldest entry that peer authored in the local
-WAL - see [Auto-Bootstrap](auto-bootstrap.md)) and by operator-driven
+high-water mark behind the oldest entry that peer authored in the head
+window of the local WAL partitions - see [Auto-Bootstrap](auto-bootstrap.md)) and by operator-driven
 re-seed flows.
 
 | Type | Shape | Purpose |

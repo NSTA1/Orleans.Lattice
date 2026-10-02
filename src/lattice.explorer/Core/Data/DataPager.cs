@@ -3,7 +3,7 @@ namespace Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Api.State;
 
 /// <summary>
-/// Forward-only-safe pager over the Data tab's scan. The state-API cursor is
+/// Forward-only-safe pager over the Data area's scan. The state-API cursor is
 /// forward-only: every page's continuation token names the <em>same</em> server
 /// cursor, which advances by one page on each call and is closed once drained.
 /// Replaying a token for a page that has already been read therefore either

@@ -258,9 +258,9 @@ internal sealed class LeafCacheGrain(
 
     public async Task<byte[]?> GetAsync(string key)
     {
-        // Always pull a delta from the primary. The VersionVector comparison
-        // makes this cheap - if nothing changed, the primary returns an empty
-        // delta without scanning entries.
+        // Always pull a delta from the primary. The delivery cursor makes the
+        // no-change path cheap - if this cache is already at the primary's
+        // cursor, the primary returns an empty delta without scanning entries.
         await RefreshAsync();
 
         // Moved-away gate: a key whose virtual slot has been migrated

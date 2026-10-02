@@ -149,6 +149,14 @@ public interface ILatticeAuthAdmin
     /// carries or projects groups, and under the token-only merge mode (which
     /// ignores directory groups at enforcement) it can differ even when the token
     /// carries none.
+    /// <para>
+    /// Tenant isolation is still enforced by the access gate in the calling
+    /// context: the active-tenant assertion and any strict snapshot-epoch
+    /// confirmation are read from the explaining caller's ambient context, not
+    /// from <paramref name="subjectId"/>. The subject being explained supplies
+    /// only the authorization principal evaluated inside that caller-selected
+    /// tenant scope.
+    /// </para>
     /// </summary>
     /// <param name="subjectId">The subject to explain the decision for. Must not be <c>null</c> or empty.</param>
     /// <param name="operation">The operation to evaluate.</param>

@@ -18,14 +18,14 @@ When the inbound apply pipeline cannot install a `WalRecord` after exhausting `L
    per-tree dead-letter store "{treeId}"
             |
             v
-   ISystemLattice "_lattice_replog_dlq_{treeId}"  (system tree, e/{19-padded-id} rows)
+   reserved system tree "_lattice_replog_dlq_{treeId}"  (e/{19-padded-id} rows)
 ```
 
 The decorator is registered as the silo-side `IReplicationApplier` singleton. Apply paths inside the cluster therefore go through the decorator transparently. When it applies entries one at a time - every single-entry batch, and the per-entry fallback it takes for a batch with retry history or one the canonical applier's batch call threw on - it also records the inbound per-peer contact the canonical applier's batch path would otherwise record (the `direction="inbound"` series of `peer.last_contact_seconds` and `peer.consecutive_errors`): an error when the apply fails, whether the entry is then retried or parked, and a success otherwise (a cancelled apply records nothing). Operator inspection and replay use the public `ILatticeReplicationDeadLetters` seam, which routes through the **canonical** applier so a deterministically-failing parked entry does not re-park itself on every replay.
 
 ## Storage
 
-Parked entries live in a reserved system tree named `_lattice_replog_dlq_{treeId}` accessed through the internal `ISystemLattice` surface. Each row is keyed `e/{19-padded-id}` and holds an Orleans-binary-serialised `DeadLetterEntry`. The DLQ inherits the scaling, sharding, and persistence of the core B+ tree rather than living inside one grain's persistent-state row, which would hit the storage row-size ceiling under sustained apply failure.
+Parked entries live in a reserved system tree named `_lattice_replog_dlq_{treeId}` accessed through the core library's internal system-tree surface. Each row is keyed `e/{19-padded-id}` and holds an Orleans-binary-serialised `DeadLetterEntry`. The DLQ inherits the scaling, sharding, and persistence of the core B+ tree rather than living inside one grain's persistent-state row, which would hit the storage row-size ceiling under sustained apply failure.
 
 On activation the grain bulk-loads every parked row into an in-memory cache; subsequent reads (`List` / `Count` / `TryGet`) are served from memory and writes (`Enqueue` / `Discard` / `RemoveReplayed`) are applied to the cache and written through to the system tree. Cache size is bounded by `DeadLetterQueueCapacity` (validator pins to >= 1).
 

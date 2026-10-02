@@ -199,7 +199,7 @@ if (Test-HistoryVmReachable) {
             Write-Host "    Options:" -ForegroundColor Yellow
             Write-Host "      - To wipe the history dataset and start fresh:" -ForegroundColor Gray
             Write-Host "          ./benchmark.ps1 -CloseHistory" -ForegroundColor White
-            Write-Host "          docker volume rm benchmark_victoriametrics-data" -ForegroundColor White
+            Write-Host "          docker volume rm history_victoriametrics-data" -ForegroundColor White
             Write-Host "      - To re-calibrate in place anyway:" -ForegroundColor Gray
             Write-Host "          ./initialise.ps1 -Force" -ForegroundColor White
             Write-Host ""

@@ -55,8 +55,8 @@ is accrued as billable overage on every metering tick.
 ## Region residency and observability
 
 An optional per-tenant residency policy confines a tenant's data to a residency
-set within an operator-authorized set of regions, refusing a replicated write in any
-region where the tenant is not `Online`. With the tenant-admin control API
+set within an operator-authorized set of regions, refusing the tenant's requests and
+its replicated writes in any region where the tenant is not `Online`. With the tenant-admin control API
 registered, a region dropped from residency completes its drain on its own, but no
 shipped component advances an added region past `Provisioning`, so read the
 region-residency guide before configuring one. A separate placement binding on the

@@ -221,7 +221,7 @@ How it works:
 
 - **Bounded reservoir.** Observed payloads are sampled into a reservoir capped by both sample count and total bytes, with a per-sample byte cap and a configurable sampling rate. When the reservoir is full the oldest sample is evicted to admit a new one, so memory use is strictly bounded regardless of traffic volume. Feeding the reservoir is an explicit ingestion hook (`Observe`) and a no-op while disabled.
 - **Off-hot-path training.** Training is driven by an explicit pass (`TryTrain`) the host invokes from a turn-safe schedule rather than a hidden background timer, so cadence is deterministic and bounded by `MinTrainingInterval`; a pass below `MinSamplesToTrain`, inside the cadence window, or whose corpus the builder rejects is skipped and never throws to the caller. At most one training pass runs at a time.
-- **Versioned roll-over.** Each successful pass builds the dictionary fully, then atomically publishes it under a new monotonically increasing dictionary id paired with a content hash (an in-process FNV-1a digest used only to detect that a freshly trained dictionary is byte-identical to the current one and skip a redundant version bump; it never travels on the wire). A bounded ring of the most recent versions stays resolvable, so a frame compressed against a version that a roll-over has just superseded still decompresses.
+- **Versioned roll-over.** Each successful pass builds the dictionary fully, then atomically publishes it under a new monotonically increasing dictionary id paired with a content hash (an in-process FNV-1a digest the provider uses only to detect that a freshly trained dictionary is byte-identical to the current one and skip a redundant version bump; the provider never ships it, though the fingerprint a receiver advertises - described below - is the same 64-bit FNV-1a computed separately over the same bytes). A bounded ring of the most recent versions stays resolvable, so a frame compressed against a version that a roll-over has just superseded still decompresses.
 - **Safe fallback.** A consumer that lacks the dictionary for a requested id resolves it as absent and degrades through the same decoder path as any unknown id, rather than mis-decoding - so a roll-over never causes data loss.
 
 Auto-training produces a dictionary **locally**. The trained ids are **advertisable**: `AutoTrainingCompressionDictionaryProvider` implements `ILatticeCompressionDictionaryCatalog`, so its live retained-version ids flow through `CompressionDictionaryAdvertisement.Build` onto a receiver's `ReplicationAck.AdvertisedDictionaries`, each paired with the dictionary's content fingerprint. An opted-in sender can therefore fingerprint-gate dictionary compression against an auto-trained dictionary exactly as it does for an operator-supplied one: a peer that has not advertised the id (or advertised it with a different fingerprint) gets dictionary-less `Zstd`, never a frame it cannot decode. Distribution of the trained **bytes** to a peer that does not yet hold them - and the host wiring that pumps sampling and training - is now automated by the single-switch `AddLatticeAutoSharedDictionary` helper described next.
@@ -369,6 +369,7 @@ The WAL path deliberately reuses the same `IEnumerable<ILatticeCompressor>` DI r
 The public registration surface is pinned by:
 
 - `LatticeCompressionServiceCollectionExtensionsTests` (core unit tests) - null-guards, idempotency, instance vs type, side-by-side registration.
+- `ZstdDictionaryLatticeCompressorTests` (core unit tests) - the dictionary-aware compressor, and the `AddLatticeCompressionDictionaries` / `AddLatticeZstdDictionaryCompressor` registration helpers wiring it to its provider.
 - `PublicApiContractTests.Compression` partial (core integration suite) - the supported public DI shape hosts depend on.
 - `CompressedFramingRoundtripTests` (replication tests) - byte-keyed dispatch round-trip including a host-reserved tag in the `[0x80, 0xFF]` range.
 - `LatticeReplicationOptionsValidatorTests` (replication tests) - host-reserved tags pass validation; core-range typos still fail.
@@ -376,11 +377,12 @@ The public registration surface is pinned by:
 - `CompressedAzureTableWalIntegrationTests` (Azure Table tests, emulator-gated) - end-to-end compress/decompress round-trip against Azurite, including raw-row tag verification, backwards-compatible reads of uncompressed rows, and (in its `FilteredRead` partial) the filtered replay read over compressed rows.
 - `AutoTrainingCompressionDictionaryProviderTests`, `AutoTrainingCompressionDictionarySharedTests`, `CompressionDictionaryTrainingOptionsTests`, and `CompressionDictionaryTrainingReservoirTests` (core unit tests) - auto-training cadence and roll-over, the active-id and sampler seams, option defaults and validation, and the bounded reservoir.
 - `CompressionDictionaryConvergenceTests` and `CompressionDictionaryPullMessageTests` (replication tests) - the fingerprint-verified dictionary pull and its message pair.
+- `AddLatticeAutoSharedDictionaryTests` (replication tests) - the single-switch helper's registrations: the enabled auto-training provider installed over the default one, the training pump, and the per-tree `AutoSharedDictionaryEnabled` flag.
 
 Run the relevant suites with:
 
 ```powershell
-dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Compression|FullyQualifiedName~PublicApiContract_AddLatticeCompressor"
-dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "FullyQualifiedName~Compress"
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Compression|FullyQualifiedName~PublicApiContract_AddLatticeCompressor|FullyQualifiedName~ZstdDictionaryLatticeCompressorTests"
+dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "FullyQualifiedName~Compress|FullyQualifiedName~AddLatticeAutoSharedDictionaryTests"
 dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj --filter "FullyQualifiedName~Compress"
 ```

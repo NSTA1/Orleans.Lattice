@@ -32,8 +32,11 @@ the published floors are:
 | Unclustered (adversarial, independent Gaussian) | 0.55 | **0.588** |
 
 Both are enforced as assertions, so the published figure cannot drift away from
-the code. Recall was also measured across four seeds at 20,000 vectors and was
-1.0000 for every one, so the clustered figure does not depend on a lucky seed.
+the code. The harness measures them with `TrainingSampleSize` pinned to 8,192
+(the default is 32,768) and `MinimumTrainingCount` lowered to 16; every other
+option is the default. Recall was also measured across four seeds at 20,000
+vectors and was 1.0000 for every one, so the clustered figure does not depend on
+a lucky seed.
 
 ## Recall against the probe dial
 
@@ -139,9 +142,10 @@ accounting.
 
 ### Recall and latency together, at 100,000 vectors
 
-384 dimensions, 316 partitions, k = 10. Recall here is exact and reproducible;
-the latency column is a single unwarmed pass per configuration and is noisier
-than the sweep above - read it for shape, not for absolute numbers.
+384 dimensions, 316 partitions, k = 10. Recall here is exact and reproducible.
+The harness also prints a mean query latency per configuration - one timed pass
+after a ten-query warm-up - which is noisier than the sweep above and is not
+tabulated here.
 
 | probes | scanned | recall@10 |
 |---|---|---|

@@ -37,7 +37,7 @@
 >
 > Companion to
 > [`../lattice.replication/wal.md`](../lattice.replication/wal.md) (the
-> replication-side per-shard WAL overlay) and [`wal.md`](wal.md) (the
+> replication-side partitioned WAL overlay) and [`wal.md`](wal.md) (the
 > cross-cutting WAL contract).
 
 This document defines the causal+-ready Write-Ahead Log (WAL) for `Orleans.Lattice`. It extends the existing WAL design without breaking any of its invariants:

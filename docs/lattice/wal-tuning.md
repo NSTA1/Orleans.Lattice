@@ -1,6 +1,6 @@
 # WAL tuning for durable backends
 
-This document explains how the per-shard WAL grain's concurrency knobs
+This document explains how the WAL partition grain's concurrency knobs
 interact with a durable backend's throughput envelope. The default
 values are tuned for a single Azure Tables Standard storage account on
 a 4-vCPU silo; lifting them above the documented envelope without a
@@ -14,7 +14,7 @@ harness show the measurement protocol used to derive these numbers.
 
 ## The knobs
 
-The per-shard WAL grain's pipeline depth against
+The WAL partition grain's pipeline depth against
 `IWalStorageProvider.AppendEncodedBatchAsync` is bounded by two independent
 caps - `WalMaxPendingBatches` and `WalPartitions` - and shaped by a third
 knob, `WalAppendCoalescingInFlightThreshold`, that decides how full each
@@ -24,7 +24,7 @@ flush gets:
 |---|---|---|
 | `LatticeOptions.WalMaxPendingBatches` | `16` | Maximum number of in-flight + just-started batches **per shard**. |
 | `LatticeOptions.WalAppendCoalescingInFlightThreshold` | `4` | In-flight depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. `0` disables. |
-| `LatticeOptions.WalPartitions` | `8` | Number of per-shard WAL grains the producer fans out across. |
+| `LatticeOptions.WalPartitions` | `8` | Number of WAL partition grains per tree the producer fans out across (every shard of the tree shares them). |
 
 The combined ceiling on simultaneous provider calls for one tree is
 therefore `WalPartitions * WalMaxPendingBatches` - at the defaults,

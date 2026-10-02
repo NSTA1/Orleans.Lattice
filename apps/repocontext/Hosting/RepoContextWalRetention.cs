@@ -36,10 +36,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// lowers the effective trim frontier toward
 /// <see cref="LatticeOptions.WalBytePressureReclaimTarget"/> of the ceiling, but only
 /// <i>within</i> the already-safe frontier - the minimum consumer cursor intersected
-/// with the causal-stable frontier. When bytes cannot be safely reclaimed because a
-/// consumer is lagging, the policy raises an advisory over-threshold signal and
-/// leaves every byte intact. Trimming a WAL is not deleting a record either: the
-/// records have already been materialised into leaves.
+/// with the causal-stable frontier. When occupancy stays above the ceiling after a
+/// pass's safe trim - whether a lagging consumer holds those bytes or dead bytes are
+/// still waiting on compaction - the policy raises an advisory over-threshold signal
+/// that names no cause, and leaves every byte intact. Trimming a WAL is not deleting a
+/// record either: the records have already been materialised into leaves.
 /// </para>
 /// <para>
 /// <b>The cost it does carry</b> is one <c>GetPhysicalByteSizeAsync</c> probe per WAL

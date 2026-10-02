@@ -492,8 +492,8 @@ public sealed partial class DurableVectorIndex
 
     /// <summary>
     /// Adds or replaces one vector. A re-embedded identifier keeps the key it
-    /// already had, so this is an in-place update of one cell rather than a
-    /// delete and an insert, and it never forces a rebuild.
+    /// already had, so it never forces a rebuild: the old vector is removed and the
+    /// new one is placed in its nearest cell, which need not be the cell it left.
     /// <para>
     /// The already-mapped path is fully synchronous and allocates nothing, which
     /// is the common case for a maintenance loop following a source that is being

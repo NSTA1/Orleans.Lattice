@@ -69,8 +69,9 @@ internal sealed class ShardRootState
     [Id(7)] public bool IsRegistered { get; set; }
 
     /// <summary>
-    /// Non-null when this shard is participating in an adaptive split
-    /// as the source. Drives shadow-write and reject-routing behaviour on the
+    /// Non-null when this shard is participating in a slot migration as
+    /// the source, either for an adaptive split or as a consolidation donor.
+    /// Drives shadow-write and reject-routing behaviour on the
     /// hot path of every operation. Cleared once the split coordinator
     /// completes the post-cleanup phase.
     /// </summary>

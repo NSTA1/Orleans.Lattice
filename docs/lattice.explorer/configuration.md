@@ -128,8 +128,10 @@ values instead, as the [Explorer sample](../../samples/Explorer/README.md) does.
 
 The configuration store persists one `ExplorerConfiguration` record as JSON at
 `ExplorerConfigStoreOptions.FilePath`, using camelCase names and case-insensitive
-reading. A missing, corrupt, unreadable, or transport-invalid document leaves the
-Explorer unconfigured. Saves write a temporary file and then move it into place.
+reading. A missing, corrupt or unreadable document reads as no configuration, so
+the launcher's endpoint seed applies when there is one; a transport-invalid
+document leaves the Explorer unconfigured. Saves write a temporary file and then
+move it into place.
 On the web head, saves are refused, and the browser is offered neither the
 connection form nor its test, unless `AllowInteractiveEndpointConfiguration` is
 `true`.

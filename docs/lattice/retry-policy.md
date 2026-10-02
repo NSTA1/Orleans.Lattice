@@ -232,7 +232,12 @@ cluster as well.
   the only exception the shipped policy never retries is a cancellation
   of the caller's own `CancellationToken`.
   In production, restrict the classifier to the storage-transient
-  exception families your provider emits.
+  exception families your provider emits. A null classifier also retries
+  `LatticeSaturatedException`, which is automatically retryable only when
+  its `SaturationSource` is `ReplayPermitAdmission`; a classifier that
+  admits saturation refusals should branch on `SaturationSource`, not on
+  the exception type (see
+  [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape)).
 - **Treat the idempotency key as part of the application's data
   identity.** Persist it (e.g. on the queue message) so that a worker
   crash and restart can re-enter the same scope on retry.

@@ -51,7 +51,7 @@
 
 	# ---- Protocol ----
 	# Phase 1 breadth arm. K counts the trees the DRIVER creates; the host
-	# brings up its own fixed per-concern set on top, and seed-trees.ps1
+	# brings up its own fixed per-concern set on top, and the breadth arm
 	# records both numbers so the reported K is the real estate size rather
 	# than the driver's switch value.
 	BreadthK                = @(20, 40, 80)

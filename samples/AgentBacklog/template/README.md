@@ -83,7 +83,7 @@ Read both now, before you do anything else.
 Orleans.Lattice's own overrides are working examples:
 [`backlog-worker.agent.md`](../../../.github/agents/backlog-worker.agent.md) and
 [`backlog-pm.agent.md`](../../../.github/agents/backlog-pm.agent.md). Each is
-roughly 80 to 110 lines, which is the whole point: that is the complete
+roughly 90 to 135 lines, which is the whole point: that is the complete
 deviation from the base.
 
 ## 4. Add the always-on memory rules

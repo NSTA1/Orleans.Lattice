@@ -89,8 +89,8 @@ Three host ports are published:
 
 | Host port | Container | Role |
 |---|---|---|
-| 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5001>. |
-| 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5002>. |
+| 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin) + the Explorer's state and backup gRPC APIs (round-robin, health-checked). Open <http://localhost:5001>. |
+| 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin) + the Explorer's state and backup gRPC APIs (round-robin, health-checked). Open <http://localhost:5002>. |
 | 3000 | `grafana:3000` | Cross-cluster Grafana on `obs-net`, querying Prometheus - which is multi-homed onto both cluster networks (and `obs-net`) to scrape every silo. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
 
 Silo HTTP (`:8080`), silo h2c gRPC (`:8081`), Orleans silo
@@ -104,7 +104,7 @@ Each Traefik runs four routers over the same backend pool:
 | `{cluster}-replicate` | `PathPrefix(/orleans.lattice.replication.)`, priority 200 | round-robin, no health check |
 | `{cluster}-state` | `PathPrefix(/orleans.lattice.api.state/)`, priority 200 | round-robin + active health check (probes `:8080`) |
 | `{cluster}-backup` | `PathPrefix(/orleans.lattice.api.backup/)`, priority 200 | round-robin + active health check (probes `:8080`); serves the backup control API, wired only with `run.ps1 -Backup` |
-| `{cluster}-web` | `PathPrefix(/)` | sticky cookie `msmfg_{cluster}_affinity` |
+| `{cluster}-web` | `PathPrefix(/)` | sticky cookie `msmfg_{cluster}_affinity` + active health check (probes `/`) |
 
 ### Tier-5 partition commands
 
@@ -158,6 +158,8 @@ flowchart LR
             partG["IPartitionChaosGrain"]
             replDisc["IReplicationDisconnectGrain"]
             seedG["IInventorySeedStateGrain"]
+            regG["ISiteRegistryGrain"]
+            actG["IClusterReplicationActivityGrain"]
         end
 
         subgraph lattice["Orleans.Lattice"]
@@ -240,25 +242,37 @@ flowchart TB
     broadcaster["DashboardBroadcaster"]
     healSvc["PartitionHealHostedService"]
     crdtStore["PartCrdtStore"]
+    baseG["IBaselinePartGrain<br/>(per part)"]
+    chaosRepl["ChaosReplicationTransport /<br/>ChaosReplicationApplier"]
+    tracker["ReplicationActivityTracker<br/>(IHostedService)"]
+    actG["IClusterReplicationActivityGrain<br/>(singleton)"]
 
     router -->|"AdmitAsync"| siteG
-    router -->|"IsPartitioned"| partG
-    router -->|"GetConfig"| backG
+    router -->|"IsPartitioned / SetPartitioned"| partG
+    router -->|"GetConfig / Configure"| backG
+    router -->|"SetDisconnected (presets)"| replDisc
+    router -->|"AppendAsync (via baseline backend)"| baseG
     router -->|"list / configure / presets"| siteReg
     router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
 
     siteReg -->|"list / configure / preset fan-out"| siteG
+    siteReg -->|"preset backend knobs"| backG
     crdtStore -.->|"PartChanged"| broadcaster
 
     seeder -->|"HasSeeded?"| seedG
     seeder -->|"snapshot / reset / restore site config"| router
     seeder -->|"emit seed facts"| router
+    seeder -->|"seed CRDT history"| crdtStore
 
     mirror -.->|"FactReplicated"| broadcaster
     mirror -->|"raise PartChanged (labels)"| crdtStore
+    mirror -->|"AppendAsync (via baseline backend)"| baseG
 
     healSvc -->|"IsPartitioned?"| partG
     healSvc -->|"promote shadows"| crdtStore
+
+    chaosRepl -->|"IsDisconnected?"| replDisc
+    tracker -->|"ReportAsync"| actG
 ```
 
 Key invariants:
@@ -282,7 +296,8 @@ Key invariants:
   collection and compaction are library concerns; the sample does not
   configure them.
 - `PartitionHealHostedService` only runs shadow promotion when
-  `IPartitionChaosGrain.IsPartitioned` has flipped back to `false`.
+  `IPartitionChaosGrain.IsPartitionedAsync()` (polled every two seconds)
+  has flipped back to `false`.
 
 ---
 
@@ -323,8 +338,8 @@ flowchart LR
 | `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | Immutable per-part fact log. Forward range scan = HLC-ascending history. | Yes |
 | `mfg-site-activity` | `{serial}/{site}` → HLC + activity label | Part-major activity rows; the per-site view reads them through the tag index. | Yes |
 | `tag-mfg-site` | tag-index membership (`tag \0 treeId \0 key`) | Posting list mapping each `ProcessSite` to its `{serial}/{site}` keys; powers `ListAtSiteAsync` via `WithAnyTags(site)`. | Yes |
-| `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part free-form label set, edited by operators on the part-detail page (the seeder writes `priority`, `expedite`, `rework-watch`, and `qa-hold` into one showcase part). | Yes - `LatticeMergeMode.OrSet` (typed CRDT delta shipping) |
-| `mfg-part-operator` | `{serial}` (one LWW register per serial) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
+| `mfg-part-labels` | `{serial}` (one OrSet per serial; `shadow/{siloId}/{serial}` while a simulated partition is active) | Per-part free-form label set, edited by operators on the part-detail page (the seeder writes `priority`, `expedite`, `rework-watch`, and `qa-hold` into one showcase part). | Yes - `LatticeMergeMode.OrSet` (typed CRDT delta shipping) |
+| `mfg-part-operator` | `{serial}` (one LWW register per serial; `shadow/{siloId}/{serial}` while a simulated partition is active) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
 
 The dashboard's per-part summary is no longer a sample-owned tree. It is the
 library-maintained folded view `mfg-compliance` over `mfg-facts` (registered via
@@ -424,12 +439,12 @@ Failure modes and their recovery:
 |---|---|---|
 | Peer unreachable | Push transport's RPC fails | Package-internal exponential backoff; shipper retries from the same cursor. |
 | Silo-B of peer restarts | The replication router has no health check, so a push routed to the stopped silo fails | The shipper retries with backoff, and round-robin lands the retry on silo-A. |
-| Duplicate delivery | Same entry merged twice | CRDT-idempotent: LWW collapses to identity, OrSet add/remove dots are deduped by replica id, write-once `mfg-facts` keys are stable. |
+| Duplicate delivery | Same entry merged twice | CRDT-idempotent: LWW collapses to identity, OrSet add/remove dots are unioned per element and dot (replica id + counter) so a re-delivered delta changes nothing, write-once `mfg-facts` keys are stable. |
 | A -> B -> A cycle | Receiver re-emits a remote-origin entry | Broken by origin stamping: the receiver appends a replicated apply to its own WAL under the source cluster's origin, and its shipper ships only locally-authored entries, so the entry never travels back. |
-| Replication-disconnect preset | `IReplicationDisconnectGrain.IsDisconnected = true` | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set, and `ChaosReplicationApplier` rejects inbound applies so the peer's shipper holds its cursor too; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
+| Replication-disconnect preset | `IReplicationDisconnectGrain` disconnect flag set (`SetDisconnectedAsync(true)`) | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set, and `ChaosReplicationApplier` rejects inbound applies so the peer's shipper holds its cursor too; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
 | Tier-5 `docker network disconnect` | gRPC push fails at transport | Identical to "peer unreachable"; shipper backs off and catches up on reconnect. |
 | Baseline applier decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
-| Receiver fallen out of WAL retention window | Receiver's per-peer cursor is older than the sender's oldest WAL entry | Auto-bootstrap drains a point-in-time snapshot from the sender cluster over the gRPC remote-snapshot transport (`IRemoteSnapshotTransport` / `RemoteSnapshotProvider`); the receiver catches up automatically. See [`docs/lattice.replication/snapshot-bootstrap.md`](../../docs/lattice.replication/snapshot-bootstrap.md). |
+| Receiver fallen out of WAL retention window | Receiver's per-origin high-water mark is older than a sender oldest-available WAL HLC supplied to the detector | With `AutoBootstrapOnFallOffLog` enabled, the detector starts a point-in-time bootstrap over the gRPC remote-snapshot transport (`IRemoteSnapshotTransport` / `RemoteSnapshotProvider`). The maintenance probe only has evidence for origins present in the local WAL, so a newly added or empty-WAL cluster still needs an entry or another probe source before it can re-seed. See [`docs/lattice.replication/snapshot-bootstrap.md`](../../docs/lattice.replication/snapshot-bootstrap.md). |
 
 See [`docs/lattice.replication/`](../../docs/lattice.replication/)
 for the gRPC wire format, bootstrap protocol, and dead-letter

@@ -60,13 +60,13 @@ Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `Test
 | Conditional range delete under split churn | `ChaosPredicateRangeDeleteIntegrationTests.cs` | The conditional `DeleteRangeAsync<T>` overload tombstones exactly the in-range keys whose value matches the predicate, and never touches a key outside the range, while splits and point writers race it. |
 | Predicate scans under split churn | `ChaosPredicateScanIntegrationTests.cs` | The predicate `ScanEntriesAsync<T>` / `ScanKeysAsync<T>` / `ScanValuesAsync<T>` overloads across a mid-scan split: output stays in ascending key order, every surfaced value satisfies the predicate, and a stable band is returned in full. |
 | Cluster-wide split admission after a crash | `ClusterSplitConcurrencyChaosTests.cs` | Models a silo crashing mid-split by reporting split footprints that saturate the `LatticeOptions.MaxClusterConcurrentAutoSplits` ceiling and are then never refreshed; once their time-to-live lapses a fresh grant must succeed, so a crash cannot wedge splitting cluster-wide. |
-| Retry policy masks storage faults | `RetryPolicyChaosTests.cs` | Parametrized theory (5%, 15% and 30% fault probability) that arms one-shot storage write faults and requires every caller-side mutation to succeed through `BoundedExponentialRetryPolicy` under an ambient `LatticeIdempotencyContext`, without the retries producing duplicate mutations (a double-counted `PnCounter`, or several stored HLCs). |
+| Retry policy masks storage faults | `RetryPolicyChaosTests.cs` | Parametrized theory (5%, 15% and 30% fault probability) that arms one-shot storage write faults and requires every caller-side `SetAsync` to succeed through `BoundedExponentialRetryPolicy` under an ambient `LatticeIdempotencyContext`; a companion test arms a fault on every 15 ms tick while incrementing a `PnCounter` and requires the counter to equal the number of increments that succeeded, so a retry never double-counts. |
 | Shard consolidation under churn | `ShardConsolidationChaosTests.cs` | Online shard-consolidation folds run while a split driver shatters the tree, writers ingest, and shard roots are force-deactivated: no key ever becomes unreachable, no acknowledged write is lost, and no virtual slot is left unrouted. |
 | Predicate translator and evaluator agree | `Predicates/LatticePredicatePushdownChaosTests.cs` | Eight workers evaluate a storm of structurally random predicates against a shared pool of 256 encoded documents, both through the server-side predicate evaluator and as the compiled lambda; any disagreement fails the run. |
 
 ### Cross-cluster, gRPC, and Azure Table WAL suites
 
-The replication package ships its own chaos suites - cross-cluster convergence
+The replication packages and the Azure Table WAL provider ship their own chaos suites - cross-cluster convergence
 and atomic visibility (`test/lattice.replication/Chaos/`), the gRPC transport
 suite (`test/lattice.replication.grpc/Chaos/`), and the Azure Table WAL suite
 (`test/lattice.storage.azuretable/Chaos/`). They drive the real replication
@@ -182,7 +182,7 @@ observes a fully consistent view of the tree.
 
 | Invariant | Mechanism under test |
 |---|---|
-| `CountAsync` returns the exact universe size, always | Per-slot routing via `CountForSlotsAsync` against the authoritative `ShardMap` plus version stability check |
+| `CountAsync` returns the exact universe size, always | Per-slot count routing against the authoritative `ShardMap`, each shard counted in work-bounded batches, plus version stability check |
 | `ScanKeysAsync` / `ScanEntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge + `HashSet` dedup |
 | `ScanKeysAsync(null, null, reverse: true)` yields the full universe in reverse | Reverse-scan path also reconciles |
 | `ScanKeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
@@ -579,7 +579,7 @@ Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atom
 
 Four of the replication suite's per-merge-mode convergence fixtures -
 last-writer-wins, OR-Set, PN-Counter and MV-Register; the suite covers
-most other `LatticeMergeMode` values too, catalogued in
+every other `LatticeMergeMode` value too, catalogued in
 [the replication chaos tests](../lattice.replication/chaos-tests.md) -
 prove that the producer-side change-feed → shipper → receiver-side
 applier pipeline converges every site to the same final state under
@@ -621,8 +621,7 @@ mode-specific convergence invariant pointwise across sites.
 
 ### Tolerated transients
 
-* PN-Counter's call-site retry loop absorbs `CAS budget exhausted` from `IncrementAsync` / `DecrementAsync` under concurrent foreign-origin pump writes against the same key (8 attempts with linear backoff; mirrors what a real application would do). A final unretried call propagates the exception if the CAS contention is sustained.
-* MV-Register uses the same 8-attempt linear-backoff wrapper around `SetAsync` for the same reason: a foreign-origin merge that lands mid-CAS bumps the local state and aborts the local attempt.
+* PN-Counter and MV-Register wrap `IncrementAsync` / `DecrementAsync` and `SetAsync` in a call-site retry (8 attempts with linear backoff, then one final unretried call) that catches an `InvalidOperationException` carrying `CAS budget exhausted`. The wrapper is defensive only: both accessors now apply one producer-side delta per call - a single read, then one `ApplyCrdtDeltaAsync`, with no compare-and-swap loop - so neither raises that exception, and a foreign-origin merge that lands mid-call cannot abort the local write.
 * OR-Set / LWW: no per-call retry needed - the pipeline is non-blocking from the producer side; transient pump errors queue onto `pump.PumpErrors` and surface in the post-drain assertion if convergence stalls.
 
 ### Companion observability
@@ -701,7 +700,7 @@ in-flight tail.
 ### Tolerated transients
 
 The stale shard-routing signal, `EnumerationAbortedException`, cursor
-snapshot/pin exhaustion, `TimeoutException`, and the saga's own
+snapshot expiry or pin exhaustion, `TimeoutException`, and the saga's own
 rollback / topology-churn / fan-out-saturation / "fewer than 2 virtual
 slots" `InvalidOperationException` messages are bucketed as transient -
 the commit worker moves on to its next generation, and the readers and
@@ -881,7 +880,6 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 | `LatticeOriginContext` flagging foreign-origin writes during apply | ✅ | ✅ | ✅ | ✅ |
 | Commutative-monoid CRDT merge absorbs out-of-order receive | - | ✅ | ✅ | ✅ |
 | Dot-context supersession of causally-dominated entries on merge | - | - | - | ✅ |
-| CAS-budget exhaustion handled by call-site retry under sustained foreign-origin contention | - | - | ✅ | ✅ |
 
 ### Per-test invariant surfaces (range delete, CAS, scan cancel, restart, replication, storage)
 
@@ -909,14 +907,14 @@ Azure Table WAL columns map to fixtures catalogued in
 | Process-shared `IGrainStorage` isolates membership churn from storage disappearance | - | - | - | ✅ | - | - | - | - | - | - |
 | Producer-side WAL trim cannot prune un-acked entries | - | - | - | - | ✅ | - | - | - | - | - |
 | Real `AddLatticeReplication` + loopback transport under sustained writes | - | - | - | - | ✅ | ✅ | - | ✅ | - | - |
-| Outbound liveness probe: `peer.last_contact_seconds` climbs while a peer edge is isolated and resets within one probe interval of the heal | - | - | - | - | - | ✅ | - | - | - | - |
+| Outbound liveness probe: `peer.last_contact_seconds` climbs while a peer edge is isolated and falls below half a probe interval within ten probe intervals of the heal | - | - | - | - | - | ✅ | - | - | - | - |
 | Budget-driven receiver-side apply faults drain in full, the receiver still converges, and the inbound peer-stats row records contact with no outbound-only backlog or in-flight counts | - | - | - | - | - | ✅ | - | - | - | - |
 | OR-Map convergence under concurrent multi-site mutation + partition | - | - | - | - | - | - | ✅ | - | - | - |
 | Per-tree typed-CRDT shape resolution end-to-end on producer + receiver dispatch | - | - | - | - | - | - | ✅ | - | - | - |
 | `ReplicationShipperGrain.ShouldShip` keeps `MutationKind.Tombstone` envelopes off the wire | - | - | - | - | - | - | - | ✅ | - | - |
 | `ITombstoneCompactionGrain.RunCompactionPassAsync` mid-shipment preserves receiver convergence | - | - | - | - | - | - | - | ✅ | - | - |
 | gRPC sender retry loop under 15% and 30% per-call channel faults delivers every attempted entry | - | - | - | - | - | - | - | - | ✅ | - |
-| Re-deliveries the channel faults induce are absorbed by the receiver's high-water-mark dedupe as no-ops | - | - | - | - | - | - | - | - | ✅ | - |
+| Re-deliveries the channel faults induce are absorbed as no-ops by the receiver's exact-identity dedupe cache or the idempotent leaf apply | - | - | - | - | - | - | - | - | ✅ | - |
 | Azurite-backed WAL keeps every shard's offsets dense, gap-free and duplicate-free under sustained concurrent appends across shards | - | - | - | - | - | - | - | - | - | ✅ |
 
 Legend: ✅ = covered by a live test.

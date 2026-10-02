@@ -153,7 +153,8 @@ Browser tests are excluded from every default filter by category: every fixture 
 `[Category("UI")]` (enforced by `UiCategoryHygieneTests`).
 
 ```powershell
-# Once per clone, and after a Microsoft.Playwright version bump
+# Once per clone, and after a Microsoft.Playwright version bump: build in Release, then install the browsers
+dotnet build test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release
 pwsh test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1 install chromium firefox webkit
 
 # The lane

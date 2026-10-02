@@ -135,11 +135,11 @@ internal sealed class LatticeWalUsageGrain(
 
     /// <summary>
     /// Publishes the freshly-served WAL report to the observable-gauge sink.
-    /// Only the WAL-bytes series and the over-threshold flag are touched
+    /// Only the WAL-bytes series and the over-threshold flag are measured
     /// here; leaf-state, snapshot, and total bytes are owned by the deep
-    /// path (<see cref="LatticeStorageUsageGrain"/>) so a sibling silo's
-    /// poll cannot accidentally republish a stale leaf/snapshot figure for
-    /// the same tree.
+    /// path (<see cref="LatticeStorageUsageGrain"/>), and the sink only
+    /// carries forward whatever deep figures it already holds for the tree
+    /// (<see cref="LatticeStorageUsageMetrics.PublishWal"/>).
     /// <para>
     /// The series is keyed by the <i>logical</i> tree
     /// (<see cref="LatticeOptionsResolver.GetMetricTreeId"/>), never by this
@@ -150,12 +150,14 @@ internal sealed class LatticeWalUsageGrain(
     /// it backs. Both activations resolve to - and therefore measure - the same
     /// WAL partitions, so keying by the addressed id published the same bytes
     /// twice under two different <c>tree</c> labels: it leaked the physical id
-    /// into the label, grew label cardinality by one value per resize
-    /// generation, and broke the poller's documented guarantee that a
-    /// cross-silo <c>sum by (tree)</c> counts each tree once (issue #4152).
-    /// Keying both by the logical id collapses them onto one series whose value
-    /// is identical from either activation, so the duplicate publish is an
-    /// idempotent overwrite rather than a second series.
+    /// into the label and grew label cardinality by one value per resize
+    /// generation (issue #4152). Keying both by the logical id puts them on one
+    /// <c>tree</c> label whose value is identical from either activation, so
+    /// where both publish into one sink the duplicate is an idempotent
+    /// overwrite rather than a second series. The two activations are placed
+    /// independently, though, so on a multi-silo cluster each can export that
+    /// label from its own silo; aggregate across silos with
+    /// <c>max by (tree)</c>, not <c>sum by (tree)</c>.
     /// </para>
     /// <para>
     /// The resolve is free here: <see cref="GetWalUsageAsync"/> has already

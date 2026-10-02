@@ -37,9 +37,10 @@ public readonly record struct VectorIndexStatus(
     public bool IsReady => State == VectorIndexState.Ready;
 
     /// <summary>
-    /// The number of bytes the contiguous vector block and its per-slot side
-    /// arrays currently occupy, divided by the live vector count - the index's
-    /// realised cost per vector. Returns <c>0</c> when the index is empty.
+    /// The number of bytes the cells' vector blocks, their per-slot side arrays
+    /// and the centroid block currently occupy, divided by the live vector count
+    /// - the index's realised cost per vector. Returns <c>0</c> when the index is
+    /// empty.
     /// </summary>
     public int BytesPerVector => Count == 0 ? 0 : (int)(VectorIndexMemory.Bytes(Capacity, Dimensions, PartitionCount) / Count);
 }

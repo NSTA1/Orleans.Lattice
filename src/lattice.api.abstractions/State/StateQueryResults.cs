@@ -285,8 +285,9 @@ public sealed record EntryHistoryResult
 
     /// <summary>
     /// On a <see cref="EntryHistoryBound.Truncated"/> page, the
-    /// hybrid-logical-clock timestamp of the oldest still-readable revision;
-    /// <see cref="HybridLogicalClock.Zero"/> otherwise.
+    /// hybrid-logical-clock timestamp of the oldest entry still readable on
+    /// the key's WAL partition; <see cref="HybridLogicalClock.Zero"/>
+    /// otherwise.
     /// </summary>
     public HybridLogicalClock EarliestAvailable { get; init; }
 

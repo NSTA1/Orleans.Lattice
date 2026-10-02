@@ -39,14 +39,15 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// partition is active, every write from this silo is redirected to a
 /// silo-local shadow key (<c>shadow/{siloId}/{serial}</c>) instead of
 /// the shared key (<c>{serial}</c>) - in both trees. Reads always merge
-/// (shared ∪ local-silo-shadow), so divergence is observable in the UI:
+/// the shared value plus the local silo's shadow value, so divergence is observable in the UI:
 /// during partition silo A sees only its own recent writes, silo B sees
 /// only its own. On heal,
 /// <see cref="PartitionHealHostedService"/> invokes
 /// <see cref="HealLocalShadowAsync"/>, which promotes every shadow
-/// entry into its shared counterpart and deletes the shadow - for
-/// labels via the OrSet's natural merge, for the operator via a plain
-/// shared-key Set (LWW resolution by the tree's HLC).
+/// entry into its shared counterpart and deletes the shadow. Label
+/// healing uses the OR-Set's per-element, per-dot union semantics;
+/// operator healing writes the shadow value to the shared key and lets
+/// LWW choose by HLC.
 /// </para>
 /// </summary>
 public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
@@ -97,14 +98,11 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     /// </para>
     ///
     /// <para>
-    /// <b>Coverage scope.</b> The event reaches every Blazor circuit
-    /// pinned to the same silo as the mutation, plus every circuit on
-    /// the peer cluster (because OR-Set label deltas replicate). It
-    /// does <b>not</b> currently reach circuits pinned to a different
-    /// silo within the same cluster - that would require a second
-    /// cluster-wide Orleans stream typed for CRDT notices, and is a
-    /// deferred enhancement. The sample's main demo case (one browser
-    /// per cluster, sticky cookie) is fully covered.
+    /// <b>Coverage scope.</b> The event is raised on the silo that
+    /// observed the mutation or inbound OR-Set apply. <c>DashboardBroadcaster</c>
+    /// republishes the serial on a cluster-wide Orleans stream, so Blazor
+    /// circuits pinned to other silos in the same cluster refresh too; peer
+    /// clusters get the same path when the replicated OR-Set delta applies.
     /// </para>
     /// </summary>
     public event Action<PartSerialNumber>? PartChanged;

@@ -86,7 +86,7 @@ internal static class TreeAdminDiagnosticsToolHandlers
     /// <summary>Reads the cluster-wide storage accounting summary.</summary>
     public static Task<ClusterStorageUsageSummary> GetStorageUsageAsync(
         ILatticeTreeAdmin treeAdmin,
-        [Description("When true, force an expensive fresh leaf-walk that re-measures every shard; when false (the default), return the cheap cached WAL-poll aggregate.")]
+        [Description("When true, force an expensive fresh leaf-walk that re-measures every shard; when false (the default), return each tree's cheap cached figures, refilled from shard-root byte totals and WAL partitions without walking leaves.")]
         bool deep = false,
         CancellationToken cancellationToken = default)
     {

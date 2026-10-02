@@ -57,7 +57,7 @@ dialog, then:
    `in-image` beside **All sources**; choose `in-image` and the **Available**
    filter. Task board appears with its icon, display name and summary. All of
    that text comes from the manifest and is shown as plain text.
-2. **Review consent.** Open the entry and choose **Install**. The review shows
+2. **Review consent.** Open the entry and choose **Install...**. The review shows
    what the app asks for, drawn against its own `a/task-board/` namespace:
    - one tree, `tasks`;
    - two roles, `viewer` (`Read`, `RangeRead`) and `editor` (`Read`,
