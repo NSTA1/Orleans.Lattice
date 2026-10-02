@@ -44,10 +44,11 @@ Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `Test
 | Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial view. Quiescent topology (no concurrent split/resize/reshard). |
 | Atomic-write reader isolation across shard split | `ShardSplitTopologyTests.cs` | Same zero-or-all visibility invariant as `AtomicVisibilityChaosTests`, but the topology mutator drives a manual `SplitAsync` on shard 0 concurrently with a chain of `SetManyAtomicAsync` sagas. Exercises shadow-forward of saga prepares onto the destination shard and the saga terminal-broadcast retry onto the new owner via `StaleShardRoutingException`. |
 | Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner via `StaleTreeRoutingException`. |
-| Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. |
-| Atomic-write reader isolation across composed topology changes | `TopologyCompositionChaosTests.cs` | Same zero-or-all visibility invariant over a chain of `SetManyAtomicAsync` rounds against a 16-key universe, but across a sequence of online topology changes on one tree rather than a single change: a grow `ReshardAsync` (4 to 8), a resize, a shrink (8 to 3) of the now-aliased tree, a second resize and a final grow (3 to 6), and separately a resize undo of a resharded tree, which must move the tree back onto its original copy with that copy's shard map and still drive a later grow. Continuous readers must see the whole universe at one round, never below the last round committed before the poll began (the bound is relaxed only while an undo discards the resized copy's rounds); after each phase the quiesced tree must hold every key at the last committed round through freshly resolved routing, and a count and a full scan must return exactly the universe. |
+| Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. Its shrink half (`ReshardTopologyTests.Shrink.cs`) runs the same invariant through a 4 → 2 shrink and through a 4 → 8 grow followed by an 8 → 3 shrink, whose donors include split-allocated shard indices, with continuous readers and atomic batches kept flowing until each change completes (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
 | Leaf structure after a reshard raced by atomic batches | `ReshardAtomicWriteStructureTests.cs` | A grow (4 -> 8) and a shrink (4 -> 2) `ReshardAsync` driven to completion while `SetManyAtomicAsync` rewrites a fixed 16-key universe throughout and for 300 ms after. Afterwards `CountAsync` must equal 16 and `ScanKeysAsync` must return each key once: a saga prepared bucket stranded on a split donor once drained into it outside its span, duplicating keys within one shard (issue [#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)). |
 | Atomic-write reader isolation across silo restarts | `AtomicWriteSiloRestartChaosTests.cs` | Same zero-or-all visibility invariant over a chain of `SetManyAtomicAsync` batches, with no topology change: the secondary silo of a two-silo `TestCluster` is restarted three times while readers poll the whole universe, and every batch whose call returned must stay visible. A restart parks the saga in flight (its caller may see `LatticeShuttingDownException`, which is tolerated) and reactivates leaves from the write-ahead log, so leaves hold that saga's undecided prepares beside every later batch's and replay drains one saga's commit after absorbing a later saga's prepare. Shares grain storage and the write-ahead log across silos exactly as `MultiSiloRestartChaosTests` does, and verifies after quiescence that every key reads at the last committed round and that a count and a full scan see exactly the universe. |
+| Atomic visibility across topology compositions | `TopologyCompositionChaosTests.cs` | One tree is driven through a sequence of online changes - grow 4 → 8, resize, shrink 8 → 3 of the resized (aliased) tree, resize again, grow 3 → 6 - and, separately, a grow, a resize and an undo of that resize followed by a regrow, with atomic batches and continuous readers throughout. Pins the hand-offs between operations: a resize's alias swap carrying a map a reshard wrote, a shrink folding an aliased tree's shards, a resize of a map with retired donors, and an undo carrying the original map back (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
+| Atomic visibility across a silo restart mid-change | `TopologySiloRestartChaosTests.cs` | Two-silo cluster with process-scope grain storage and a shared write-ahead log; the secondary silo restarts after a grow, a shrink or a resize has started its first migrations (and, as a control, with no change in flight). Every batch whose call returned must survive the restart, every batch must stay all-or-nothing, and the change must complete (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
 | Digest determinism under load | `ChaosDigestIntegrationTests.cs` | `ILattice.GetLeafProjectionDigestAsync` is byte-stable across repeated calls in a write-quiescent window after concurrent writer / scanner load, and per-shard `EntryCount` sums equal `CountAsync`. |
 | Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | A worker repeatedly issues `DeleteRangeAsync` over the middle band of a 600-key universe (`rd-000200` to `rd-000400`) while point writers, a refill writer re-inserting delete-band keys, scanners and a split coordinator run. Post-window, every key in the two protected bands is present and envelope-valid - the delete never strays outside its range - and scanners never observe a malformed value. The live count inside the delete band is deliberately not pinned, because deletes and refills race. |
 | Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Four writers increment an eight-key counter universe through a read-then-`SetIfVersionAsync` (CAS) loop while a split coordinator churns shards. A lost CAS returns `false` and the caller re-reads with `GetWithVersionAsync` and retries; post-window, every stored counter equals the number of successful CAS calls made against it, so no update was lost, and no caller saw an exception outside the documented transient class. |
@@ -97,6 +98,7 @@ remediation.
 | Atomic write under policy churn | `AtomicWriteUnderPolicyChurnChaosTests.cs` | A committer drives cross-tree `SetManyAtomicAsync` sagas (alternating a compliant and a non-compliant leg) while a churner flips each participating tree's enforcement policy between "require JSON" and "no policy". Asserts every saga is decided as a unit against the policy current at admission - it either commits every leg or rejects the whole batch and mutates no tree - and a concurrent reader never observes a torn (cross-generation) snapshot. |
 | Atomic write under version advance | `AtomicWriteUnderVersionAdvanceChaosTests.cs` | A committer drives single-tree `SetManyAtomicAsync` batches into one versioned tree while a churner advances the target schema version v1 -> v2 -> v3 concurrently, then a quiesced eager background migration re-stamps the tree. Asserts every batch lands all-or-nothing, that every read is always envelope-stripped and upcast to the current target, and that the eager migration preserves the last committed snapshot. |
 | Schema remediation runner loss | `SchemaOperationSiloLossChaosTests.cs` | A tracked remediation is held during its build phase, the runner silo is killed, and a survivor must observe the lost operation as `Failed`. Starting the same remediation again resumes the durable sliced remediation from the recorded work and cuts the tree over successfully. |
+| Remediation cutover of a resharded tree | `SchemaRemediationCutoverChaosTests.cs` | A tree grown 4 → 7 under atomic load is remediated (passthrough transform) while continuous readers poll it, resharded 7 → 3 through its alias under atomic load, remediated again and grown 3 → 5. The remediation's contract is write quiescence, so only the readers run during each cutover; because the transform is a passthrough, every poll must see every key at the last committed round, with no rollback. Runs on `SchemaRemediationClusterFixture` (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
 
 ## The workload
 
@@ -829,6 +831,71 @@ under live writes.
 
 None beyond the churner's own cancellation; any unexpected exception during the advance, the write loop, or the migration fails the test.
 
+## Test 15 - Atomic visibility across topology compositions, alias swaps and silo restarts
+
+Tests 5 and 6 pin reader isolation through one topology change on a freshly created,
+identity-mapped tree. The fixtures in this section extend it to the cases those cannot
+reach: a shrinking reshard, sequences of changes on one tree, every kind of alias swap on
+a tree whose map a reshard has rewritten, and a silo restart while a change is in flight.
+They share one harness, `AtomicRoundProbe` (`test/lattice/BPlusTree/AtomicRoundProbe.cs`,
+linked into the backup, schema and tree-administration test projects), and one set of
+coordinator drivers, `TopologyDrivers`.
+
+| Fixture | Where | Topology change under test |
+|---|---|---|
+| `ReshardTopologyTests` (shrink half) | `test/lattice/BPlusTree/ReshardTopologyTests.Shrink.cs` | A 4 → 2 shrink; a 4 → 8 grow followed by an 8 → 3 shrink |
+| `TopologyCompositionChaosTests` | `test/lattice/BPlusTree/` | Grow, resize, shrink of the aliased tree, resize, grow; and grow, resize, resize undo, regrow |
+| `TopologySiloRestartChaosTests` | `test/lattice/BPlusTree/` | A silo restart during a grow, a shrink or a resize, and with no change in flight |
+| `ShadowCutoverAtomicVisibilityChaosTests` | `test/lattice.backup/Chaos/` | Shadow-cutover restores and a revert of a resharded tree; a cutover landing mid-grow and mid-shrink |
+| `ExplicitAliasSwapChaosTests` | `test/lattice.api.treeadmin/Chaos/` | `ILatticeTreeAdmin.SetTreeAliasAsync` onto targets resharded to a different map, and a shrink driven through the alias |
+| `SchemaRemediationCutoverChaosTests` | `test/lattice.schema/Chaos/` | Schema remediation cutovers of a resharded tree, and reshards through the remediated alias |
+
+### What they prove
+
+Round *r* writes `{"r":"v-r-i"}` to key *i* of a 16-key universe in one
+`SetManyAtomicAsync` batch, and four readers poll the whole universe with `GetManyAsync`
+every 5 ms for the life of the test. The writer also reads the universe back the moment
+each batch returns. Every observation must satisfy both:
+
+* **Atomicity** - every key carries the same round, or every key is hidden. A poll in
+  which some keys are absent, or keys carry different rounds, is a torn view.
+* **No lost or stale reads** - that round is no lower than the last round committed
+  before the poll began, and no higher than the last round attempted when it finished.
+
+An operation whose contract is to roll the tree back - a resize undo, a shadow-cutover
+restore or its revert, an explicit alias swap onto a prepared copy - runs inside a
+rollback window that relaxes only the lower bound; atomicity is never relaxed. After the
+window the lower bound returns with the first round committed afterwards.
+
+Atomic batches keep being written until each change reports completion, so every
+change is guaranteed to race at least one batch (the fixtures assert it). After each
+change the tree is checked quiesced: every key at the last committed round through
+freshly resolved routing, `CountAsync` equal to the universe size, and a full
+`ScanKeysAsync` yielding exactly the universe with no duplicates. The count and scan
+checks matter: a tree can serve every point read correctly while its counts and scans
+have drifted.
+
+### Pass criteria
+
+* No torn and no out-of-range observation, by any reader or by the writer's read-back.
+* Every change completes within its budget, with at least one batch written while it
+  was in flight, and the map reaches the expected physical shard count.
+* After every change: every key at the last committed round, an exact count, and an
+  exact, duplicate-free scan.
+* Alias swaps move the alias where expected (and a revert or undo moves it back).
+
+### Tolerated transients
+
+* The stale shard-routing and stale tree-routing signals, and the documented
+  `GetManyAsync` scan-retry exhaustion when sagas commit faster than the fan-out, on a
+  reader's poll.
+* A shard activation timeout on a coordinator pass, which the next pass retries.
+* In the backup fixture, a saga that rolls back as a unit across a swap.
+* In the silo-restart fixture, the faults a caller may see while a silo leaves and
+  rejoins: a rejected or timed-out request, a shard activation timeout, and a saga
+  parked with `LatticeShuttingDownException` for resumption on the next activation. A
+  batch whose call faulted may or may not have committed, but must be whole either way.
+
 ## Observed recovery surfaces
 
 Between them, the chaos tests exercise every recovery path documented
@@ -945,7 +1012,8 @@ added without a per-suite runtime table to maintain.
   trees start at 4 shards (64 where a fixture does not pre-register its
   tree; the multi-silo restart and bounded-cache fixtures pin 2 and 1) and
   grow under split or reshard; the shrinking reshard run folds its tree
-  from 4 shards to 2.
+  from 4 shards to 2. The Test 15 fixtures run one phase per topology change, each
+  bounded at 90-120 s, and write atomic batches until the change completes.
 - Cross-cluster suites (`test/lattice.replication/Chaos/`) run two or three
   in-process clusters over a fault-injectable inter-site delivery layer, with a
   single-key or single-tree universe (the atomic-visibility suite uses ~72
@@ -991,6 +1059,7 @@ restore machinery and the core lattice, cover this and are tracked by
 |---|---|---|
 | Routing self-heal across a shadow-cutover | `test/lattice.backup/Chaos/ShadowCutoverRoutingSelfHealChaosTests.cs` | Many stateless-worker routing activations are warmed against a tree's pre-cutover identity under sustained concurrent reads, then the tree is cut over to a restored shadow while the readers keep hammering. The retained tree refuses logical-alias traffic with the internal staleness signal, which the routing tier catches and re-resolves onto the shadow. No reader ever surfaces that signal or observes an out-of-universe value, and after the cutover every activation converges onto the restored snapshot with no key left resolving to pre-cutover content. The repeated-cutover case restores to successively earlier point-in-times and proves the heal re-arms for each. |
 | Cross-tree atomic write across a participant cutover | `test/lattice.backup/Chaos/CrossTreeAtomicWriteAcrossCutoverChaosTests.cs` | A sustained stream of cross-tree atomic writes spans two trees while one participant is repeatedly cut over to a restored shadow underneath the saga. The saga's deadline-bounded retry loops must absorb the staleness signal the retired physical tree raises, re-resolve onto the shadow, and reach a clean terminal decision - no call leaks the signal to the caller. After the cutover storm a fresh all-or-nothing batch still commits and is atomically visible on both trees, proving the cut-over participant self-healed and is not wedged. Complements the mocked prepare-side and terminal-broadcast stale-routing retry regressions by exercising the whole coordinator over a real restore. |
+| Atomic visibility across cutovers and reverts of a resharded tree | `test/lattice.backup/Chaos/ShadowCutoverAtomicVisibilityChaosTests.cs` | A tree grown and shrunk under atomic load is cut over to a restored shadow, reverted, regrown and cut over again, with atomic batches and continuous readers throughout; a further pair of cases lands a cutover while a grow or a shrink has migrations in flight and requires the reshard to complete on the carried map. Unlike the two suites above it runs on non-identity maps and checks that no batch is torn and no key goes missing across the swap (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
 
 ## See also
 
