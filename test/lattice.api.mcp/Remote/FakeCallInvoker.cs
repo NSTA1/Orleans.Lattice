@@ -37,6 +37,9 @@ internal sealed class FakeCallInvoker : CallInvoker
     /// <summary>The request object of the most recent call.</summary>
     public object? LastRequest { get; private set; }
 
+    /// <summary>The full method name (<c>/service/Method</c>) of the most recent call.</summary>
+    public string? LastMethod { get; private set; }
+
     /// <summary>The number of calls the invoker has served.</summary>
     public int CallCount { get; private set; }
 
@@ -47,7 +50,7 @@ internal sealed class FakeCallInvoker : CallInvoker
         CallOptions options,
         TRequest request)
     {
-        Capture(options, request);
+        Capture(method.FullName, options, request);
 
         Task<TResponse> responseAsync;
         if (options.CancellationToken.IsCancellationRequested)
@@ -84,7 +87,7 @@ internal sealed class FakeCallInvoker : CallInvoker
         CallOptions options,
         TRequest request)
     {
-        Capture(options, request);
+        Capture(method.FullName, options, request);
 
         if (_streamResponder is null)
         {
@@ -120,9 +123,10 @@ internal sealed class FakeCallInvoker : CallInvoker
         Method<TRequest, TResponse> method, string? host, CallOptions options)
         => throw new NotSupportedException("Duplex-streaming calls are not used by the remote-host adapters.");
 
-    private void Capture<TRequest>(CallOptions options, TRequest request)
+    private void Capture<TRequest>(string method, CallOptions options, TRequest request)
     {
         CallCount++;
+        LastMethod = method;
         LastHeaders = options.Headers;
         LastRequest = request;
     }

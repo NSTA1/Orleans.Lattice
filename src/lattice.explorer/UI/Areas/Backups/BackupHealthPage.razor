@@ -1,11 +1,13 @@
 @page "/backups/health"
 @page "/t/{tenant}/backups/health"
 @inherits ExplorerPage
+@using Orleans.Lattice.Explorer.UI.Operations
 @*
     /backups/health: backup health, only where monitoring applies (a durable,
     external backup store). Lists the latest health of the newest backups; for
-    one backup (?backup=) reads its latest report, re-checks it now, and
-    configures its periodic monitoring.
+    one backup (?backup=) reads its latest report, re-checks it now as a cluster
+    operation followed with real progress (#4125), and configures its periodic
+    monitoring.
 *@
 
 <PageTitle>Backup health - Orleans.Lattice Explorer</PageTitle>
@@ -67,8 +69,15 @@ else if (FocusedId is { } focused)
         else
         {
             <div class="lt-backups-actions">
-                <LtButton Disabled="@_checking" OnClick="CheckNowAsync">@(_checking ? "Checking" : "Check now")</LtButton>
+                <LtButton Disabled="@Checking" OnClick="CheckNowAsync">@(Checking ? "Checking" : "Check now")</LtButton>
             </div>
+            @if (_check?.Status is { } check)
+            {
+                <div class="lt-backups-last-run" role="status" aria-live="polite">
+                    <LtOperationProgress Status="@check" Label="Health check progress" PhaseName="BackupClusterOperation.PhaseName" />
+                    <p class="lt-backups-note"><a class="lt-backups-link" href="@Href(BackupsAddresses.Operation(check.OperationId))">Open the check's page</a></p>
+                </div>
+            }
             @if (_checkError is { } checkError)
             {
                 <p class="lt-backups-error" role="alert">@checkError</p>

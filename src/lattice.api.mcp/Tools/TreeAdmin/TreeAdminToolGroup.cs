@@ -334,6 +334,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
         // ----- Accept-then-poll compliance scans and storage refreshes (#4126) -----
         tools.AddRange(TreeAdminOperationTools.Create());
 
+        // ----- Accept-then-poll schema remediation and migration: status and list (#4209) -----
+        tools.AddRange(TreeAdminSchemaOperationTools.CreateReadTools());
+
         if (enableSchemaControl)
         {
             // ----- Schema management (destructive) -----
@@ -360,24 +363,12 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Advance a tree's target schema version",
                 "Advances a tree's monotonic target schema version to a strictly greater value, returning the "
                 + "updated config. New writes stamp at the new target immediately; existing values upcast lazily on "
-                + "read. Does not run an eager migration - use advance_and_migrate or migrate_to_target for that. "
-                + "Schema-admin-gated and destructive."));
-            tools.Add(Write(services, TreeAdminSchemaToolHandlers.AdvanceAndMigrateAsync, "lattice_treeadmin_schema_advance_and_migrate",
-                "Advance and eagerly migrate a tree's schema",
-                "Advances a tree's target schema version to a strictly greater value and kicks off a background "
-                + "eager migration that re-stamps every existing value to the new target, returning the terminal "
-                + "migration report. Schema-admin-gated and destructive."));
-            tools.Add(Write(services, TreeAdminSchemaToolHandlers.MigrateToTargetVersionAsync, "lattice_treeadmin_schema_migrate_to_target",
-                "Migrate a tree's values to its target schema version",
-                "Runs (or idempotently resumes / no-ops) an eager migration that re-stamps every existing value of "
-                + "a tree to the tree's current target version, returning the terminal migration report. "
-                + "Schema-admin-gated and destructive."));
-            tools.Add(Write(services, TreeAdminSchemaToolHandlers.RemediateAsync, "lattice_treeadmin_schema_remediate",
-                "Remediate a tree's values against a target policy",
-                "Starts (or idempotently resumes) a background remediation that rewrites every stored value of a "
-                + "tree through a value transform and cuts the tree over once the transformed values satisfy a "
-                + "target policy, returning the terminal report. Aborts without cutover on the first value the "
-                + "transform cannot make compliant. Schema-admin-gated and destructive."));
+                + "read. Does not run an eager migration - use lattice_treeadmin_schema_advance_and_migrate_start or "
+                + "lattice_treeadmin_schema_migration_start for that. Schema-admin-gated and destructive."));
+
+            // ----- Accept-then-poll schema remediation and migration: starts, cancel and the
+            // deprecated blocking-tool names, now aliases of the starts (#4209) -----
+            tools.AddRange(TreeAdminSchemaOperationTools.CreateControlTools());
         }
 
         if (enableLifecycle)

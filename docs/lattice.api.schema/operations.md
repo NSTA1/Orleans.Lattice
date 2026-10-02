@@ -147,7 +147,7 @@ The deprecated verbs drive the same bounded slices and return the terminal repor
 | `MigrateToTargetVersionAsync(tree)` | `StartMigrationAsync(tree)`. |
 | `AdvanceAndMigrateAsync(tree, version)` | `StartAdvanceAndMigrateAsync(tree, version)`. |
 
-Over gRPC, the `Remediate`, `MigrateToTargetVersion` and `AdvanceAndMigrate` RPCs stay on the wire, deprecated, until the next major version. Use `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation` instead (see the [gRPC API reference](../lattice.api.schema.grpc/api.md)).
+Over gRPC, the `Remediate`, `MigrateToTargetVersion` and `AdvanceAndMigrate` RPCs stay on the wire, deprecated, until the next major version. Use `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation` instead (see the [gRPC API reference](../lattice.api.schema.grpc/api.md)). Over MCP, use the `lattice_treeadmin_schema_remediation_start`, `lattice_treeadmin_schema_migration_start` and `lattice_treeadmin_schema_advance_and_migrate_start` tools with the `lattice_treeadmin_schema_operation_*` tools; the old `lattice_treeadmin_schema_remediate`, `lattice_treeadmin_schema_migrate_to_target` and `lattice_treeadmin_schema_advance_and_migrate` names are deprecated aliases of the start tools (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
 
 To keep a deliberate use of a deprecated verb building warning-free, suppress the diagnostic locally:
 
