@@ -31,7 +31,7 @@ The Backups area is tenant-scoped. These route forms exist in the shipped pages:
 | Capture | `/backups/new` | `/t/{tenant}/backups/new` | Captures a full, incremental, or set backup. `?tree={tree}` seeds the tree field. |
 | Schedules | `/backups/schedules` | `/t/{tenant}/backups/schedules` | Manages a tree's full and incremental schedules. Query key: `tree`. |
 | Health | `/backups/health` | `/t/{tenant}/backups/health` | Lists backup health where health monitoring applies. `?backup={id}` focuses one backup. |
-| Maintenance | `/backups/maintenance` | `/t/{tenant}/backups/maintenance` | Rebuilds and checks the catalogue where the connection serves the in-process extensions. |
+| Maintenance | `/backups/maintenance` | `/t/{tenant}/backups/maintenance` | Rebuilds and checks the catalogue as cluster operations, and shows the latest run of each. |
 | Operation status | `/backups/operations/{operationId}` | `/t/{tenant}/backups/operations/{operationId}` | Shows a backup or restore operation tracked by the cluster, or a staged operation started in this Explorer circuit. |
 
 ## Navigation row
@@ -110,13 +110,15 @@ The registration form can create or change a full or incremental schedule. Its *
 
 Health appears only when the backup sink is durable and external. The Health page lists the newest 25 backups and their latest stored health reports. A focused address, `/backups/health?backup={id}`, shows one backup, its latest report, **Check now**, and periodic monitoring settings.
 
+**Check now** starts a health check on the cluster as a tracked operation and follows it on the page with the shared progress display, counting the backup's artifacts checked; when it succeeds the page reads the fresh report. The check keeps running if the tab is closed. Reopening the backup's health page while a check started from the Explorer is still running picks that check up instead of starting another; **Open the check's page** links to its operation status page.
+
 A health report shows status, checked time, explanation, whether the manifest is present, missing or uncommitted artifacts, hash mismatches, and peer-cluster visibility when applicable. Focused health actions are offered only when the scope probe grants list authority for that backup.
 
 Periodic monitoring can be turned on or off per backup. Its **Verify every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes, at least one minute; the monitor applies the config on its next sweep.
 
 ## Maintenance
 
-Maintenance covers in-process catalogue extensions. A connection that does not serve them shows:
+Rebuild and check run on the cluster as tracked operations, so they are served over the gRPC binding too. A connection that does not serve backup operations at all shows:
 
 > This connection does not serve this operation. Run it from a silo host, where the backup control API is in process.
 
@@ -124,22 +126,22 @@ Maintenance covers in-process catalogue extensions. A connection that does not s
 
 **Check the catalogue against the store** finds catalogue rows whose backup is gone from the store. The check changes nothing. If a check finds orphan rows, **Remove orphan rows...** opens a destructive confirmation named **Remove orphan rows?**. Removing orphan rows touches only the catalogue; the store is not touched, and a rebuild restores any row whose backup reappears.
 
-All maintenance actions run as staged operations with status pages.
+Each section shows its latest run as the cluster reports it - started from this page, another tab, or another client - with the shared progress display while it runs (manifests re-registered or rows checked, with no total, then orphan rows removed when pruning) and a one-sentence outcome linking to the run's status page. A closed tab never stops a run. **Remove orphan rows...** is offered when the latest check found orphan rows it did not remove. The page looks back through at most the caller's 200 most recent backup operations.
 
 ## Operation status pages
 
-Captures and restores are accept-then-poll operations tracked by the cluster (see [Backup and restore operations](../lattice.api.backup/operations.md)). Their status page at `/backups/operations/{id}` reads the cluster's status, so it survives closing the tab, a reload, or another circuit: open the address again and it picks the operation up where it is. While the page is open it reads the status every few seconds, backing off while reads fail, and stops once the operation finishes. It shows:
+Captures, restores, health checks, and catalogue rebuilds and checks are accept-then-poll operations tracked by the cluster (see [Backup and restore operations](../lattice.api.backup/operations.md)). Their status page at `/backups/operations/{id}` reads the cluster's status, so it survives closing the tab, a reload, or another circuit: open the address again and it picks the operation up where it is. While the page is open it reads the status every few seconds, backing off while reads fail, and stops once the operation finishes. It shows:
 
 - the title and a status pill (**Cancelling** once a cancel was asked for);
 - while it runs, the step among the operation's phases and a progress bar over the current phase's units - determinate only when the phase total is known, otherwise the count so far, never an invented percentage;
 - **Cancel operation** while it runs;
 - once it stops early, the phase and units it stopped at and why;
-- once it succeeds, links to what it produced and its figures;
+- once it succeeds, links to what it produced, its figures, and the orphan rows a catalogue check found;
 - revert controls for a completed point-in-time restore, and a link to the revert once one was made.
 
 An operation id the caller cannot see - another tenant's, or one past its retention - is not found. The progress display is the shared `LtOperationProgress` component, so every area that runs long operations draws them the same way.
 
-Reverts, catalogue rebuilds, and scrubs still run as staged operations in the current circuit. Their status page can be left and resumed while the circuit lives, and shows the title and start or finish time, a status pill and message, the ordered stages with the current stage marked, facts and links, and orphan rows for a scrub.
+Reverts still run as staged operations in the current circuit. Their status page can be left and resumed while the circuit lives, and shows the title and start or finish time, a status pill and message, the ordered stages with the current stage marked, and facts and links.
 
 Reverting a point-in-time restore opens a destructive confirmation named **Revert this restore?**. It says the tree returns to the copy it held before the restore and every write made since the restore is dropped. The revert itself becomes a new operation status page.
 
@@ -167,8 +169,8 @@ Only backups the caller may read are returned.
 - Backup-id completions scan at most 2000 ids.
 - Scope probes return no capabilities when they fault.
 - Health availability is remembered once known; a fault reads as unavailable but is not remembered as a definitive true value.
-- Inventory not served withdraws the in-process extensions for the circuit; a denied inventory keeps them offered.
-- Captures and restores run on the cluster and outlive the circuit. Staged operations (reverts, rebuilds, scrubs) are kept in the current Explorer circuit; ending the circuit cancels them while still running.
+- Inventory not served withdraws the in-process extensions (the inventory and cold restore) for the circuit; a denied inventory keeps them offered. Catalogue maintenance does not depend on it.
+- Captures, restores, health checks, rebuilds and catalogue checks run on the cluster and outlive the circuit. Staged reverts are kept in the current Explorer circuit; ending the circuit cancels one still running.
 - The operation list shows the 10 most recent operations and is reused for 2 seconds per caller and tenant.
 
 ## Server authority

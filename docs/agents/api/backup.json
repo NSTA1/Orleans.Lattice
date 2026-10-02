@@ -370,6 +370,11 @@
           "name": "BackupId",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "TrackingOperationId",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.backup.grpc/Model/BackupHealthCheckRequestMessage.cs#BackupHealthCheckRequestMessage"
@@ -1281,6 +1286,33 @@
         }
       ],
       "source": "src/lattice.api.backup.grpc/Model/BackupOperationStatusResponse.cs#BackupOperationStatusResponse"
+    },
+    "BackupCatalogRebuildRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TrackingOperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCatalogRebuildRequestMessage.cs#BackupCatalogRebuildRequestMessage"
+    },
+    "BackupCatalogScrubRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "PruneOrphans",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "TrackingOperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCatalogScrubRequestMessage.cs#BackupCatalogScrubRequestMessage"
     }
   },
   "operations": [
@@ -2589,6 +2621,64 @@
       ]
     },
     {
+      "id": "start-backup-health-check",
+      "in_process": "ILatticeBackupOperations.StartBackupHealthCheckAsync",
+      "grpc_method": "/orleans.lattice.api.backup/StartBackupHealthCheck",
+      "transport_scope": "both",
+      "request": "BackupHealthCheckRequestMessage",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "backup.health-check",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "No backup with the id exists in the catalog."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "Transient reminder infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered the old backup control facade but not ILatticeBackupOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupHealthCheckAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported. On success the fresh report is persisted as the backup's latest health state.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupHealthCheckAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StartBackupHealthCheck",
+        "docs/lattice.api.backup/operations.md"
+      ]
+    },
+    {
       "id": "start-backup-set",
       "in_process": "ILatticeBackupOperations.StartBackupSetAsync",
       "grpc_method": "/orleans.lattice.api.backup/StartBackupSet",
@@ -2639,6 +2729,114 @@
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupSetAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StartBackupSet",
+        "docs/lattice.api.backup/operations.md"
+      ]
+    },
+    {
+      "id": "start-catalog-rebuild",
+      "in_process": "ILatticeBackupOperations.StartCatalogRebuildAsync",
+      "grpc_method": "/orleans.lattice.api.backup/StartCatalogRebuild",
+      "transport_scope": "both",
+      "request": "BackupCatalogRebuildRequestMessage",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "backup.catalog-rebuild",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "Transient reminder infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered the old backup control facade but not ILatticeBackupOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogRebuildAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogRebuildAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StartCatalogRebuild",
+        "docs/lattice.api.backup/operations.md"
+      ]
+    },
+    {
+      "id": "start-catalog-scrub",
+      "in_process": "ILatticeBackupOperations.StartCatalogScrubAsync",
+      "grpc_method": "/orleans.lattice.api.backup/StartCatalogScrub",
+      "transport_scope": "both",
+      "request": "BackupCatalogScrubRequestMessage",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "backup.catalog-scrub",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "Transient reminder infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered the old backup control facade but not ILatticeBackupOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogScrubAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported. PruneOrphans false only flags orphan rows; true removes them.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogScrubAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StartCatalogScrub",
         "docs/lattice.api.backup/operations.md"
       ]
     },
