@@ -79,6 +79,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Delta run-fold sizing.** Two OR-set union sizing passes routed their count selector through a capturing adapter lambda, minting a display class and a delegate hop per run element. A generic helper drives the selector directly: 24 B to zero, and 28% off the fold at width 32. ([#4244](https://github.com/NSTA1/Orleans.Lattice/pull/4244)) (`Orleans.Lattice`)
+
+- **Performance - Multi-value register dot probes.** The duplicate-dot probe returned `MvRegisterEntry?`, copying a 24-byte struct twice per candidate and running once per local entry per merge. Both probes return an index over a span now, still allocation-free and 27-29% faster at 32 entries. ([#4244](https://github.com/NSTA1/Orleans.Lattice/pull/4244)) (`Orleans.Lattice`)
+
+- **Performance - Flag dot union span walk.** `OrFlag` and `RwFlag` unioned their dot lists through a list enumerator. Both walk `CollectionsMarshal.AsSpan` by reference now, taking 24% off the scan at 32 dots, with a self-union guard that keeps an aliased append safe. ([#4244](https://github.com/NSTA1/Orleans.Lattice/pull/4244)) (`Orleans.Lattice`)
+
 - **Performance - WAL batch buffer pooling.** The two leaf merge paths staged their record batch in a list, and the CRDT apply path copied its list to a fresh array before dispatch. All three take a threshold-gated pooled rental now: 82 KB to zero on a 256-record batch. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
 
 - **Performance - Set accessor key probes.** Two set accessors materialised a base64 string purely to probe a dictionary, then dropped it. Both encode into a stack or pooled span and probe through an alternate lookup now, allocating nothing on either side of the stack threshold. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)

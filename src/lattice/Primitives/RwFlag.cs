@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// A remove-wins (disable-wins) flag CRDT - the inverse of the enable-wins
 /// <see cref="OrFlag"/>. Presence requires at least one
@@ -212,6 +214,23 @@ public sealed class RwFlag : ICrdt<RwFlag>
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {
         if (source.Count == 0) return;
+
+        // A union with itself is the identity, and short-circuiting it is load
+        // bearing rather than merely thrifty: the walks below resolve source's
+        // backing span once and then append to target, so aliasing the two
+        // lists would let an append resize the array out from under a live
+        // span. The list enumerator this replaced raised on the same aliasing
+        // through its version check, so the guard preserves that safety while
+        // turning a throw into the correct answer.
+        if (ReferenceEquals(target, source)) return;
+
+        // Walk the resolved span with ref readonly rather than the list's
+        // struct enumerator: OrSetDot is a multi-field struct, so the
+        // enumerator's Current copies it once before the Contains/Add call
+        // copies it again, and the enumerator re-checks the list version on
+        // every MoveNext. Flag merges drive this two (OrFlag) or three
+        // (RwFlag) times apiece on the replication apply path.
+        var span = CollectionsMarshal.AsSpan(source);
         if (source.Count <= DotLinearScanThreshold)
         {
             // Small incoming dot list (the common 1-2-concurrent-dot and
@@ -220,15 +239,17 @@ public sealed class RwFlag : ICrdt<RwFlag>
             // quadratic. Only the incoming side must be small - the previous
             // guard also required the target to be small, allocating a HashSet
             // over a long-lived flag's accumulated list on every small merge.
-            foreach (var dot in source)
+            for (var i = 0; i < span.Length; i++)
             {
+                ref readonly var dot = ref span[i];
                 if (!target.Contains(dot)) target.Add(dot);
             }
             return;
         }
         var seen = OrSetDotSet.Build(target, source.Count);
-        foreach (var dot in source)
+        for (var i = 0; i < span.Length; i++)
         {
+            ref readonly var dot = ref span[i];
             if (seen.Add(dot)) target.Add(dot);
         }
     }

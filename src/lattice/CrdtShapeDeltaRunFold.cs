@@ -175,11 +175,47 @@ public sealed partial class CrdtShape
         return total;
     }
 
+    /// <summary>
+    /// Sums the widths the run's per-source selector resolves, driving
+    /// <paramref name="select"/> directly rather than through a per-call
+    /// adapter lambda.
+    /// </summary>
+    /// <remarks>
+    /// The spelling matters. Sizing through
+    /// <c>SumCounts(run, o =&gt; select(o)?.Count ?? 0)</c> reads as a free
+    /// adapter, but the lambda <b>captures <paramref name="select"/></b>, so
+    /// Roslyn cannot cache it in a static singleton: every call heap-allocates
+    /// a display class <em>and</em> a <see cref="Func{T, TResult}"/> closed
+    /// over it, and every element then pays a second delegate hop
+    /// (<c>count</c> to <c>select</c>) on top of the one it already owes. The
+    /// run folds that size this way call it two to three times apiece, on the
+    /// replication delta-apply path. Taking the already-constructed
+    /// <paramref name="select"/> as the parameter removes both allocations and
+    /// one indirection per element, and leaves the arithmetic identical.
+    /// <para>
+    /// The sibling <see cref="SumCounts"/> overload stays: its remaining call
+    /// sites pass <c>static</c> lambdas, which Roslyn caches, so they allocate
+    /// nothing and have nothing to trim.
+    /// </para>
+    /// </remarks>
+    private static int SumSelectedCounts<T>(
+        IReadOnlyList<object> run,
+        Func<object, IReadOnlyList<T>?> select)
+    {
+        var total = 0;
+        for (var i = 0; i < run.Count; i++)
+        {
+            total += select(run[i])?.Count ?? 0;
+        }
+
+        return total;
+    }
+
     private static IReadOnlyList<OrSetDeltaDot> UnionOrSetDeltaDotsRun(
         IReadOnlyList<object> run,
         Func<object, IReadOnlyList<OrSetDeltaDot>?> select)
     {
-        var bound = SumCounts(run, o => select(o)?.Count ?? 0);
+        var bound = SumSelectedCounts(run, select);
         var result = new List<OrSetDeltaDot>(bound);
         var seen = new HashSet<(string ReplicaId, long Counter, byte[] Element)>(
             bound, ElementDotComparer.Instance);
@@ -195,7 +231,7 @@ public sealed partial class CrdtShape
         IReadOnlyList<object> run,
         Func<object, IReadOnlyList<OrSetDot>?> select)
     {
-        var bound = SumCounts(run, o => select(o)?.Count ?? 0);
+        var bound = SumSelectedCounts(run, select);
         var result = new List<OrSetDot>(bound);
         var seen = new HashSet<OrSetDot>(bound);
         for (var i = 0; i < run.Count; i++)
