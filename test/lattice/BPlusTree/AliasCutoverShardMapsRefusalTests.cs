@@ -8,7 +8,9 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Issue #4270: the alias-cutover shard-map carries rewrite registry rows with
 /// <see cref="ILatticeRegistry.UpdateAsync"/>, an unconditional upsert. They used
 /// to default a missing row to an empty entry and write it, creating a row with
-/// no structural pins. Each now refuses a missing row and writes nothing.
+/// no structural pins. A missing destination or revert row now refuses and writes
+/// nothing; a missing logical row on a cutover is the genuine create of a
+/// restore into a fresh target and still proceeds.
 /// </summary>
 [TestFixture]
 public sealed class AliasCutoverShardMapsRefusalTests
@@ -44,16 +46,17 @@ public sealed class AliasCutoverShardMapsRefusalTests
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_refuses_an_unregistered_logical_tree_without_writing_it()
+    public async Task PrepareCutoverAsync_into_a_never_created_target_creates_its_row_with_the_destination_map()
     {
+        // A shadow-cutover restore into a fresh target id: the cutover is the
+        // genuine create of the logical row, so it must not be refused.
         _registry.ResolveAsync(Logical).Returns(Task.FromResult(Logical));
-        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2) });
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2), NextShardIndex = 3 });
 
-        var ex = Assert.ThrowsAsync<LatticeTreeNotRegisteredException>(
-            () => AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination));
+        await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
 
-        Assert.That(ex!.TreeId, Is.EqualTo(Logical));
-        await _registry.DidNotReceive().UpdateAsync(Logical, Arg.Any<TreeRegistryEntry>());
+        await _registry.Received(1).UpdateAsync(Logical, Arg.Is<TreeRegistryEntry>(e =>
+            e.ShardMap != null && e.ShardMap.Slots.SequenceEqual(Map(2).Slots) && e.NextShardIndex == 3));
     }
 
     [Test]

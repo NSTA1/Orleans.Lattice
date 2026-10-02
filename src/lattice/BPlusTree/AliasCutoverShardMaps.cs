@@ -94,7 +94,13 @@ internal static class AliasCutoverShardMaps
 
         var destinationRouting = await grainFactory.GetGrain<ILattice>(destinationPhysicalTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken);
-        var logical = await RequireEntryAsync(registry, logicalTreeId, CutoverOperation);
+
+        // A shadow-cutover restore into a target that was never created has no
+        // logical row: this cutover is what creates it, as an alias of the restored
+        // copy, so an absent row is a genuine create and starts from an empty entry.
+        // It cannot be a lost row - the alias lives on that row, and the resolve
+        // above found none - unlike the destination and revert reads, which refuse.
+        var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
         await registry.UpdateAsync(logicalTreeId, logical with
         {
             ShardMap = Restamp(destinationRouting.Map, logical.ShardMap),
