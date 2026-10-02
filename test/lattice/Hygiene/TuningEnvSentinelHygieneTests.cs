@@ -578,7 +578,14 @@ public sealed class TuningEnvSentinelHygieneTests
             // a script whose failure output goes to stderr, which is exactly that case.
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
-            process.WaitForExit(milliseconds: 120_000);
+            if (!process.WaitForExit(milliseconds: 120_000))
+            {
+                // Reading ExitCode on a running child throws an exception naming neither the
+                // timeout nor the script, and the child would leak; kill it and say what overran.
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already exited */ }
+                Assert.Fail($"`{shell} {string.Join(' ', arguments)}` did not exit within 120 s; the process tree was killed.");
+            }
+
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
 
