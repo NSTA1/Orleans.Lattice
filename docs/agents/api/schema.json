@@ -76,6 +76,11 @@
           "name": "NewTargetVersion",
           "type": "uint",
           "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.schema.grpc/Model/AdvanceVersionRequest.cs#AdvanceVersionRequest"
@@ -682,6 +687,11 @@
           "name": "TargetPolicy",
           "type": "LatticeSchemaPolicy",
           "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.schema.grpc/Model/RemediateRequest.cs#RemediateRequest"
@@ -750,6 +760,44 @@
         }
       ],
       "source": "src/lattice.api.schema.grpc/Model/SchemaCountResponse.cs#SchemaCountResponse"
+    },
+    "SchemaMigrationStartRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaMigrationStartRequest.cs#SchemaMigrationStartRequest"
+    },
+    "SchemaOperationRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaOperationRequest.cs#SchemaOperationRequest"
+    },
+    "SchemaOperationStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "LatticeOperationStatus?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaOperationStatusResponse.cs#SchemaOperationStatusResponse"
     },
     "SchemaRemediationReportResponse": {
       "kind": "record",
@@ -868,7 +916,13 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#AdvanceAndMigrateMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#AdvanceAndMigrate"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-advance-and-migrate",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "advance-target-version",
@@ -957,6 +1011,54 @@
       "sources": [
         "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#CancelComplianceScan"
+      ]
+    },
+    {
+      "id": "cancel-schema-operation",
+      "in_process": "ILatticeSchemaOperations.CancelOperationAsync",
+      "grpc_method": "/orleans.lattice.api.schema/CancelSchemaOperation",
+      "transport_scope": "both",
+      "request": "SchemaOperationRequest",
+      "response": "SchemaOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller may read but not manage the tree's schema."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's schema control facade does not implement ILatticeSchemaOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.remediation, schema.migration and schema.advance-and-migrate kinds, the caller's tenant and trees the caller may read, and return null for invisible operations. Cancelling requires schema management over the tree and takes effect only before cutover; a cancel during cutover is declined.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#CancelSchemaOperationMethodName"
       ]
     },
     {
@@ -1220,6 +1322,50 @@
       ]
     },
     {
+      "id": "get-schema-operation-status",
+      "in_process": "ILatticeSchemaOperations.GetOperationStatusAsync",
+      "grpc_method": "/orleans.lattice.api.schema/GetSchemaOperationStatus",
+      "transport_scope": "both",
+      "request": "SchemaOperationRequest",
+      "response": "SchemaOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's schema control facade does not implement ILatticeSchemaOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.remediation, schema.migration and schema.advance-and-migrate kinds, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetSchemaOperationStatusMethodName"
+      ]
+    },
+    {
       "id": "get-version-config",
       "in_process": "ILatticeSchemaControl.GetVersionConfigAsync",
       "grpc_method": "/orleans.lattice.api.schema/GetVersionConfig",
@@ -1305,6 +1451,50 @@
       ]
     },
     {
+      "id": "list-schema-operations",
+      "in_process": "ILatticeSchemaOperations.ListOperationsAsync",
+      "grpc_method": "/orleans.lattice.api.schema/ListSchemaOperations",
+      "transport_scope": "both",
+      "request": "LatticeOperationListRequest",
+      "response": "LatticeOperationPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's schema control facade does not implement ILatticeSchemaOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the schema.remediation, schema.migration and schema.advance-and-migrate kinds, the caller's tenant and trees the caller may read, and return null for invisible operations.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ListSchemaOperationsMethodName"
+      ]
+    },
+    {
       "id": "migrate-to-target-version",
       "in_process": "ILatticeSchemaControl.MigrateToTargetVersionAsync",
       "grpc_method": "/orleans.lattice.api.schema/MigrateToTargetVersion",
@@ -1347,7 +1537,13 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#MigrateToTargetVersionMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#MigrateToTargetVersion"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-migration",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "probe-capabilities",
@@ -1425,7 +1621,13 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#RemediateMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#Remediate"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-remediation",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "scan-compliance",
@@ -1549,6 +1751,60 @@
       ]
     },
     {
+      "id": "start-advance-and-migrate",
+      "in_process": "ILatticeSchemaOperations.StartAdvanceAndMigrateAsync",
+      "grpc_method": "/orleans.lattice.api.schema/StartAdvanceAndMigrate",
+      "transport_scope": "both",
+      "request": "AdvanceVersionRequest",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "schema.advance-and-migrate",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is null, empty or reserved, a policy rule is invalid, or operationId is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller may not manage the tree's schema."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Schema versioning is not registered, or the operation id is in use by an operation of a different kind."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's schema control facade does not implement ILatticeSchemaOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A fresh start whose target no longer advances fails the operation in its first phase.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartAdvanceAndMigrateAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
+      },
+      "concurrency": {
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartAdvanceAndMigrateAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StartAdvanceAndMigrateMethodName",
+        "docs/lattice.api.schema/operations.md"
+      ]
+    },
+    {
       "id": "start-compliance-scan",
       "in_process": "ILatticeSchemaComplianceOperations.StartComplianceScanAsync",
       "grpc_method": "/orleans.lattice.api.schema/StartComplianceScan",
@@ -1595,6 +1851,114 @@
       "sources": [
         "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs#StartComplianceScanAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StartComplianceScan",
+        "docs/lattice.api.schema/operations.md"
+      ]
+    },
+    {
+      "id": "start-migration",
+      "in_process": "ILatticeSchemaOperations.StartMigrationAsync",
+      "grpc_method": "/orleans.lattice.api.schema/StartMigration",
+      "transport_scope": "both",
+      "request": "SchemaMigrationStartRequest",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "schema.migration",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is null, empty or reserved, a policy rule is invalid, or operationId is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller may not manage the tree's schema."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Schema versioning is not registered, or the operation id is in use by an operation of a different kind."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's schema control facade does not implement ILatticeSchemaOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A tree already fully migrated finishes at once, having done nothing.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartMigrationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
+      },
+      "concurrency": {
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartMigrationAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StartMigrationMethodName",
+        "docs/lattice.api.schema/operations.md"
+      ]
+    },
+    {
+      "id": "start-remediation",
+      "in_process": "ILatticeSchemaOperations.StartRemediationAsync",
+      "grpc_method": "/orleans.lattice.api.schema/StartRemediation",
+      "transport_scope": "both",
+      "request": "RemediateRequest",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "schema.remediation",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is null, empty or reserved, a policy rule is invalid, or operationId is malformed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller may not manage the tree's schema."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Schema versioning is not registered, or the operation id is in use by an operation of a different kind."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's schema control facade does not implement ILatticeSchemaOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false. A start with the same parameters as an in-flight remediation follows it; different parameters fail the new operation in-band.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartRemediationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
+      },
+      "concurrency": {
+        "rule": "The tree's coordinator records the run and drives it one bounded slice of values at a time from a durable cursor; a cancel takes effect between slices and is declined during cutover. If the silo running the work is lost the operation reads Failed, and starting the same remediation again resumes it from its last slice.",
+        "source": "docs/lattice.api.schema/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartRemediationAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StartRemediationMethodName",
         "docs/lattice.api.schema/operations.md"
       ]
     },
@@ -1696,7 +2060,7 @@
     {
       "id": "unimplemented",
       "grpc_status": "Unimplemented",
-      "meaning": "Server registered no ILatticeSchemaComplianceOperations.",
+      "meaning": "The server does not serve the requested tracked schema operations: it registered no ILatticeSchemaComplianceOperations, or its schema control facade does not implement ILatticeSchemaOperations.",
       "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ComplianceOperations"
     }
   ]

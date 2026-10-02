@@ -179,9 +179,13 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             // same endpoint (the schema-API gRPC service is co-hosted with the
             // tree-administration gRPC service on the same silo address), so removing
             // the remote deferral never advertises a schema tool with no backing facade.
-            services.TryAddSingleton<ILatticeSchemaControl>(sp =>
+            // One adapter serves both the schema-control facade and the accept-then-poll
+            // remediation and migration facade (#4209).
+            services.TryAddSingleton(sp =>
                 new GrpcLatticeSchemaControl(LatticeSchemaApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+            services.TryAddSingleton<ILatticeSchemaControl>(static sp => sp.GetRequiredService<GrpcLatticeSchemaControl>());
+            services.TryAddSingleton<ILatticeSchemaOperations>(static sp => sp.GetRequiredService<GrpcLatticeSchemaControl>());
 
             // The accept-then-poll compliance-scan and storage-usage refresh tools
             // (#4126) forward over the same endpoints.
@@ -190,6 +194,11 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
             services.TryAddSingleton<ILatticeStorageUsageOperations>(sp =>
                 new GrpcLatticeStorageUsageOperations(LatticeTreeAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+
+            // The WAL reclamation read (#4237) forwards over the same endpoint.
+            services.TryAddSingleton<ILatticeWalReclamation>(sp =>
+                new GrpcLatticeWalReclamation(LatticeTreeAdminApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
             services.AddTreeAdminTools(options.EnableSchemaControl, options.EnableLifecycleControl);
         }
