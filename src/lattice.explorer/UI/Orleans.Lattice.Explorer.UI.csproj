@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Orleans.Lattice.Explorer.UI</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.UI</PackageId>
-    <Version>10.0.0</Version>
+    <Version>9.4.2</Version>
     <Description>The Orleans.Lattice Explorer UI: a Razor class library for everything outside a Lattice App's frame - the navigation and session chrome, the shell-owned native areas (Data, Apps, Access, Schema, Tenancy, Replication, Backups, Telemetry and Cluster), the order-diagram design system in its Operate register, the credential-aware transport adapters, and the app frame host and bridge broker. Its static assets are served from _content/Orleans.Lattice.Explorer.UI. Nothing in it is an extension point: areas are compiled in, and the only third-party UI surface is a sandboxed Lattice App frame.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
