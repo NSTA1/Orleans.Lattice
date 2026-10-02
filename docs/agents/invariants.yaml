@@ -914,37 +914,6 @@ invariants:
     sources:
       - "docs/lattice/state-primitives.md"
       - ".github/instructions/primitives.instructions.md"
-  - id: mcp-caller-error-text-sanitized
-    name: "MCP caller error text is sanitized"
-    description: "Caller-controlled MCP rejection text is classified as a client error or sanitized before echoing or logging, so CR/LF and overlong values cannot forge logs or leak raw input."
-    scope:
-      packages:
-        - "Orleans.Lattice.Api.Mcp"
-        - "Orleans.Lattice.Api.Mcp.RepoContext"
-      components:
-        - "McpToolClientErrors"
-        - "CredentialStampingTool"
-        - "RepoContextToolInvocationLogger"
-    violation_modes:
-      - "A caller-supplied argument name, region id, record key, field value, or link target reaches the caller or a log without SanitizeForEcho."
-      - "A tool-level McpException is attached to a repo-context warning log, causing raw exception text and stack output to be rendered."
-      - "A caller mistake escapes as an unhandled tool exception instead of an MCP error result marked as a client error."
-    detection_signals:
-      - type: source
-        name: "McpToolClientErrors.SanitizeForEcho"
-        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors.SanitizeForEcho"
-      - type: source
-        name: "CredentialStampingTool.ReportClientError"
-        source: "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs#CredentialStampingTool.ReportClientError"
-    remediation:
-      - step: "Route caller mistakes through McpToolClientErrors.InvalidArgument, RejectedContent, NotFound, or ReportClientError so they are sanitized, capped, counted, and returned as MCP error results."
-        source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
-      - step: "When logging repo-context tool-level McpException failures before the outer client-error seam runs, log SanitizeForEcho(ex.Message) without attaching the exception."
-        source: "src/lattice.api.mcp.repocontext/Logging/RepoContextToolInvocationLogger.cs#RepoContextToolInvocationLogger"
-    sources:
-      - "src/lattice.api.mcp/Tools/McpToolClientErrors.cs"
-      - "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs"
-      - "src/lattice.api.mcp.repocontext/Logging/RepoContextToolInvocationLogger.cs"
   - id: mcp-region-catalog-validated-tenant-scope
     name: "MCP region catalog honours only a validated tenant assertion"
     description: "With tenancy active, a tenant-asserted region discovery call is scoped to the asserted tenant only when ITenantContextResolver resolves that same tenant; otherwise it advertises the current region alone with no tenantScope annotation."
