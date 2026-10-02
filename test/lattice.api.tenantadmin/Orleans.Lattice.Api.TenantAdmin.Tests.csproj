@@ -25,6 +25,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
+    <!-- The delegated tenant access conformance suite (Security/) exercises the cluster
+         auth facade's break-glass path and app role binding confinement end to end. -->
+    <ProjectReference Include="..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.apps\Orleans.Lattice.Apps.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
