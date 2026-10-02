@@ -25,9 +25,9 @@
     transitively.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="9.8.1" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="9.8.1" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="9.8.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="9.9.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
   </ItemGroup>
@@ -40,8 +40,8 @@
     republishes the core or a facade client but not Api.Mcp, the floors Api.Mcp
     emits still name the unpatched versions, and without the pins below this head
     would restore the unpatched graph (issue #2413; the first case was the
-    api.state.grpc lockout bypass fixed in the 9.6.2 wave). At 9.8.0 every pin
-    equals the floor Api.Mcp 9.8.0 emits.
+    api.state.grpc lockout bypass fixed in the 9.6.2 wave). At 9.9.0 every pin
+    equals the floor Api.Mcp 9.9.0 emits.
 
     These are deliberate version overrides, not new direct dependencies: the
     packages still arrive transitively via Api.Mcp exactly as documented above,
@@ -51,15 +51,15 @@
     9.7.0.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="9.8.2" />
-    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.8.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="9.9.0" />
   </ItemGroup>
 
   <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
