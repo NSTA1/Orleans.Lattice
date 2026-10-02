@@ -25,11 +25,17 @@ public partial class LatticeWalGcSchedulerCadenceTests
         var reporter = Substitute.For<ILeafCursorReporter>();
         var time = new VirtualTimeProvider();
 
+        // The fixture's options carry the default WAL partition count, so the
+        // consumer id is the partition-suffixed one a leaf of such a tree
+        // publishes: retirement acts only on a leaf's own id (issue #4238).
+        var consumerId = BlockedConsumerId(TreeId) + "_0";
+
         // A drive verdict of NotDriven is exactly what a reclaimed leaf returns:
         // its state was cleared, so there is no tree to drive a checkpoint for.
         var (scheduler, recorder) = BlockedTreeProbing(
             time,
             () => Task.FromResult<string?>(null),
+            consumerId: consumerId,
             treeId: TreeId,
             cursorReporter: reporter);
 
@@ -42,7 +48,7 @@ public partial class LatticeWalGcSchedulerCadenceTests
 
         await reporter.Received().UnregisterAsync(
             TreeId,
-            BlockedConsumerId(TreeId),
+            consumerId,
             Arg.Any<CancellationToken>());
     }
 
