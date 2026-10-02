@@ -352,6 +352,18 @@ internal sealed class LatticeBackupRestoreService(
         {
             await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
                 .BeginAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
+
+            // Carry the previous tree's map back with the alias (#4250): the commit
+            // moved the shadow's map onto the target and recorded the one it
+            // replaced on the shadow. Without this a revert onto a tree whose map
+            // differs from the shadow's reads most of its keys as absent.
+            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId))
+            {
+                await AliasCutoverShardMaps.PrepareRevertAsync(
+                    grainFactory, restore.TargetTreeId, restore.ShadowPhysicalTreeId,
+                    restore.PreviousPhysicalTreeId, cancellationToken).ConfigureAwait(false);
+            }
+
             if (string.Equals(restore.PreviousPhysicalTreeId, restore.TargetTreeId, StringComparison.Ordinal))
             {
                 await registry.RemoveAliasAsync(restore.TargetTreeId).ConfigureAwait(false);
@@ -359,6 +371,13 @@ internal sealed class LatticeBackupRestoreService(
             else
             {
                 await registry.SetAliasAsync(restore.TargetTreeId, restore.PreviousPhysicalTreeId).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId)
+                && !string.Equals(restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId, StringComparison.Ordinal))
+            {
+                await AliasCutoverShardMaps.CompleteRevertAsync(grainFactory, restore.ShadowPhysicalTreeId)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -561,14 +580,27 @@ internal sealed class LatticeBackupRestoreService(
         {
             await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
                 .BeginAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
-            // Resolve the retained tree's routing BEFORE the alias swap. A
-            // never-aliased tree's retained physical id equals its logical name,
-            // so resolving it after the swap would follow the alias to the
-            // shadow tree and arm the wrong shards.
+
+            // Carry the shadow's map onto the target before the swap (#4250). Routing
+            // reads the map under the target's id, but the shadow was built by
+            // routing under its own, so swapping only the alias would read most of
+            // the restored keys as absent. The map the target addressed its
+            // previous physical tree by is recorded on the shadow for a revert, and
+            // is the authoritative description of that tree's shards: when the
+            // target was already aliased, splits and reshards wrote it under the
+            // target's id, never the previous tree's own. Resolved before the
+            // prepare moves the target's map, so a resumed commit can tell which
+            // physical tree the recorded map describes.
+            var replacedPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
+            var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(
+                grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
             if (armRedirect)
             {
-                retainedRouting = await ResolveRetainedRoutingAsync(previousPhysicalTreeId!, cancellationToken)
-                    .ConfigureAwait(false);
+                var describesPrevious = string.Equals(replacedPhysical, previousPhysicalTreeId, StringComparison.Ordinal)
+                    || string.Equals(replacedPhysical, shadowPhysicalTreeId, StringComparison.Ordinal);
+                retainedRouting = replacedMap is not null && describesPrevious
+                    ? new RoutingInfo(previousPhysicalTreeId!, replacedMap)
+                    : await ResolveRetainedRoutingAsync(previousPhysicalTreeId!, cancellationToken).ConfigureAwait(false);
             }
             await registry.SetAliasAsync(targetTreeId, shadowPhysicalTreeId).ConfigureAwait(false);
         }
