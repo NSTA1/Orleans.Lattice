@@ -28,9 +28,17 @@ public class ShardRootGrainDeadOverloadRegressionTests
     public void ThrowIfRejectedForAnyKey_HasNoEnumerableOfStringOverload()
     {
         var firstParameterTypes = RejectGateOverloads()
-            .Select(m => m.GetParameters()[0].ParameterType);
+            .Select(m => m.GetParameters()[0].ParameterType)
+            .ToArray();
 
-        Assert.That(firstParameterTypes, Has.None.EqualTo(typeof(IEnumerable<string>)));
+        Assert.Multiple(() =>
+        {
+            // Has.None passes on an empty population, so a rename of the gate would
+            // leave this reporting that the dead overload is gone when in fact the
+            // scan found no overload at all.
+            Assert.That(firstParameterTypes, Is.Not.Empty);
+            Assert.That(firstParameterTypes, Has.None.EqualTo(typeof(IEnumerable<string>)));
+        });
     }
 
     [Test]

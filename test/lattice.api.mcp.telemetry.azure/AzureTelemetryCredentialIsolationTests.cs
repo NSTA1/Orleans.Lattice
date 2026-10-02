@@ -340,10 +340,18 @@ public sealed class AzureTelemetryCredentialIsolationTests
     {
         var exported = typeof(AzureTelemetryBackendTokenOptions).Assembly.GetExportedTypes();
 
-        Assert.That(
-            exported,
-            Has.None.EqualTo(typeof(AzureTelemetryBackendTokenProvider)),
-            "The provider must stay internal so ITelemetryBackendTokenProvider is the only path to it.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                exported,
+                Is.Not.Empty,
+                "Has.None passes on an empty population, so an assembly that exported nothing "
+                + "would satisfy this guard without it ever having looked at a type.");
+            Assert.That(
+                exported,
+                Has.None.EqualTo(typeof(AzureTelemetryBackendTokenProvider)),
+                "The provider must stay internal so ITelemetryBackendTokenProvider is the only path to it.");
+        });
     }
 
     [Test]

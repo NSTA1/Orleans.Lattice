@@ -39,6 +39,12 @@ public sealed class TenantObservabilityScopeTests
     [Test]
     public void ActiveTenant_is_stable_across_reads()
     {
-        Assert.That(TenantObservabilityScope.ActiveTenant, Is.EqualTo(TenantObservabilityScope.ActiveTenant));
+        // Bound to distinct locals so the assertion is visibly between two
+        // independent reads of the cached property rather than reading as a
+        // self-comparison, and so a failure reports both observed values.
+        var first = TenantObservabilityScope.ActiveTenant;
+        var second = TenantObservabilityScope.ActiveTenant;
+
+        Assert.That(second, Is.EqualTo(first));
     }
 }
