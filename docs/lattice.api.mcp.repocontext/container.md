@@ -114,6 +114,7 @@ Two further variables tune the indexing role and per-file token counting, and tw
 | Variable | Default | Purpose |
 |---|---|---|
 | `LATTICE_REPOCONTEXT_INDEXING_ROLE` | `hub` | The cluster's indexing role: `hub` (the authoritative indexer that walks, reconciles, prunes, and re-embeds) or `spoke` (a read-only replica whose index pass is inert). An absent or unrecognised value falls back to `hub`. |
+| `LATTICE_REPOCONTEXT_SOURCE_INDEXING` | `on` | Whether the index pass derives anything from repository source. `off` runs the host **memory-only**: no file is walked, read, reconciled, or embedded and no symbol is extracted or embedded, while agent memory is still stored, embedded, and semantically searchable. Accepts `on`/`off`, `true`/`false`, `1`/`0`, `yes`/`no`, or `enabled`/`disabled`; an absent or unrecognised value falls back to `on`, so a typo never silently stops indexing. See [Memory-only mode](#memory-only-mode). |
 | `LATTICE_REPOCONTEXT_TOKENIZER` | `o200k` | The BPE tokenizer profile the per-file token counter uses: `o200k` (OpenAI o200k_base) or `cl100k` (OpenAI cl100k_base). An absent or unrecognised value falls back to `o200k`. |
 | `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL` | `approximate` | Which semantic retrieval path is bound: `approximate` routes semantic search through the persisted approximate nearest-neighbour index (bounded recall, sub-linear query cost, survives a restart), and `exact` routes it through the complete-recall brute-force scan instead, whose cost is proportional to the corpus. An absent or unrecognised value falls back to `approximate`. A host set to `exact` maintains no approximate index at all, so the build coordinator below is inert for it. Documented in full under [Semantic search](semantic-search.md#the-two-paths). |
 | `LATTICE_VECTOR_CACHE_TTL_SECONDS` | `30` | How long (in seconds) a warm decoded-vector candidate set is trusted before it is re-gathered from the store; `0` disables the cache. |
@@ -343,6 +344,21 @@ The same pass counting spaces out the **embedding gap scan**. Beyond structural 
 Pruning is applied only to this background reconcile. An explicit `repocontext_add_repo` onboarding (or re-onboarding) always runs a full, exact walk, so an agent that re-adds a repository observes the current on-disk state immediately rather than within the full-walk bound.
 
 Everything in this section describes the mounted-workspace strategy. A git-sourced repository never walks a directory and never prunes by modification time: its loop is the fetch-and-diff cycle in [Index source strategies](#index-source-strategies), where the change set - deletes included - comes from the commit itself.
+
+## Memory-only mode
+
+Setting `LATTICE_REPOCONTEXT_SOURCE_INDEXING=off` turns file and symbol indexing off completely while leaving durable agent memory fully available: `repocontext_remember`, `recall`, `update`, `forget`, `scan`, `list_topics`, and `neighbors` behave exactly as before, and memory entries are still embedded, so `repocontext_search` and `repocontext_context` rank them semantically.
+
+What changes is the index pass. Every pass - the one `repocontext_add_repo` starts and every periodic reconcile after it - skips the walk, the structural, symbol, content and cross-reference reconcile, and the file and symbol embedding arms, and runs only the memory embedding arm. Specifically:
+
+- `repocontext_add_repo` still validates its `path` and registers the repository, stamping its marker with a file count of `0`, so the repository is listed and its memory is embedded. It never reads a file under that path.
+- The periodic reconcile keeps running at `LATTICE_RECONCILE_INTERVAL_SECONDS`, because it is what embeds memory written since the previous pass.
+- The self-index grain stops probing file-embedding coverage: the coverage-digest audit and the paged gap sweep do not run, because there is no file corpus to keep embedded.
+- A git-sourced repository is never fetched; its pass is the same memory-only pass.
+
+The switch **stops new source indexing; it does not delete an existing code index**. Records left by an earlier run stay on disk and stay costly - tombstone compaction walks still activate their leaves, and semantic and keyword search still page them in. To drop them, run `repocontext_reset_index` on each repository after switching: it removes the code index and every derived plane and preserves memory, and because a memory-only pass never re-walks, the code index stays gone. Re-run `repocontext_add_repo` afterwards so the repository's marker is re-stamped. Turning the switch back on and re-adding a repository rebuilds its code index from the working files.
+
+In the sample container, set `REPOCONTEXT_SOURCE_INDEXING=off` in `samples/RepoContextContainer/.env`; the compose file passes it through.
 
 ## Agent-memory backup and recovery
 

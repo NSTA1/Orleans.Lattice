@@ -48,6 +48,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="Role"/>.</summary>
     public const string IndexingRoleKey = "LATTICE_REPOCONTEXT_INDEXING_ROLE";
 
+    /// <summary>Environment variable overriding <see cref="SourceIndexing"/>.</summary>
+    public const string SourceIndexingKey = "LATTICE_REPOCONTEXT_SOURCE_INDEXING";
+
     /// <summary>Environment variable overriding <see cref="SemanticRetrieval"/>.</summary>
     public const string SemanticRetrievalKey = "LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL";
 
@@ -356,6 +359,27 @@ internal sealed class RepoContextIndexingOptions
     public bool IndexingEnabled => Role == RepoContextIndexingRole.Hub;
 
     /// <summary>
+    /// Whether the index pass derives anything from repository source: the workspace
+    /// (or staged git commit) walk, the structural, symbol, content and
+    /// cross-reference reconcile, and the file and symbol embedding arms. On by
+    /// default. When <see langword="false"/> the host runs in <b>memory-only</b>
+    /// mode: every pass skips all of that and runs only the agent-memory embedding
+    /// arm, so durable memory is still stored, embedded, and semantically searchable
+    /// while no file or symbol is ever read, indexed, or embedded. Registering a
+    /// repository records its marker (with a file count of zero) without walking
+    /// it, the self-index grain stops probing file-embedding coverage, and a
+    /// git-sourced repository is never fetched.
+    /// <para>
+    /// The switch stops new source indexing only; it does not delete what an earlier
+    /// run indexed. Use <c>repocontext_reset_index</c>, which preserves memory, to
+    /// drop an existing code index. Resolved from <see cref="SourceIndexingKey"/>; an
+    /// absent or unrecognised value falls back to the default (on), so a typo can
+    /// never silently stop a repository being indexed.
+    /// </para>
+    /// </summary>
+    public bool SourceIndexing { get; init; } = true;
+
+    /// <summary>
     /// Which semantic retrieval path is bound:
     /// <see cref="RepoContextSemanticRetrievalMode.Approximate"/> (the default) routes
     /// semantic search through the persisted approximate nearest-neighbour index, and
@@ -539,6 +563,7 @@ internal sealed class RepoContextIndexingOptions
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
             Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),
+            SourceIndexing = ReadBoolean(SourceIndexingKey, defaults.SourceIndexing),
             SemanticRetrieval = ReadSemanticRetrieval(SemanticRetrievalKey, defaults.SemanticRetrieval),
             AnnIndexScheduling = ReadBoolean(AnnIndexSchedulingKey, defaults.AnnIndexScheduling),
             AnnIndexReclamation = ReadBoolean(AnnIndexReclamationKey, defaults.AnnIndexReclamation),
