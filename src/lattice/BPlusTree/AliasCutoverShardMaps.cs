@@ -4,7 +4,8 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Carries routing maps across the alias swap of a shadow-cutover restore or a
-/// schema remediation cutover (issue #4250).
+/// schema remediation cutover (issue #4250), and of an explicit alias set through
+/// the tree-administration facade (issue #4263).
 /// <para>
 /// Routing reads the shard map under the id it is addressed by, and splits,
 /// folds and reshards write it there, so for an aliased tree the logical entry
@@ -191,6 +192,82 @@ internal static class AliasCutoverShardMaps
             });
         }
     }
+
+    /// <summary>
+    /// Runs the explicit alias swap <paramref name="swapAsync"/> of
+    /// <paramref name="logicalTreeId"/> onto <paramref name="targetPhysicalTreeId"/>
+    /// and carries the routing maps across it (issue #4263). After the swap the
+    /// logical entry takes the target's own map and split allocation mark, and the
+    /// map the logical tree addressed its previous physical tree by is written to
+    /// that tree's own entry when it has one and is not the logical id itself, so
+    /// an alias back onto it finds its layout.
+    /// <para>
+    /// The maps are read before the swap and written only after it succeeds, so
+    /// an alias the registry refuses (a multi-level target, a deleted tree, an
+    /// ownership denial) changes nothing. A re-set of the current alias carries
+    /// nothing: the logical map already describes the target. Every write is to
+    /// the registry from outside its turn (issue #4128).
+    /// </para>
+    /// </summary>
+    public static async Task CarryAcrossExplicitAliasAsync(
+        IGrainFactory grainFactory,
+        string logicalTreeId,
+        string targetPhysicalTreeId,
+        Func<Task> swapAsync)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(logicalTreeId);
+        ArgumentNullException.ThrowIfNull(targetPhysicalTreeId);
+        ArgumentNullException.ThrowIfNull(swapAsync);
+
+        var registry = grainFactory.GetLatticeRegistry();
+        var logicalBefore = await registry.GetEntryAsync(logicalTreeId);
+        var current = logicalBefore?.PhysicalTreeId ?? logicalTreeId;
+        if (string.Equals(current, targetPhysicalTreeId, StringComparison.Ordinal))
+        {
+            await swapAsync();
+            return;
+        }
+
+        var replaced = EffectiveMap(logicalBefore);
+        await swapAsync();
+
+        // A previous physical tree with its own id was addressed by the logical
+        // map, never its own, so its own entry is stale once the alias moves off.
+        if (!string.Equals(current, logicalTreeId, StringComparison.Ordinal)
+            && await registry.GetEntryAsync(current) is { } previous
+            && (previous.ShardMap is null || !SameSlots(replaced, previous.ShardMap)))
+        {
+            await registry.UpdateAsync(current, previous with
+            {
+                ShardMap = Restamp(replaced, previous.ShardMap),
+                NextShardIndex = logicalBefore?.NextShardIndex ?? previous.NextShardIndex,
+            });
+        }
+
+        // Routing reads the map under the logical id, so the target's shards are
+        // addressed by whatever map the logical entry holds: carry the target's.
+        var target = await registry.GetEntryAsync(targetPhysicalTreeId);
+        var targetMap = EffectiveMap(target);
+        var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
+        if (!SameSlots(EffectiveMap(logical), targetMap) || logical.NextShardIndex != target?.NextShardIndex)
+        {
+            await registry.UpdateAsync(logicalTreeId, logical with
+            {
+                ShardMap = Restamp(targetMap, logical.ShardMap),
+                NextShardIndex = target?.NextShardIndex,
+            });
+        }
+    }
+
+    /// <summary>
+    /// The map routing addresses a tree's shards by: its persisted map, or the
+    /// default map for its shard-count pin, as the tree router resolves it.
+    /// </summary>
+    private static ShardMap EffectiveMap(TreeRegistryEntry? entry) =>
+        entry?.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
+            LatticeConstants.DefaultVirtualShardCount,
+            entry?.ShardCount ?? LatticeConstants.DefaultShardCount);
 
     /// <summary>
     /// A copy of <paramref name="map"/> versioned above both it and
