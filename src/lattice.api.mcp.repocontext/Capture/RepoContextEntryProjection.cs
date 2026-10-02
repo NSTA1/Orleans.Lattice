@@ -232,7 +232,7 @@ internal static class RepoContextEntryProjection
             elements.Add(Encoding.UTF8.GetString(element));
         }
 
-        elements.Sort(StringComparer.Ordinal);
+        elements.Sort(OrdinalStringOrder.Comparison);
         return elements;
     }
 }

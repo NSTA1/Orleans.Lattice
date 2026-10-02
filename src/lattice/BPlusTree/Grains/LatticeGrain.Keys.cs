@@ -11,11 +11,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class LatticeGrain
 {
     /// <summary>
-    /// Pre-allocated descending-ordinal comparer used for reverse scans.
+    /// Pre-allocated descending-ordinal ordering used for reverse scans.
     /// Hoisted to avoid allocating a delegate + comparer on every scan call.
+    /// <para>
+    /// The <see cref="Comparison{T}"/> is the single source of the ordering and
+    /// the <see cref="IComparer{T}"/> wraps it, so the two cannot drift. The
+    /// split exists because the scan needs both shapes and only one of them is
+    /// free: <see cref="PriorityQueue{TElement,TPriority}"/> and the frontier
+    /// test below require an <see cref="IComparer{T}"/>, while every
+    /// <c>Sort</c> overload taking one re-converts <c>comparer.Compare</c> to a
+    /// <see cref="Comparison{T}"/> internally and so allocates a fresh delegate
+    /// on each call - once per scan page. See <see cref="OrdinalStringOrder"/>.
+    /// </para>
     /// </summary>
+    private static readonly Comparison<string> ReverseOrdinalComparison =
+        static (a, b) => string.Compare(b, a, StringComparison.Ordinal);
+
     private static readonly IComparer<string> ReverseOrdinal =
-        Comparer<string>.Create(static (a, b) => string.Compare(b, a, StringComparison.Ordinal));
+        Comparer<string>.Create(ReverseOrdinalComparison);
 
     /// <summary>
     /// Enumerates the live keys of this tree in strict lexicographic order
@@ -158,6 +171,7 @@ internal sealed partial class LatticeGrain
             : null;
 
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;
+        var sortComparison = reverse ? ReverseOrdinalComparison : OrdinalStringOrder.Comparison;
 
         // Live shard cursors - one per start-of-scan physical shard.
         // Per-shard ShardActivationRetry wrap on the initial MoveNextAsync:
@@ -288,7 +302,7 @@ internal sealed partial class LatticeGrain
 
                     if (buffer.Count > 0)
                     {
-                        buffer.Sort(comparer);
+                        buffer.Sort(sortComparison);
                         var memCursor = new MemoryKeyCursor(buffer);
                         cursors.Add(memCursor);
                         memCursor.MoveNext();
@@ -339,7 +353,7 @@ internal sealed partial class LatticeGrain
 
                 if (finalBuffer.Count == 0) continue; // loop back; pq empty → re-check stability.
 
-                finalBuffer.Sort(comparer);
+                finalBuffer.Sort(sortComparison);
                 var finalCursor = new MemoryKeyCursor(finalBuffer);
                 cursors.Add(finalCursor);
                 finalCursor.MoveNext();
