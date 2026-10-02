@@ -308,6 +308,12 @@ gate will tell you if you forget.
   membership seams default to null implementations registered with `TryAdd`; those
   packages must never reference tenancy. A flip to off takes effect at once, without
   waiting for the snapshot rebuild, and deletes nothing.
+- **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
+  (`test/lattice.api.tenantadmin/Security/`, Category `Integration`, filter
+  `FullyQualifiedName~TenantAccessConformanceTests`) proves the invariants above end to
+  end on a real cluster: layering, confinement, claim stripping, isolation, revocation,
+  feature-off equivalence, deletion purge, break-glass removal and caps under
+  concurrency. Run it, and extend it, when you change any of these seams.
 
 ## Release-status note for security fixes
 

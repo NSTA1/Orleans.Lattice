@@ -760,6 +760,9 @@ invariants:
       - "A snapshot compiled with the flag on keeps honouring member entries after the flag is turned off."
     detection_signals:
       - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
         name: "DelegatedAccessStaleSnapshotTests"
         source: "test/lattice.tenancy/DelegatedAccessStaleSnapshotTests.cs"
       - type: test
@@ -1570,6 +1573,9 @@ invariants:
       - "A delegated access facade accepts the reserved default tenant."
     detection_signals:
       - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
         name: "TenantAccessEntriesTests"
         source: "test/lattice.tenancy/TenantAccessEntriesTests.cs"
       - type: test
@@ -1701,6 +1707,9 @@ invariants:
       - "The tenant layer governs a control-plane, app-owned or default-tenant tree."
     detection_signals:
       - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
         name: "TenantLayerEvaluationTests"
         source: "test/lattice.auth/TenantLayerEvaluationTests.cs"
       - type: test
@@ -1810,6 +1819,9 @@ invariants:
       - "A Tree:* or cross-tenant rule names a tenant group."
       - "An app role binding names another tenant group."
     detection_signals:
+      - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
       - type: test
         name: "LatticeAuthorizationPolicyStoreTenantRuleTests"
         source: "test/lattice.auth/LatticeAuthorizationPolicyStoreTenantRuleTests.cs"
