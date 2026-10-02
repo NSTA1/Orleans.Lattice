@@ -277,6 +277,26 @@ public sealed class BackupToolGroupInvocationTests
     }
 
     [Test]
+    public async Task Maintenance_start_tool_delegates_forward_their_arguments()
+    {
+        var health = await CallAsync<McpBackupOperationHandle>(
+            "lattice_backup_start_health_check", ("backupId", "bk-7"), ("operationId", "health-op"));
+        var rebuild = await CallAsync<McpBackupOperationHandle>("lattice_backup_start_catalog_rebuild");
+        var scrub = await CallAsync<McpBackupOperationHandle>(
+            "lattice_backup_start_catalog_scrub", ("pruneOrphans", true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(health.OperationId, Is.EqualTo("health-op"));
+            Assert.That(health.Kind, Is.EqualTo(BackupOperationKinds.HealthCheck));
+            Assert.That(_control.LastHealthCheckBackupId, Is.EqualTo("bk-7"));
+            Assert.That(rebuild.Kind, Is.EqualTo(BackupOperationKinds.CatalogRebuild));
+            Assert.That(scrub.Kind, Is.EqualTo(BackupOperationKinds.CatalogScrub));
+            Assert.That(_control.LastScrubPruneOrphans, Is.True);
+        });
+    }
+
+    [Test]
     public async Task Restore_alias_tool_delegate_treats_operation_id_as_the_restore_key()
     {
         var handle = await CallAsync<McpBackupOperationHandle>(

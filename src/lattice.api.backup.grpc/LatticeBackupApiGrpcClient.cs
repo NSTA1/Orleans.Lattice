@@ -224,6 +224,54 @@ public sealed class LatticeBackupApiGrpcClient
         return UnaryAsync(_methods.StartColdRestore, ToRestoreMessage(request, operationId), cancellationToken);
     }
 
+    /// <summary>
+    /// Starts a tracked health verification of one backup against the durable sink
+    /// and returns its handle at once; the fresh report is persisted server-side when
+    /// it completes and is read with <see cref="GetBackupHealthAsync"/>.
+    /// </summary>
+    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    public Task<LatticeOperationHandle> StartBackupHealthCheckAsync(
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return UnaryAsync(
+            _methods.StartBackupHealthCheck,
+            new BackupHealthCheckRequestMessage { BackupId = backupId, TrackingOperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked rebuild of the backup catalog from the durable sink and returns its handle at once.</summary>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartCatalogRebuildAsync(
+        string? operationId = null,
+        CancellationToken cancellationToken = default) =>
+        UnaryAsync(
+            _methods.StartCatalogRebuild,
+            new BackupCatalogRebuildRequestMessage { TrackingOperationId = operationId },
+            cancellationToken);
+
+    /// <summary>Starts a tracked scrub of the backup catalog against the durable sink and returns its handle at once.</summary>
+    /// <param name="pruneOrphans"><see langword="true"/> to remove orphan rows; <see langword="false"/> to flag them only.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartCatalogScrubAsync(
+        bool pruneOrphans = false,
+        string? operationId = null,
+        CancellationToken cancellationToken = default) =>
+        UnaryAsync(
+            _methods.StartCatalogScrub,
+            new BackupCatalogScrubRequestMessage { PruneOrphans = pruneOrphans, TrackingOperationId = operationId },
+            cancellationToken);
+
     /// <summary>Reads a tracked backup operation's status.</summary>
     /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -534,6 +582,7 @@ public sealed class LatticeBackupApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The fresh health report.</returns>
     /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    [Obsolete("CheckBackupHealthAsync calls a blocking RPC, so a large backup's check is cut off by the call deadline. Use StartBackupHealthCheckAsync and poll GetBackupOperationStatusAsync instead. CheckBackupHealthAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     public async Task<BackupHealthReport> CheckBackupHealthAsync(
         string backupId,
         CancellationToken cancellationToken = default)

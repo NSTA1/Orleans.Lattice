@@ -32,6 +32,9 @@ public sealed class ShellBackupOperationsTransportTests : ShellTransportAdapterC
         new("StartBackupSetAsync", Service + "StartBackupSet", (f, ct) => f.StartBackupSetAsync(new LatticeBackupSetCaptureRequest("set", [Scope]), null, ct)),
         new("StartRestoreAsync", Service + "StartRestore", (f, ct) => f.StartRestoreAsync(new LatticeRestoreRequest("b1"), null, ct)),
         new("StartColdRestoreAsync", Service + "StartColdRestore", (f, ct) => f.StartColdRestoreAsync(new LatticeRestoreRequest("b1"), null, ct)),
+        new("StartBackupHealthCheckAsync", Service + "StartBackupHealthCheck", (f, ct) => f.StartBackupHealthCheckAsync("b1", null, ct)),
+        new("StartCatalogRebuildAsync", Service + "StartCatalogRebuild", (f, ct) => f.StartCatalogRebuildAsync(null, ct)),
+        new("StartCatalogScrubAsync", Service + "StartCatalogScrub", (f, ct) => f.StartCatalogScrubAsync(true, null, ct)),
         new("GetOperationStatusAsync", Service + "GetBackupOperationStatus", (f, ct) => f.GetOperationStatusAsync("op-1", ct)),
         new("ListOperationsAsync", Service + "ListBackupOperations", (f, ct) => f.ListOperationsAsync(new LatticeOperationListRequest(), ct)),
         new("CancelOperationAsync", Service + "CancelBackupOperation", (f, ct) => f.CancelOperationAsync("op-1", ct)),
@@ -39,7 +42,7 @@ public sealed class ShellBackupOperationsTransportTests : ShellTransportAdapterC
 
     internal override void ScriptSuccess(ShellTransportPeer peer)
     {
-        foreach (var start in new[] { "StartBackup", "StartIncrementalBackup", "StartBackupSet", "StartRestore", "StartColdRestore" })
+        foreach (var start in new[] { "StartBackup", "StartIncrementalBackup", "StartBackupSet", "StartRestore", "StartColdRestore", "StartBackupHealthCheck", "StartCatalogRebuild", "StartCatalogScrub" })
         {
             peer.Respond(Service + start, Handle);
         }
@@ -62,6 +65,7 @@ public sealed class ShellBackupOperationsTransportTests : ShellTransportAdapterC
             Assert.That(() => facade.StartBackupSetAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => facade.StartRestoreAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => facade.StartColdRestoreAsync(null!), Throws.ArgumentNullException);
+            Assert.That(() => facade.StartBackupHealthCheckAsync(string.Empty), Throws.ArgumentException);
             Assert.That(() => facade.GetOperationStatusAsync(string.Empty), Throws.ArgumentException);
             Assert.That(() => facade.ListOperationsAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => facade.CancelOperationAsync(string.Empty), Throws.ArgumentException);

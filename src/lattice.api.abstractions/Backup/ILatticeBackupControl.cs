@@ -20,8 +20,10 @@ namespace Orleans.Lattice.Api.Backup;
 /// <para>
 /// The blocking capture and restore verbs (<see cref="CreateBackupAsync"/>,
 /// <see cref="CreateIncrementalBackupAsync"/>, <see cref="CreateBackupSetAsync"/>,
-/// <see cref="RestoreBackupAsync"/> and <see cref="ColdRestoreAsync"/>) are deprecated
-/// (diagnostic <c>LATTICE0002</c>) in favour of the accept-then-poll
+/// <see cref="RestoreBackupAsync"/> and <see cref="ColdRestoreAsync"/>) and the
+/// blocking sink scans (<see cref="CheckBackupHealthAsync"/>,
+/// <see cref="RebuildCatalogFromSinkAsync"/> and <see cref="ScrubCatalogAgainstSinkAsync"/>)
+/// are deprecated (diagnostic <c>LATTICE0002</c>) in favour of the accept-then-poll
 /// <see cref="ILatticeBackupOperations"/>, and will be removed in the next major version.
 /// Each is now a thin wrapper that starts the matching tracked operation and waits
 /// for it, so it behaves as before and the work is visible to the operation verbs.
@@ -234,6 +236,7 @@ public interface ILatticeBackupControl
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A summary of how many manifests were scanned, freshly added, and reconciled.</returns>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to rebuild the catalog.</exception>
+    [Obsolete("RebuildCatalogFromSinkAsync blocks until the whole sink has been scanned, so a long rebuild is cut off by the caller's timeout. Use ILatticeBackupOperations.StartCatalogRebuildAsync and poll GetOperationStatusAsync instead. RebuildCatalogFromSinkAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
         CancellationToken cancellationToken = default);
 
@@ -256,6 +259,7 @@ public interface ILatticeBackupControl
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A summary of how many rows were scanned, how many are orphans, and how many were removed.</returns>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to scrub the catalog.</exception>
+    [Obsolete("ScrubCatalogAgainstSinkAsync blocks until every catalog row has been probed, so a long scrub is cut off by the caller's timeout. Use ILatticeBackupOperations.StartCatalogScrubAsync and poll GetOperationStatusAsync instead. ScrubCatalogAgainstSinkAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
         bool pruneOrphans = false,
         CancellationToken cancellationToken = default);
@@ -353,6 +357,7 @@ public interface ILatticeBackupControl
     /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    [Obsolete("CheckBackupHealthAsync blocks until every artifact has been re-hashed, so a large backup's check is cut off by the caller's timeout. Use ILatticeBackupOperations.StartBackupHealthCheckAsync and poll GetOperationStatusAsync instead. CheckBackupHealthAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
     Task<BackupHealthReport> CheckBackupHealthAsync(
         string backupId,
         CancellationToken cancellationToken = default);

@@ -78,8 +78,14 @@ internal sealed class LatticeBackupColdRestoreService(
         // Leave the recovered cluster with a correct catalog: re-project every
         // manifest the sink holds into the reserved catalog tree. Idempotent, and
         // the catalog is a disposable projection over the sink, so this never
-        // affects the restored data - it only heals discovery.
-        var rebuild = await _catalogRebuild.RebuildFromSinkAsync(cancellationToken).ConfigureAwait(false);
+        // affects the restored data - it only heals discovery. The rebuild reports
+        // its own phase when tracked (#4125); suppress it here so the cold restore's
+        // declared Cataloguing phase stays current.
+        BackupCatalogRebuildReport rebuild;
+        using (LatticeOperationProgress.Enter(null))
+        {
+            rebuild = await _catalogRebuild.RebuildFromSinkAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         _logger.LogInformation(
             "Cold restore of backup {BackupId} applied {EntryCount} entries; catalog re-projected "

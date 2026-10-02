@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Backup;
 
@@ -71,22 +72,46 @@ internal sealed class LatticeBackupHealthService(
         var missing = resolution.MissingArtifactIds;
         var missingSet = new HashSet<string>(missing, StringComparer.Ordinal);
 
+        // Tracked-operation progress (#4125): every distinct artifact the manifest
+        // references counts as one checked unit, present (re-hashed) or missing
+        // (classified by the probe), so the count reaches the total.
+        var progress = LatticeOperationProgress.Current;
+        long artifactTotal = 0;
+        long artifactsChecked = 0;
+        if (progress is not null)
+        {
+            artifactTotal = CountDistinctArtifacts(manifest);
+            await progress.ReportAsync(
+                BackupOperationPhases.Verifying, 0, artifactTotal, BackupOperationUnits.Artifacts).ConfigureAwait(false);
+        }
+
         // Hash-verify only the artifacts the probe reported as present; a missing
         // artifact is already classified and downloading it would be pointless.
         var mismatches = new List<string>();
         var verifiedHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        HashSet<string>? counted = progress is null ? null : new HashSet<string>(StringComparer.Ordinal);
         foreach (var descriptor in manifest.ContentDescriptors)
         {
-            if (missingSet.Contains(descriptor.ArtifactId) || verifiedHashes.ContainsKey(descriptor.ArtifactId))
+            if (counted is not null && !counted.Add(descriptor.ArtifactId))
             {
                 continue;
             }
 
-            var actualHash = await ComputeArtifactHashAsync(descriptor.ArtifactId, cancellationToken).ConfigureAwait(false);
-            verifiedHashes[descriptor.ArtifactId] = actualHash;
-            if (!string.Equals(actualHash, descriptor.ContentHash, StringComparison.Ordinal))
+            if (!missingSet.Contains(descriptor.ArtifactId) && !verifiedHashes.ContainsKey(descriptor.ArtifactId))
             {
-                mismatches.Add(descriptor.ArtifactId);
+                var actualHash = await ComputeArtifactHashAsync(descriptor.ArtifactId, cancellationToken).ConfigureAwait(false);
+                verifiedHashes[descriptor.ArtifactId] = actualHash;
+                if (!string.Equals(actualHash, descriptor.ContentHash, StringComparison.Ordinal))
+                {
+                    mismatches.Add(descriptor.ArtifactId);
+                }
+            }
+
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Verifying, ++artifactsChecked, artifactTotal, BackupOperationUnits.Artifacts)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -138,6 +163,17 @@ internal sealed class LatticeBackupHealthService(
         return report is null || report.Status == BackupSinkSharingStatus.NotApplicable
             ? null
             : report;
+    }
+
+    private static long CountDistinctArtifacts(BackupManifest manifest)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var descriptor in manifest.ContentDescriptors)
+        {
+            ids.Add(descriptor.ArtifactId);
+        }
+
+        return ids.Count;
     }
 
     private async Task<string> ComputeArtifactHashAsync(string artifactId, CancellationToken cancellationToken)
