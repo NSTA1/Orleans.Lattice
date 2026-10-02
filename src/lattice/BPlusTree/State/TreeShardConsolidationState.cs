@@ -135,6 +135,20 @@ internal sealed class TreeShardConsolidationState
     /// </para>
     /// </summary>
     [Id(16)] public string? DrainCursorKey { get; set; }
+
+    /// <summary>
+    /// The physical tree this consolidation drains and swaps, bound when it
+    /// begins. The donor and survivor indices are indices of this tree, so it is
+    /// persisted rather than re-resolved after a reactivation: an alias cutover
+    /// in the meantime re-points the logical id at a copy whose map the fold's
+    /// diff does not describe (issue #4264). Read only while
+    /// <see cref="InProgress"/>.
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>,
+    /// and the coordinator then resolves the logical id as it always did.
+    /// </para>
+    /// </summary>
+    [Id(17)] public string? PhysicalTreeId { get; set; }
 }
 
 /// <summary>

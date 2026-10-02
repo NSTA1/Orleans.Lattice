@@ -149,6 +149,100 @@ public sealed class AliasCutoverShardMapsTests
     }
 
     [Test]
+    public async Task PrepareCutoverAsync_marks_the_logical_entry_until_the_alias_swap_clears_it()
+    {
+        var (logical, destination) = await RegisterAsync();
+
+        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        var carried = await Registry.GetEntryAsync(logical);
+        await SetAliasAsync(logical, destination);
+        var swapped = await Registry.GetEntryAsync(logical);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(carried!.AliasCutoverTarget, Is.EqualTo(destination),
+                "between the carry and the swap the map describes the destination, not the resolved tree (#4264)");
+            Assert.That(swapped!.AliasCutoverTarget, Is.Null, "the alias swap completes the cutover");
+        });
+    }
+
+    [Test]
+    public async Task PrepareRevertAsync_marks_the_logical_entry_until_the_alias_is_removed()
+    {
+        var (logical, shadow) = await RegisterAsync();
+        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, shadow);
+        await SetAliasAsync(logical, shadow);
+
+        await AliasCutoverShardMaps.PrepareRevertAsync(Grains, logical, shadow, previousPhysicalTreeId: logical);
+        var carried = await Registry.GetEntryAsync(logical);
+        await Registry.RemoveAliasAsync(logical);
+        var reverted = await Registry.GetEntryAsync(logical);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(carried!.AliasCutoverTarget, Is.EqualTo(logical));
+            Assert.That(reverted!.AliasCutoverTarget, Is.Null);
+        });
+    }
+
+    /// <summary>
+    /// Issue #4264 end to end: a split begun on the replaced tree and driven to
+    /// its commit after the cutover must leave the carried map untouched. Its
+    /// diff names a target shard of the replaced tree, which the destination's
+    /// map does not have, so applying it would route the moved slots nowhere.
+    /// </summary>
+    [Test]
+    public async Task A_split_in_flight_across_the_cutover_leaves_the_carried_map_untouched()
+    {
+        var (logical, destination) = await RegisterAsync();
+        var split = Grains.GetGrain<ITreeShardSplitGrain>($"{logical}/0");
+        await split.SplitAsync(sourceShardIndex: 0);
+
+        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await SetAliasAsync(logical, destination);
+        var carried = (await Registry.GetShardMapAsync(logical))!;
+
+        await split.RunSplitPassAsync();
+
+        var after = (await Registry.GetShardMapAsync(logical))!;
+        var idle = await split.IsIdleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(after.Slots, Is.EqualTo(carried.Slots),
+                "the split's diff names the replaced tree's shards, not the destination's");
+            Assert.That(after.Slots, Is.EqualTo(DefaultSlots(DestinationShards)));
+            Assert.That(idle, Is.True, "the split is abandoned, not left in flight");
+        });
+    }
+
+    /// <summary>
+    /// The narrower window of issue #4264: the cutover has carried the
+    /// destination's map onto the logical entry but not yet swapped the alias,
+    /// so the logical id still resolves to the tree the split is bound to.
+    /// </summary>
+    [Test]
+    public async Task A_split_committing_between_the_map_carry_and_the_alias_swap_is_refused()
+    {
+        var (logical, destination) = await RegisterAsync();
+        var split = Grains.GetGrain<ITreeShardSplitGrain>($"{logical}/0");
+        await split.SplitAsync(sourceShardIndex: 0);
+
+        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        var carried = (await Registry.GetShardMapAsync(logical))!;
+
+        await split.RunSplitPassAsync();
+        var afterSplit = (await Registry.GetShardMapAsync(logical))!;
+        await SetAliasAsync(logical, destination);
+
+        var idle = await split.IsIdleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterSplit.Slots, Is.EqualTo(carried.Slots));
+            Assert.That(idle, Is.True);
+        });
+    }
+
+    [Test]
     public async Task CarryAcrossExplicitAliasAsync_carries_the_target_map_and_stamps_the_replaced_tree()
     {
         var (logical, target) = await RegisterAsync();

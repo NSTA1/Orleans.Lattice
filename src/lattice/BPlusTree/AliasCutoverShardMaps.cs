@@ -32,7 +32,10 @@ internal static class AliasCutoverShardMaps
     /// tree by on the destination entry (once, so a resumed cutover keeps the
     /// original), stamps that map onto the current physical tree's own entry when
     /// it is not the logical id itself, and carries the destination's own map onto
-    /// the logical entry.
+    /// the logical entry, marking it with the destination as
+    /// <see cref="TreeRegistryEntry.AliasCutoverTarget"/> until the alias swap
+    /// clears it, so a split or fold bound to the replaced tree cannot commit onto
+    /// the carried map (issue #4264).
     /// </summary>
     /// <returns>
     /// The map the replaced physical tree's shards are addressed by, for arming or
@@ -104,10 +107,13 @@ internal static class AliasCutoverShardMaps
         // It cannot be a lost row - the alias lives on that row, and the resolve
         // above found none - unlike the revert read, which refuses.
         var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
+        // The marker fences a split or fold bound to the replaced tree off this
+        // map until the alias swap clears it (#4264).
         await registry.UpdateAsync(logicalTreeId, logical with
         {
             ShardMap = Restamp(destinationRouting.Map, logical.ShardMap),
             NextShardIndex = destination.NextShardIndex,
+            AliasCutoverTarget = destinationPhysicalTreeId,
         });
 
         return replaced;
@@ -119,7 +125,9 @@ internal static class AliasCutoverShardMaps
     /// <paramref name="previousPhysicalTreeId"/>; call it immediately before the
     /// alias swap. Stamps the logical map, which describes the shadow, onto the
     /// shadow's own entry, then carries the map recorded at the cutover back onto
-    /// the logical entry. A no-op unless the alias currently resolves to the shadow.
+    /// the logical entry, marked with <paramref name="previousPhysicalTreeId"/> as
+    /// its <see cref="TreeRegistryEntry.AliasCutoverTarget"/> until the alias swap.
+    /// A no-op unless the alias currently resolves to the shadow.
     /// </summary>
     public static async Task PrepareRevertAsync(
         IGrainFactory grainFactory,
@@ -177,6 +185,7 @@ internal static class AliasCutoverShardMaps
         {
             ShardMap = Restamp(restored, logical.ShardMap),
             NextShardIndex = restoredNextShardIndex,
+            AliasCutoverTarget = previousPhysicalTreeId,
         });
     }
 

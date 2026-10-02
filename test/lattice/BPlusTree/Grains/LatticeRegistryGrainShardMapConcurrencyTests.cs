@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// between them.
 /// </para>
 /// </summary>
-public class LatticeRegistryGrainShardMapConcurrencyTests
+public partial class LatticeRegistryGrainShardMapConcurrencyTests
 {
     private const string TreeId = "shard-map-concurrency";
 

@@ -56,6 +56,10 @@ public partial class TreeShardSplitGrainTests
         // previous max-existing+1 behavior for unit-test expectations.
         registry.AllocateNextShardIndexAsync(TreeId, Arg.Any<int>())
             .Returns(ci => Task.FromResult(((int)ci[1]) + 1));
+        // The fenced reassignment the swap commits through: admitted unless a
+        // test arranges a refusal.
+        registry.ReassignSlotsAsync(TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>())
+            .Returns(ci => Task.FromResult<ShardMap?>((ShardMap)ci[3]));
 
         // Stub source + target shards.
         var sourceShard = Substitute.For<IShardRootGrain>();
@@ -183,7 +187,8 @@ public partial class TreeShardSplitGrainTests
             TreeId,
             Arg.Is<int[]>(s => s.Length == 3 && s[0] == 2 && s[1] == 4 && s[2] == 6),
             2,
-            Arg.Any<ShardMap>());
+            Arg.Any<ShardMap>(),
+            TreeId);
         // A get-modify-set composed at the call site is exactly the defect this
         // seam replaced: non-reentrancy serialises each individual grain call,
         // not a sequence of two, so a concurrent fold could be clobbered.
@@ -256,6 +261,8 @@ public partial class TreeShardSplitGrainTests
         await registry.DidNotReceive().SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
         await registry.DidNotReceive()
             .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+        await registry.DidNotReceive()
+            .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>());
         await source.DidNotReceive().EnterRejectPhaseAsync();
     }
 
@@ -273,7 +280,7 @@ public partial class TreeShardSplitGrainTests
         await grain.RunSplitPassAsync();
 
         await registry.Received(1).ReassignSlotsAsync(
-            TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+            TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), TreeId);
         // EnterRejectPhaseAsync is called twice in a full pass:
         //   1. Inside SwapAsync, BEFORE the registry's shard-map flip, to
         //      close the stale-routing window (see SwapAsync's ordering

@@ -109,12 +109,93 @@ internal sealed class TreeShardSplitGrain(
 
     private string? _physicalTreeId;
 
+    /// <summary>
+    /// The physical tree this split drains and swaps. An in-flight split stays
+    /// bound to the tree it started on, even across a reactivation, so a
+    /// cutover that re-points the logical id is detected rather than followed
+    /// (issue #4264); a new split resolves the logical id afresh.
+    /// </summary>
     private async Task<string> GetPhysicalTreeIdAsync()
     {
         if (_physicalTreeId is not null) return _physicalTreeId;
+        if (state.State.InProgress && state.State.PhysicalTreeId is { } bound)
+        {
+            _physicalTreeId = bound;
+            return bound;
+        }
+
         var registry = grainFactory.GetLatticeRegistry();
         _physicalTreeId = await registry.ResolveAsync(TreeId);
         return _physicalTreeId;
+    }
+
+    /// <summary>
+    /// Whether the logical tree's registry entry still describes the physical
+    /// tree this split is bound to. See <see cref="ShardMapCommitFence"/>.
+    /// </summary>
+    private async Task<bool> IsBoundTreeCurrentAsync()
+    {
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+        return ShardMapCommitFence.Admits(entry, TreeId, await GetPhysicalTreeIdAsync());
+    }
+
+    /// <summary>
+    /// Abandons a split whose logical tree was cut over to another physical
+    /// tree before the split committed (issue #4264). Nothing is written to the
+    /// routing map: the moved slots keep routing to the source in the map the
+    /// cutover carried, and that map describes the copy, which holds the moved
+    /// entries on its own source shard. The source's migration record on the
+    /// replaced tree is cleared when it is still reversible
+    /// (<paramref name="sourceFrozen"/> false), so that tree is unchanged if the
+    /// cutover is later undone.
+    /// </summary>
+    private async Task AbandonRetargetedSplitAsync(bool sourceFrozen)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        Logger.LogWarning(
+            "Shard split {OperationId} of shard {SourceShardIndex} on tree {TreeId} abandoned in phase {Phase}: the tree no longer resolves to physical tree {PhysicalTreeId}, whose shards the split migrated.",
+            state.State.OperationId, state.State.SourceShardIndex, TreeId, state.State.Phase, physicalTreeId);
+
+        if (!sourceFrozen)
+        {
+            var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
+            try
+            {
+                await source.AbortSplitAsync();
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The source already entered reject (a Swap interrupted after its
+                // freeze); that is no longer reversible, and the replaced tree no
+                // longer serves the logical id.
+                Logger.LogWarning(ex,
+                    "Shard split {OperationId} on tree {TreeId} left the source shard's migration record in place on physical tree {PhysicalTreeId}.",
+                    state.State.OperationId, TreeId, physicalTreeId);
+            }
+        }
+
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevPhase = state.State.Phase;
+        var prevCursor = state.State.DrainCursorKey;
+        state.State.InProgress = false;
+        state.State.Complete = false;
+        state.State.Phase = ShardSplitPhase.None;
+        state.State.DrainCursorKey = null;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.Phase = prevPhase;
+            state.State.DrainCursorKey = prevCursor;
+            throw;
+        }
+
+        await CompleteCoordinatorAsync();
     }
 
     /// <inheritdoc />
@@ -140,6 +221,10 @@ internal sealed class TreeShardSplitGrain(
         }
 
         if (state.State.Complete) state.State.Complete = false;
+
+        // A new split binds to the physical tree the logical id resolves to now,
+        // not to whichever one an earlier split on this coordinator used.
+        _physicalTreeId = null;
 
         // Serialise behind any migration already in flight on the source
         // shard. A shard carries a single migration record, and an online
@@ -182,6 +267,16 @@ internal sealed class TreeShardSplitGrain(
             throw new InvalidOperationException(
                 $"Shard {sourceShardIndex} cannot be split because it owns fewer than 2 virtual slots.");
 
+        // Bind to the physical tree now, and refuse while an alias cutover has
+        // carried another tree's map onto the logical entry but not yet swapped
+        // the alias: the map read above would then describe the copy while the
+        // shards below belong to the replaced tree (issue #4264). Checked before
+        // a shard index is allocated, so a refusal leaves nothing behind.
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        if (!ShardMapCommitFence.Admits(await registry.GetEntryAsync(TreeId), TreeId, physicalTreeId))
+            throw new InvalidOperationException(
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while an alias cutover of the tree is in progress.");
+
         // Atomically allocate a fresh target physical shard index via the
         // registry - the registry's non-reentrant scheduling guarantees that
         // concurrent split coordinators each receive a distinct index even
@@ -218,6 +313,7 @@ internal sealed class TreeShardSplitGrain(
         state.State.TargetShardIndex = targetShardIndex;
         state.State.MovedSlots = new List<int>(movedSlots);
         state.State.OriginalShardMap = currentMap;
+        state.State.PhysicalTreeId = physicalTreeId;
         try
         {
             await state.WriteStateAsync();
@@ -236,7 +332,6 @@ internal sealed class TreeShardSplitGrain(
         }
 
         // Kick off shadow-writing on the source shard.
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
         try
         {
@@ -298,6 +393,16 @@ internal sealed class TreeShardSplitGrain(
     public async Task RunSplitPassAsync()
     {
         if (!state.State.InProgress) return;
+
+        // A split whose tree was cut over before it committed is abandoned
+        // rather than driven on against the replaced tree (issue #4264).
+        // SwapAsync makes the same check for itself.
+        if (state.State.Phase is ShardSplitPhase.BeginShadowWrite or ShardSplitPhase.Drain
+            && !await IsBoundTreeCurrentAsync())
+        {
+            await AbandonRetargetedSplitAsync(sourceFrozen: false);
+            return;
+        }
 
         // Phase order: Drain → Swap → Reject → Complete.
         if (state.State.Phase == ShardSplitPhase.BeginShadowWrite)
@@ -379,7 +484,10 @@ internal sealed class TreeShardSplitGrain(
                     await RunSplitPassAsync();
                     break;
                 case ShardSplitPhase.Drain:
-                    await DrainAsync();
+                    if (await IsBoundTreeCurrentAsync())
+                        await DrainAsync();
+                    else
+                        await AbandonRetargetedSplitAsync(sourceFrozen: false);
                     break;
                 case ShardSplitPhase.Swap:
                     await SwapAsync();
@@ -493,11 +601,27 @@ internal sealed class TreeShardSplitGrain(
     /// final drain is LWW-idempotent, so a crash-recovery re-entry into
     /// <see cref="SwapAsync"/> re-drains harmlessly.
     /// </para>
+    /// <para>
+    /// <b>Alias-cutover fence.</b> The diff names shard indices of the physical
+    /// tree this split is bound to, so it is applied only while the logical tree
+    /// still resolves to that tree and no cutover has carried another tree's map
+    /// onto it (issue #4264). A split that loses the fence is abandoned, before
+    /// the freeze when that is detected first, and never re-drives onto the copy.
+    /// </para>
     /// </summary>
     internal async Task SwapAsync()
     {
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
+
+        // Abandon before anything irreversible when the tree was cut over to
+        // another physical tree since this split started (issue #4264): the
+        // freeze below cannot be undone, and the diff could not be applied.
+        if (!await IsBoundTreeCurrentAsync())
+        {
+            await AbandonRetargetedSplitAsync(sourceFrozen: false);
+            return;
+        }
 
         // Mark every source leaf with the moved-slot set BEFORE the
         // source enters Reject phase, so no read crosses the Swap
@@ -559,11 +683,22 @@ internal sealed class TreeShardSplitGrain(
         // them, so a fold persisting in the gap would be clobbered by the
         // write below and its folded slots would keep routing to the donor it
         // had already drained.
-        await registry.ReassignSlotsAsync(
+        //
+        // The fenced overload also refuses, inside that same call, a diff for a
+        // tree an alias cutover has re-pointed since the check above: the diff's
+        // shard indices describe the replaced tree, not the copy whose map the
+        // cutover carried onto the logical entry (issue #4264).
+        var reassigned = await registry.ReassignSlotsAsync(
             TreeId,
             state.State.MovedSlots.ToArray(),
             state.State.TargetShardIndex,
-            state.State.OriginalShardMap!);
+            state.State.OriginalShardMap!,
+            physicalTreeId);
+        if (reassigned is null)
+        {
+            await AbandonRetargetedSplitAsync(sourceFrozen: true);
+            return;
+        }
 
         // The registry ReassignSlotsAsync side effect is cross-grain and
         // idempotent on re-apply; only the in-memory Phase mutation needs
