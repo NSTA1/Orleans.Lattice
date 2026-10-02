@@ -68,21 +68,10 @@ public sealed class RoutingForceRefreshGuardTests
         ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyTerminalPostGateAsync"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyTerminalToShardAsync"] = (1, RoutedDataPath),
 
-        // Bulk load writes into an empty tree; the stale-route exposure of these write
-        // paths is tracked as a follow-up to #4180 rather than claimed tolerated here.
-        ["src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs::BulkLoadAsync"] = (1, "bulk-load write path; follow-up to #4180"),
-        ["src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs::BulkAppendChunkAsync"] = (1, "bulk-load write path; follow-up to #4180"),
-        ["src/lattice/BPlusTree/LatticeExtensions.cs::BulkLoadAsync"] = (1, "bulk-load write path; follow-up to #4180"),
-
-        // Backup and schema resolve the routing of a physical tree id their own
-        // operation reserved or is retiring; their exposure is a follow-up to #4180.
-        ["src/lattice.backup/LatticeBackupRestoreService.cs::RevertRestoreAsync"] = (1, "restore shadow addressed by physical id; follow-up to #4180"),
-        ["src/lattice.backup/LatticeBackupRestoreService.cs::RestoreInPlaceAsync"] = (1, "restore target routing; follow-up to #4180"),
+        // Bulk load, the backup restore lifecycle and the schema cutover force their
+        // refresh (#4206); only the shadow build, which resolves a tree it has just
+        // registered, stays unforced.
         ["src/lattice.backup/LatticeBackupRestoreService.cs::BuildShadowCoreAsync"] = (1, "a freshly registered shadow tree that no activation can have cached"),
-        ["src/lattice.backup/LatticeBackupRestoreService.cs::CommitShadowCoreAsync"] = (1, "retained tree addressed by physical id; follow-up to #4180"),
-        ["src/lattice.backup/LatticeBackupRestoreService.cs::DeleteShadowAsync"] = (1, "restore shadow addressed by physical id; follow-up to #4180"),
-        ["src/lattice.backup/LatticeBackupRestoreService.cs::ClearRetainedTreeRedirectAsync"] = (1, "retained tree addressed by physical id; follow-up to #4180"),
-        ["src/lattice.schema/LatticeSchemaRemediationGrain.cs::CutoverAsync"] = (1, "remediation source addressed by physical id; follow-up to #4180"),
 
         ["src/lattice.api.mcp.repocontext/Retrieval/EmbeddingRepoContextVectorIngestor.cs::LogGapShardDistributionAsync"] =
             (1, "diagnostic log line only: a stale map mislabels one log entry and steers nothing"),

@@ -61,6 +61,25 @@ internal sealed class LeafCursorReporter(
         new();
 
     /// <summary>
+    /// Test seam for the monotonic clock backing the durable-pin debounce
+    /// (<see cref="MinDurableWriteSpacingMs"/>). Defaults to
+    /// <see cref="TimeProvider.System"/>; unit tests substitute a controllable
+    /// provider to drive the debounce deterministically instead of racing a
+    /// real delay against the 1 second spacing.
+    /// </summary>
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
+
+    /// <summary>
+    /// The current instant in the same millisecond-tick units the debounce
+    /// state stores, read from <see cref="Clock.GetTimestamp"/> (not
+    /// <see cref="TimeProvider.GetUtcNow"/>) so this stays monotonic like the
+    /// <see cref="Environment.TickCount64"/> read it replaces: immune to
+    /// wall-clock adjustments (NTP steps, manual clock changes), which an
+    /// elapsed-spacing check must be.
+    /// </summary>
+    private long NowTickMs() => (long)(Clock.GetTimestamp() * (1000.0 / Clock.TimestampFrequency));
+
+    /// <summary>
     /// Per-durable-pin-shard-key mutual-exclusion gates for the teardown
     /// direct-store fallback (<see cref="DirectStorePinAsync"/>). During a
     /// full-silo graceful shutdown several deactivating leaves whose consumer
@@ -178,7 +197,7 @@ internal sealed class LeafCursorReporter(
         // factory pair would incur on this per-checkpoint (and, in every-write
         // mode, per-write) path.
         var key = (treeName, consumerId);
-        var now = Environment.TickCount64;
+        var now = NowTickMs();
         bool shouldWrite;
 
         if (_durableDebounce.TryGetValue(key, out var current))
@@ -261,12 +280,12 @@ internal sealed class LeafCursorReporter(
             {
                 if (frontier > current.LastWritten)
                 {
-                    _durableDebounce[key] = (frontier, Math.Max(-1, current.LastWrittenOffset), Environment.TickCount64);
+                    _durableDebounce[key] = (frontier, Math.Max(-1, current.LastWrittenOffset), NowTickMs());
                 }
             }
             else
             {
-                _durableDebounce[key] = (frontier, -1, Environment.TickCount64);
+                _durableDebounce[key] = (frontier, -1, NowTickMs());
             }
         }
         catch (Exception ex)
@@ -481,7 +500,7 @@ internal sealed class LeafCursorReporter(
     /// </remarks>
     private void RecordDurableWrite(string treeName, List<MaterialiserPinReport> bucket)
     {
-        var now = Environment.TickCount64;
+        var now = NowTickMs();
         for (var i = 0; i < bucket.Count; i++)
         {
             var report = bucket[i];

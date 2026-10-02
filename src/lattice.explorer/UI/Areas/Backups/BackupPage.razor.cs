@@ -12,7 +12,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// One backup at <c>/backups/{id}</c>: describe, restore (in place, point in
 /// time, or cold), export an artifact, and delete. Restore and delete are
 /// offered only when the capability probe allows them over the backup's scope,
-/// each behind a type-the-name confirmation that states its consequences.
+/// each behind a type-the-name confirmation that states its consequences. Cold
+/// restore runs on the cluster as a tracked operation (#4122), so it is offered
+/// wherever the connection serves backup operations - the gRPC binding included -
+/// and withdrawn where it does not (#4218).
 /// </summary>
 public partial class BackupPage : IDisposable
 {
@@ -35,7 +38,7 @@ public partial class BackupPage : IDisposable
     private bool _healthAvailable;
     private bool _healthPending;
     private BackupHealthReport? _health;
-    private bool _extensionsServed;
+    private bool _coldRestoreServed;
     private string? _error;
     private string? _target;
     private string? _targetError;
@@ -53,6 +56,9 @@ public partial class BackupPage : IDisposable
 
     [Inject]
     internal BackupsAccess Access { get; set; } = default!;
+
+    [Inject]
+    internal BackupOperationList List { get; set; } = default!;
 
     [Inject]
     internal BackupAppTrees Apps { get; set; } = default!;
@@ -187,11 +193,11 @@ public partial class BackupPage : IDisposable
             var capabilities = Access.ProbeAsync(description.Manifest.Scope, cancellationToken);
             var app = Apps.FindAsync(_tree, cancellationToken);
             var health = Access.IsHealthMonitoringAvailableAsync(cancellationToken);
-            var extensions = Access.AreExtensionsServedAsync(cancellationToken);
+            var operations = AreOperationsServedAsync(cancellationToken);
 
             _capabilities = await capabilities;
             _app = await app;
-            _extensionsServed = await extensions;
+            _coldRestoreServed = await operations;
             _healthAvailable = await health;
             if (_healthAvailable)
             {
@@ -242,9 +248,32 @@ public partial class BackupPage : IDisposable
             _point is { Length: > 0 } point ? point : _manifest.Id,
             target,
             _mode == PointInTime ? LatticeRestoreMode.ShadowCutover : LatticeRestoreMode.InPlace,
-            _cold && _extensionsServed);
+            _cold && _coldRestoreServed);
         Navigator.NavigateTo(BackupsAddresses.Operation(operation.Id));
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Whether this connection serves backup operations, which cold restore starts
+    /// on. Read as the maintenance page reads it: only a listing refused as not
+    /// served withdraws it; a denied or faulted listing keeps it offered, and the
+    /// server authorizes the start itself.
+    /// </summary>
+    private async Task<bool> AreOperationsServedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _ = await List.RecentAsync(cancellationToken);
+            return true;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
+        {
+            return true;
+        }
     }
 
     private async Task DeleteAsync()

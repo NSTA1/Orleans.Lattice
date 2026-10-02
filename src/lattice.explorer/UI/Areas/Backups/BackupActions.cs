@@ -147,19 +147,9 @@ internal sealed class BackupActions
                 }
 
                 operation.Advance(1);
-                Api.Operations.LatticeOperationHandle handle;
-                try
-                {
-                    handle = cold
-                        ? await _clusterOperations.StartColdRestoreAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false)
-                        : await _clusterOperations.StartRestoreAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
-                }
-                catch (NotSupportedException)
-                {
-                    _access.MarkExtensionsNotServed();
-                    throw;
-                }
-
+                var handle = cold
+                    ? await _clusterOperations.StartColdRestoreAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false)
+                    : await _clusterOperations.StartRestoreAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
                 HandOff(operation, handle.OperationId);
             });
     }

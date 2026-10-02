@@ -55,6 +55,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public Exception? ReadThrowsFor { get; set; }
 
+        /// <summary>When set, every pin removal throws it (issue #4246's <c>retire_failed</c> arm).</summary>
+        public Exception? RemoveThrows { get; set; }
+
         public void Seed(string key, string consumerId)
         {
             if (!_grains.TryGetValue(key, out var grain))
@@ -135,6 +138,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
             public Task RemoveAsync(string consumerId)
             {
+                if (store.RemoveThrows is { } ex)
+                {
+                    throw ex;
+                }
+
                 store.Removals.Add((key, consumerId));
                 Pins.Remove(consumerId);
                 return Task.CompletedTask;
@@ -565,8 +573,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Distinct()
             .ToArray();
 
-        Assert.That(arms, Is.EquivalentTo(new[] { "retired", "deferred", "live", "unresolved", "unreadable" }),
-            "every arm must be minted for a tree the sweep reached, so a zero is a measured zero.");
+        Assert.That(arms, Is.EquivalentTo(new[]
+            {
+                "retired", "retire_failed", "deferred", "refused_malformed_id", "refused_ambiguous_partition",
+                "live", "unresolved", "unreadable",
+            }),
+            "every arm must be minted for a tree the sweep reached, so a zero is a measured zero (the decision arms by issue #4246).");
     }
 
     [Test]

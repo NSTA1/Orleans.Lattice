@@ -83,7 +83,7 @@ The **Artifacts** section lists artifact id, size, chunk count, and an **Export*
 
 ### Restore
 
-Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where in-process extensions are served, a cold-restore option that reads from the backup store alone. The target tree defaults to the backup's own tree and is a picker that also accepts a new name: naming an existing tree is flagged, because restoring replaces what it holds, and a new name restores into a new tree.
+Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where the connection serves backup operations, a cold-restore option that reads from the backup store alone. Cold restore runs on the cluster as a tracked operation, so it is offered over the gRPC binding too. The target tree defaults to the backup's own tree and is a picker that also accepts a new name: naming an existing tree is flagged, because restoring replaces what it holds, and a new name restores into a new tree.
 
 Both restore modes are confirmed before the operation starts:
 
@@ -169,7 +169,7 @@ Only backups the caller may read are returned.
 - Backup-id completions scan at most 2000 ids.
 - Scope probes return no capabilities when they fault.
 - Health availability is remembered once known; a fault reads as unavailable but is not remembered as a definitive true value.
-- Inventory not served withdraws the in-process extensions (the inventory and cold restore) for the circuit; a denied inventory keeps them offered. Catalogue maintenance does not depend on it.
+- Inventory not served withdraws the inventory for the circuit; a denied inventory keeps it offered. Cold restore and catalogue maintenance do not depend on it: they follow whether backup operations are served, and only a listing refused as not served withdraws them.
 - Captures, restores, health checks, rebuilds and catalogue checks run on the cluster and outlive the circuit. Staged reverts are kept in the current Explorer circuit; ending the circuit cancels one still running.
 - The operation list shows the 10 most recent operations and is reused for 2 seconds per caller and tenant.
 

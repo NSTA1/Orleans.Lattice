@@ -42,8 +42,8 @@ public partial class SagaWriteFenceGrainTests
     private static IShardCountProvider RoutedShards(int count)
     {
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(count));
+        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, count).ToArray()));
         shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult<IReadOnlyList<string>>(
                 [.. Enumerable.Range(0, count).Select(i => $"{call.ArgAt<string>(0)}/{i}")]));
