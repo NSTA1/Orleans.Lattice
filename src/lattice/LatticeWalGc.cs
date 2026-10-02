@@ -221,7 +221,15 @@ public sealed class LatticeWalGc(
         cancellationToken.ThrowIfCancellationRequested();
 
         var resolved = optionsMonitor.Get(treeName);
-        var partitions = resolved.WalPartitions;
+
+        // The partition count is the registry pin, not the configured value
+        // (issue #4238): the pin is set at registration and immutable after it,
+        // so a tree registered under a different configuration would otherwise
+        // have partitions beyond the configured count never scanned or trimmed,
+        // and every pin's partition suffix read against the wrong count.
+        var partitions = OptionsResolver is { } partitionResolver
+            ? Math.Max(1, await partitionResolver.GetWalPartitionsAsync(treeName).ConfigureAwait(false))
+            : resolved.WalPartitions;
 
         // Prime the trim-stop arms before any early return below, so a tree whose
         // pass returns without reaching the trim loop still publishes
