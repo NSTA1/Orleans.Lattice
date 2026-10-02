@@ -226,19 +226,30 @@ public sealed class BackupPageTests : BackupsTestContext
     }
 
     [Test]
-    public void Cold_restore_is_offered_only_where_the_connection_serves_it()
+    public void Cold_restore_is_withdrawn_where_backup_operations_are_not_served()
     {
+        // The in-process inventory is served, but the operations surface cold restore
+        // starts on is not: the inventory no longer decides it (#4218).
         Seed(FakeBackupControl.Manifest("b1", "nightly", "orders"));
-        var unserved = RenderAt<BackupPage>("backups/b1");
-        unserved.WaitUntil(() => Assert.That(RestoreButton(unserved), Is.Not.Null));
-        Assert.That(unserved.FindAll("input[type=checkbox]"), Is.Empty);
+        Backups.Inventory = () => Task.FromResult(new BackupInventoryReport(1, 1, 1, 0, null, null, 0, 0, 0));
+        Backups.ListFault = new NotSupportedException("not served");
+
+        var cut = RenderAt<BackupPage>("backups/b1");
+
+        cut.WaitUntil(() => Assert.That(RestoreButton(cut), Is.Not.Null));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("input[type=checkbox]"), Is.Empty);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.ListOperationsAsync)), Is.EqualTo(1), "the operations surface was asked");
+        });
     }
 
     [Test]
-    public void A_served_cold_restore_runs_as_a_cold_restore()
+    public void Over_grpc_cold_restore_is_offered_where_backup_operations_are_served_and_runs_as_a_cold_restore()
     {
+        // The fake's inventory is not served, as over the gRPC binding; backup
+        // operations are, so cold restore - a tracked operation since #4122 - is offered.
         Seed(FakeBackupControl.Manifest("b1", "nightly", "orders"));
-        Backups.Inventory = () => Task.FromResult(new BackupInventoryReport(1, 1, 1, 0, null, null, 0, 0, 0));
         var cut = RenderAt<BackupPage>("backups/b1");
         cut.WaitUntil(() => Assert.That(cut.FindAll("input[type=checkbox]"), Has.Count.EqualTo(1)));
 
