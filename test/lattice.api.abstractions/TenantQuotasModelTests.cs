@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Abstractions.Tests;
 
@@ -90,6 +92,106 @@ public sealed class TenantQuotasModelTests
         {
             Assert.That(result.TenantId, Is.EqualTo("acme"));
             Assert.That(result.Quotas, Is.EqualTo(quotas));
+        });
+    }
+
+    // A descriptor with the six pre-epic members set, serialized by the type as it stood at
+    // 83b748e4a, before epic #4154 appended the delegated access caps. Never regenerate.
+    private const string PreEpicPayload = "IOgAQh8Bgj4Bwl0BEQFCnAFl4A==";
+
+    private static readonly TenantQuotasDescriptor PreEpicSample = new()
+    {
+        MaxBytes = 1_000, MaxKeys = 2_000, MaxMemoryBytes = 3_000, MaxTreeCount = 4, MaxOpsPerSecond = 5_000, BurstPercent = 25,
+    };
+
+    [Test]
+    public void Descriptor_with_the_delegated_access_caps_set_round_trips_through_the_serializer()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer>();
+        var descriptor = PreEpicSample with
+        {
+            MaxGroups = 50, MaxMembershipEdges = 600, MaxMemberSubjects = 70, MaxTenantRules = 80,
+        };
+
+        var read = serializer.Deserialize<TenantQuotasDescriptor>(serializer.SerializeToArray(descriptor));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read, Is.EqualTo(descriptor));
+            Assert.That(read.MaxGroups, Is.EqualTo(50));
+            Assert.That(read.MaxMembershipEdges, Is.EqualTo(600));
+            Assert.That(read.MaxMemberSubjects, Is.EqualTo(70));
+            Assert.That(read.MaxTenantRules, Is.EqualTo(80));
+        });
+    }
+
+    [Test]
+    public void Pre_epic_payload_reads_every_original_dimension_and_leaves_the_delegated_access_caps_null()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer>();
+
+        var read = serializer.Deserialize<TenantQuotasDescriptor>(Convert.FromBase64String(PreEpicPayload));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read, Is.EqualTo(PreEpicSample));
+            Assert.That(read.MaxGroups, Is.Null);
+            Assert.That(read.MaxMembershipEdges, Is.Null);
+            Assert.That(read.MaxMemberSubjects, Is.Null);
+            Assert.That(read.MaxTenantRules, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Pre_epic_payload_rewrites_every_original_field_unchanged()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer>();
+        var payload = Convert.FromBase64String(PreEpicPayload);
+
+        var rewritten = serializer.SerializeToArray(serializer.Deserialize<TenantQuotasDescriptor>(payload));
+
+        // Any appended member is written before the end-of-object marker, which a pre-epic reader skips.
+        Assert.Multiple(() =>
+        {
+            Assert.That(rewritten[..(payload.Length - 1)], Is.EqualTo(payload[..^1]));
+            Assert.That(rewritten[^1], Is.EqualTo(payload[^1]));
+        });
+    }
+
+    [Test]
+    public void The_delegated_access_caps_do_not_affect_IsUnbounded()
+    {
+        var capsOnly = TenantQuotasDescriptor.Unbounded with
+        {
+            MaxGroups = 1, MaxMembershipEdges = 1, MaxMemberSubjects = 1, MaxTenantRules = 1,
+        };
+        var boundedWithoutCaps = TenantQuotasDescriptor.Unbounded with { MaxBytes = 1 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(capsOnly.IsUnbounded, Is.True, "the access caps are not data-plane dimensions");
+            Assert.That((TenantQuotasDescriptor.Unbounded with { MaxGroups = 1 }).IsUnbounded, Is.True);
+            Assert.That((TenantQuotasDescriptor.Unbounded with { MaxMembershipEdges = 1 }).IsUnbounded, Is.True);
+            Assert.That((TenantQuotasDescriptor.Unbounded with { MaxMemberSubjects = 1 }).IsUnbounded, Is.True);
+            Assert.That((TenantQuotasDescriptor.Unbounded with { MaxTenantRules = 1 }).IsUnbounded, Is.True);
+            Assert.That(boundedWithoutCaps.IsUnbounded, Is.False);
+        });
+    }
+
+    [Test]
+    public void The_unbounded_sentinel_leaves_the_delegated_access_caps_at_their_defaults()
+    {
+        var unbounded = TenantQuotasDescriptor.Unbounded;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unbounded.MaxGroups, Is.Null);
+            Assert.That(unbounded.MaxMembershipEdges, Is.Null);
+            Assert.That(unbounded.MaxMemberSubjects, Is.Null);
+            Assert.That(unbounded.MaxTenantRules, Is.Null);
         });
     }
 }
