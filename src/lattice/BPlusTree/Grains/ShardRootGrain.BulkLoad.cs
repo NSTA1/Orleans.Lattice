@@ -321,6 +321,10 @@ internal sealed partial class ShardRootGrain
 
         if (sortedEntries.Count == 0) return;
 
+        // A bulk load writes data, so it may register a tree that has no row
+        // (issue #4219); see PrepareForWriteAsync.
+        if (state.State.RootNodeId is null && !state.State.IsRegistered)
+            await RegisterForWriteAsync();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
 

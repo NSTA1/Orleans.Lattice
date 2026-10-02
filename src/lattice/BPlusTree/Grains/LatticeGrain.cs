@@ -4602,18 +4602,22 @@ internal sealed partial class LatticeGrain(
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         if (_shardMap is null)
         {
-            var resolved = await optionsResolver.ResolveAsync(TreeId);
+            // A pure read (issue #4219): routing observes the tree and never
+            // registers it. The default map for a tree with no row uses the
+            // default shard count, which is exactly what registering it pins.
+            var shardCount = (await optionsResolver.ResolveIfRegisteredAsync(TreeId))?.ShardCount
+                ?? LatticeConstants.DefaultShardCount;
             if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             {
                 // System trees never have a custom shard map; using the default
                 // also avoids a circular registry call.
-                _shardMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+                _shardMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, shardCount);
             }
             else
             {
                 var registry = grainFactory.GetLatticeRegistry();
                 _shardMap = await registry.GetShardMapAsync(TreeId)
-                    ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+                    ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, shardCount);
             }
         }
         var routing = new RoutingInfo(physicalTreeId, _shardMap);

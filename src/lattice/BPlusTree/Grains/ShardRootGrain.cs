@@ -882,7 +882,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        await PrepareForWriteAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
@@ -922,7 +922,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        await PrepareForWriteAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
@@ -959,7 +959,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        await PrepareForWriteAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
@@ -1009,7 +1009,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        await PrepareForWriteAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
@@ -1063,7 +1063,7 @@ internal sealed partial class ShardRootGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        await PrepareForWriteAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
@@ -1098,7 +1098,7 @@ internal sealed partial class ShardRootGrain(
         BeginBatchWrite();
         try
         {
-            await PrepareForOperationAsync();
+            await PrepareForWriteAsync();
             // Reject-check up-front so the batch fails fast rather than partially applying.
             ThrowIfRejectedForAnyKey(entries);
             RecordWrite(entries.Count);
@@ -1343,7 +1343,7 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
         ArgumentNullException.ThrowIfNull(deltas);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
+        await PrepareForWriteAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
         ThrowIfRejectedForAnyKey(deltas);
         RecordWrite(deltas.Count);
@@ -1563,7 +1563,7 @@ internal sealed partial class ShardRootGrain(
         BeginBatchWrite();
         try
         {
-            await PrepareForOperationAsync();
+            await PrepareForWriteAsync();
             ThrowIfRejectedForAnyKey(entries);
             // The affected-record count is the guard-passing subset, known only once
             // the local apply completes, so the operation is counted here and the
@@ -2792,7 +2792,13 @@ internal sealed partial class ShardRootGrain(
         {
             var registry = grainFactory.GetLatticeRegistry();
             if (!await registry.ExistsAsync(TreeId))
+            {
+                // Reached unregistered only on a read: a write registered the
+                // tree in PrepareForWriteAsync first. A read must not recreate
+                // a purged tree (issue #4219).
+                await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, TreeId);
                 await registry.RegisterAsync(TreeId);
+            }
             state.State.IsRegistered = true;
         }
 
@@ -2909,6 +2915,48 @@ internal sealed partial class ShardRootGrain(
     /// </summary>
     private bool IsRetiredForRangeRead => state.State.IsRetired && !state.State.IsDeleted;
 
+    /// <summary>
+    /// <see cref="PrepareForOperationAsync"/> for an entry point that writes
+    /// data. A write is the deliberate reuse of an id that issue #3940 defines:
+    /// when this shard is unseeded and the tree has no registry row - a tree
+    /// never created, or one that was purged - the write registers it before the
+    /// seed, so the read-side seed guard in <see cref="EnsureRootSlowAsync"/>
+    /// (issue #4219) never refuses it. Costs nothing on a seeded shard.
+    /// </summary>
+    private Task PrepareForWriteAsync() =>
+        state.State.RootNodeId is null && !state.State.IsRegistered
+            ? PrepareForWriteSlowAsync()
+            : PrepareForOperationAsync();
+
+    private async Task PrepareForWriteSlowAsync()
+    {
+        // Same order as PrepareForOperationAsync: a deleted, retired or
+        // redirected shard refuses the write before anything is registered.
+        ThrowIfTreeRejecting();
+        ThrowIfRetainedRedirect();
+        ThrowIfDeleted();
+        ThrowIfRetired();
+
+        await RegisterForWriteAsync();
+        await PrepareForOperationAsync();
+    }
+
+    /// <summary>
+    /// Registers this shard's tree when it has no registry row, as a write
+    /// does. See <see cref="PrepareForWriteAsync"/>.
+    /// </summary>
+    private async Task RegisterForWriteAsync()
+    {
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            return;
+
+        // The interleaved probe first, for the reason EnsureRootSlowAsync
+        // gives (issue 4128): RegisterAsync is only for a missing row.
+        var registry = grainFactory.GetLatticeRegistry();
+        if (!await registry.ExistsAsync(TreeId))
+            await registry.RegisterAsync(TreeId);
+    }
+
     private Task PrepareForOperationAsync()
     {
         // Order matters: a shard that participated as the *source* of an
@@ -2972,7 +3020,7 @@ internal sealed partial class ShardRootGrain(
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
-        await PrepareForOperationAsync();
+        await (isCrossShardMigration ? PrepareForOperationAsync() : PrepareForWriteAsync());
         RecordWrite(entries.Count);
 
         if (entries.Count == 0)
