@@ -80,6 +80,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Resize and restore revert no longer recreate a missing tree.** A resize swap or undo, or a restore revert, against a tree whose registry row is gone now fails as not found instead of writing back a row with no sizing. ([#4270](https://github.com/NSTA1/Orleans.Lattice/issues/4270)) (`Orleans.Lattice`)
+
 - **Admin - Aliasing a tree onto a resharded tree keeps its keys readable.** Setting an alias now gives the tree the target's shard map, as a restore cutover does. Before, the tree kept its own map, so most of the target's keys read as absent. ([#4263](https://github.com/NSTA1/Orleans.Lattice/issues/4263)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
 
 - **Core - A purge whose registry removal failed now finishes.** The removal is retried by the purge's keepalive or the next purge call, so the id no longer reads as a live tree that kept the purged tree's settings. ([#4265](https://github.com/NSTA1/Orleans.Lattice/issues/4265)) (`Orleans.Lattice`)
