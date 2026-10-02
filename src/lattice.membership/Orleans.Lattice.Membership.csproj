@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Membership.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Tenancy" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

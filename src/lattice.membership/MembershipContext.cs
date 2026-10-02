@@ -19,8 +19,13 @@ internal sealed class MembershipContext : ILatticeMembershipContext
     private readonly ILatticeMembershipDirectory _directory;
     private readonly MembershipResolutionCache _cache;
     private readonly IOptionsMonitor<LatticeMembershipOptions> _options;
+    private readonly ITenantGroupClaimFilter _claimFilter;
 
-    /// <summary>Initializes a new <see cref="MembershipContext"/>.</summary>
+    /// <summary>
+    /// Initializes a new <see cref="MembershipContext"/> with the inactive tenant
+    /// group claim filter, so resolution behaves exactly as it did before the
+    /// filter seam existed.
+    /// </summary>
     /// <param name="authenticators">The registered credential authenticators, tried in registration order.</param>
     /// <param name="mapper">The subject mapper that merges principal and directory groups.</param>
     /// <param name="directory">The membership directory.</param>
@@ -32,18 +37,44 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         ILatticeMembershipDirectory directory,
         MembershipResolutionCache cache,
         IOptionsMonitor<LatticeMembershipOptions> options)
+        : this(authenticators, mapper, directory, cache, options, new NullTenantGroupClaimFilter())
+    {
+    }
+
+    /// <summary>Initializes a new <see cref="MembershipContext"/>.</summary>
+    /// <param name="authenticators">The registered credential authenticators, tried in registration order.</param>
+    /// <param name="mapper">The subject mapper that merges principal and directory groups.</param>
+    /// <param name="directory">The membership directory.</param>
+    /// <param name="cache">The per-silo resolution cache.</param>
+    /// <param name="options">The membership options monitor.</param>
+    /// <param name="claimFilter">
+    /// The tenant group claim filter consulted, when active, on the claim-derived
+    /// groups before expansion.
+    /// </param>
+    public MembershipContext(
+        IEnumerable<ILatticeCredentialAuthenticator> authenticators,
+        ILatticeSubjectMapper mapper,
+        ILatticeMembershipDirectory directory,
+        MembershipResolutionCache cache,
+        IOptionsMonitor<LatticeMembershipOptions> options,
+        ITenantGroupClaimFilter claimFilter)
     {
         ArgumentNullException.ThrowIfNull(authenticators);
         ArgumentNullException.ThrowIfNull(mapper);
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(claimFilter);
         _authenticators = authenticators.ToArray();
         _mapper = mapper;
         _directory = directory;
         _cache = cache;
         _options = options;
+        _claimFilter = claimFilter;
     }
+
+    /// <summary>The tenant group claim filter this context consults.</summary>
+    internal ITenantGroupClaimFilter ClaimFilter => _claimFilter;
 
     /// <inheritdoc />
     public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default)
@@ -124,6 +155,10 @@ internal sealed class MembershipContext : ILatticeMembershipContext
 
         var subject = _mapper.Map(principal, directoryGroups);
 
+        // Strip claim-asserted t/ group ids before they are expanded (epic
+        // #4154, D2). Inactive (tenancy absent or its flag off): one bool read.
+        subject = ApplyTenantGroupClaimFilter(subject, directoryGroups);
+
         // The directory groups above are already transitively expanded, but the
         // mapper also unions in token-asserted and claim-projected seed groups
         // that are not. Unless the directory is being ignored entirely
@@ -142,5 +177,64 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         }
 
         return new ResolvedSubject(subject, principal.ExpiresAt);
+    }
+
+    /// <summary>
+    /// Returns <paramref name="subject"/> unchanged (its group set is handed back,
+    /// not copied, and nothing is allocated) unless the tenant group claim filter
+    /// is active. When active, the
+    /// claim-derived groups (every group the mapper added beyond
+    /// <paramref name="directoryGroups"/>: token-asserted, overage and
+    /// claim-projected ids) are run through the filter, and those it removes are
+    /// dropped from the subject. Directory-derived groups are never filtered: a
+    /// tenant group the directory records the subject in is a real membership.
+    /// </summary>
+    /// <param name="subject">The mapped subject.</param>
+    /// <param name="directoryGroups">The directory-derived groups the subject was mapped with.</param>
+    /// <returns>The subject to expand.</returns>
+    internal LatticeSubject ApplyTenantGroupClaimFilter(LatticeSubject subject, IReadOnlyCollection<string> directoryGroups)
+    {
+        if (!_claimFilter.IsActive)
+        {
+            return subject;
+        }
+
+        return StripClaimDerivedTenantGroups(subject, directoryGroups);
+    }
+
+    private LatticeSubject StripClaimDerivedTenantGroups(LatticeSubject subject, IReadOnlyCollection<string> directoryGroups)
+    {
+        List<string>? claimDerived = null;
+        foreach (var group in subject.GroupIds)
+        {
+            if (!directoryGroups.Contains(group))
+            {
+                (claimDerived ??= new List<string>()).Add(group);
+            }
+        }
+
+        if (claimDerived is null)
+        {
+            return subject;
+        }
+
+        var before = claimDerived.Count;
+        _claimFilter.Filter(claimDerived);
+        if (claimDerived.Count == before)
+        {
+            return subject;
+        }
+
+        var kept = new HashSet<string>(claimDerived, StringComparer.Ordinal);
+        var groups = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in subject.GroupIds)
+        {
+            if (kept.Contains(group) || directoryGroups.Contains(group))
+            {
+                groups.Add(group);
+            }
+        }
+
+        return subject with { GroupIds = groups };
     }
 }
