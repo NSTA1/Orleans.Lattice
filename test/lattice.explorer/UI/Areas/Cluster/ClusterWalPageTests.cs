@@ -1,11 +1,19 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Operations;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using static Orleans.Lattice.Explorer.Tests.UI.Operations.TreeAdminOperationScript;
+
+// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
+// they stay supported until the next major version.
+#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 
@@ -13,7 +21,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 /// <c>/cluster/wal</c>: the placement audit, the "Plan WAL move..." command's
 /// visible control and its dialog, a plan at its own resumable address, and the
 /// execute and reclaim verbs behind typed confirmations and the TreeLifecycle
-/// grant.
+/// grant. A move runs on the cluster as a tracked operation (#4124) whose copy,
+/// verify and flip the page follows, picks up again, and can stop.
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
@@ -100,11 +109,11 @@ public sealed class ClusterWalPageTests : ClusterTestContext
     [Test]
     public void A_plan_is_moved_behind_a_confirmation_and_its_retained_source_reclaimed_behind_another()
     {
-        Admin.ExecuteWalMoveAsync(TreeId, 1, "blob-b", null, Arg.Any<CancellationToken>()).Returns(new TreeWalMoveReceipt
-        {
-            TreeId = TreeId, Partition = 1, FromProviderKey = "blob-x", ToProviderKey = "blob-b", CopiedFromOffset = 10, CopiedThroughOffset = 1210,
-            NewPlacementVersion = 6, SourceRetained = true, Outcome = TreeWalMoveOutcome.Moved,
-        });
+        Tracked.Script(
+            TreeAdminOperationKinds.WalMove,
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Copying, 400, 1200, TreeAdminOperationUnits.Entries),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Verifying),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Succeeded, "Completed", result: MovedResult()));
         Admin.ReclaimMovedWalSourceAsync(TreeId, 1, "blob-x", Arg.Any<CancellationToken>()).Returns(new TreeWalMoveReceipt
         {
             TreeId = TreeId, Partition = 1, FromProviderKey = "blob-x", ToProviderKey = "blob-b", Outcome = TreeWalMoveOutcome.SourceReclaimed,
@@ -116,7 +125,26 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         Button(cut, "Move partition...").Click();
         Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Quiesces partition 1 briefly"));
         ConfirmTyping(cut, TreeId);
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-result").TextContent, Does.Contain("The source is retained until you reclaim it.")));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Tracked.Started, Has.Count.EqualTo(1));
+            Assert.That(TreeAdminOperationIds.Matches(Tracked.Started[0], TreeAdminOperationKinds.WalMove, TreeAdminOperationIds.Target(TreeId, 1)), Is.True);
+            Assert.That(cut.Find("[data-lt-cluster='move-progress']").TextContent, Does.Contain("Copying").And.Contain("400 of 1,200 entries"));
+            Assert.That(HasButton(cut, "Move partition..."), Is.True);
+            Assert.That(Button(cut, "Move partition...").HasAttribute("disabled"), Is.True);
+        });
+
+        Time.Advance(ClusterStatusPoller.Interval);
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-cluster='move-progress']").TextContent, Does.Contain("Verifying")));
+
+        Time.Advance(ClusterStatusPoller.Interval);
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-cluster-result").TextContent, Does.Contain("offsets 10 to 1,210 copied to blob-b").And.Contain("The source is retained until you reclaim it."));
+            Assert.That(Toasts, Does.Contain("WAL partition moved."));
+            Assert.That(cut.FindAll("[data-lt-cluster='move-progress']"), Is.Empty);
+        });
+        Assert.That(Admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == "ExecuteWalMoveAsync"), Is.Zero, "The blocking verb is never called.");
 
         Button(cut, "Reclaim the source...").Click();
         Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("blob-x").And.Contain("can no longer be reverted"));
@@ -127,6 +155,60 @@ public sealed class ClusterWalPageTests : ClusterTestContext
             Assert.That(cut.Find(".lt-cluster-result").TextContent, Does.Contain("was reclaimed"));
             Assert.That(Toasts, Does.Contain("WAL source reclaimed."));
         });
+    }
+
+    [Test]
+    public void A_move_running_from_another_tab_is_followed_and_can_be_stopped_before_its_flip()
+    {
+        var operationId = TreeAdminOperationIds.New(TreeAdminOperationKinds.WalMove, TreeAdminOperationIds.Target(TreeId, 1));
+        Tracked.Running(
+            operationId,
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Copying, 4, 20, TreeAdminOperationUnits.Entries),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Copying, 8, 20, TreeAdminOperationUnits.Entries),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Cancelled, TreeAdminOperationPhases.Copying, 8, 20, TreeAdminOperationUnits.Entries));
+
+        var cut = RenderAt("/cluster/wal?tree=orders&partition=1&target=blob-b");
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-cluster='move-progress']").TextContent, Does.Contain("4 of 20 entries")));
+
+        cut.Find("[data-lt-cluster='stop-move']").Click();
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Tracked.Cancelled, Is.EqualTo(new[] { operationId }));
+            Assert.That(cut.Find("[data-lt-cluster='move-progress']").TextContent, Does.Contain("Cancelling"));
+        });
+
+        Time.Advance(ClusterStatusPoller.Interval);
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Toasts, Does.Contain("The move was stopped before its flip: the partition stays on its source."));
+            Assert.That(cut.Find("[data-lt-cluster='move-progress']").TextContent, Does.Contain("Stopped during Copying, after 8 of 20 entries."));
+            Assert.That(Button(cut, "Move partition...").HasAttribute("disabled"), Is.False);
+        });
+    }
+
+    [Test]
+    public void A_move_on_another_partition_is_not_followed_here()
+    {
+        Tracked.Running(
+            TreeAdminOperationIds.New(TreeAdminOperationKinds.WalMove, TreeAdminOperationIds.Target(TreeId, 0)),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Copying, 1, 2, TreeAdminOperationUnits.Entries));
+
+        var cut = RenderAt("/cluster/wal?tree=orders&partition=1&target=blob-b");
+
+        cut.WaitUntil(() => Assert.That(Button(cut, "Move partition...").HasAttribute("disabled"), Is.False));
+        Assert.That(cut.FindAll("[data-lt-cluster='move-progress']"), Is.Empty);
+    }
+
+    [Test]
+    public void A_finished_moves_result_reads_back_as_its_receipt()
+    {
+        var receipt = ClusterWalPage.ReceiptFrom(Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Succeeded, "Completed", result: MovedResult()));
+
+        Assert.That(receipt, Is.EqualTo(new TreeWalMoveReceipt
+        {
+            TreeId = TreeId, Partition = 1, FromProviderKey = "blob-x", ToProviderKey = "blob-b", PreviousPlacementVersion = 5, NewPlacementVersion = 6,
+            CopiedFromOffset = 10, CopiedThroughOffset = 1210, SourceHighestOffset = 1210, TargetHighestOffset = 1210, SourceRetained = true, Outcome = TreeWalMoveOutcome.Moved,
+        }));
     }
 
     [Test]
@@ -173,4 +255,20 @@ public sealed class ClusterWalPageTests : ClusterTestContext
 
         Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end"));
     }
+
+    private static Dictionary<string, string> MovedResult() => new()
+    {
+        [TreeAdminOperationResultKeys.TreeId] = TreeId,
+        [TreeAdminOperationResultKeys.Partition] = "1",
+        [TreeAdminOperationResultKeys.FromProviderKey] = "blob-x",
+        [TreeAdminOperationResultKeys.ToProviderKey] = "blob-b",
+        [TreeAdminOperationResultKeys.Outcome] = nameof(TreeWalMoveOutcome.Moved),
+        [TreeAdminOperationResultKeys.PreviousPlacementVersion] = "5",
+        [TreeAdminOperationResultKeys.NewPlacementVersion] = "6",
+        [TreeAdminOperationResultKeys.CopiedFromOffset] = "10",
+        [TreeAdminOperationResultKeys.CopiedThroughOffset] = "1210",
+        [TreeAdminOperationResultKeys.SourceHighestOffset] = "1210",
+        [TreeAdminOperationResultKeys.TargetHighestOffset] = "1210",
+        [TreeAdminOperationResultKeys.SourceRetained] = "true",
+    };
 }

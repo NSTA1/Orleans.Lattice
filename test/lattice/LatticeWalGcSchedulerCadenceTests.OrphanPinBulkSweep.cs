@@ -201,8 +201,20 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         /// born <c>0</c> rather than at the <c>-1</c> sentinel, so
         /// <c>ProjectionCheckpointOffsetAssigned</c> is the only thing
         /// separating "applied up to offset 0" from "applied nothing"
-        /// (issue #2703). This is the population whose Zero pin is CORRECT, and
-        /// which must never be driven toward coverage.
+        /// (issue #2703). This is the population with no proven durable
+        /// checkpoint, whose block is CORRECT and which must never be driven
+        /// toward coverage.
+        /// <para>
+        /// It says nothing about the pin the caller seeds beside it, and that
+        /// is deliberate: the classifier derives this state from the persisted
+        /// checkpoint alone, so the same leaf state backs both readings of it
+        /// (issue #3258). Seed it with an unusable pin for the benign sentinel
+        /// shape, or with a usable pin at a real offset for the divergent shape
+        /// a leaf leaves behind when it publishes from
+        /// <c>max(persisted, pending)</c> and then deactivates without
+        /// persisting - the shape that wedges a tree permanently when it holds
+        /// the offset floor.
+        /// </para>
         /// </summary>
         public void PutNeverCheckpointed(GrainId leaf, string treeId) =>
             _states[leaf] = new LeafNodeState

@@ -1,10 +1,16 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Suggestions;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Operations;
+
+// Still calls the deprecated blocking tree-administration verbs (LATTICE0002); the Explorer moves to
+// ILatticeTreeAdminOperations in the second #4124 change, which removes this suppression.
+#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -13,7 +19,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// (a read-only preview at its own address, <c>?tree=&amp;partition=&amp;target=</c>,
 /// so it resumes), execute and reclaim, each of the last two behind a typed
 /// confirmation and the TreeLifecycle grant. It owns the visible control of the
-/// "Plan WAL move..." palette command.
+/// "Plan WAL move..." palette command. A move runs on the cluster as a tracked
+/// operation (#4124): the page follows its copy, verify and flip, picks it up again
+/// when the plan's address is reopened, and can ask it to stop before the flip.
 /// </summary>
 public partial class ClusterWalPage : IDisposable
 {
@@ -39,7 +47,9 @@ public partial class ClusterWalPage : IDisposable
     private string? _planTargetError;
     private Verb _confirm;
     private bool _busy;
+    private bool _cancelling;
     private bool _initialised;
+    private TreeAdminOperationWatch _watch = default!;
 
     private enum Verb
     {
@@ -79,6 +89,12 @@ public partial class ClusterWalPage : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
+
+    /// <summary>Whether a move or reclaim is being asked for or a move is running.</summary>
+    private bool Busy => _busy || _watch.IsRunning;
+
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
 
@@ -99,6 +115,7 @@ public partial class ClusterWalPage : IDisposable
     {
         Signals.Requested -= OnCommand;
         _load.Leave();
+        _watch?.Dispose();
     }
 
     /// <inheritdoc />
@@ -106,6 +123,9 @@ public partial class ClusterWalPage : IDisposable
     {
         _access = ClusterTreeAccess.None(TreeId ?? string.Empty);
         _providerKeys = new ClusterProviderKeySuggestionSource(Facades, () => _planTree);
+        _watch = new TreeAdminOperationWatch(Time);
+        _watch.Changed += OnWatchChanged;
+        _watch.Finished += OnWatchFinished;
         Signals.Requested += OnCommand;
         if (Signals.TryTake(ClusterArea.PlanWalMoveCommandId))
         {
@@ -127,6 +147,7 @@ public partial class ClusterWalPage : IDisposable
         _tree = TreeId;
         _receipt = null;
         _reclaimKey = null;
+        _watch.Clear();
         var token = _load.Renew();
 
         if (TreeId is not { } tree)
@@ -147,6 +168,17 @@ public partial class ClusterWalPage : IDisposable
         if (plan is not null)
         {
             _plan = await plan;
+        }
+
+        if (Partition is { } movePartition && TreeAdminOperationsAccess.Of(Facades.TreeAdmin) is { } operations)
+        {
+            try
+            {
+                await _watch.ResumeAsync(operations, [(TreeAdminOperationKinds.WalMove, TreeAdminOperationIds.Target(tree, movePartition))], token);
+            }
+            catch (OperationCanceledException) when (_load.IsLeft)
+            {
+            }
         }
     }
 
@@ -224,32 +256,115 @@ public partial class ClusterWalPage : IDisposable
     private async Task ExecuteAsync()
     {
         _confirm = Verb.None;
-        if (TreeId is not { } tree || Partition is not { } partition || Target is not { } target)
+        if (TreeId is not { } tree || Partition is not { } partition || Target is not { } target || Busy)
         {
             return;
         }
 
-        _busy = true;
-        var receipt = await ClusterLoad<TreeWalMoveReceipt>.RunAsync(
-            ct => Facades.RequireTreeAdmin().ExecuteWalMoveAsync(tree, partition, target, null, ct),
-            _load.Token);
-        _busy = false;
-
-        if (receipt.Value is { } value)
+        if (TreeAdminOperationsAccess.Of(Facades.TreeAdmin) is not { } operations)
         {
-            _receipt = value;
-            Toasts.Show("WAL partition moved.", LtToastTone.Success);
+            Toasts.Show("This Explorer cannot run a WAL move as a tracked operation.", LtToastTone.Danger);
+            return;
         }
-        else
+
+        _busy = true;
+        try
         {
-            Toasts.Show(receipt.Error!, LtToastTone.Danger);
+            await _watch.StartAsync(
+                operations,
+                TreeAdminOperationKinds.WalMove,
+                TreeAdminOperationIds.Target(tree, partition),
+                (operationId, ct) => operations.StartWalMoveAsync(tree, partition, target, null, operationId, ct),
+                _load.Token);
+        }
+        catch (OperationCanceledException) when (_load.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            Toasts.Show(ClusterFaults.Describe(exception), LtToastTone.Danger);
+        }
+        finally
+        {
+            _busy = false;
         }
     }
 
+    private async Task StopMoveAsync()
+    {
+        _cancelling = true;
+        try
+        {
+            await _watch.CancelAsync(_load.Token);
+        }
+        catch (OperationCanceledException) when (_load.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            Toasts.Show(ClusterFaults.Describe(exception), LtToastTone.Danger);
+        }
+        finally
+        {
+            _cancelling = false;
+        }
+    }
+
+    private void OnWatchChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnWatchFinished(LatticeOperationStatus status) => _ = InvokeAsync(() =>
+    {
+        if (_load.IsLeft)
+        {
+            return;
+        }
+
+        switch (status.State)
+        {
+            case LatticeOperationState.Succeeded:
+                _receipt = ReceiptFrom(status);
+                _watch.Clear();
+                Toasts.Show("WAL partition moved.", LtToastTone.Success);
+                break;
+            case LatticeOperationState.Cancelled:
+                Toasts.Show("The move was stopped before its flip: the partition stays on its source.", LtToastTone.Warning);
+                break;
+            default:
+                Toasts.Show("The WAL move failed. Audit the placement before trying again.", LtToastTone.Danger);
+                break;
+        }
+
+        StateHasChanged();
+    });
+
+    /// <summary>The receipt a finished move's result describes.</summary>
+    /// <param name="status">The succeeded move's status.</param>
+    /// <returns>The receipt.</returns>
+    internal static TreeWalMoveReceipt ReceiptFrom(LatticeOperationStatus status)
+    {
+        var result = status.Result;
+        string Text(string key) => result.TryGetValue(key, out var value) ? value : string.Empty;
+        long Number(string key) => long.TryParse(Text(key), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value) ? value : 0;
+        return new TreeWalMoveReceipt
+        {
+            TreeId = Text(TreeAdminOperationResultKeys.TreeId),
+            Partition = (int)Number(TreeAdminOperationResultKeys.Partition),
+            FromProviderKey = Text(TreeAdminOperationResultKeys.FromProviderKey),
+            ToProviderKey = Text(TreeAdminOperationResultKeys.ToProviderKey),
+            PreviousPlacementVersion = Number(TreeAdminOperationResultKeys.PreviousPlacementVersion),
+            NewPlacementVersion = Number(TreeAdminOperationResultKeys.NewPlacementVersion),
+            CopiedFromOffset = Number(TreeAdminOperationResultKeys.CopiedFromOffset),
+            CopiedThroughOffset = Number(TreeAdminOperationResultKeys.CopiedThroughOffset),
+            SourceHighestOffset = Number(TreeAdminOperationResultKeys.SourceHighestOffset),
+            TargetHighestOffset = Number(TreeAdminOperationResultKeys.TargetHighestOffset),
+            SourceRetained = string.Equals(Text(TreeAdminOperationResultKeys.SourceRetained), "true", StringComparison.Ordinal),
+            Outcome = Enum.TryParse<TreeWalMoveOutcome>(Text(TreeAdminOperationResultKeys.Outcome), out var outcome) ? outcome : TreeWalMoveOutcome.Moved,
+        };
+    }
     private async Task ReclaimAsync()
     {
         _confirm = Verb.None;
-        if (TreeId is not { } tree || Partition is not { } partition || ReclaimSource is not { } source)
+        if (TreeId is not { } tree || Partition is not { } partition || ReclaimSource is not { } source || Busy)
         {
             return;
         }

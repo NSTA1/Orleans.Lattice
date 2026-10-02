@@ -47,7 +47,11 @@ internal sealed partial class LatticeGrain
                 "digest API is unavailable. Set the option to true to resume maintenance.");
         }
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced: a shard index names no key, so this read never meets the
+        // StaleShardRoutingException that heals a routed call, and an activation
+        // that cached its map before a reshard or its alias before a resize would
+        // reject a new shard or read a retired one (issue #4180).
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Validate the supplied shard index against the per-tree map; this
@@ -99,7 +103,8 @@ internal sealed partial class LatticeGrain
                 "digest API is unavailable. Set the option to true to resume maintenance.");
         }
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced for the same reason as GetLeafProjectionDigestAsync.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShards = shardMap.GetPhysicalShardIndices();

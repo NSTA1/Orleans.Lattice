@@ -6753,6 +6753,115 @@ public static class LatticeMetrics
         new(TagStatus, "offset_absent");
 
     /// <summary>
+    /// Whether a floor-holding pin classified
+    /// <see cref="WalGcBlockingPinState.NeverCheckpointed"/> carried a usable
+    /// durable offset (issue #4198).
+    /// <para>
+    /// <b>The question it answers.</b>
+    /// <see cref="WalGcBlockingPinState.NeverCheckpointed"/> is derived from the
+    /// leaf's <i>persisted</i> checkpoint alone and constrains the published pin
+    /// offset not at all, so one arm of
+    /// <see cref="WalGcBlockingPinStates"/> covers two populations with opposite
+    /// meanings. The <c>offset_absent</c> reading is the blocking sentinel at
+    /// offset <c>-1</c>: benign, ubiquitous, routed into the floor-holder
+    /// sweep's unusable sample where it constrains no offset floor, and cleared
+    /// as soon as the leaf checkpoints. The <c>offset_usable</c> reading carries
+    /// a non-negative published offset, so it sits in the offset-bearing sample
+    /// and <b>can hold the tree's offset floor</b> - where it is refused
+    /// admission to the issue #3178 liveness drive, and that refusal is terminal
+    /// for the whole tree, because the floor is defined by its own holder, every
+    /// other candidate is strictly above it, and issue #3310's prefetch is gated
+    /// on the floor's holder having been admitted first.
+    /// </para>
+    /// <para>
+    /// <b>Why no existing instrument answers it.</b>
+    /// <see cref="WalGcBlockingPinStates"/> records the classifier's verdict and
+    /// nothing about the candidate that produced it, and both floor-holder
+    /// sample lists are recorded through the same call, so the two readings are
+    /// byte-identical there. The bit is not derived here either: the sweep
+    /// already computes it when it routes a candidate into one of those two
+    /// lists, and until this instrument existed it was computed and discarded.
+    /// This mirrors exactly what issue #3199 did for the neighbouring state on
+    /// <see cref="WalGcCoverageUnknownPinOffset"/>, and deliberately reuses its
+    /// <c>offset_usable</c> / <c>offset_absent</c> vocabulary so a reader who
+    /// knows one instrument needs nothing new to read this one.
+    /// </para>
+    /// <para>
+    /// <b>Reading it.</b> The arms partition this instrument's population
+    /// exactly, since a candidate's durable offset is either negative or it is
+    /// not, so <c>sum by (tree)</c> here equals
+    /// <see cref="WalGcBlockingPinStates"/><c>{status="never_checkpointed"}</c>
+    /// on the same tree and a divergence is a defect in one of the two rather
+    /// than a reading about the estate. Do not write that comparison naively:
+    /// <see cref="WalGcBlockingPinStates"/> is also primed per collected tree at
+    /// <c>partition="none"</c>, a label this instrument never mints, so sum over
+    /// <c>partition</c> on both sides. A sustained non-zero <c>offset_usable</c>
+    /// is the wedge shape and should be read beside
+    /// <see cref="WalGcFloorHolderAdmission"/>: the two together separate a
+    /// latent holder sitting harmlessly above the floor from one that is
+    /// actually holding it and blocking the tree.
+    /// </para>
+    /// <para>
+    /// <b>Both arms are zero-primed</b> per classified
+    /// <c>(tree, partition)</c>, alongside the
+    /// <see cref="WalGcBlockingPinStates"/> priming and independently of which
+    /// state resolved, so <c>offset_usable</c> reading zero against a large
+    /// <c>offset_absent</c> is a measured absence rather than silence. That is
+    /// the entire value of the instrument: the question is whether the
+    /// <c>offset_usable</c> slice is empty, and an unprimed zero could not
+    /// answer it in either direction. It carries no per-tree reachability
+    /// priming of its own, because whether the floor-holder classifier is wired
+    /// on this silo is already answered by
+    /// <see cref="WalGcFloorHolderClassification"/>.
+    /// </para>
+    /// <para>
+    /// <b>Diagnostic only.</b> It never changes what a pass is allowed to trim
+    /// and never changes admission. The refusal it makes visible is correct -
+    /// driving a leaf with no proven durable checkpoint toward a durable claim
+    /// is silent data loss, guarded by the floor-holder liveness fixtures - so
+    /// this instrument is a way to see the population, never a licence to drive
+    /// it.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcNeverCheckpointedPinOffset =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.never_checkpointed_pin_offset", unit: "{pin}",
+            description: "Whether a floor-holding pin classified 'never_checkpointed' carried a usable durable offset (issue #4198), tagged by tree, partition, status and tenant. That state is derived from the leaf's PERSISTED checkpoint alone and constrains the published pin offset not at all, so one arm of blocking_pin_state covers two populations with opposite meanings. 'offset_absent' is the blocking sentinel at offset -1: benign, ubiquitous, routed into the floor-holder sweep's unusable sample where it constrains no offset floor, and cleared as soon as the leaf checkpoints. 'offset_usable' carries a non-negative published offset, so it sits in the offset-bearing sample and CAN HOLD the tree's offset floor - where it is refused admission to the issue #3178 liveness drive, and that refusal is terminal for the whole tree, because the floor is defined by its own holder, every other candidate is strictly above it, and issue #3310's prefetch is gated on the floor's holder having been admitted first. That is the permanent-wedge shape diagnosed in issue #3258. blocking_pin_state cannot answer this and no aggregation of it can: it records the classifier's verdict and nothing about the candidate that produced it, and both floor-holder sample lists are recorded through the same call, so the two readings are byte-identical there. The bit is not derived here either - the sweep already computes it when it routes a candidate into one of those two lists, and until this instrument existed it was computed and then discarded. This mirrors exactly what issue #3199 did for the neighbouring state on coverage_unknown_pin_offset, and deliberately reuses its offset_usable/offset_absent vocabulary so a reader who knows one needs nothing new to read the other. The arms partition this instrument's population exactly, since a candidate's durable offset is either negative or it is not, so sum by (tree) here equals blocking_pin_state{status='never_checkpointed'} on the same tree and a divergence is a defect in one of the two. That equality is an assertion about the recording sites rather than a query that can be written naively: blocking_pin_state is also primed per collected tree at partition='none', a label this instrument never mints, so a comparison must sum over partition on both sides or it mismatches on every collected tree; and a tree that never reaches the floor-holder classifier has no series here at all rather than a zero, so the absent side needs an explicit guard. Read a sustained non-zero offset_usable beside floor_holder_admission: the two together separate a latent holder sitting harmlessly above the floor from one actually holding it and blocking the tree. Both arms are zero-primed per classified (tree, partition), alongside the blocking_pin_state priming and independently of which state resolved, so offset_usable reading zero against a large offset_absent is a measured absence rather than silence - which is the entire value of the instrument, because the question is whether that slice is empty and an unprimed zero could not answer it in either direction. It carries no per-tree reachability priming of its own: whether the floor-holder classifier is wired on this silo is already answered by floor_holder_classification. Diagnostic only: it never changes what a pass is allowed to trim, and never changes admission. The refusal it makes visible is correct - driving a leaf with no proven durable checkpoint toward a durable claim is silent data loss - so this is a way to see the population, never a licence to drive it.");
+
+    /// <summary>Canonical name of <see cref="WalGcNeverCheckpointedPinOffset"/>.</summary>
+    public const string WalGcNeverCheckpointedPinOffsetName =
+        "orleans.lattice.wal.gc.never_checkpointed_pin_offset";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on
+    /// <see cref="WalGcNeverCheckpointedPinOffset"/> for a candidate whose
+    /// durable offset is <c>&gt;= 0</c>.
+    /// <para>
+    /// This is the wedging reading: such a pin sits in the offset-bearing sample
+    /// and can hold the tree's offset floor, where its refusal is terminal for
+    /// the whole tree. Its string value deliberately matches
+    /// <see cref="CoverageUnknownOffsetUsable"/> so the two instruments share
+    /// one vocabulary.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> NeverCheckpointedOffsetUsable =
+        new(TagStatus, "offset_usable");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on
+    /// <see cref="WalGcNeverCheckpointedPinOffset"/> for a candidate that
+    /// reported no usable durable offset.
+    /// <para>
+    /// This is the benign sentinel reading - a pin at the issue #1490 blocking
+    /// sentinel, which constrains no offset floor and clears as soon as the leaf
+    /// checkpoints. Its string value deliberately matches
+    /// <see cref="CoverageUnknownOffsetAbsent"/> so the two instruments share one
+    /// vocabulary.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> NeverCheckpointedOffsetAbsent =
+        new(TagStatus, "offset_absent");
+
+    /// <summary>
     /// Whether the candidate that <i>defines</i> a tree's durable materialiser
     /// offset floor was admitted to the issue #3178 liveness drive on a
     /// classifying sweep, tagged by tree, tenant and status (issue #3258).

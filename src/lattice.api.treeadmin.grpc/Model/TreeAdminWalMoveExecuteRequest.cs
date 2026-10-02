@@ -22,4 +22,10 @@ public sealed record TreeAdminWalMoveExecuteRequest
 
     /// <summary>Optional move tunables; <c>null</c> takes the conventional defaults.</summary>
     [Id(3)] public TreeWalMoveOptions? Options { get; init; }
+
+    /// <summary>
+    /// The idempotency id of the tracked operation an accept-then-poll start RPC
+    /// creates, or <see langword="null"/> to generate one. Ignored by the blocking RPCs.
+    /// </summary>
+    [Id(4)] public string? TrackingOperationId { get; init; }
 }

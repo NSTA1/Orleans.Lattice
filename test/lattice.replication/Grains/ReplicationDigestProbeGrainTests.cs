@@ -76,7 +76,7 @@ public partial class ReplicationDigestProbeGrainTests
         // Wire the routing snapshot and an empty-shard root so the
         // localise-stage walk (when enabled) resolves a physical tree id
         // and terminates cleanly without emitting localise/abort metrics.
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
         var shardRoot = Substitute.For<IShardRootGrain>();
         shardRoot.GetRootNodeRefAsync().Returns(Task.FromResult<ShardRootNodeRef?>(null));
@@ -260,6 +260,7 @@ public partial class ReplicationDigestProbeGrainTests
         // The localise stage is dark by default: a mismatch must not resolve
         // routing or issue a key-range probe when MerkleWalkEnabled is off.
         await lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeMerkleWalkAsync(
             Arg.Any<string>(), Arg.Any<MerkleWalkProbeRequest>(), Arg.Any<CancellationToken>());
     }
@@ -281,7 +282,31 @@ public partial class ReplicationDigestProbeGrainTests
 
         // With the flag on, a mismatch triggers the read-only localise stage,
         // which resolves the physical tree id before descending the tree.
-        await lattice.Received().GetRoutingAsync(Arg.Any<CancellationToken>());
+        await lattice.Received().GetRoutingAsync(true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_localises_against_a_freshly_resolved_physical_tree()
+    {
+        // Issue #4180: the tree's stateless worker caches its alias per activation,
+        // and nothing on the localise path routes a key, so a cached resolve would
+        // walk the physical tree a resize or restore retired.
+        var (grain, _, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: true);
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys-retired", ShardMap.CreateDefault(1, 1))));
+        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
+        transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DigestProbeResponse
+            {
+                DigestAvailable = true,
+                Digest = Digest(new byte[] { 9, 9, 9 }),
+            }));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]

@@ -17,7 +17,7 @@ internal sealed partial class LatticeAdminGrain(
     LatticeOptionsResolver? optionsResolver = null,
     IWalStorageProviderCatalog? walProviderCatalog = null,
     IWalRecordEncoder? walRecordEncoder = null,
-    IOptionsMonitor<LatticeOptions>? optionsMonitor = null) : ILatticeAdmin, IGrainBase
+    IOptionsMonitor<LatticeOptions>? optionsMonitor = null) : ILatticeAdmin, ILatticeAdminTrackedGrain, IGrainBase
 {
     IGrainContext IGrainBase.GrainContext => context;
 

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class LatticeTagIndexReconcileIntegrationTests
+public partial class LatticeTagIndexReconcileIntegrationTests
 {
     private ClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;

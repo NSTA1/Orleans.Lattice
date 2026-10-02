@@ -36,6 +36,22 @@ internal interface ITagIndexReconcileGrain : IGrainWithStringKey
     Task<TagReconcileReport> RunSweepAsync();
 
     /// <summary>
+    /// <see cref="RunSweepAsync"/> as a tracked grain call: reports the probe and
+    /// repair progress (covered trees probed, then divergent trees repaired) to the
+    /// coordinated operation <paramref name="ticket"/> names. When that operation is
+    /// cancelled the sweep stops, is abandoned (the coordinator goes idle, so the
+    /// schedule can start the next sweep), and the call throws
+    /// <see cref="OperationCanceledException"/>.
+    /// </summary>
+    /// <param name="ticket">The operation to report to. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the sweep.</param>
+    /// <returns>The sweep summary.</returns>
+    [ResponseTimeout(Operations.LatticeMaintenanceProgress.TrackedCallResponseTimeout)]
+    Task<TagReconcileReport> RunTrackedSweepAsync(
+        Operations.LatticeOperationTicket ticket,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns <c>true</c> when the coordinator is idle - either no sweep has
     /// been started, or the last one has run to completion. Returns <c>false</c>
     /// while a sweep is in flight.
