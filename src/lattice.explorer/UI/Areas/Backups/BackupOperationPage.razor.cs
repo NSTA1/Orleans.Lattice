@@ -9,13 +9,14 @@ using Orleans.Lattice.Explorer.UI.Transport;
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
 /// <summary>
-/// A backup operation's status page at <c>/backups/operations/{id}</c>. A capture
-/// or restore is the cluster's tracked operation (#4122): the page reads its status
-/// and real progress from the cluster and follows it on the circuit's clock until
-/// it finishes, so it survives a closed tab or a reload, and offers to cancel it
-/// while it runs. A revert or catalogue maintenance is staged in the session and
-/// redrawn as it moves. A session-staged start that the cluster has accepted hands
-/// the page over to the cluster's operation. An unknown id is not found.
+/// A backup operation's status page at <c>/backups/operations/{id}</c>. A capture,
+/// restore, health check, catalogue rebuild or scrub is the cluster's tracked
+/// operation (#4122, #4125): the page reads its status and real progress from the
+/// cluster and follows it on the circuit's clock until it finishes, so it survives
+/// a closed tab or a reload, and offers to cancel it while it runs. A revert is
+/// staged in the session and redrawn as it moves. A session-staged start that the
+/// cluster has accepted hands the page over to the cluster's operation. An unknown
+/// id is not found.
 /// </summary>
 public partial class BackupOperationPage : IDisposable
 {
