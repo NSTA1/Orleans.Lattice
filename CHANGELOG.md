@@ -79,6 +79,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - CRDT delta apply path.** Applying a delta walked six incoming lists through a boxed enumerator, rebuilt both OR-set alternate lookups once per dot, and grew the RGA node list and dot index unsized. All three are fixed: 51-69% off the scans, 16-23% fewer bytes per RGA merge. ([#4281](https://github.com/NSTA1/Orleans.Lattice/pull/4281)) (`Orleans.Lattice`)
+
 - **Performance - Delta run-fold sizing.** Two OR-set union sizing passes routed their count selector through a capturing adapter lambda, minting a display class and a delegate hop per run element. A generic helper drives the selector directly: 24 B to zero, and 28% off the fold at width 32. ([#4244](https://github.com/NSTA1/Orleans.Lattice/pull/4244)) (`Orleans.Lattice`)
 
 - **Performance - Multi-value register dot probes.** The duplicate-dot probe returned `MvRegisterEntry?`, copying a 24-byte struct twice per candidate and running once per local entry per merge. Both probes return an index over a span now, still allocation-free and 27-29% faster at 32 entries. ([#4244](https://github.com/NSTA1/Orleans.Lattice/pull/4244)) (`Orleans.Lattice`)

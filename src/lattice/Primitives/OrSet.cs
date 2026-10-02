@@ -391,8 +391,21 @@ public sealed class OrSet : ICrdt<OrSet>
             // the dot list without bound and break the idempotency this method
             // documents. Hoist a single reusable scratch buffer (CA2014).
             Span<char> scratch = stackalloc char[MaxStackBase64Chars];
-            foreach (var dot in adds)
+            // Hoist the alternate lookup out of the per-dot loop. The lookup
+            // struct stays valid across inserts into the dictionary it
+            // projects - RwSet.UnionDeltaDots already relies on exactly that -
+            // so rebuilding it on every dot was pure overhead.
+            var addLookup = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+            // foreach over an IReadOnlyList<T> binds IEnumerable<T>.GetEnumerator
+            // and heap-allocates a boxed enumerator per apply. Resolve the
+            // backing span where the concrete shape allows it and fall back to
+            // the interface indexer otherwise. Nothing in this loop changes the
+            // scanned collection's length, so the span stays valid.
+            var addsSpanned = CrdtDeltaListSpan.TryGetSpan(adds, out var addsSpan);
+            var addCount = adds.Count;
+            for (var i = 0; i < addCount; i++)
             {
+                var dot = addsSpanned ? addsSpan[i] : adds[i];
                 if (dot.Element is null) continue;
                 var element = dot.Element;
                 var charCount = Base64CharCount(element.Length);
@@ -402,7 +415,6 @@ public sealed class OrSet : ICrdt<OrSet>
                 {
                     Convert.TryToBase64Chars(element, buffer, out var written);
                     var key = buffer[..written];
-                    var addLookup = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
                     if (!addLookup.TryGetValue(key, out var dots))
                     {
                         dots = [];
@@ -423,8 +435,15 @@ public sealed class OrSet : ICrdt<OrSet>
             // Hoist a single reusable scratch buffer out of the loop so
             // the stackalloc is not repeated per element (CA2014).
             Span<char> scratch = stackalloc char[MaxStackBase64Chars];
-            foreach (var dot in removes)
+            // Same two trims as the adds loop above: the alternate lookup is
+            // built once, and the delta list is walked through its backing
+            // span so no boxed enumerator is allocated per apply.
+            var tombLookup = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
+            var removesSpanned = CrdtDeltaListSpan.TryGetSpan(removes, out var removesSpan);
+            var removeCount = removes.Count;
+            for (var i = 0; i < removeCount; i++)
             {
+                var dot = removesSpanned ? removesSpan[i] : removes[i];
                 if (dot.Element is null) continue;
                 var element = dot.Element;
                 var charCount = Base64CharCount(element.Length);
@@ -434,8 +453,7 @@ public sealed class OrSet : ICrdt<OrSet>
                 {
                     Convert.TryToBase64Chars(element, buffer, out var written);
                     var key = buffer[..written];
-                    var tombstones = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
-                    if (!tombstones.TryGetValue(key, out var tomb))
+                    if (!tombLookup.TryGetValue(key, out var tomb))
                     {
                         tomb = [];
                         Tombstones[new string(key)] = tomb;

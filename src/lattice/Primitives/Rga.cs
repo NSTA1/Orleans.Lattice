@@ -554,7 +554,11 @@ public sealed class Rga : ICrdt<Rga>
         Dictionary<OrSetDot, RgaNode>? byDot = null;
         if (insertCount + tombstoneCount > MergeLinearScanThreshold)
         {
-            byDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count);
+            // Size for the nodes this merge is about to add as well as the
+            // ones already present: the insert loop below seeds every new node
+            // into this index, so sizing to Nodes.Count alone guaranteed a
+            // rehash on a catch-up delta.
+            byDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count + insertCount);
             foreach (var n in Nodes) byDot[n.Dot] = n;
         }
 
@@ -571,8 +575,18 @@ public sealed class Rga : ICrdt<Rga>
         var inserts = delta.Inserts;
         if (inserts is { Count: > 0 })
         {
-            foreach (var ins in inserts)
+            // The batch size is known up front, so grow the node list once
+            // instead of letting it double its way there.
+            Nodes.EnsureCapacity(Nodes.Count + insertCount);
+            // foreach over an IReadOnlyList<T> binds IEnumerable<T>.GetEnumerator
+            // and heap-allocates a boxed enumerator per apply. Resolve the
+            // backing span where the concrete shape allows it and fall back to
+            // the interface indexer otherwise. The loop appends to Nodes, never
+            // to the scanned collection, so the span stays valid.
+            var insertsSpanned = CrdtDeltaListSpan.TryGetSpan(inserts, out var insertsSpan);
+            for (var i = 0; i < insertCount; i++)
             {
+                var ins = insertsSpanned ? insertsSpan[i] : inserts[i];
                 var dot = ins.Dot;
                 BumpContext(ins.ReplicaId, ins.Counter);
                 if (Lookup(dot) is { } existing)
@@ -629,8 +643,11 @@ public sealed class Rga : ICrdt<Rga>
         var tombstones = delta.Tombstones;
         if (tombstones is { Count: > 0 })
         {
-            foreach (var dot in tombstones)
+            // Same span resolution as the insert loop above.
+            var tombsSpanned = CrdtDeltaListSpan.TryGetSpan(tombstones, out var tombsSpan);
+            for (var i = 0; i < tombstoneCount; i++)
             {
+                var dot = tombsSpanned ? tombsSpan[i] : tombstones[i];
                 BumpContext(dot.ReplicaId, dot.Counter);
                 if (Lookup(dot) is { } node)
                 {
