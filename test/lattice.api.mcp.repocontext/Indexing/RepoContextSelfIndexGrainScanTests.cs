@@ -184,6 +184,39 @@ public sealed class RepoContextSelfIndexGrainScanTests
     }
 
     [Test]
+    public async Task A_memory_only_tick_does_not_probe_file_coverage_or_re_drive_a_gap()
+    {
+        // With source indexing off there is no file corpus to keep embedded, so an
+        // unembedded file record left behind by an earlier run must not re-drive a
+        // pass that would only try to back-fill it.
+        var harness = new SelfIndexGrainHarness(options: new RepoContextIndexingOptions { SourceIndexing = false });
+        harness.SeedFile("src/B.cs");
+
+        await ArmedPastReconcileAsync(harness);
+        harness.Job.ClearReceivedCalls();
+
+        await harness.TickAsync();
+
+        await harness.Job.DidNotReceive().EnsureIndexedAsync(Arg.Any<bool>());
+        Assert.That(harness.State.State.NextSweepAfterTicks, Is.GreaterThan(0),
+            "the scan cycle still ends so the next tick is spaced behind the cooldown");
+    }
+
+    [Test]
+    public async Task A_memory_only_tick_still_re_drives_the_periodic_reconcile_that_embeds_memory()
+    {
+        var harness = new SelfIndexGrainHarness(options: new RepoContextIndexingOptions { SourceIndexing = false });
+        var grain = harness.CreateGrain();
+        await grain.EnsureRunningAsync(SelfIndexGrainHarness.Request());
+        harness.State.State.NextReconcileAfterTicks = 0;
+        harness.Job.ClearReceivedCalls();
+
+        await harness.TickAsync();
+
+        await harness.Job.Received(1).EnsureIndexedAsync();
+    }
+
+    [Test]
     public async Task A_tick_that_finds_an_unembedded_file_re_drives_the_index_to_back_fill_it()
     {
         var harness = new SelfIndexGrainHarness();

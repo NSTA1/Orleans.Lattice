@@ -325,6 +325,17 @@ internal sealed class RepoContextSelfIndexGrain(
             }
         }
 
+        // Memory-only mode: there is no file corpus whose embedding coverage could
+        // have a gap, so the digest audit and the gap sweep below would only read
+        // (and re-drive passes over) source records this host no longer maintains.
+        // Memory is re-embedded by the periodic reconcile above instead.
+        if (!options.SourceIndexing)
+        {
+            EndScan(nowTicks);
+            await state.WriteStateAsync().ConfigureAwait(true);
+            return;
+        }
+
         // The exhaustive digest audit, on its own long cadence (issue #2486). Run
         // BEFORE the digest-backed detection below so a pass that audits also detects
         // against the freshly re-derived digest rather than the stale one it replaced.
@@ -539,7 +550,10 @@ internal sealed class RepoContextSelfIndexGrain(
     private async Task<bool> TriggerReconcileAsync(CancellationToken cancellationToken)
     {
         var job = grainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
-        if (!sourceGate.IsGitSourced(RepoId))
+
+        // A memory-only host never fetches a git source: its pass reads no content,
+        // so it re-drives from the persisted request exactly as a mounted one does.
+        if (!options.SourceIndexing || !sourceGate.IsGitSourced(RepoId))
         {
             return await job.EnsureIndexedAsync().ConfigureAwait(true);
         }
@@ -569,6 +583,13 @@ internal sealed class RepoContextSelfIndexGrain(
     /// </summary>
     private async Task<RepoIndexProgress> StartFromSourceAsync(RepoIndexJobRequest request)
     {
+        // A memory-only host starts the pass without preparing a source: preparing a
+        // git source is a fetch, and this pass reads no content at all.
+        if (!options.SourceIndexing)
+        {
+            return await runner.StartIndexAsync(request).ConfigureAwait(true);
+        }
+
         var job = grainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
         var preparation = await PrepareAsync(job, request, CancellationToken.None).ConfigureAwait(true);
         if (preparation.Outcome == RepoContextSourceOutcome.Proceed)

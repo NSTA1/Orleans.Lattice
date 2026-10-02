@@ -58,6 +58,7 @@ public static class RepoContextEnvironmentVariables
         RepoContextIndexingOptions.VectorCacheTtlSecondsKey,
         RepoContextIndexingOptions.TokenizerProfileKey,
         RepoContextIndexingOptions.IndexingRoleKey,
+        RepoContextIndexingOptions.SourceIndexingKey,
         RepoContextIndexingOptions.SemanticRetrievalKey,
         RepoContextIndexingOptions.AnnIndexSchedulingKey,
         RepoContextIndexingOptions.AnnIndexReclamationKey,
@@ -186,6 +187,10 @@ public static class RepoContextEnvironmentVariables
                 RepoContextIndexingOptions.IndexingRoleKey,
                 resolved.Role.ToString(),
                 defaults.Role.ToString()),
+            Snapshot(
+                RepoContextIndexingOptions.SourceIndexingKey,
+                resolved.SourceIndexing ? "on" : "off (memory-only)",
+                defaults.SourceIndexing ? "on" : "off (memory-only)"),
             Snapshot(
                 RepoContextIndexingOptions.SemanticRetrievalKey,
                 resolved.SemanticRetrieval.ToString(),
