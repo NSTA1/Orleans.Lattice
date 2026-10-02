@@ -144,6 +144,7 @@ internal sealed partial class TreeDeletionGrain(
         {
             var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
             await compaction.UnregisterReminderAsync();
+            await StopAutonomicLoopsAsync();
         }
 
         // Register the purge reminder. This reminder is the tree's ONLY purge
@@ -342,6 +343,11 @@ internal sealed partial class TreeDeletionGrain(
             var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
             await compaction.EnsureReminderAsync();
         }
+
+        // And the autonomic loops the delete stopped. A retired copy's loops
+        // were never armed: no caller addresses its id as a tree.
+        if (!delegatedSnapshot && !retainsRegistryEntrySnapshot)
+            await ArmAutonomicLoopsAsync();
 
         if (!retainsRegistryEntrySnapshot && !suppressedSnapshot && !delegatedSnapshot)
             await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeRecovered);
@@ -767,6 +773,10 @@ internal sealed partial class TreeDeletionGrain(
 
         var registry = grainFactory.GetLatticeRegistry();
         await registry.UnregisterAsync(TreeId);
+
+        // A worker activation can re-arm the loops while the tree is deleted,
+        // so stop them again now that the purge has retired the id.
+        await StopAutonomicLoopsAsync();
     }
 
     private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
