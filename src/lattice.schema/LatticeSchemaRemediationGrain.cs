@@ -772,17 +772,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         var sourcePhysical = state.State.SourcePhysicalTreeId!;
 
         // The destination is a fresh, never-aliased tree, so its physical id equals
-        // its logical id. Resolve the retained (source) routing by PHYSICAL id, forced
-        // (#4206): the tree's stateless worker caches routing per activation and this
-        // path routes no key, so an unforced read would keep a pre-reshard map and leave
-        // the shards a grow added unarmed. The physical id is pinned to the source's,
-        // so a resume after a partial cutover re-derives the same shards rather than
-        // following the just-installed alias to the destination (a never-aliased
-        // source's physical id is its logical name); the map is read under the
-        // addressed id, so pinning keeps the source's own map.
+        // its logical id.
         var destinationPhysical = destinationTreeId;
-        var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync(forceRefresh: true);
-        var retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical };
 
         // Arm enforcement BEFORE the alias swap so there is no window in which the
         // remediated destination is live (logical-alias-routed) yet unenforced. The
@@ -802,6 +793,32 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
             policyProvider!.Invalidate(TreeId);
+        }
+
+        // Carry the destination's map onto the logical entry before the swap (#4250).
+        // Routing reads the map under the logical id, but the destination was written
+        // by routing under its own, so swapping only the alias would read most of the
+        // remediated values as absent. The map the logical tree addressed the source
+        // by is recorded on the destination and returned: it is the authoritative
+        // description of the source's shards, because when the tree was already
+        // aliased its splits and reshards wrote the map under the logical id, never
+        // the source's own. A cutover resumed after the swap gets the recorded map
+        // back rather than following the new alias to the destination's.
+        var replacedPhysical = await registry.ResolveAsync(TreeId);
+        var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(grainFactory, TreeId, destinationPhysical);
+        RoutingInfo retainedRouting;
+        if (replacedMap is not null
+            && (string.Equals(replacedPhysical, sourcePhysical, StringComparison.Ordinal)
+                || string.Equals(replacedPhysical, destinationPhysical, StringComparison.Ordinal)))
+        {
+            retainedRouting = new RoutingInfo(sourcePhysical, replacedMap);
+        }
+        else
+        {
+            // Forced (#4206), and pinned to the source so a resume does not follow
+            // the installed alias to the destination.
+            var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync(forceRefresh: true);
+            retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical };
         }
 
         // Repoint the logical tree to the remediated destination.
