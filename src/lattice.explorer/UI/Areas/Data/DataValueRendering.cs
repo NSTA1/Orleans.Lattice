@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Orleans.Lattice.Explorer.Core.Data;
 
@@ -16,7 +17,18 @@ internal static class DataValueRendering
     /// <summary>How many characters the value cell shows before asking to expand.</summary>
     public const int DisplayLimit = 4000;
 
-    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+    // Relaxed escaping keeps non-ASCII text and < > & ' + as written: everything
+    // returned here is rendered as text, never as markup, so it is HTML-encoded anyway.
+    private static readonly JsonSerializerOptions Indented = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    private static readonly JsonSerializerOptions Compacted = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     /// <summary>The renderers offered for a value, members only when the state API decoded some.</summary>
     /// <param name="hasMembers">Whether CRDT members are available.</param>
@@ -142,7 +154,7 @@ internal static class DataValueRendering
         try
         {
             using var document = JsonDocument.Parse(bytes);
-            return JsonSerializer.Serialize(document.RootElement);
+            return JsonSerializer.Serialize(document.RootElement, Compacted);
         }
         catch (JsonException)
         {
