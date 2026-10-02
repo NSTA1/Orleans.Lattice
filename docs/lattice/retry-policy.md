@@ -145,6 +145,13 @@ overloads, which the typed CRDT accessors write through), and
 points never route through it (see
 [What is explicitly out of scope](#what-is-explicitly-out-of-scope)).
 
+Every attempt the policy drives runs inside the tree grain's turn, whatever
+the policy does between attempts. A policy may resume with
+`ConfigureAwait(false)` after its back-off - the shipped
+`BoundedExponentialRetryPolicy` does - and the grain re-enters its own
+scheduler before re-running the mutation, so a retry never executes grain
+code on a thread-pool thread alongside the activation's other work.
+
 ## Caller-side retry without DI
 
 If you prefer to keep the policy entirely at the caller (e.g. a

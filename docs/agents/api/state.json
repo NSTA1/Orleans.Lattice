@@ -2236,7 +2236,10 @@
       "grpc_method": null,
       "transport_scope": "in_process_only",
       "request": "string treeId, bool deep = true",
-      "response": "TreeSummaryResult",
+      "response": {
+        "type": "TreeSummaryResult",
+        "meaning": "When populated, Summary.Config.WalPartitions is the tree registry's pinned WAL partition count when a registry entry exists, falling back to LatticeOptions.WalPartitions only before registration."
+      },
       "errors": [
         {
           "error_id": "argument-invalid",

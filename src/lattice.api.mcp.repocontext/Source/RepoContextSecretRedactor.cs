@@ -63,11 +63,12 @@ internal static class RepoContextSecretRedactor
             var authorityStart = schemeIndex + 3;
 
             // Locate the userinfo/host boundary '@' by scanning only up to a
-            // character that cannot appear unencoded in a userinfo component. The
-            // RFC 3986 sub-delims - ',', ';', '(', ')' and '\'' among them - are
-            // legal in userinfo, so they must NOT bound this scan: stopping at one
-            // that sits inside the userinfo (a password such as "p,ss") would hide
-            // the '@' and leave the whole credential unredacted.
+            // character that cannot appear anywhere in the authority. The RFC 3986
+            // sub-delims - ',', ';', '(', ')' and '\'' among them - are legal in
+            // userinfo, so they must NOT bound this scan: stopping at one that sits
+            // inside the userinfo (a password such as "p,ss") would hide the '@' and
+            // leave the whole credential unredacted. The gen-delims '?' and '#' are
+            // excluded on the same grounds; see IsUserinfoTerminator.
             var userinfoEnd = authorityStart;
             while (userinfoEnd < text.Length && !IsUserinfoTerminator(text[userinfoEnd]))
             {
@@ -105,12 +106,29 @@ internal static class RepoContextSecretRedactor
     private static bool IsAuthorityTerminator(char c) =>
         c is '/' or '\\' or ' ' or '\t' or '\r' or '\n' or '"' or '\'' or ')' or ',' or ';';
 
-    // The characters that cannot appear unencoded in a URL userinfo component
-    // (RFC 3986 section 3.2.1) and therefore definitively end it: a path, query, or
-    // fragment separator, whitespace, or a double quote. Sub-delims (',', ';', '(',
-    // ')', '\'' and the rest) are deliberately absent because they are legal in
-    // userinfo - treating them as boundaries would truncate the scan before the '@'
-    // and leak an embedded credential.
+    // The characters that cannot appear anywhere in a URL authority and therefore
+    // definitively end the userinfo scan: a path separator, whitespace, or a double
+    // quote.
+    //
+    // Sub-delims (',', ';', '(', ')', '\'' and the rest) are deliberately absent
+    // because they are legal in a userinfo - treating one as a boundary would
+    // truncate the scan before the '@' and leak an embedded credential.
+    //
+    // '?' and '#' are absent for exactly the same reason, and their presence here
+    // was a credential leak. RFC 3986 does forbid them in a conforming userinfo, so
+    // treating them as terminators looked sound - but this redactor is handed
+    // whatever a transport exception quoted, and git accepts an authority whose
+    // password carries a raw gen-delim because it splits on the LAST '@' before the
+    // path. For "https://alice:s3c?ret@host/r.git" the scan stopped at the '?',
+    // found no '@' in the "alice:s3c" prefix it had seen, concluded there was no
+    // userinfo at all, and copied the authority through verbatim - emitting the
+    // whole credential into the log it was supposed to scrub. Bounding the scan at
+    // the authority instead finds the last '@' and redacts everything before it.
+    //
+    // The residual cost is over-redaction, which is the safe direction for a
+    // redactor: a pathless URL whose query carries an '@' ("https://host?x=a@b")
+    // now has its prefix replaced. Under-redaction leaks a secret permanently into
+    // a log; over-redaction costs a less precise diagnostic message.
     private static bool IsUserinfoTerminator(char c) =>
-        c is '/' or '\\' or '?' or '#' or ' ' or '\t' or '\r' or '\n' or '"';
+        c is '/' or '\\' or ' ' or '\t' or '\r' or '\n' or '"';
 }

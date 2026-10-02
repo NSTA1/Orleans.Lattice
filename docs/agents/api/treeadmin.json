@@ -2023,6 +2023,11 @@
           "name": "FloorHolder",
           "type": "TreeWalFloorHolder",
           "required": false
+        },
+        {
+          "name": "IsWedged",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalReclamationReport.cs#TreeWalReclamationReport"
@@ -2058,6 +2063,11 @@
         {
           "name": "State",
           "type": "TreeWalFloorHolderState",
+          "required": true
+        },
+        {
+          "name": "HoldsOffsetFloor",
+          "type": "bool",
           "required": true
         }
       ],
@@ -4301,6 +4311,10 @@
         {
           "error_id": "internal",
           "condition": "Unhandled server failure."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The tree id has no registry row (it was never created, or it has been purged); the coordinator refuses rather than creating one."
         }
       ],
       "retry": {
@@ -4349,6 +4363,10 @@
         {
           "error_id": "internal",
           "condition": "Unhandled server failure."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The tree id has no registry row (it was never created, or it has been purged); the coordinator refuses rather than creating one."
         }
       ],
       "retry": {
@@ -4608,7 +4626,13 @@
       "sources": [
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "api/schema.json#start-advance-and-migrate",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "schema-advance-target-version",
@@ -5049,7 +5073,13 @@
       "sources": [
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "api/schema.json#start-migration",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "schema-probe-capabilities",
@@ -5147,7 +5177,13 @@
       "sources": [
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "api/schema.json#start-remediation",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "schema-scan-compliance",
@@ -5196,7 +5232,13 @@
       "sources": [
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "api/schema.json#start-compliance-scan",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "schema-set-policy",
@@ -5313,6 +5355,10 @@
           "condition": "Authorization denied the caller."
         },
         {
+          "error_id": "tree-not-registered",
+          "condition": "The effective tree id has a completed purge record; the underlying ILattice configuration verb refuses it as not registered."
+        },
+        {
           "error_id": "cancelled",
           "condition": "Call cancellation."
         },
@@ -5408,6 +5454,10 @@
         {
           "error_id": "permission-denied",
           "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The effective tree id has no registry row or has been purged; per-tree registry overrides fail closed instead of creating a row."
         },
         {
           "error_id": "cancelled",
@@ -6214,6 +6264,14 @@
       "retryable": false,
       "meaning": "Bulk-load target is not empty.",
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeNotEmptyException.cs#TreeNotEmptyException"
+    },
+    {
+      "id": "tree-not-registered",
+      "type": "LatticeTreeNotRegisteredException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "A registry verb that only changes an existing tree row targeted a tree id that was never registered or has been purged; the tree-admin gRPC binding maps the KeyNotFoundException-derived fault to NotFound.",
+      "source": "src/lattice/LatticeTreeNotRegisteredException.cs#LatticeTreeNotRegisteredException"
     },
     {
       "id": "tree-ownership-denied",
