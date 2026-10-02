@@ -131,6 +131,12 @@ public sealed class TelemetryGrpcDtoSerializationTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(
+                aliases,
+                Is.Not.Empty,
+                "The registry scan found no alias constants. Is.Unique and Is.All both pass on an "
+                + "empty population, so without this the wire-format guard would silently stop "
+                + "guarding the moment the constants were renamed or stopped being const strings.");
             Assert.That(GrpcTelemetryTypeAliases.AliasPrefix, Is.EqualTo("oitlg."));
             Assert.That(aliases, Is.Unique);
             Assert.That(aliases, Is.All.StartsWith(GrpcTelemetryTypeAliases.AliasPrefix));
@@ -153,6 +159,12 @@ public sealed class TelemetryGrpcDtoSerializationTests
 
         Assert.Multiple(() =>
         {
+            // Both populations are reflection-derived, and both assertions below are
+            // Is.Empty, which an empty source satisfies. Without these two guards a
+            // registry rename on either side would report a healthy partition between
+            // two sets that no longer exist.
+            Assert.That(bindingAliases, Is.Not.Empty);
+            Assert.That(contractAliases, Is.Not.Empty);
             Assert.That(bindingAliases.Intersect(contractAliases, StringComparer.Ordinal), Is.Empty);
             Assert.That(
                 contractAliases.Where(a => a.StartsWith(GrpcTelemetryTypeAliases.AliasPrefix, StringComparison.Ordinal)),
