@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Auth;
@@ -72,4 +73,22 @@ public sealed record AuthExplanation
     /// state that is otherwise invisible. Defaults to both-off.
     /// </summary>
     [Id(9)] public AuthPolicyPosture Posture { get; init; } = new();
+
+    /// <summary>
+    /// The policy layer whose rule decided the request:
+    /// <see cref="TenantRuleLayer.Platform"/> when an operator rule matched (its
+    /// verdict is final), <see cref="TenantRuleLayer.Tenant"/> when no operator rule
+    /// matched and a tenant-tier rule did. For a tree- or prefix-scoped request it is
+    /// set only when one rule decides the whole scope uniformly. <see langword="null"/>
+    /// when no rule matched (the default effect decided), when a tree- or
+    /// prefix-scoped verdict is resolved key by key, and from a server that predates
+    /// this member.
+    /// </summary>
+    [Id(10)] public TenantRuleLayer? DecidingLayer { get; init; }
+
+    /// <summary>
+    /// The id of the rule that decided the request, or <see langword="null"/>
+    /// exactly when <see cref="DecidingLayer"/> is <see langword="null"/>.
+    /// </summary>
+    [Id(11)] public string? DecidingRuleId { get; init; }
 }
