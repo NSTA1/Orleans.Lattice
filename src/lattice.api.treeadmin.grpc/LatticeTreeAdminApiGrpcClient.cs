@@ -498,15 +498,15 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// handle. Requires the whole-tree bulk-load capability.
     /// </summary>
     /// <param name="treeId">The tree to bulk-load. Must not be <c>null</c> or empty.</param>
-    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The opened bulk-load session.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty, or <paramref name="operationId"/> contains <c>'/'</c>.</exception>
     public Task<TreeBulkLoadSession> BeginBulkLoadAsync(
         string treeId, string operationId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ThrowIfInvalidBulkLoadOperationId(operationId);
         return UnaryAsync(
             _methods.BeginBulkLoad,
             new TreeAdminBulkLoadSessionRequest { TreeId = treeId, OperationId = operationId },
@@ -521,13 +521,14 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// capability.
     /// </summary>
     /// <param name="treeId">The tree being bulk-loaded. Must not be <c>null</c> or empty.</param>
-    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty.</param>
-    /// <param name="chunkIndex">The zero-based, monotonically increasing chunk index.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
+    /// <param name="chunkIndex">The zero-based, monotonically increasing chunk index. Must not be negative.</param>
     /// <param name="entries">The chunk's entries, in strictly ascending key order.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The acknowledgement for the accepted chunk.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty, or <paramref name="operationId"/> contains <c>'/'</c>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="entries"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="chunkIndex"/> is negative.</exception>
     public Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(
         string treeId,
         string operationId,
@@ -536,8 +537,9 @@ public sealed class LatticeTreeAdminApiGrpcClient
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ThrowIfInvalidBulkLoadOperationId(operationId);
         ArgumentNullException.ThrowIfNull(entries);
+        ArgumentOutOfRangeException.ThrowIfNegative(chunkIndex);
         return UnaryAsync(
             _methods.AppendBulkLoad,
             new TreeAdminBulkLoadAppendRequest
@@ -556,15 +558,15 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// bulk-load capability.
     /// </summary>
     /// <param name="treeId">The tree being bulk-loaded. Must not be <c>null</c> or empty.</param>
-    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The bulk-load result summary.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty, or <paramref name="operationId"/> contains <c>'/'</c>.</exception>
     public Task<TreeBulkLoadResult> CommitBulkLoadAsync(
         string treeId, string operationId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ThrowIfInvalidBulkLoadOperationId(operationId);
         return UnaryAsync(
             _methods.CommitBulkLoad,
             new TreeAdminBulkLoadSessionRequest { TreeId = treeId, OperationId = operationId },
@@ -581,12 +583,17 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="operationId">An optional idempotency key, or <c>null</c> to derive one. Must not be empty when supplied.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The restore outcome, including the trees needed to revert it.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="backupId"/> is <c>null</c> or empty, or <paramref name="operationId"/> is supplied but empty.</exception>
     public Task<TreeRestoreResult> RestoreTreeAsync(
         string treeId, string backupId, string? operationId = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(backupId);
+        if (operationId is not null)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(operationId);
+        }
+
         return UnaryAsync(
             _methods.RestoreTree,
             new TreeAdminRestoreRequest { TreeId = treeId, BackupId = backupId, OperationId = operationId },
@@ -1348,5 +1355,23 @@ public sealed class LatticeTreeAdminApiGrpcClient
             request);
 
         return await call.ResponseAsync.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Mirrors the facade's bulk-load operation-id check, so a request the server
+    /// would reject is refused locally with the same <see cref="ArgumentException"/>
+    /// a local caller sees, rather than being sent and surfacing as an
+    /// <see cref="RpcException"/>. The facade composes each chunk's core operation
+    /// id as <c>"{operationId}/{chunkIndex}"</c>, which is why <c>'/'</c> is refused.
+    /// </summary>
+    private static void ThrowIfInvalidBulkLoadOperationId(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        if (operationId.Contains('/', StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The bulk-load operation id must not contain '/'.",
+                nameof(operationId));
+        }
     }
 }

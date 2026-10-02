@@ -42,6 +42,16 @@ internal sealed class GrainIndexDeclarationOptionsValidator : IValidateOptions<G
                     + "give one of the declarations a distinct name with WithName.");
             }
 
+            if (indexName.Contains('/', StringComparison.Ordinal))
+            {
+                // The registry keys an index's bookkeeping as '{segment}/{indexName}/{grainKey}',
+                // so the scan range of an index named 'a' would also cover every entry of 'a/b'.
+                failures.Add(
+                    $"Grain index '{indexName}' contains '/'. The registry scans each index's markers "
+                    + "and outbox entries by the prefix '<index name>/', so a name containing '/' falls "
+                    + "inside another index's range; choose a name without '/' with WithName.");
+            }
+
             if (definition.PropertyDescriptors.Count == 0)
             {
                 failures.Add(
