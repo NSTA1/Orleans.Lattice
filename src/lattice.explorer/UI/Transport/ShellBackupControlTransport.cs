@@ -20,8 +20,9 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// are in-cluster operator verbs the backup binding does not serve over the wire,
 /// so they fail with <see cref="NotSupportedException"/> - the same shape the
 /// shared fault table gives a verb a cluster answers <c>Unimplemented</c> for.
-/// A cold restore is served over the wire only as a tracked operation, through
-/// <see cref="StartColdRestoreAsync"/>.
+/// A cold restore, a catalogue rebuild and a catalogue scrub are served over the
+/// wire only as tracked operations, through <see cref="StartColdRestoreAsync"/>,
+/// <see cref="StartCatalogRebuildAsync"/> and <see cref="StartCatalogScrubAsync"/>.
 /// </remarks>
 /// <param name="channel">The circuit's transport channel.</param>
 internal sealed partial class ShellBackupControlTransport(ShellTransportChannel channel)
@@ -180,7 +181,9 @@ internal sealed partial class ShellBackupControlTransport(ShellTransportChannel 
     public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
         return CallAsync(backupId, static (client, state, ct) => client.CheckBackupHealthAsync(state, ct), null, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <inheritdoc />

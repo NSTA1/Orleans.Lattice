@@ -210,6 +210,9 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.GetBackupOperationStatusMethodName => LatticeBackupApiOperation.GetBackupOperationStatus,
             LatticeBackupGrpcMethods.ListBackupOperationsMethodName => LatticeBackupApiOperation.ListBackupOperations,
             LatticeBackupGrpcMethods.CancelBackupOperationMethodName => LatticeBackupApiOperation.CancelBackupOperation,
+            LatticeBackupGrpcMethods.StartBackupHealthCheckMethodName => LatticeBackupApiOperation.StartBackupHealthCheck,
+            LatticeBackupGrpcMethods.StartCatalogRebuildMethodName => LatticeBackupApiOperation.StartCatalogRebuild,
+            LatticeBackupGrpcMethods.StartCatalogScrubMethodName => LatticeBackupApiOperation.StartCatalogScrub,
             _ => LatticeBackupApiOperation.Unknown,
         };
 
@@ -232,6 +235,10 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             // A tracked-operation status or cancel names an operation, not a backup or
             // tree, so it carries no target; the facade scopes it to the caller.
             BackupOperationRequestMessage => null,
+            // A catalog rebuild or scrub is cluster-wide and names no backup or tree;
+            // the facade authorizes it at the reserved catalog tree.
+            BackupCatalogRebuildRequestMessage => null,
+            BackupCatalogScrubRequestMessage => null,
             _ => null,
         };
 

@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Bootstrap;
 /// shallower one, independently of the filesystem walk that consumes it.
 /// </summary>
 [TestFixture]
-public sealed class GitignoreScopeTests
+public sealed partial class GitignoreScopeTests
 {
     [Test]
     public void Empty_scope_ignores_nothing()

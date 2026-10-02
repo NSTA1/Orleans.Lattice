@@ -1,3 +1,5 @@
+using Orleans.Lattice.Operations;
+
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
@@ -22,6 +24,15 @@ internal sealed class LatticeBackupCatalogRebuildService(
         long registered = 0;
         long reconciled = 0;
 
+        // Tracked-operation progress (#4125). The sink's manifests are streamed, so
+        // their count is unknown until the walk ends and no total is invented.
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(
+                BackupOperationPhases.RebuildingCatalog, 0, null, BackupOperationUnits.Manifests).ConfigureAwait(false);
+        }
+
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await foreach (var manifest in _sink.ListManifestsAsync(cancellationToken).ConfigureAwait(false))
@@ -43,6 +54,13 @@ internal sealed class LatticeBackupCatalogRebuildService(
                 else
                 {
                     reconciled++;
+                }
+
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(
+                        BackupOperationPhases.RebuildingCatalog, scanned, null, BackupOperationUnits.Manifests)
+                        .ConfigureAwait(false);
                 }
             }
         }

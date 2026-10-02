@@ -16,6 +16,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
+- **Backup - Health checks and catalogue rebuild and scrub run as operations.** Start a backup health check, a catalogue rebuild or a scrub and poll it for the artifacts or manifests checked; the work outlives a caller timeout or a closed tab. ([#4125](https://github.com/NSTA1/Orleans.Lattice/issues/4125)) (`Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
 - **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)
 - **Tree admin - Accept-then-poll maintenance.** View rebuild and reconcile, tag-index reconcile, WAL moves and orphaned-leaf audit and repair return a handle at once and report phase and unit progress; they survive a closed tab and can be cancelled. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
@@ -129,7 +131,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Deprecated
 
-- **Backup - Blocking capture and restore verbs.** `CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+- **Backup - Blocking backup verbs.** The blocking capture, restore, health-check and catalogue rebuild and scrub verbs, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122), [#4125](https://github.com/NSTA1/Orleans.Lattice/issues/4125)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
 - **Tree admin - Blocking maintenance verbs.** `RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` and their gRPC client methods raise `LATTICE0002` and will be removed in the next major version. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 ### Fixed

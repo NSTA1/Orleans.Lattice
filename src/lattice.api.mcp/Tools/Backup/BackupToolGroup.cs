@@ -63,7 +63,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
 
     private static IReadOnlyList<McpServerTool> BuildTools(bool enableControl)
     {
-        var tools = new List<McpServerTool>(enableControl ? 17 : 7)
+        var tools = new List<McpServerTool>(enableControl ? 20 : 7)
         {
             CreateListTool(),
             CreateDescribeTool(),
@@ -91,6 +91,9 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 + "fail-closed backup access gate. Requires backup control to be enabled on the server."));
             tools.Add(CreateStartBackupSetTool());
             tools.Add(CreateStartRestoreTool());
+            tools.Add(CreateStartHealthCheckTool());
+            tools.Add(CreateStartCatalogRebuildTool());
+            tools.Add(CreateStartCatalogScrubTool());
             tools.Add(CreateOperationCancelTool());
             tools.Add(CreateRevertRestoreTool());
             tools.Add(CreateDeleteTool());
@@ -353,6 +356,91 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                     + " Poll lattice_backup_operation_status for progress; a succeeded status carries the restore "
                     + "result to round-trip into lattice_backup_revert_restore. Mutating: subject to the fail-closed "
                     + "backup access gate. Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateStartHealthCheckTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The content-addressed id of the backup to verify.")] string backupId,
+                CancellationToken cancellationToken,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartHealthCheckAsync(operations, backupId, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_health_check",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup health check",
+                Description =
+                    "Starts a tracked health verification of one backup against the durable sink - manifest and "
+                    + "artifact presence, and a re-hash of every present artifact - and returns an operation handle at "
+                    + "once. Poll lattice_backup_operation_status for progress (artifacts checked of total) and the "
+                    + "verdict (result key healthStatus); the fresh report is persisted as the backup's latest health "
+                    + "state. Mutating: subject to the fail-closed backup access gate. Requires backup control to be "
+                    + "enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateStartCatalogRebuildTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                CancellationToken cancellationToken,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartCatalogRebuildAsync(operations, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_catalog_rebuild",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup catalog rebuild",
+                Description =
+                    "Starts a tracked rebuild of the backup catalog from the durable sink - every manifest the sink "
+                    + "holds is re-registered - and returns an operation handle at once. Poll "
+                    + "lattice_backup_operation_status for progress (manifests re-registered; no total) and the counts "
+                    + "(result keys scannedCount, registeredCount, reconciledCount). Cluster-wide: requires the restore "
+                    + "grant over the backup catalog. Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateStartCatalogScrubTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                CancellationToken cancellationToken,
+                [Description("When true, remove the orphan rows found; when false (the default), only flag them.")] bool pruneOrphans = false,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartCatalogScrubAsync(operations, pruneOrphans, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_catalog_scrub",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup catalog scrub",
+                Description =
+                    "Starts a tracked scrub of the backup catalog against the durable sink - every catalog row is "
+                    + "probed for a resolvable sink payload - and returns an operation handle at once. Poll "
+                    + "lattice_backup_operation_status for progress (rows probed, then orphans removed when pruning) "
+                    + "and the counts (result keys scannedCount, orphanCount, removedCount, pruned, orphanBackupIds). "
+                    + "Non-destructive unless pruneOrphans is true. Cluster-wide: requires the restore grant over the "
+                    + "backup catalog. Requires backup control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

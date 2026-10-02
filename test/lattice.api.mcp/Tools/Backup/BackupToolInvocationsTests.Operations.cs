@@ -206,6 +206,70 @@ public sealed partial class BackupToolInvocationsTests
     }
 
     [Test]
+    public async Task Start_health_check_passes_the_backup_and_polls_to_the_verdict()
+    {
+        var control = new FakeLatticeBackupControl();
+
+        var handle = await BackupToolInvocations.StartHealthCheckAsync(control, "bk-9", "health-1", CancellationToken.None);
+        var status = await BackupToolInvocations.GetOperationStatusAsync(control, handle.OperationId, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(control.LastHealthCheckBackupId, Is.EqualTo("bk-9"));
+            Assert.That(handle.OperationId, Is.EqualTo("health-1"));
+            Assert.That(handle.Kind, Is.EqualTo(BackupOperationKinds.HealthCheck));
+            Assert.That(handle.StatusTool, Is.EqualTo(McpBackupOperationHandle.StatusToolName));
+            Assert.That(status.Operation!.Result[BackupOperationResultKeys.HealthStatus], Is.EqualTo("Healthy"));
+        });
+    }
+
+    [Test]
+    public async Task Start_catalog_rebuild_and_scrub_carry_their_reports_in_the_result_map()
+    {
+        var control = new FakeLatticeBackupControl();
+
+        var rebuild = await BackupToolInvocations.StartCatalogRebuildAsync(control, operationId: string.Empty, CancellationToken.None);
+        var rebuildGeneratedId = control.LastOperationId;
+        var scrub = await BackupToolInvocations.StartCatalogScrubAsync(control, pruneOrphans: true, operationId: "scrub-1", CancellationToken.None);
+        var rebuilt = await BackupToolInvocations.GetOperationStatusAsync(control, rebuild.OperationId, CancellationToken.None);
+        var scrubbed = await BackupToolInvocations.GetOperationStatusAsync(control, scrub.OperationId, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rebuildGeneratedId, Is.Null, "An empty id is passed on as null so one is generated.");
+            Assert.That(rebuild.Kind, Is.EqualTo(BackupOperationKinds.CatalogRebuild));
+            Assert.That(BackupOperationResults.TryReadCatalogRebuildReport(rebuilt.Operation!.Result, out var rebuildReport), Is.True);
+            Assert.That(rebuildReport!.ScannedCount, Is.EqualTo(2));
+            Assert.That(control.LastScrubPruneOrphans, Is.True);
+            Assert.That(scrub.Kind, Is.EqualTo(BackupOperationKinds.CatalogScrub));
+            Assert.That(BackupOperationResults.TryReadCatalogScrubReport(scrubbed.Operation!.Result, out var scrubReport), Is.True);
+            Assert.That(scrubReport!.Pruned, Is.True);
+        });
+    }
+
+    [Test]
+    public void Unauthorized_caller_is_denied_on_the_maintenance_start_tools()
+    {
+        var control = new FakeLatticeBackupControl { Authorized = false };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await BackupToolInvocations.StartHealthCheckAsync(control, "bk-0", null, CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await BackupToolInvocations.StartCatalogRebuildAsync(control, null, CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await BackupToolInvocations.StartCatalogScrubAsync(control, false, null, CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await BackupToolInvocations.StartHealthCheckAsync(null!, "bk-0", null, CancellationToken.None),
+                Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
     public void Unauthorized_caller_is_denied_on_the_operation_tools()
     {
         var control = new FakeLatticeBackupControl { Authorized = false };

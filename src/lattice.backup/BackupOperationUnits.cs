@@ -14,6 +14,9 @@ public static class BackupOperationUnits
     /// <summary>Backup-set members captured.</summary>
     public const string Members = "members";
 
-    /// <summary>Manifests validated.</summary>
+    /// <summary>Manifests validated, re-registered, probed or removed.</summary>
     public const string Manifests = "manifests";
+
+    /// <summary>Backup artifacts checked against the sink.</summary>
+    public const string Artifacts = "artifacts";
 }
