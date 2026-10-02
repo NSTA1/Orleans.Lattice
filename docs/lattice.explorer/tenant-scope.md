@@ -93,8 +93,14 @@ on, a tenant's own administrators manage who belongs to the tenant and who may d
 what on its trees from the tenant-rooted Access area, `/t/{tenant}/access`. The pages
 talk to the tenant directory and tenant policy facades
 (`ILatticeTenantDirectoryAdmin`, `ILatticeTenantPolicyAdmin`) through the circuit's
-connection; the web head's gRPC transports do not carry those two facades yet, so a
-standalone Explorer reports the feature as unavailable.
+connection. The web head carries both over the cluster's tenant-administration gRPC
+service: every call carries the circuit's sign-in and asserts its active tenant, and
+the binding's statuses are turned back into the facades' typed refusals (the feature
+being off, the reserved tenant, the last admin entry, a confinement rule, or a reached
+cap with its dimension, usage and limit), so a page reads a failure the same way it
+would against an in-process facade. The
+[Explorer sample](../../samples/Explorer/README.md#delegated-tenant-access-globex)
+seeds a tenant with delegated access to walk through.
 
 ### Who sees the pages
 

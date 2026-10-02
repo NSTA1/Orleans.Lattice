@@ -93,7 +93,9 @@ lifecycle, quota, and region-residency verbs and the
   definition.
 - **Create seeds admin subjects.** Tenant *visibility* on the read-only
   `ILatticeTenantSelfService` surface resolves from the tenant
-  record's admin-subject set, so a tenant created with none is mutable but
+  record's admin-subject set (and, with
+  [delegated tenant access administration](#delegated-tenant-access-administration)
+  on, its member set and group entries too), so a tenant created with none is mutable but
   invisible - even to the operator who just created it. `CreateTenantAsync`
   therefore takes an optional `adminSubjects` set and seeds it onto the new
   record. Omit it (or pass an empty set) and the **calling subject** is seeded, so the
@@ -296,7 +298,11 @@ instead of a report for a tenant it does not hold.
 `ListAccessibleTenantsAsync` returns, in ascending ordinal tenant-id order, the
 tenants the caller is a registered administrator of plus its own current tenant when
 that is non-default, so an anonymous or non-privileged caller under the default tenant
-gets an empty list. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
+gets an empty list. It asks the tenant policy engine with the caller's resolved
+groups, and so does the accessibility check in `GetTenantAsync`: while delegated
+tenant access administration is on, a tenant the caller may act as through a member
+entry or a group entry - for example a member only through one of the tenant's
+groups - is listed and readable; while it is off, only the exact-id admin set counts. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
 not see this tenant" into a single `TenantNotFoundException`, so no caller can probe
 for the existence of a tenant outside its authority.
 
@@ -368,10 +374,16 @@ refused with `TenantAccessConfinementException` (`ForeignTenantGroup`), and an
 own-tenant group that does not exist with an `ArgumentException`. Such an entry is
 checked in the membership directory instead of the identity directory. A group entry
 counts as one entry. Removing a tenant's last admin subject is refused with
-`TenantLastAdminSubjectException` - including when two concurrent removals of
-different subjects would together empty the set, which is detected on the merged
-record and repaired before the refusal - and the reserved `default` tenant's
-membership can never be changed.
+`TenantLastAdminSubjectException`, including when two concurrent removals of
+different subjects would together empty the set: the guard is re-applied to the
+merged record inside the registry's compare-and-set loop, before the write, so the
+second racer to commit re-reads the first's removal and is refused with nothing
+written. (A host that replaced the built-in tenant registry gets a best-effort
+fallback: the guard is checked against a fresh read, and a call that still finds the
+set empty after its write re-grants its own entry and is refused.) A removal is
+stamped later than the entry it removes as well as the local clock, so it takes
+effect even when another silo with a clock running ahead wrote the entry. The
+reserved `default` tenant's membership can never be changed.
 
 ### `ILatticeTenantGrantAdmin`
 
@@ -475,7 +487,21 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
   finds the tenant over its cap withdraws exactly what it added and is refused with
   `LatticeQuotaExceededException`. Concurrent callers may all be refused, which is the
   fail-closed direction; between a write and its withdrawal a reader can briefly see
-  the tenant over its cap.
+  the tenant over its cap. The withdrawal is idempotent and is tried up to four times,
+  uncancellably. If every attempt fails, the addition stays and the call is still
+  refused with `LatticeQuotaExceededException`, whose message says the cap may stay
+  exceeded until the addition is removed and whose `Current` is the over-cap count; a
+  warning naming only the tenant and dimension is logged.
+- **Removals win the merge.** A removal from the member set or the admin set is
+  stamped later than the entry it removes as well as the local clock, so `Changed`
+  `true` means the entry is gone even when another silo with a clock running ahead
+  wrote it.
+- **One id namespace.** Admin-set and member-set entries are plain ids, and user ids
+  and cluster group ids share one namespace there, as they do in the membership
+  directory: an entry matches a subject whose own id, or any of whose groups, equals
+  it. Keeping user and group ids distinct is the identity provider's and the
+  directory's job. Tenant groups cannot collide, because no user or cluster group id
+  may start with `t/`.
 - **Idempotent mutations, ordinal listings.** Repeating an add or remove reports
   `Changed` (or `Removed`) `false`. Paged listings take a `TenantAccessPageRequest`
   (`PageSize` defaults to 100 and is clamped to 1000) and return `NextPageToken`.
@@ -528,7 +554,9 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
   resolves as a group, is a cluster group, and anything else is a user.
 - **Removing a group** cascades, in this order: a guard that refuses with
   `TenantLastAdminSubjectException` when the group is the tenant's last admin-set
-  entry, before anything is written; the group's member-set and admin-set entries;
+  entry, before anything is written; the group's member-set and admin-set entries,
+  committed with the last-admin guard re-applied to the merged record, so a racing
+  admin removal is refused with nothing written;
   the tenant-tier rules whose subject is the group; and finally its membership edges
   in both directions and its record. A removal interrupted part-way can be repeated.
   `TenantGroupRemovalResult` reports `Removed`, `EdgesRemoved`,
@@ -536,7 +564,12 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
   group that does not exist reports `Removed` `false` and cascades nothing.
 - **`ResolveSubjectAsync`** expands the subject's transitive groups from the
   membership directory and reports `IsAdmin`, `IsMember` and the matching
-  `AdminEntries` and `MemberEntries`.
+  `AdminEntries` and `MemberEntries`. The subject may be any principal, so a tenant
+  admin who added a cluster group to the tenant's member or admin set can learn
+  whether a given user is a transitive member of that cluster group. That is by
+  design: admitting the group lets its members act as the tenant, so who they are is
+  the tenant admin's to know. Nothing is reported about a cluster group the tenant has
+  not admitted, because only entries of the tenant's own sets are matched.
 
 ### `ILatticeTenantPolicyAdmin`
 

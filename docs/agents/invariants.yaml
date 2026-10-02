@@ -755,6 +755,7 @@ invariants:
         - "TenantAccessAdministrationDisabledException"
     violation_modes:
       - "A member or group entry admits a subject while the flag is off."
+      - "Turning the flag off also stops stripping asserted t/ group claims (the claim filter must stay active)."
       - "The evaluator consults a tenant-tier rule while the flag is off."
       - "Turning the flag off deletes tenant groups, members or rules."
       - "A snapshot compiled with the flag on keeps honouring member entries after the flag is turned off."
@@ -1571,6 +1572,8 @@ invariants:
       - "A tenant member reaches another tenant's tree without an active cross-tenant grant."
       - "An admin-set entry naming another tenant's group admits that group's members."
       - "A delegated access facade accepts the reserved default tenant."
+      - "Two concurrent admin-set removals both commit and leave the tenant with no admin entry, or a removal is repaired by a second write that can fail."
+      - "A removal stamped behind the slot it supersedes loses the merge while the facade reports the entry removed."
     detection_signals:
       - type: test
         name: "TenantAccessConformanceTests"
@@ -1592,7 +1595,7 @@ invariants:
       - "src/lattice.tenancy/TenantAccessEntries.cs"
   - id: tenant-group-namespace-reserved
     name: "The t/ group namespace is reserved to the tenant tier"
-    description: "Only the tenant tier owns group ids starting with t/: the cluster auth facade refuses to create one, and while delegated tenant access administration is enabled every identity-provider-asserted t/ group is stripped before group expansion."
+    description: "Only the tenant tier owns group ids starting with t/: the cluster auth facade refuses to create one, and whenever the tenancy add-on is registered, whatever its delegated tenant access administration flag, every identity-provider-asserted t/ group is stripped before group expansion, because operator rules and app role bindings naming a tenant group are honoured whatever the flag."
     scope:
       packages:
         - "Orleans.Lattice.Membership"
@@ -1604,7 +1607,8 @@ invariants:
         - "LatticeAuthAdmin"
     violation_modes:
       - "The cluster auth facade creates a group whose id starts with t/."
-      - "A token-asserted, overage or claim-projected t/ group id reaches group expansion while the feature is enabled."
+      - "A token-asserted, overage or claim-projected t/ group id reaches group expansion on a cluster with tenancy registered, including while the delegated-access flag is off."
+      - "The claim filter is made to follow the delegated-access flag, so a token asserting t/{T}/x matches an operator rule or app role binding after a rollback."
       - "A check tests only the well-formed LatticeTenantGroupId shape, so t/default/x or a malformed t/ id slips through."
     detection_signals:
       - type: test

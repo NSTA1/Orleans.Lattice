@@ -148,6 +148,13 @@ origin included**, and refuses a violation with an `ArgumentException` naming th
   `Tree:*`, a legacy or `default` tree, a `sys-` or `_lattice_` tree, or another
   tenant's tree may never name a tenant group. User subjects are not affected.
 
+An operator rule or an app role rule that names a tenant group is evaluated in the
+operator layer, so it is honoured whatever the delegated-access flag says. That is why
+the membership package strips identity-provider-asserted `t/` groups whenever tenancy
+is registered rather than only while the flag is on: a token asserting
+`t/{tenant}/{name}` can never match such a rule (see
+[Tenant groups](../lattice.membership/README.md#tenant-groups)).
+
 When the snapshot compiles, it also drops any tenant-tier rule that breaks the first
 rule above, so one that reached the store by restore or replication without passing
 the guard is never evaluated.

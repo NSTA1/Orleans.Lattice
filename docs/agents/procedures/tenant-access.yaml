@@ -68,7 +68,7 @@ failure_modes:
     response: "Name only the tenant's own trees and groups, cluster groups and users, and data-plane operations."
   - id: cap-reached
     signal: "LatticeQuotaExceededException with a tenant-groups, tenant-membership-edges, tenant-member-subjects or tenant-rules dimension (gRPC ResourceExhausted)."
-    effect: "The addition is refused or withdrawn."
+    effect: "The addition is refused or withdrawn; if the withdrawal failed every attempt the message says the cap may stay exceeded until the addition is removed."
     response: "Remove entries, or ask a platform operator to raise the cap with SetTenantQuotasAsync."
   - id: platform-rule-decides
     signal: "ExplainAsync reports DecidingLayer Platform."
@@ -85,7 +85,7 @@ rollback:
 concurrency:
   - rule: "Cap-governed additions are verified after the write and withdrawn when over the cap; concurrent racers may all be refused."
     source: "docs/lattice.api.tenantadmin/README.md"
-  - rule: "Removing the tenant's last admin entry, including a group, is refused with TenantLastAdminSubjectException."
+  - rule: "Removing the tenant's last admin entry, including a group, is refused with TenantLastAdminSubjectException; the guard runs inside the registry compare-and-set loop, so concurrent removals cannot empty the set."
     source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
 sources:
   - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"

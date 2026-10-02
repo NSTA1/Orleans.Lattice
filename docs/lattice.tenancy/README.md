@@ -776,8 +776,7 @@ While the flag is off:
 - Tenant groups, member entries, group entries in an admin set and tenant-tier rules
   are **inert**. Active-tenant validation is the exact-subject-id admin check it has
   always been, the compiled tenant-policy snapshot builds no member or group index,
-  the authorization engine never enters the tenant rule layer, and asserted tenant
-  group claims are not filtered.
+  and the authorization engine never enters the tenant rule layer.
 - Every delegated access operation except `GetPostureAsync` is refused with
   `TenantAccessAdministrationDisabledException`.
 - **Nothing is deleted.** Existing groups, member entries and tenant-tier rules are
@@ -793,8 +792,8 @@ The flag is read through the options monitor, so a change applies without a rest
   Member and group entries are honoured only while both the snapshot and the live
   flag have the feature on, so turning it off takes effect at once, before the
   rebuild.
-- It clears the membership package's subject-resolution cache, because a cached
-  subject carries the claim filter's verdict from when it was resolved.
+- It clears the membership package's subject-resolution cache, so no subject
+  resolved before the change outlives it.
 
 ### Tenant groups
 
@@ -811,11 +810,15 @@ tenant's residency. The whole `t/` group namespace is reserved to the tenant tie
 
 - The cluster auth facade refuses to create a group whose id starts with `t/`
   (`LatticeTenantOwnedGroupException`).
-- While the feature is on, a group id starting with `t/` that an identity provider
-  asserts (a token claim, a group overage, or a `ClaimToGroups` projection) is
-  stripped before group expansion, so no identity-provider administrator can join a
-  tenant group by asserting its id. Groups the membership directory itself records
-  are kept.
+- Whenever tenancy is registered, **whatever the flag**, a group id starting with
+  `t/` that an identity provider asserts (a token claim, a group overage, or a
+  `ClaimToGroups` projection) is stripped before group expansion, so no
+  identity-provider administrator can join a tenant group by asserting its id.
+  Groups the membership directory itself records are kept. The filter does not
+  follow the flag because operator rules and app role bindings that name a tenant
+  group are honoured whatever the flag: were it switched off by the flag, a token
+  asserting `t/{tenant}/{name}` could match them after a rollback, or on a silo whose
+  flag has not yet changed.
 - A tenant group may contain users, groups of the same tenant and cluster groups, but
   may never become a member of a cluster group or of another tenant's group. The
   membership directory enforces this for every caller, operators included; see

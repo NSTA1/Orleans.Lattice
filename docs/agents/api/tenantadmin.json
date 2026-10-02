@@ -1752,7 +1752,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
       },
       "concurrency": {
-        "rule": "Absent and unauthorized tenants are deliberately indistinguishable.",
+        "rule": "Absent and unauthorized tenants are deliberately indistinguishable; accessibility is evaluated with the caller resolved groups.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
       },
       "sources": [
@@ -2043,7 +2043,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
       },
       "concurrency": {
-        "rule": "Enumeration is scoped to the caller resolved subject and omits tenants the caller cannot see.",
+        "rule": "Enumeration is scoped to the caller resolved subject and its resolved groups and omits tenants the caller cannot see; with delegated tenant access administration on, a tenant reached through a member entry or a group entry is listed.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
       },
       "sources": [
@@ -2485,8 +2485,8 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
       },
       "concurrency": {
-        "rule": "Concurrent removals that would empty the set are detected on the registry merged result and repaired before refusal.",
-        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+        "rule": "The last-admin guard is re-applied to the merged record inside the registry compare-and-set loop, so of two concurrent removals that would together empty the set the second to commit is refused with nothing written. The removal is stamped later than the slot it supersedes.",
+        "source": "src/lattice.api.tenantadmin/TenantAdminSetCommit.cs#TenantAdminSetCommit"
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
@@ -2530,8 +2530,8 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
       },
       "concurrency": {
-        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
-        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; the admin-set removal is committed with the last-admin guard re-applied inside the registry compare-and-set loop, and every set removal is stamped later than the slot it supersedes.",
+        "source": "src/lattice.api.tenantadmin/TenantAdminSetCommit.cs#TenantAdminSetCommit"
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
@@ -2620,8 +2620,8 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
       },
       "concurrency": {
-        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
-        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+        "rule": "Member-set removals are stamped later than the slot they supersede, so the removal wins the CRDT merge even against a slot written by a silo whose clock runs ahead.",
+        "source": "src/lattice.api.tenantadmin/TenantRemovalStamp.cs#TenantRemovalStamp"
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
@@ -2706,7 +2706,7 @@
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Read-only resolution of admin and member entries.",
+        "basis": "Read-only resolution of admin and member entries. The subject may be any principal, so a tenant admin can learn whether a user is in a cluster group the tenant admitted; by design.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
       },
       "concurrency": {
@@ -3392,7 +3392,7 @@
       "type": "LatticeQuotaExceededException",
       "grpc_status": "ResourceExhausted",
       "retryable": false,
-      "meaning": "The active tenant quota, or a delegated tenant access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects, MaxTenantRules), would be exceeded. Over gRPC it is ResourceExhausted with lattice-quota-dimension, -current and -limit trailers.",
+      "meaning": "The active tenant quota, or a delegated tenant access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects, MaxTenantRules), would be exceeded. Over gRPC it is ResourceExhausted with lattice-quota-dimension, -current and -limit trailers. A delegated access cap addition found over the cap is withdrawn with up to four attempts; if none lands, the message says the cap may stay exceeded until the addition is removed.",
       "source": "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException"
     },
     {
