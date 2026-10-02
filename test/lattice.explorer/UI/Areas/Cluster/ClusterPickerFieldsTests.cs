@@ -42,6 +42,8 @@ public sealed class ClusterPickerFieldsTests : ClusterTestContext
             .Returns(new TreeWalPlacementAudit { TreeId = Orders, PartitionCount = 1, KnownProviderKeys = ["blob-a", "blob-b"] });
         var cut = RenderAt("/cluster/wal");
         ClusterTestContext.Button(cut, "Plan a move...").Click();
+        // #4254: the dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog input"), Is.Not.Empty));
         cut.FindAll(".lt-dialog input")[0].Input(Orders);
 
         Assert.That(SuggestionFields.Offers(cut, "Target provider key", "blob", atLeast: 2), Is.EqualTo(new[] { "blob-a", "blob-b" }));
@@ -124,6 +126,8 @@ public sealed class ClusterPickerFieldsTests : ClusterTestContext
         var cut = RenderAt("/cluster/trees");
         cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-command]"), Is.Not.Empty));
         cut.Find($"[data-lt-command=\"{ClusterArea.ReshardCommandId}\"]").Click();
+        // #4254: the picker dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog"), Is.Not.Empty));
 
         Assert.That(SuggestionFields.Offers(cut, "Tree", "bil"), Is.EqualTo(new[] { "billing" }));
     }

@@ -39,6 +39,8 @@ public sealed class ClusterOperationProgressPagesTests : ClusterTestContext
         cut.FindAll("form input")[0].Input("256");
         cut.FindAll("form input")[1].Input("32");
         cut.Find("form").Submit();
+        // #4254: the "Resize..." button renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(HasButton(cut, "Resize..."), Is.True));
         Button(cut, "Resize...").Click();
         ConfirmTyping(cut, TreeId);
 
@@ -162,6 +164,8 @@ public sealed class ClusterOperationProgressPagesTests : ClusterTestContext
 
         cut.FindAll("form input")[0].Input("a/crm/orders-copy");
         cut.Find("form").Submit();
+        // #4254: the "Snapshot..." button renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(HasButton(cut, "Snapshot..."), Is.True));
         Button(cut, "Snapshot...").Click();
         ConfirmTyping(cut, TreeId);
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-progress__phase").TextContent, Is.EqualTo("Starting to forward live writes")));

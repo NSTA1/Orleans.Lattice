@@ -74,7 +74,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class CiIntegrationBranchTriggerTests
+public sealed partial class CiIntegrationBranchTriggerTests
 {
     /// <summary>
     /// The branch pattern that denotes an epic or bucket integration branch.

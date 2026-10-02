@@ -54,7 +54,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
 
         Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("Choose a tree"));
         cut.Find("form[aria-label='Choose a tree']").Submit();
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Name the tree to audit."));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Name the tree to audit.")));
 
         cut.Find("form[aria-label='Choose a tree'] input").Input("orders");
         cut.Find("form[aria-label='Choose a tree']").Submit();
@@ -86,7 +86,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         Assert.That(cut.Markup, Does.Contain("Known keys: blob-a, blob-b."));
 
         cut.Find(".lt-dialog form").Submit();
-        Assert.That(cut.FindAll(".lt-dialog .lt-field__error"), Has.Count.EqualTo(2));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog .lt-field__error"), Has.Count.EqualTo(2)));
 
         cut.FindAll(".lt-dialog input")[1].Input("1");
         cut.FindAll(".lt-dialog input")[2].Input("blob-b");
@@ -123,7 +123,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         Assert.That(HasButton(cut, "Reclaim the source..."), Is.False, "nothing to reclaim before a move");
 
         Button(cut, "Move partition...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Quiesces partition 1 briefly"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Quiesces partition 1 briefly")));
         ConfirmTyping(cut, TreeId);
         cut.WaitUntil(() =>
         {
@@ -147,7 +147,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         Assert.That(Admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == "ExecuteWalMoveAsync"), Is.Zero, "The blocking verb is never called.");
 
         Button(cut, "Reclaim the source...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("blob-x").And.Contain("can no longer be reverted"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("blob-x").And.Contain("can no longer be reverted")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() =>
@@ -225,6 +225,9 @@ public sealed class ClusterWalPageTests : ClusterTestContext
 
         Assert.That(HasButton(cut, "Move partition..."), Is.False);
         cut.Find("select").Change("blob-b");
+        // The change handler can re-render asynchronously under load before the
+        // reclaim button settles, so wait rather than assuming it is ready (#4254).
+        cut.WaitUntil(() => HasButton(cut, "Reclaim the source..."));
         Button(cut, "Reclaim the source...").Click();
         ConfirmTyping(cut, TreeId);
 
@@ -253,7 +256,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
 
         Button(cut, "Plan a move...").Click();
 
-        Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end")));
     }
 
     private static Dictionary<string, string> MovedResult() => new()

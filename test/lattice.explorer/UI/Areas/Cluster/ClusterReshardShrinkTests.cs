@@ -31,17 +31,19 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
 
         Stage(cut, "4");
 
-        Assert.Multiple(() =>
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll(".lt-field__error"), Is.Empty, "a count below the current one is a shrink, not an error");
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Shrink a/crm/orders from 8 physical shards to 4 physical shards."));
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("lower the tree's write and point-read throughput ceiling"));
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("scans, counts, snapshots and resizes fan out to fewer shards"));
             Assert.That(cut.Markup, Does.Not.Contain("only grows"));
-        });
+        }));
 
         Button(cut, "Reshard...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Shrinks the tree to 4 physical shards"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Shrinks the tree to 4 physical shards")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() =>
@@ -62,13 +64,15 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
 
         Stage(cut, "8");
 
-        Assert.Multiple(() =>
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.Multiple(() =>
         {
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Grow a/crm/orders from 4 physical shards to 8 physical shards."));
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Not.Contain("throughput ceiling"));
-        });
+        }));
         Button(cut, "Reshard...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Grows the tree to 8 physical shards"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Grows the tree to 8 physical shards")));
     }
 
     [Test]
@@ -81,13 +85,14 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
         Assert.That(cut.Find(".lt-field__hint").TextContent, Does.Contain("From 2 to 16."));
 
         Stage(cut, "1");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at least 2"));
+        // #4254: the error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at least 2")));
         Stage(cut, "8");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("already has 8 physical shards"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("already has 8 physical shards")));
         Stage(cut, "17");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 16"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 16")));
         Stage(cut, "2");
-        Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 8 physical shards to 2 physical shards"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 8 physical shards to 2 physical shards")));
     }
 
     [Test]
@@ -152,7 +157,8 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
         });
 
         Stage(cut, "72");
-        Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Grow a/crm/orders from 64 physical shards to 72 physical shards."));
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Grow a/crm/orders from 64 physical shards to 72 physical shards.")));
     }
 
     private static string Definition(IRenderedComponent<ClusterPage> cut, string term) =>

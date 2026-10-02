@@ -31,7 +31,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         var cut = RenderTab<ClusterTreeLifecycle>();
 
         Button(cut, "Delete tree...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Every read and write on it fails at once"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Every read and write on it fails at once")));
         cut.Find(".lt-confirm input").Input("a/crm/Orders");
         Assert.That(cut.Find(".lt-confirm button[type=submit]").HasAttribute("disabled"), Is.True);
         ConfirmTyping(cut, TreeId);
@@ -56,8 +56,8 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         var cut = RenderTab<ClusterTreeLifecycle>();
 
         Button(cut, "Purge now...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent,
-            Does.Contain("cannot be undone").And.Contain("Purge requires the TreeLifecycle grant and is not an app operation"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent,
+            Does.Contain("cannot be undone").And.Contain("Purge requires the TreeLifecycle grant and is not an app operation")));
         ConfirmTyping(cut, TreeId);
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Purged")));
         Admin.Received(1).PurgeTreeAsync(TreeId, true, Arg.Any<CancellationToken>());
@@ -95,10 +95,10 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         var cut = RenderTab<ClusterTreeLifecycle>();
 
         cut.Find("form[aria-label='Set alias']").Submit();
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Name the tree this name should reach."));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Name the tree this name should reach.")));
         cut.Find("form[aria-label='Set alias'] input").Input(TreeId);
         cut.Find("form[aria-label='Set alias']").Submit();
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("A tree cannot alias itself."));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("A tree cannot alias itself.")));
 
         cut.Find("form[aria-label='Set alias'] input").Input("a/crm/orders-v2");
         cut.Find("form[aria-label='Set alias']").Submit();
@@ -121,7 +121,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("1.0 KiB")));
 
         cut.Find("form[aria-label='Change configuration']").Submit();
-        Assert.That(Toasts, Does.Contain("Nothing to change."));
+        cut.WaitUntil(() => Assert.That(Toasts, Does.Contain("Nothing to change.")));
 
         cut.Find("form[aria-label='Change configuration'] select").Change("off");
         cut.Find("form[aria-label='Change configuration']").Submit();
@@ -142,7 +142,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         cut.Find("form[aria-label='Change configuration'] input").Input("-3");
         cut.Find("form[aria-label='Change configuration']").Submit();
 
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("greater than zero"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("greater than zero")));
         Admin.DidNotReceive().SetTreeConfigAsync(Arg.Any<string>(), Arg.Any<TreeConfigurationUpdate>(), Arg.Any<CancellationToken>());
     }
 
@@ -160,6 +160,8 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         var form = cut.Find("form[aria-label='Change history retention']");
         form.QuerySelector("select")!.Change("FullValue");
         // #4148: the window is a duration in days, hours, minutes and seconds, not a count of seconds typed as text.
+        // #4254: the re-render after Change is async, so wait for the duration boxes rather than finding them immediately.
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form[aria-label='Change history retention'] .lt-duration__input"), Has.Count.EqualTo(4)));
         var boxes = cut.FindAll("form[aria-label='Change history retention'] .lt-duration__input");
         Assert.That(boxes.Select(box => box.GetAttribute("aria-label")), Is.EqualTo(new[] { "Window, days", "Window, hours", "Window, minutes", "Window, seconds" }));
         Assert.That(boxes.Select(box => box.GetAttribute("value")), Is.EqualTo(new[] { "7", "0", "0", "0" }), "the stored window, in its units");

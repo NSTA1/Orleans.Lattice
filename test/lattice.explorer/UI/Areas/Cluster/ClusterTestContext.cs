@@ -107,7 +107,10 @@ public abstract class ClusterTestContext : ShellChromeTestContext
     internal static void ConfirmTyping<TComponent>(IRenderedComponent<TComponent> cut, string name)
         where TComponent : IComponent
     {
-        cut.Find(".lt-confirm input").Input(name);
+        // The typed confirmation renders after the button click that opens it,
+        // which can land after an async render continuation under load, so the
+        // input must be awaited rather than found immediately (#4254).
+        cut.WaitForElement(".lt-confirm input").Input(name);
         cut.Find("form.lt-confirm").Submit();
     }
 

@@ -95,7 +95,8 @@ public sealed class ClusterOrphansPageTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-stage").TextContent, Does.Contain("2 orphaned leaves, 1 repairable.")));
 
         Button(cut, "Repair...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("cannot be undone").And.Contain("audits again"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("cannot be undone").And.Contain("audits again")));
         ConfirmTyping(cut, TreeId);
         cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-cluster='orphan-progress']").TextContent, Does.Contain("1 of 4 shards")));
 
@@ -186,6 +187,8 @@ public sealed class ClusterOrphansPageTests : ClusterTestContext
 
         cut.Find("input[type=checkbox]").Change(true);
         Button(cut, "Audit").Click();
+        // #4254: the Stop button renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(HasButton(cut, "Stop"), Is.True));
         Button(cut, "Stop").Click();
 
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-error").TextContent, Does.Contain("describe only the part of the tree the pass reached")));
@@ -214,7 +217,8 @@ public sealed class ClusterOrphansPageTests : ClusterTestContext
         var none = RenderAt("/cluster/orphans");
         Assert.That(none.Find(".lt-empty h2").TextContent, Is.EqualTo("Choose a tree"));
         none.Find("form").Submit();
-        Assert.That(none.Find(".lt-field__error").TextContent, Does.Contain("Name the tree to audit."));
+        // #4254: the field error renders after an async continuation.
+        none.WaitUntil(() => Assert.That(none.Find(".lt-field__error").TextContent, Does.Contain("Name the tree to audit.")));
         none.Find("form input").Input("orders");
         none.Find("form").Submit();
         none.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/orphans?tree=orders")));
