@@ -142,6 +142,68 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
     }
 
     [Test]
+    public async Task An_unknown_region_carrying_control_characters_is_sanitized_before_it_is_echoed()
+    {
+        // Regression: the region selector is accepted as any non-empty JSON string -
+        // no character class, no length bound - and the routing fault interpolates it
+        // verbatim. That throw sits in InvokeAsync, outside the try/catch that guards
+        // InvokeInnerAsync, so before the fix it bypassed the sanitize-and-cap seam
+        // altogether: the raw value was echoed to the caller and written by the SDK as
+        // an Error-level "unhandled exception" record with a stack, letting a CR/LF
+        // selector forge whole log records and misreporting a caller mistake as a
+        // server fault.
+        await using var host = await StartHostAsync();
+        await using var client = await ConnectAsync(host);
+
+        var result = await client.CallToolAsync(
+            "lattice_data_get",
+            new Dictionary<string, object?>
+            {
+                ["treeId"] = "t",
+                ["key"] = "k",
+                ["region"] = "mars\r\nfail: Orleans.Lattice[0] FORGED ADMIN GRANT",
+            },
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        var text = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text ?? string.Empty;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.True);
+            Assert.That(text, Does.Contain("Unknown region"));
+            Assert.That(
+                text, Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "a caller-supplied newline must not survive into the echoed fault");
+            Assert.That(
+                text, Does.Contain("mars??fail:"),
+                "each control character must be replaced by a placeholder in place");
+        });
+    }
+
+    [Test]
+    public async Task An_oversized_region_selector_is_capped_before_it_is_echoed()
+    {
+        // The selector is unbounded, so without the cap one argument sizes the fault
+        // the server echoes and logs.
+        await using var host = await StartHostAsync();
+        await using var client = await ConnectAsync(host);
+
+        var result = await client.CallToolAsync(
+            "lattice_data_get",
+            new Dictionary<string, object?>
+            {
+                ["treeId"] = "t", ["key"] = "k", ["region"] = new string('r', 64 * 1024),
+            },
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        var text = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text ?? string.Empty;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.True);
+            Assert.That(text, Has.Length.LessThan(4096));
+        });
+    }
+
+    [Test]
     public async Task Verified_peer_region_serves_the_targeted_call()
     {
         await using var host = await StartVerifyingHostAsync(stateClusterId: "cluster-eu");

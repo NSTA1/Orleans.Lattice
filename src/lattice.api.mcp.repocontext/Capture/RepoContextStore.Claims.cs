@@ -406,7 +406,7 @@ internal sealed partial class RepoContextStore
     {
         if (fencingToken is not null && kind != RepoContextRecordKind.Memory)
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 $"A fencing token was presented for '{key}', but claims are supported on memory records only, "
                 + $"not on a {kind} record. Omit 'fencingToken'.");
         }
@@ -469,7 +469,7 @@ internal sealed partial class RepoContextStore
         var parsed = ParseKey(key);
         if (parsed.Kind != RepoContextRecordKind.Memory)
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 $"The key '{key}' addresses a {parsed.Kind} record. Claims are supported on memory records only "
                 + "('repo/{repoId}/mem/{topic}/{id}'), because the fencing check is enforced on the memory "
                 + "record's own write path.");
@@ -492,7 +492,8 @@ internal sealed partial class RepoContextStore
 
         if (value <= 0L)
         {
-            throw new McpException($"The '{parameterName}' parameter must be a positive number of seconds.");
+            throw McpToolClientErrors.InvalidArgument(
+                $"The '{parameterName}' parameter must be a positive number of seconds.");
         }
 
         return TimeSpan.FromSeconds(value);

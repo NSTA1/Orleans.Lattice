@@ -158,11 +158,51 @@ public sealed class AppMcpToolSourceInvocationTests
 
         var home = await McpToolInvocation.CallAsync(tool, services, Args("home"));
 
+        // The peer rejection is a caller mistake, so it is answered as a client-error
+        // result rather than thrown: the message interpolates the caller's raw region
+        // selector, and a throw here escapes InvokeAsync, which has no handler (#4277).
+        var peer = await McpToolInvocation.CallAsync(tool, services, Args("peer"));
+
         Assert.Multiple(() =>
         {
             Assert.That(home.Text(), Does.Contain("found"));
-            var fault = Assert.ThrowsAsync<McpException>(() => McpToolInvocation.CallAsync(tool, services, Args("peer")));
-            Assert.That(fault!.Message, Does.Contain("current region"));
+            Assert.That(peer.IsError, Is.True);
+            Assert.That(peer.Text(), Does.Contain("current region"));
+        });
+    }
+
+    [Test]
+    public async Task An_app_tool_region_rejection_is_sanitized_before_it_is_echoed()
+    {
+        // This rejection is composed in ResolveRegion's app-tool arm and interpolates
+        // the caller's region verbatim. The selector is accepted as any non-empty JSON
+        // string, so without the client-error seam a CR/LF value forges log records.
+        var host = NotesHost();
+        host.Bind("alice");
+        var tool = (await host.SessionToolAsync("notes_search"))!;
+        var router = new LatticeApiMcpRegionRouter("home", [
+            new LatticeApiMcpRegionDefinition { RegionId = "home", ClusterId = "c1", IsCurrent = true, Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.Data] = null } },
+        ]);
+        var services = new RouterServiceProvider(host.Services, router);
+        host.Services.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>().HttpContext = host.Context();
+
+        var rejected = await McpToolInvocation.CallAsync(
+            tool, services, Args("mars\r\nfail: Orleans.Lattice[0] FORGED ADMIN GRANT"));
+        var oversized = await McpToolInvocation.CallAsync(tool, services, Args(new string('r', 64 * 1024)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rejected.IsError, Is.True);
+            Assert.That(
+                rejected.Text(), Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "a caller-supplied newline must not survive into the echoed fault");
+            Assert.That(
+                rejected.Text(), Does.Contain("mars??fail:"),
+                "each control character must be replaced by a placeholder in place");
+            Assert.That(oversized.IsError, Is.True);
+            Assert.That(
+                oversized.Text(), Has.Length.LessThan(4096),
+                "the echoed fault must be capped so one argument cannot write an unbounded record");
         });
     }
 
