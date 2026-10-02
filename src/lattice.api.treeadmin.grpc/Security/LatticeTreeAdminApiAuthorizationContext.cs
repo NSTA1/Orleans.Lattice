@@ -63,6 +63,18 @@ public enum LatticeTreeAdminApiOperation
 
     /// <summary>The mutating <c>CreateView</c> runtime materialised-view RPC.</summary>
     CreateView = 15,
+
+    /// <summary>The accept-then-poll <c>StartStorageUsageRefresh</c> cluster-storage RPC.</summary>
+    StartStorageUsageRefresh = 16,
+
+    /// <summary>The read-only <c>GetStorageUsageRefreshStatus</c> RPC.</summary>
+    GetStorageUsageRefreshStatus = 17,
+
+    /// <summary>The read-only <c>ListStorageUsageRefreshes</c> RPC.</summary>
+    ListStorageUsageRefreshes = 18,
+
+    /// <summary>The <c>CancelStorageUsageRefresh</c> RPC.</summary>
+    CancelStorageUsageRefresh = 19,
 }
 
 /// <summary>

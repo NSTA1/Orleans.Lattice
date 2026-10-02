@@ -182,6 +182,15 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeSchemaControl>(sp =>
                 new GrpcLatticeSchemaControl(LatticeSchemaApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+
+            // The accept-then-poll compliance-scan and storage-usage refresh tools
+            // (#4126) forward over the same endpoints.
+            services.TryAddSingleton<ILatticeSchemaComplianceOperations>(sp =>
+                new GrpcLatticeSchemaComplianceOperations(LatticeSchemaApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+            services.TryAddSingleton<ILatticeStorageUsageOperations>(sp =>
+                new GrpcLatticeStorageUsageOperations(LatticeTreeAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
             services.AddTreeAdminTools(options.EnableSchemaControl, options.EnableLifecycleControl);
         }
 

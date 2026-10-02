@@ -208,6 +208,18 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Requests cancellation of a tree-administration operation on the wrapped operations facade.</summary>
     public abstract Task<TreeAdminOperationStatusResponse> CancelTreeAdminOperation(TreeAdminOperationRequest request, ServerCallContext context);
 
+    /// <summary>Starts an accept-then-poll storage-usage refresh. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartStorageUsageRefresh(TreeAdminStorageUsageRefreshRequest request, ServerCallContext context);
+
+    /// <summary>Reads a storage-usage refresh's status. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeAdminStorageUsageOperationStatusResponse> GetStorageUsageRefreshStatus(TreeAdminStorageUsageOperationRequest request, ServerCallContext context);
+
+    /// <summary>Lists the caller's storage-usage refreshes. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationPage> ListStorageUsageRefreshes(LatticeOperationListRequest request, ServerCallContext context);
+
+    /// <summary>Requests cancellation of a storage-usage refresh. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeAdminStorageUsageOperationStatusResponse> CancelStorageUsageRefresh(TreeAdminStorageUsageOperationRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -287,6 +299,10 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.GetTreeAdminOperationStatus, (UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>?)null);
             binder.AddMethod(methods.ListTreeAdminOperations, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
             binder.AddMethod(methods.CancelTreeAdminOperation, (UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>?)null);
+            binder.AddMethod(methods.StartStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.GetStorageUsageRefreshStatus, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
+            binder.AddMethod(methods.ListStorageUsageRefreshes, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
+            binder.AddMethod(methods.CancelStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
             return;
         }
 
@@ -350,6 +366,10 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.GetTreeAdminOperationStatus, new UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(serviceImpl.GetTreeAdminOperationStatus));
         binder.AddMethod(methods.ListTreeAdminOperations, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListTreeAdminOperations));
         binder.AddMethod(methods.CancelTreeAdminOperation, new UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(serviceImpl.CancelTreeAdminOperation));
+        binder.AddMethod(methods.StartStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle>(serviceImpl.StartStorageUsageRefresh));
+        binder.AddMethod(methods.GetStorageUsageRefreshStatus, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.GetStorageUsageRefreshStatus));
+        binder.AddMethod(methods.ListStorageUsageRefreshes, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListStorageUsageRefreshes));
+        binder.AddMethod(methods.CancelStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.CancelStorageUsageRefresh));
     }
 }
 
@@ -368,6 +388,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     private readonly ILatticeTreeAdminApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeTreeAdminApiGrpcOptions> _options;
     private readonly ILogger<LatticeTreeAdminGrpcService> _logger;
+    private readonly ILatticeStorageUsageOperations? _storageUsageOperations;
 
     /// <summary>
     /// Initialises the service. The <paramref name="methods"/> parameter is unused
@@ -386,6 +407,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         ILatticeTreeAdminApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeTreeAdminApiGrpcOptions> options,
         ILogger<LatticeTreeAdminGrpcService> logger,
+        ILatticeStorageUsageOperations? storageUsageOperations = null,
         ILatticeTreeAdminOperations? operations = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
@@ -401,6 +423,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         _authSchemeSource = authSchemeSource;
         _options = options;
         _logger = logger;
+        _storageUsageOperations = storageUsageOperations;
     }
 
     /// <summary>
@@ -676,6 +699,36 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         => InvokeAsync(request, context, static (control, req, ct) => control.SetHistoryRetentionAsync(req.TreeId, req.Mode, req.Window, ct));
 
     /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartStorageUsageRefresh(TreeAdminStorageUsageRefreshRequest request, ServerCallContext context)
+        => InvokeAsync(StorageUsageOperations, request, context, static (operations, req, ct) =>
+            operations.StartStorageUsageRefreshAsync(req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAdminStorageUsageOperationStatusResponse> GetStorageUsageRefreshStatus(TreeAdminStorageUsageOperationRequest request, ServerCallContext context)
+        => InvokeAsync(StorageUsageOperations, request, context, static async (operations, req, ct) =>
+            new TreeAdminStorageUsageOperationStatusResponse
+            {
+                Status = await operations.GetOperationStatusAsync(req.OperationId, ct).ConfigureAwait(false),
+            });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationPage> ListStorageUsageRefreshes(LatticeOperationListRequest request, ServerCallContext context)
+        => InvokeAsync(StorageUsageOperations, request, context, static (operations, req, ct) => operations.ListOperationsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAdminStorageUsageOperationStatusResponse> CancelStorageUsageRefresh(TreeAdminStorageUsageOperationRequest request, ServerCallContext context)
+        => InvokeAsync(StorageUsageOperations, request, context, static async (operations, req, ct) =>
+            new TreeAdminStorageUsageOperationStatusResponse
+            {
+                Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
+            });
+
+    private ILatticeStorageUsageOperations StorageUsageOperations => _storageUsageOperations
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented,
+            "This host registers no ILatticeStorageUsageOperations, so the accept-then-poll storage-usage refresh RPCs are unavailable."));
+
+    /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -729,7 +782,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         TRequest request,
         ServerCallContext context,
         Func<ILatticeTreeAdmin, TRequest, CancellationToken, Task<TResponse>> handler)
-        => InvokeCoreAsync(_control, request, context, handler);
+        => InvokeAsync(_control, request, context, handler);
 
     private Task<TResponse> InvokeOperationsAsync<TRequest, TResponse>(
         TRequest request,
@@ -743,14 +796,14 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
                 "The accept-then-poll tree-administration operations are not registered on this host."));
         }
 
-        return InvokeCoreAsync(operations, request, context, handler);
+        return InvokeAsync(operations, request, context, handler);
     }
 
-    private async Task<TResponse> InvokeCoreAsync<TControl, TRequest, TResponse>(
-        TControl control,
+    private async Task<TResponse> InvokeAsync<TFacade, TRequest, TResponse>(
+        TFacade facade,
         TRequest request,
         ServerCallContext context,
-        Func<TControl, TRequest, CancellationToken, Task<TResponse>> handler)
+        Func<TFacade, TRequest, CancellationToken, Task<TResponse>> handler)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
@@ -759,7 +812,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
 
         try
         {
-            return await handler(control, request, context.CancellationToken).ConfigureAwait(false);
+            return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
         }
         catch (RpcException)
         {

@@ -53,7 +53,7 @@ public sealed class LatticeTreeAdminGrpcOperationsUnitTests
             Substitute.For<ILatticeTreeAdminApiAuthSchemeSource>(),
             Options.Create(new LatticeTreeAdminApiGrpcOptions()),
             NullLogger<LatticeTreeAdminGrpcService>.Instance,
-            operations);
+            operations: operations);
 
     private static FakeServerCallContext Context(string method) =>
         new($"/{LatticeTreeAdminGrpcMethods.ServiceName}/{method}");
