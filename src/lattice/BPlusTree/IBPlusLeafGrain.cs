@@ -1153,9 +1153,11 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Optional cross-migration LWW backstop. When non-null and
     /// <paramref name="committed"/> is <c>true</c>, the leaf applies each
     /// <c>(key, value)</c> as a LWW-safe write only when it holds no
-    /// pending bucket under <paramref name="transactionId"/>. The dictionary
-    /// must be restricted to keys this leaf owns (the shard root performs
-    /// the per-key-to-leaf grouping). Passing <c>null</c> is the
+    /// pending bucket under <paramref name="transactionId"/>. The shard root
+    /// groups the dictionary per leaf by descent; a key the leaf's declared
+    /// span excludes (a descent that predates a split) is re-delivered to the
+    /// neighbouring leaf on the key's side rather than stored here, as is a
+    /// prepared key a split moved away from this leaf. Passing <c>null</c> is the
     /// pre-backstop call shape and remains supported for wire compatibility.
     /// </param>
     Task ApplyTxTerminalAsync(

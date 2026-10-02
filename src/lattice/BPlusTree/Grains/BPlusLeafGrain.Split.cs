@@ -1345,11 +1345,11 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// The donor keeps its own <see cref="_pendingTx"/> bucket and
-    /// <see cref="_shadowedSagas"/> markers for the moved keys: they are inert
-    /// once the split shrinks its key range (the donor no longer owns or
-    /// serves those keys) and are cleared per-saga by
-    /// <see cref="ApplyTxTerminalAsync"/> on the saga's terminal, so their
-    /// lifetime stays bounded by saga progress. Removing them here instead
+    /// <see cref="_shadowedSagas"/> markers for the moved keys: they are
+    /// cleared per-saga by <see cref="ApplyTxTerminalAsync"/> on the saga's
+    /// terminal, which re-routes a committed moved key to the leaf that now
+    /// declares it rather than draining it into this donor (issue #4335), so
+    /// their lifetime stays bounded by saga progress. Removing them here instead
     /// would open a window - between this transfer and the donor dropping the
     /// moved rows from its own cache - in which the donor still serves the
     /// migrated value but no longer gates it.
