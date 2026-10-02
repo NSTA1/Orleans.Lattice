@@ -204,9 +204,12 @@ internal sealed class StoragePressureCollector(
     /// give the byte figure at which the budget's owner is reported over
     /// threshold. A non-positive budget means "no capacity classification", and
     /// yields a threshold of zero, which every comparison is guarded against.
+    /// A positive budget yields a threshold of at least one byte: truncating a
+    /// product below one to zero would report the aggregate over threshold with
+    /// nothing retained, while the per-account guard would never report it.
     /// </summary>
     private static long ApplyAdvisoryRatio(long budget, double ratio)
-        => budget > 0 ? (long)(budget * ratio) : 0L;
+        => budget > 0 ? Math.Max(1L, (long)(budget * ratio)) : 0L;
 
     private WalAccountPressure[] BuildAccounts(
         Dictionary<string, Accumulator> accumulators,
