@@ -166,7 +166,7 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   as skills under `.github/skills/` and instructions under
   `.github/instructions/`. Read the relevant one before large changes.
 - Security invariants for the auth, membership, replication, telemetry, MCP,
-  installable-apps, and Explorer surfaces (fail closed; never trust peer/wire-supplied classification;
+  installable-apps, delegated tenant access, and Explorer surfaces (fail closed; never trust peer/wire-supplied classification;
   enforce at the single narrowest seam; isolate credential state per circuit; no
   dead security config; keep the allocation bar on security hot paths) live in
   `.github/instructions/security.instructions.md`,

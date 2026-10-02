@@ -1,11 +1,11 @@
 ---
-applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.apps/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.auth/**,src/lattice.api.replication/**,src/lattice.api.replication.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**,src/lattice.apps/**,src/lattice.api.apps/**,src/lattice.api.apps.grpc/**"
+applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.apps/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.auth/**,src/lattice.api.replication/**,src/lattice.api.replication.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**,src/lattice.apps/**,src/lattice.api.apps/**,src/lattice.api.apps.grpc/**,src/lattice.tenancy/**,src/lattice.api.tenantadmin/**,src/lattice.api.tenantadmin.grpc/**"
 ---
 
 # Security Boundaries and Invariants
 
 These are load-bearing security invariants for the auth, membership, replication,
-telemetry, MCP, Explorer, and installable-app control surfaces. They were established by the v8 security
+telemetry, MCP, Explorer, installable-app, and delegated tenant access control surfaces. They were established by the v8 security
 hardening epic (#1270, sub-issues #1264-#1269). Do not regress them, and apply the
 cross-cutting principles below to any new code on these surfaces. When you touch a
 seam named here, re-read the invariant before changing it.
@@ -254,6 +254,60 @@ gate will tell you if you forget.
   upgrade whose `AppInstallRequest.ExpectedManifestDigest` differs from the digest of
   the manifest re-resolved at commit is refused before anything is recorded (#4021).
   A review-then-install client must send the digest; the Explorer does.
+
+### Delegated tenant access administration (`src/lattice.auth`, `src/lattice.membership`, `src/lattice.tenancy`, `src/lattice.api.tenantadmin`, `src/lattice.api.tenantadmin.grpc`, `src/lattice.api.auth`, `src/lattice.apps`)
+- **Operator verdicts are final.** The operator layer - every rule whose id is not in
+  the tenant-tier `tenant:` namespace (`LatticeTenantRuleIds`), the `Tree:*` tier and
+  `app:` rules included - is evaluated first, and a matched verdict, allow or deny,
+  ends the decision. The tenant layer runs only when no operator rule matches, only
+  for a tenant-layer tree (`t/{tenant}/{name}`, never `default`, never an app-owned
+  `a/...`, `sys-` or `_lattice_` tree), and it is always the tree **owner's** layer.
+  Range and scan filters compose the two layers per key on operator **coverage**, not
+  on the operator rule's effect. Do not add a path that consults a tenant rule before,
+  or instead of, the operator layer.
+- **Tenant-tier rules are written only under system origin, and confined for every
+  caller.** The policy store refuses a `tenant:` id off system origin with
+  `LatticeTenantOwnedRuleException` before any read or write. Independently of origin
+  it refuses a tenant-tier rule outside its tenant's tenant-layer trees and tenant-wide
+  scope or outside `LatticeAuthOperations.All`, a tenant-wide `t/{x}/*` scope on any
+  rule that is not that tenant's own tenant-tier rule, and any rule naming a tenant
+  group on a tree outside that group's tenant (an `app:` rule may also use that
+  tenant's app-owned trees). The only writer of `tenant:` rules is the tenant policy
+  facade, after its own tenant-admin check.
+- **The `t/` group namespace is reserved to the tenant tier.** The cluster auth facade
+  refuses to create a `t/` group (`LatticeTenantOwnedGroupException`), and the
+  membership directory refuses, for every caller, an edge that nests a tenant group in
+  a cluster group or in another tenant's group (`LatticeTenantGroupNestingException`).
+  Test the whole `t/` prefix (`LatticeTenantTrees.SegmentPrefix`), never only the
+  well-formed `LatticeTenantGroupId` shape: `t/default/...` and malformed `t/` ids are
+  reserved too.
+- **Asserted tenant-group claims are stripped.** While the feature is on, the claim
+  filter (`ITenantGroupClaimFilter`) removes every asserted `t/` group - token claim,
+  overage or `ClaimToGroups` projection - before group expansion, keeping only groups
+  the membership directory records. Never let an identity-provider-asserted id confer
+  tenant group membership.
+- **No bypass of tenant isolation.** Tenant membership, group-aware admin checks and
+  tenant-tier rules never bypass the tenant gate or the cross-tenant grant protocol.
+  Admin-set, member-set and app role-binding entries may name only users, cluster
+  groups and the tenant's own groups; another tenant's group never counts, even in a
+  record that arrived by replication or restore. The reserved `default` tenant has no
+  tenant groups, members or tenant-tier rules, and the facades refuse it.
+- **The tenant facades authorize first and are the single enforcement point.** Every
+  `ILatticeTenantDirectoryAdmin` and `ILatticeTenantPolicyAdmin` operation authorizes
+  the caller (a platform operator, or an admin of the named tenant) before the feature
+  flag, the reserved-tenant check or any read, so a denied caller learns nothing, and
+  only then runs its store work under system origin. They compose every group, tree
+  and rule id from the tenant the call names; never accept a caller-supplied full id.
+  The MCP tools and gRPC binding add no authorization path of their own, and a denial
+  is never downgraded to a client error.
+- **Feature-off is inert and costs nothing.** `LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`
+  is off by default. While off, active-tenant validation is the exact-subject-id admin
+  check, the snapshot builds no member, group or tenant-rule index, the evaluator
+  reads one `bool`, claim resolution does no prefix work, and the facades refuse with
+  `TenantAccessAdministrationDisabledException` (posture excepted). The auth and
+  membership seams default to null implementations registered with `TryAdd`; those
+  packages must never reference tenancy. A flip to off takes effect at once, without
+  waiting for the snapshot rebuild, and deletes nothing.
 
 ## Release-status note for security fixes
 
