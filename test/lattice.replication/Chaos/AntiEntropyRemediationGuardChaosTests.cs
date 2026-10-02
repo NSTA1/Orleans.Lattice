@@ -430,8 +430,8 @@ public class AntiEntropyRemediationGuardChaosTests
         var replicationTransport = Substitute.For<IReplicationTransport>();
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(1));
+        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<int>>([0]));
 
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();

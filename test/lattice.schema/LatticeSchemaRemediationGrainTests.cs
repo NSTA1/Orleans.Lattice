@@ -105,7 +105,7 @@ public partial class LatticeSchemaRemediationGrainTests
             .Returns(ci => Bounded(entriesFactory(), ci.ArgAt<string?>(0), ci.ArgAt<string?>(1)));
         // Source routing for cutover: a single-shard identity map on the physical
         // tree that equals the (never-aliased) logical tree id.
-        source.GetRoutingAsync().Returns(new ValueTask<RoutingInfo>(
+        source.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
             new RoutingInfo(TreeId, new ShardMap { Slots = new[] { 0 } })));
 
         var destination = Substitute.For<ILattice>();
