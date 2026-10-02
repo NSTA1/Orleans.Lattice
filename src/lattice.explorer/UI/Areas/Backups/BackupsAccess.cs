@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// <summary>
 /// The Backups area's probes, per circuit: whether the area may be seen at all,
 /// what the caller may do to one scope, whether health monitoring applies, and
-/// whether this connection serves the catalogue extensions (inventory, catalogue
-/// rebuild and scrub, and cold restore).
+/// whether this connection serves the catalogue extensions (the inventory).
+/// Catalogue rebuild and scrub, and cold restore, are not among them: they run as
+/// cluster operations (#4122, #4125, #4218), which the gRPC binding serves.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -189,9 +190,10 @@ internal sealed class BackupsAccess
 
     /// <summary>
     /// The inventory, or <see langword="null"/> when it cannot be read. The
-    /// inventory, catalogue rebuild and scrub, and cold restore are served by the
-    /// same in-process surface and none of them by the gRPC binding, so an
-    /// inventory that is not served tells the area to withdraw all four.
+    /// inventory is served by the in-process surface and not by the gRPC binding,
+    /// so an inventory that is not served tells the area to withdraw it. Cold
+    /// restore does not follow this answer: it is gated on backup operations being
+    /// served (#4218).
     /// </summary>
     /// <param name="cancellationToken">Cancels the read.</param>
     public async Task<BackupInventoryReport?> GetInventoryAsync(CancellationToken cancellationToken)

@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Areas.Backups;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
@@ -267,6 +268,71 @@ public sealed class BackupsCataloguePageTests : BackupsTestContext
         });
     }
 
+    [Test]
+    public void Cluster_operations_are_listed_with_their_progress_whichever_tab_started_them()
+    {
+        Backups.Statuses["op-run"] = FakeBackupControl.Running("op-run", BackupOperationKinds.Restore, "orders") with
+        {
+            State = Orleans.Lattice.Api.Operations.LatticeOperationState.Running,
+            Phase = "RestoringShards",
+            CompletedUnits = 2,
+            TotalUnits = 5,
+            UnitName = "shards",
+            StartedAtUtc = new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.Zero),
+        };
+        Backups.Statuses["op-done"] = FakeBackupControl.Running("op-done", BackupOperationKinds.Capture, "orders");
+        Backups.SucceedCapture("op-done", "b1");
+
+        var cut = RenderAt<BackupsCataloguePage>("backups");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("#lt-backups-cluster-operations-title").TextContent, Is.EqualTo("Backup and restore operations"));
+            var items = cut.FindAll("#lt-backups-cluster-operations-title + ul li");
+            Assert.That(items, Has.Count.EqualTo(2));
+            Assert.That(items[0].QuerySelector("a")!.GetAttribute("href"), Is.EqualTo("backups/operations/op-run"));
+            Assert.That(items[0].TextContent, Does.Contain("Restore orders").And.Contain("Running, Restoring shards, 2 of 5 shards"));
+            Assert.That(items[1].TextContent, Does.Contain("Capture a full backup of orders").And.Contain("Succeeded"));
+            Assert.That(cut.FindAll("#lt-backups-operations-title"), Is.Empty, "no staged operation ran in this circuit");
+        });
+    }
+
+    [Test]
+    public void A_listing_that_fails_says_so_and_a_denied_one_is_hidden()
+    {
+        Backups.ListFault = new InvalidOperationException("the cluster is unreachable");
+        var failed = RenderAt<BackupsCataloguePage>("backups");
+        failed.WaitUntil(() => Assert.That(
+            failed.FindAll(".lt-backups-note").Select(note => note.TextContent),
+            Has.Some.StartsWith("The recent backup and restore operations could not be listed")));
+
+        Backups.ListFault = new LatticeAuthorizationDeniedException();
+        Backups.List = _ => Task.FromResult(new BackupCatalogPage { Entries = [FakeBackupControl.Manifest("b1")] });
+        Services.GetRequiredService<BackupOperationList>().Forget();
+        var denied = RenderAt<BackupsCataloguePage>("backups");
+        denied.WaitUntil(() => Assert.That(denied.FindAll("tbody tr"), Is.Not.Empty));
+        Assert.Multiple(() =>
+        {
+            Assert.That(denied.FindAll("#lt-backups-cluster-operations-title"), Is.Empty);
+            Assert.That(denied.FindAll(".lt-backups-note").Select(note => note.TextContent), Has.None.Contains("could not be listed"));
+        });
+    }
+
+    [Test]
+    public void A_staged_operation_handed_to_the_cluster_is_listed_once_as_the_clusters()
+    {
+        var staged = Operations.Start(BackupOperationKind.FullCapture, "Capture a full backup of orders", ["one"], (_, _) => Task.CompletedTask);
+        staged.HandOff("op-1");
+        Backups.Statuses["op-1"] = FakeBackupControl.Running("op-1", BackupOperationKinds.Capture, "orders");
+
+        var cut = RenderAt<BackupsCataloguePage>("backups");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("#lt-backups-cluster-operations-title + ul li"), Has.Count.EqualTo(1));
+            Assert.That(cut.FindAll("#lt-backups-operations-title"), Is.Empty);
+        });
+    }
     private static AngleSharp.Dom.IElement Pager(IRenderedComponent<BackupsCataloguePage> cut, string text) =>
         cut.FindAll(".lt-backups-pager button").Single(button => button.TextContent == text);
 }

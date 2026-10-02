@@ -877,6 +877,7 @@ public interface ILatticeTreeAdmin
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c>, empty, or reserved.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="partition"/> is out of range for the tree.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    [Obsolete("ExecuteWalMoveAsync blocks until the work completes, so a long move is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartWalMoveAsync and poll GetOperationStatusAsync instead. ExecuteWalMoveAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
         string treeId,
         int partition,
@@ -991,6 +992,7 @@ public interface ILatticeTreeAdmin
     /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
     /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
+    [Obsolete("RebuildViewAsync blocks until the work completes, so a long rebuild is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartViewRebuildAsync and poll GetOperationStatusAsync instead. RebuildViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     Task<TreeViewStatus> RebuildViewAsync(
         string viewName,
         CancellationToken cancellationToken = default);
@@ -1011,6 +1013,7 @@ public interface ILatticeTreeAdmin
     /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
     /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
+    [Obsolete("ReconcileViewAsync blocks until the work completes, so a long reconcile is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartViewReconcileAsync and poll GetOperationStatusAsync instead. ReconcileViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     Task<TreeViewReconcileResult> ReconcileViewAsync(
         string viewName,
         CancellationToken cancellationToken = default);
@@ -1089,6 +1092,7 @@ public interface ILatticeTreeAdmin
     /// <exception cref="InvalidOperationException">The tag-index subsystem is not available on this cluster.</exception>
     /// <exception cref="KeyNotFoundException">No tag index named <paramref name="indexName"/> is registered on this cluster.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the index's backing membership tree.</exception>
+    [Obsolete("ReconcileTagIndexAsync blocks until the work completes, so a long sweep is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartTagIndexReconcileAsync and poll GetOperationStatusAsync instead. ReconcileTagIndexAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
         string indexName,
         CancellationToken cancellationToken = default);

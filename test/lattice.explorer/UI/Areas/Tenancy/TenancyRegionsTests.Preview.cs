@@ -117,7 +117,10 @@ public sealed partial class TenancyRegionsTests
 
         cut.WaitUntil(() =>
         {
-            Assert.That(cut.Find(".lt-tenancy-served-nowhere").TextContent, Does.Contain("Not Online for it: eu-west (added: starts Provisioning), us-east (Provisioning)."));
+            // Nothing serves the tenant now, so the change stops nothing: Apply stays the primary action (issue #4114).
+            Assert.That(cut.Find(".lt-tenancy-still-unserved").TextContent, Does.Contain("stays unserved").And.Contain("promotes one of eu-west, us-east to Online"));
+            Assert.That(cut.FindAll(".lt-tenancy-served-nowhere"), Is.Empty);
+            Assert.That(TenancyForms.Button(cut, "Apply residency").HasAttribute("disabled"), Is.False);
             Assert.That(Preview(cut), Does.Contain("us-east stays in the residency, and is not served there until it is Online."));
         });
     }

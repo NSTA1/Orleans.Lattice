@@ -598,7 +598,11 @@ list is rejected.
 
 The requested grants are part of what an install consents to. When a fresh install
 through the [control facade](../lattice.api.apps/README.md) records its consent, it
-records `AppUiBridgeRequest.FromManifest`; an install made directly through
+records `AppUiBridgeRequest.FromManifest` of the manifest resolved at commit; an install
+that carries the reviewed manifest digest is refused if that manifest changed after the
+review (see
+[pinning the reviewed manifest](../lattice.api.apps/README.md#pinning-the-reviewed-manifest)).
+An install made directly through
 `IAppRegistry` records the `AppRegistryInstallRequest.BridgeConsent` it is given, and
 no grants when that is `null`. An upgrade that **adds** a grant fails activation with
 `BridgeConsentRequired` until the consent is updated. Removing a grant never needs consent. The grants gate the

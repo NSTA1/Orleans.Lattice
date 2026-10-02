@@ -43,11 +43,23 @@ Methods (one per RPC):
 | `ClearVersionConfigAsync` | `Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `RemediateAsync` | `Task<LatticeSchemaRemediationReport> RemediateAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, CancellationToken cancellationToken = default)` |
 | `GetRemediationStatusAsync` | `Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)` |
-| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` - deprecated (`LATTICE0002`) |
+| `StartComplianceScanAsync` | `Task<LatticeOperationHandle> StartComplianceScanAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `GetComplianceScanStatusAsync` | `Task<LatticeOperationStatus?> GetComplianceScanStatusAsync(string operationId, CancellationToken cancellationToken = default)` |
+| `ListComplianceScansAsync` | `Task<LatticeOperationPage> ListComplianceScansAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
+| `CancelComplianceScanAsync` | `Task<LatticeOperationStatus?> CancelComplianceScanAsync(string operationId, CancellationToken cancellationToken = default)` |
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
+| `StartRemediationAsync` | `Task<LatticeOperationHandle> StartRemediationAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartMigrationAsync` | `Task<LatticeOperationHandle> StartMigrationAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartAdvanceAndMigrateAsync` | `Task<LatticeOperationHandle> StartAdvanceAndMigrateAsync(string treeId, uint newTargetVersion, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `GetSchemaOperationStatusAsync` | `Task<LatticeOperationStatus?> GetSchemaOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)` |
+| `ListSchemaOperationsAsync` | `Task<LatticeOperationPage> ListSchemaOperationsAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
+| `CancelSchemaOperationAsync` | `Task<LatticeOperationStatus?> CancelSchemaOperationAsync(string operationId, CancellationToken cancellationToken = default)` |
 
-Methods that take a tree id throw `ArgumentException` on a null or empty id. `SetPolicyAsync` and `RemediateAsync` throw `ArgumentNullException` on a null policy or target policy (the version config and value transform are value types). `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+Methods that take a tree id throw `ArgumentException` on a null or empty id. `SetPolicyAsync` and `RemediateAsync` throw `ArgumentNullException` on a null policy or target policy (the version config and value transform are value types). `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired. `ScanComplianceAsync` calls the blocking `ScanCompliance` RPC and is deprecated (`LATTICE0002`, removed in the next major version); `StartComplianceScanAsync` starts the same scan as a tracked operation over the `StartComplianceScan` RPC and returns at once, and the `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` RPCs follow it (status and cancel return `null` for an operation the caller may not see). The server answers `Unimplemented` when its host registers no `ILatticeSchemaComplianceOperations`. See [Schema compliance operations](../lattice.api.schema/operations.md).
+
+`AdvanceAndMigrateAsync`, `MigrateToTargetVersionAsync` and `RemediateAsync` call blocking RPCs and are **deprecated** (`LATTICE0002`), for removal in the next major version, together with the `AdvanceAndMigrate`, `MigrateToTargetVersion` and `Remediate` RPCs. The start methods call the accept-then-poll `StartRemediation`, `StartMigration` and `StartAdvanceAndMigrate` RPCs, which return a `LatticeOperationHandle` as soon as the run is accepted; `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation` read, page and cancel the operation. A status read or cancel of an operation the caller may not see returns `null`. See [Schema operations](../lattice.api.schema/operations.md).
 
 ## Server-side options
 
@@ -85,7 +97,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeSchemaApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read).
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read), followed - appended after `Unknown` so the shipped numeric values stay stable - by `StartComplianceScan`, `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` (#4126), then `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation`. A start targets its tree; a status, list or cancel names an operation rather than a tree, so its `TargetId` is `null` and the facade scopes it to the caller.
 
 ### `LatticeSchemaApiAuthorizationContext`
 
@@ -111,8 +123,11 @@ Each RPC's request and response is one of these Orleans-serialized records, exce
 | `SchemaTreeRequest` | `required string TreeId`. |
 | `SetPolicyRequest` | `required string TreeId`, `required LatticeSchemaPolicy Policy`. |
 | `SetVersionConfigRequest` | `required string TreeId`, `required LatticeSchemaVersionConfig Config`. |
-| `AdvanceVersionRequest` | `required string TreeId`, `required uint NewTargetVersion`. |
-| `RemediateRequest` | `required string TreeId`, `required LatticeValueTransform Transform`, `required LatticeSchemaPolicy TargetPolicy`. |
+| `AdvanceVersionRequest` | `required string TreeId`, `required uint NewTargetVersion`, `string? OperationId` (used by `StartAdvanceAndMigrate`). |
+| `RemediateRequest` | `required string TreeId`, `required LatticeValueTransform Transform`, `required LatticeSchemaPolicy TargetPolicy`, `string? OperationId` (used by `StartRemediation`). |
+| `SchemaMigrationStartRequest` | `required string TreeId`, `string? OperationId`. |
+| `SchemaOperationRequest` | `required string OperationId`. |
+| `SchemaOperationStatusResponse` | `LatticeOperationStatus? Status` (`null` when not found). |
 | `AuthSchemeAdvertisementRequest` | (empty). |
 | `SchemaAckResponse` | (empty). |
 | `SchemaRemovedResponse` | `required bool Removed`. |
@@ -125,7 +140,7 @@ Each RPC's request and response is one of these Orleans-serialized records, exce
 | `AuthSchemeAdvertisement` | `IReadOnlyList<AuthSchemeDescriptor> Schemes`. |
 | `AuthSchemeDescriptor` | `required string SchemeId`, `string DisplayName`, `IReadOnlyDictionary<string, string> Parameters`. |
 
-`SetPolicy` and `SetVersionConfig` return the empty `SchemaAckResponse`; `ClearPolicy` and `ClearVersionConfig` return `SchemaRemovedResponse`. `StreamDeadLetters` takes a `SchemaTreeRequest` and streams `LatticeSchemaDeadLetterEntry` values directly (no wrapper record). `ProbeCapabilities` returns a `LatticeSchemaCapabilities` value directly. Both of those types are defined in the schema packages, not in this binding. `GetAuthScheme` takes `AuthSchemeAdvertisementRequest` and returns `AuthSchemeAdvertisement`; the typed client projects that response to `IReadOnlyList<AuthSchemeDescriptor>`.
+`SetPolicy` and `SetVersionConfig` return the empty `SchemaAckResponse`; `ClearPolicy` and `ClearVersionConfig` return `SchemaRemovedResponse`. `StreamDeadLetters` takes a `SchemaTreeRequest` and streams `LatticeSchemaDeadLetterEntry` values directly (no wrapper record). `ProbeCapabilities` returns a `LatticeSchemaCapabilities` value directly. The start RPCs return a `LatticeOperationHandle`, and `ListSchemaOperations` takes a `LatticeOperationListRequest` and returns a `LatticeOperationPage`, directly; those types are defined in `Orleans.Lattice.Api.Abstractions`. Both of those types are defined in the schema packages, not in this binding. `GetAuthScheme` takes `AuthSchemeAdvertisementRequest` and returns `AuthSchemeAdvertisement`; the typed client projects that response to `IReadOnlyList<AuthSchemeDescriptor>`.
 
 ## Serialization aliases
 

@@ -30,8 +30,8 @@ public sealed partial class AppsPageTests
             Assert.That(section.QuerySelector("h2")!.TextContent, Is.EqualTo("Installed in tenant acme"));
             Assert.That(row.QuerySelector("[data-lt-installed-app]")!.GetAttribute("data-lt-installed-app"), Is.EqualTo("task-board"));
             Assert.That(row.TextContent, Does.Contain("1.0.0").And.Contain("Enabled"));
-            Assert.That(row.QuerySelector("a")!.TextContent, Is.EqualTo("Manage"));
-            Assert.That(row.QuerySelector("a")!.GetAttribute("href"), Is.EqualTo("t/acme/apps/catalogue/in-image/task-board%401.0.0"));
+            Assert.That(row.QuerySelector("a[aria-label^='Manage']")!.TextContent, Is.EqualTo("Manage"));
+            Assert.That(row.QuerySelector("a[aria-label^='Manage']")!.GetAttribute("href"), Is.EqualTo("t/acme/apps/catalogue/in-image/task-board%401.0.0"));
             Assert.That(row.QuerySelectorAll("button").Select(button => button.TextContent.Trim()), Is.EqualTo(new[] { "Disable", "Uninstall" }));
             Assert.That(cut.FindAll(".lt-empty h2").Select(heading => heading.TextContent), Does.Not.Contain("No apps yet"));
             Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Does.Contain("installed in tenant acme"));

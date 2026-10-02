@@ -257,4 +257,29 @@ internal sealed record TreeRegistryEntry
     /// <see cref="RestoreShadowOfTreeId"/> for restore-specific classification.
     /// </summary>
     [Id(16)] public string? DerivedFrom { get; init; }
+
+    /// <summary>
+    /// On a derived copy that a shadow-cutover restore or a schema remediation
+    /// cut a logical tree over to: the routing map the logical tree addressed the
+    /// physical tree it replaced by, captured once immediately before the cutover
+    /// carried this copy's own map onto the logical entry (issue #4250).
+    /// <see langword="null"/> on every other entry, and on a copy cut over
+    /// before this field existed.
+    /// <para>
+    /// The logical entry holds the only live routing map, so after the cutover
+    /// nothing else remembers how the replaced tree's shards were addressed. This
+    /// is what a restore revert carries back onto the logical entry, and what a
+    /// cutover resumed after the alias swap arms the replaced tree's shards from.
+    /// Always a materialised map, never the implicit default, so a non-null value
+    /// also records that the capture happened.
+    /// </para>
+    /// </summary>
+    [Id(17)] public ShardMap? ReplacedShardMap { get; init; }
+
+    /// <summary>
+    /// The split allocation high-water mark (<see cref="NextShardIndex"/>) that
+    /// accompanied <see cref="ReplacedShardMap"/> on the logical entry when it was
+    /// captured, so a revert restores both together.
+    /// </summary>
+    [Id(18)] public int? ReplacedNextShardIndex { get; init; }
 }

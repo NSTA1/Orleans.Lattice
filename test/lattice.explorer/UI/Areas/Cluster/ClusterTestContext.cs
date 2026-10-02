@@ -6,6 +6,7 @@ using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Explorer.Tests.UI.Operations;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 using Orleans.Lattice.Explorer.UI.Design.Components;
@@ -27,7 +28,8 @@ public abstract class ClusterTestContext : ShellChromeTestContext
     /// <summary>Registers the fakes over the Shell's registrations.</summary>
     protected ClusterTestContext()
     {
-        Admin = Substitute.For<ILatticeTreeAdmin>();
+        Admin = Substitute.For<ILatticeTreeAdmin, ILatticeTreeAdminOperations>();
+        Tracked = new TreeAdminOperationScript(Admin);
         Status = Substitute.For<ILatticeReplicationStatus>();
         Services.AddKeyedSingleton(ShellFacades.Key, Admin);
         Services.AddKeyedSingleton(ShellFacades.Key, Status);
@@ -49,6 +51,9 @@ public abstract class ClusterTestContext : ShellChromeTestContext
 
     /// <summary>The tree administration fake.</summary>
     internal ILatticeTreeAdmin Admin { get; }
+
+    /// <summary>The scripted accept-then-poll half of <see cref="Admin"/> (#4124).</summary>
+    internal TreeAdminOperationScript Tracked { get; }
 
     /// <summary>The replication peer report fake.</summary>
     internal ILatticeReplicationStatus Status { get; }
@@ -102,7 +107,10 @@ public abstract class ClusterTestContext : ShellChromeTestContext
     internal static void ConfirmTyping<TComponent>(IRenderedComponent<TComponent> cut, string name)
         where TComponent : IComponent
     {
-        cut.Find(".lt-confirm input").Input(name);
+        // The typed confirmation renders after the button click that opens it,
+        // which can land after an async render continuation under load, so the
+        // input must be awaited rather than found immediately (#4254).
+        cut.WaitForElement(".lt-confirm input").Input(name);
         cut.Find("form.lt-confirm").Submit();
     }
 

@@ -14,6 +14,20 @@ public sealed class AppsControlFailuresTests
     private static AppSlug Slug => AppSlug.Parse(AppsControlHarness.Slug);
 
     [Test]
+    public void ManifestChanged_is_an_invalid_operation_naming_the_app_version_and_the_re_review()
+    {
+        // The Explorer recognises this exact phrase to tell the operator to review again.
+        var mapped = AppsControlFailures.ManifestChanged(Slug, AppsControlHarness.V(AppsControlHarness.Version));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mapped, Is.TypeOf<InvalidOperationException>());
+            Assert.That(mapped.Message, Does.Contain("no longer matches the manifest that was reviewed"));
+            Assert.That(mapped.Message, Does.Contain(AppsControlHarness.Slug).And.Contain(AppsControlHarness.Version));
+        });
+    }
+
+    [Test]
     public void FromTransition_maps_a_not_installed_rejection_to_the_not_found_category()
     {
         // The registry reports an absent app as a transition error rather than as a null

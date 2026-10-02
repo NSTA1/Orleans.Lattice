@@ -123,13 +123,19 @@ internal sealed partial class TreeDeletionGrain
         var retired = d.RetainsRegistryEntry;
         var deletedAt = retired ? null : d.DeletedAtUtc;
         var (purged, shards) = retired ? (0, 0) : PhysicalProgress(d);
+
+        // A purge that has recorded its completion but not yet removed the
+        // tree's registry entry is still running (issue #4252): reporting it
+        // complete here let PurgeTreeAsync return while TreeExistsAsync still
+        // found the tree. The walk is done, so every shard reads as purged.
+        var finalising = _finalisingPurge && !retired && d.PurgeComplete;
         return new TreeDeletionSnapshot
         {
             IsDeleted = !retired && d.IsDeleted,
             DeletedAtUtc = deletedAt,
             RecoveryDeadlineUtc = deletedAt is { } at ? at + Options.SoftDeleteDuration : null,
-            PurgeInProgress = !retired && d.PurgeInProgress,
-            PurgeComplete = !retired && d.PurgeComplete,
+            PurgeInProgress = !retired && (d.PurgeInProgress || finalising),
+            PurgeComplete = !retired && d.PurgeComplete && !finalising,
             PurgedShardCount = purged,
             PurgeShardCount = shards,
         };

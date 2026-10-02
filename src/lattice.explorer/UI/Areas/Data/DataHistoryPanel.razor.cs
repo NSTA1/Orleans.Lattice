@@ -35,7 +35,8 @@ public partial class DataHistoryPanel : IDisposable
     private HybridLogicalClock _earliest;
     private string? _continuation;
     private DateTimeOffset? _at;
-    private string? _atInput;
+    private DateTimeOffset? _atValue;
+    private LtDateTimeInput? _atField;
     private string? _atError;
     private string? _keyInput;
     private bool _newestFirst = true;
@@ -60,16 +61,27 @@ public partial class DataHistoryPanel : IDisposable
 
     private string? BoundNote => _bound switch
     {
-        EntryHistoryBound.Truncated => $"Older revisions were trimmed; history is available from {DataFormat.Time(_earliest)}.",
+        EntryHistoryBound.Truncated => DataFormat.HasTime(_earliest)
+            ? $"Older revisions were trimmed; history is available from {DataFormat.Time(_earliest)}."
+            : TrimmedWithNoEarliestText,
         EntryHistoryBound.WalWindowFallback => "This tree keeps no durable history, so only changes still in the write-ahead log are shown.",
         _ => null,
     };
 
-    /// <summary>The As-of field's hint: the form it takes, rather than a sample time that reads as a value.</summary>
-    internal const string AtHint = "As yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
+    /// <summary>The As-of field's hint: how to choose a time, and what an empty field means.</summary>
+    internal const string AtHint = "Pick a time, or type one as yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";
 
-    /// <summary>What a metadata-only revision holds, said once for the timeline.</summary>
-    internal const string MetadataOnlyText = "Revisions marked \"metadata only\" kept only the value's size and hash, so there is no value to show for them.";
+    /// <summary>The history bound note when older revisions were trimmed and no earliest retained revision is known.</summary>
+    internal const string TrimmedWithNoEarliestText = "Older revisions were trimmed; no earlier revision is retained.";
+
+    /// <summary>What a range deletion whose marker names no end key says, in place of the end key.</summary>
+    internal const string RangeDeletedWithNoEndText = "A range of keys that included this one was deleted.";
+
+    /// <summary>What a revision whose value bytes were not kept is called on the timeline.</summary>
+    internal const string ValueNotKeptKindText = "Set - value not kept";
+
+    /// <summary>What a revision whose value bytes were not kept holds, said once for the timeline.</summary>
+    internal const string MetadataOnlyText = "\"Value not kept\" marks a write whose value this tree's history retention did not keep: only its size and hash are recorded, so there is no value to show. It is still a change to the key, not a metadata change.";
 
     private string? MetadataOnlyNote =>
         _timeline is { } timeline && timeline.Rows.Any(row => row.RenderMode == HistoryRowRenderMode.MetadataOnly)
@@ -112,7 +124,6 @@ public partial class DataHistoryPanel : IDisposable
 
         StopFollow();
         _keyInput = null;
-        _atInput = atText;
         _atError = null;
         _at = null;
         if (atText is not null)
@@ -127,6 +138,7 @@ public partial class DataHistoryPanel : IDisposable
             }
         }
 
+        _atValue = _at;
         _prefixChanges.Clear();
         if (workspace.Key is not null)
         {
@@ -159,7 +171,7 @@ public partial class DataHistoryPanel : IDisposable
         HistoryRowRenderMode.CrdtMembers when row.IsSnapshot => "Full state",
         HistoryRowRenderMode.CrdtMembers => "CRDT change",
         HistoryRowRenderMode.LiveTail => "Live " + (row.Kind == HistoryRowKind.Delete ? "delete" : "set"),
-        HistoryRowRenderMode.MetadataOnly => "Set (metadata only)",
+        HistoryRowRenderMode.MetadataOnly => ValueNotKeptKindText,
         _ => "Set",
     };
 
@@ -295,22 +307,28 @@ public partial class DataHistoryPanel : IDisposable
         Build();
     }
 
-    private void ApplyAt()
+    private void SetAt(DateTimeOffset? value)
+    {
+        _atValue = value;
+        _atError = null;
+    }
+
+    private async Task ApplyAt()
     {
         if (Workspace is not { } workspace)
         {
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_atInput))
+        _atError = null;
+        if (_atField is not null && !await _atField.ConfirmAsync())
         {
-            ClearAt();
             return;
         }
 
-        if (!DataFormat.TryParseInstant(_atInput, out var at))
+        if (_atValue is not { } at)
         {
-            _atError = "Write a time such as 2026-09-28T14:00:00Z.";
+            ClearAt();
             return;
         }
 

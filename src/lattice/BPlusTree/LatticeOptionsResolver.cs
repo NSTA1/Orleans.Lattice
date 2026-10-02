@@ -27,8 +27,11 @@ namespace Orleans.Lattice.BPlusTree;
 /// missing after the second read resolves to its <see cref="LatticeConstants"/>
 /// default for that call, and a missing WAL partition pin resolves to the live
 /// <see cref="LatticeOptions.WalPartitions"/> value. Only
-/// <see cref="ResolveAsync"/> registers; the single-field fast paths are pure
-/// reads and never seed a row.
+/// <see cref="ResolveAsync"/> registers; the single-field fast paths and
+/// <see cref="ResolveIfRegisteredAsync"/> are pure reads and never seed a row.
+/// A missing row is never seeded for an id whose deletion record holds a
+/// completed purge: <see cref="ResolveAsync"/> fails closed for such an id
+/// instead (issue #4219).
 /// </para>
 /// <para>
 /// System trees (IDs beginning with <see cref="LatticeConstants.SystemTreePrefix"/>)
@@ -311,6 +314,12 @@ internal sealed class LatticeOptionsResolver(
             // that already exists, so an existing row missing a field
             // stays incomplete and ResolveAsync falls back to the
             // LatticeConstants default for that field on every resolve.
+            //
+            // A missing row is seeded only for an id that was never purged
+            // (issue #4219): this is a read, and creating the row of a purged
+            // tree here would silently undo the purge for every later caller.
+            if (entry is null)
+                await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, treeId).ConfigureAwait(false);
             await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
             entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
 #if LATTICE_DIAG
@@ -846,10 +855,53 @@ internal sealed class LatticeOptionsResolver(
         return (provider, pin.Version, key);
     }
 
-    /// <summary>Resolves the effective options for <paramref name="treeId"/>.</summary>
+    /// <summary>
+    /// Resolves the effective options for <paramref name="treeId"/>, seeding a
+    /// registry row for a user tree that has none. The seed is refused, with an
+    /// <see cref="InvalidOperationException"/> and no registration, for an id
+    /// whose deletion record holds a completed purge (issue #4219): a resolve is
+    /// a read, and a read must not bring a purged tree back.
+    /// </summary>
     public async Task<ResolvedLatticeOptions> ResolveAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        var entry = treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            ? null
+            : await FetchRegistryEntryCoalescedAsync(treeId).ConfigureAwait(false);
+        return BuildResolved(treeId, entry);
+    }
+
+    /// <summary>
+    /// Resolves the effective options for <paramref name="treeId"/> without ever
+    /// seeding a registry row, returning <see langword="null"/> for a user tree
+    /// that has none - a tree that was never created, or one that was purged.
+    /// For the per-tree background loops and the routing default, which must
+    /// observe a tree rather than create it (issue #4219). System trees never
+    /// consult the registry and always resolve.
+    /// </summary>
+    internal async Task<ResolvedLatticeOptions?> ResolveIfRegisteredAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            return BuildResolved(treeId, entry: null);
+
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+        if (entry is null)
+            return null;
+
+        CacheMetricTreeId(treeId, entry);
+        return BuildResolved(treeId, entry);
+    }
+
+    /// <summary>
+    /// The configured, non-structural options for <paramref name="treeId"/>,
+    /// read without any registry call. For a caller that needs only a
+    /// configured value, such as a timeout, before the tree may be registered.
+    /// </summary>
+    internal LatticeOptions GetConfiguredOptions(string treeId) => optionsMonitor.Get(treeId);
+
+    private ResolvedLatticeOptions BuildResolved(string treeId, State.TreeRegistryEntry? entry)
+    {
         var baseOptions = optionsMonitor.Get(treeId);
 
         int mlk, mic, sc;
@@ -893,7 +945,6 @@ internal sealed class LatticeOptionsResolver(
         }
         else
         {
-            var entry = await FetchRegistryEntryCoalescedAsync(treeId).ConfigureAwait(false);
             mlk = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys;
             mic = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren;
             sc = entry?.ShardCount ?? LatticeConstants.DefaultShardCount;

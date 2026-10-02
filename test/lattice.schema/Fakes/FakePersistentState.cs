@@ -41,6 +41,15 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     /// <summary>Total <see cref="WriteStateAsync"/> attempts, successful or not.</summary>
     public int WriteAttempts { get; private set; }
 
+    /// <summary>
+    /// When set, invoked with the 1-based attempt ordinal at the start of every
+    /// <see cref="WriteStateAsync"/> and awaited before the write completes, so a
+    /// test can hold a specific write open on a <see cref="TaskCompletionSource"/>
+    /// and observe what an interleaved read sees meanwhile. <c>null</c> (the
+    /// default) keeps every write synchronous.
+    /// </summary>
+    public Func<int, Task>? BeforeWrite { get; set; }
+
     public Task ClearStateAsync()
     {
         State = new();
@@ -53,7 +62,23 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     public Task WriteStateAsync()
     {
         WriteAttempts++;
-        if (ThrowOnWrite is { } ex && WriteAttempts == ThrowOnWriteNumber)
+        if (BeforeWrite is { } hook)
+        {
+            return HeldWriteAsync(hook, WriteAttempts);
+        }
+
+        return CompleteWrite(WriteAttempts);
+    }
+
+    private async Task HeldWriteAsync(Func<int, Task> hook, int attempt)
+    {
+        await hook(attempt);
+        await CompleteWrite(attempt);
+    }
+
+    private Task CompleteWrite(int attempt)
+    {
+        if (ThrowOnWrite is { } ex && attempt == ThrowOnWriteNumber)
         {
             ThrowOnWrite = null;
             throw ex;

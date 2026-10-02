@@ -181,6 +181,19 @@ internal sealed partial class LatticeGrain
     /// older entries. Returns an empty <see cref="EntryHistorySource.None"/> page
     /// when the replication read seam is not registered.
     /// </summary>
+    /// <remarks>
+    /// The log holds more than one record per revision. Every merge-channel write
+    /// (a resize or snapshot copy, a reshard migration, a sibling redistribution on
+    /// a leaf split, a replication apply) appends the entry it copies again, under
+    /// the hybrid logical clock its author stamped, and a tombstone reap appends
+    /// one more under the clock of the entry it reaps. None of them is a change to
+    /// the key, so a revision is identified by its clock, exactly as the history
+    /// view keys its rows (<c>{key}/{encodedHlc}</c>), and only its first record is
+    /// reported. No record's own classification is trusted for this: a write at a
+    /// clock of its own is always reported. The collapse has to span pages, so
+    /// every page reads from the trim point and uses the records below its
+    /// continuation offset only to learn which revisions an earlier page reported.
+    /// </remarks>
     private async Task<EntryHistoryPage> ScanWalWindowAsync(
         string key,
         HybridLogicalClock? fromHlc,
@@ -205,8 +218,12 @@ internal sealed partial class LatticeGrain
         // Resolve the WAL the same way the writer did: against the physical tree
         // id (routing can alias the logical id after a snapshot/reshard) and the
         // registry-pinned partition count (tree-immutable from first register, not
-        // the silo's live LatticeOptions.WalPartitions).
-        var (physicalTreeId, _) = await GetRoutingAsync(cancellationToken);
+        // the silo's live LatticeOptions.WalPartitions). Forced: this read routes no
+        // key through a shard, so it never meets the StaleTreeRoutingException that
+        // heals a routed call, and an activation that cached the alias before a
+        // resize, snapshot or restore would otherwise keep reading the retired
+        // physical tree's log (issue #4176). One registry read per history page.
+        var (physicalTreeId, _) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         var partitions = await optionsResolver.GetWalPartitionsAsync(physicalTreeId);
         var partition = WalPartitionHash.Compute(key, partitions);
         var tail = await reader.GetTailOffsetAsync(physicalTreeId, partition, cancellationToken);
@@ -231,31 +248,29 @@ internal sealed partial class LatticeGrain
         string? continuationOut = null;
         var earliest = HybridLogicalClock.Zero;
         var earliestResolved = false;
+        var reported = new HashSet<HybridLogicalClock>();
 
-        // A page that resumes past the trim point starts its read after the
-        // oldest still-readable entry, so its own first entry is not the floor:
-        // probe the floor directly rather than report a later entry's clock (or
-        // Zero, on an empty tail page) as the point history was trimmed at.
-        if (truncated && fromOffsetExclusive >= tail)
-        {
-            earliest = await ReadOldestRetainedTimestampAsync(
-                reader, physicalTreeId, partition, tail, cancellationToken);
-            earliestResolved = true;
-        }
-
+        // Every page reads from the trim point, so its first readable entry is
+        // the oldest one on the partition, and the records an earlier page
+        // covered are seen again to collapse their replays (see remarks).
         await foreach (var (offset, mutation) in reader
-            .ReadAsync(physicalTreeId, partition, fromOffsetExclusive, cancellationToken))
+            .ReadAsync(physicalTreeId, partition, -1, cancellationToken))
         {
             if (!earliestResolved)
             {
-                // The page starts at or below the trim point, so its first
-                // readable entry is the oldest one on the partition.
                 earliest = mutation.Timestamp;
                 earliestResolved = true;
             }
 
             if (!EntryHistoryReader.WalMutationMatchesKey(mutation, key))
             {
+                continue;
+            }
+
+            if (!reported.Add(mutation.Timestamp) || offset <= fromOffsetExclusive)
+            {
+                // A replay of a revision already met, or a revision an earlier
+                // page reported.
                 continue;
             }
 
@@ -281,27 +296,5 @@ internal sealed partial class LatticeGrain
             EarliestAvailable = truncated ? earliest : HybridLogicalClock.Zero,
             Source = EntryHistorySource.WalWindow,
         };
-    }
-
-    /// <summary>
-    /// Reads the hybrid-logical-clock timestamp of the oldest still-readable entry
-    /// on a write-ahead-log partition - the first entry at or above
-    /// <paramref name="tail"/> - or <see cref="HybridLogicalClock.Zero"/> when the
-    /// partition retains nothing.
-    /// </summary>
-    private static async Task<HybridLogicalClock> ReadOldestRetainedTimestampAsync(
-        ICommitLogReader reader,
-        string physicalTreeId,
-        int partition,
-        long tail,
-        CancellationToken cancellationToken)
-    {
-        await foreach (var (_, mutation) in reader
-            .ReadAsync(physicalTreeId, partition, tail - 1, cancellationToken))
-        {
-            return mutation.Timestamp;
-        }
-
-        return HybridLogicalClock.Zero;
     }
 }

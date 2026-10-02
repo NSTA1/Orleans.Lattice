@@ -63,6 +63,39 @@ public enum LatticeSchemaApiOperation
     /// rather than have it silently masquerade as a benign read.
     /// </summary>
     Unknown,
+
+    // The values below were appended after Unknown (#4126) so the shipped numeric
+    // values of every earlier member, Unknown included, stay stable.
+
+    /// <summary>The read-only accept-then-poll <c>StartComplianceScan</c> RPC.</summary>
+    StartComplianceScan,
+
+    /// <summary>The read-only <c>GetComplianceScanStatus</c> RPC.</summary>
+    GetComplianceScanStatus,
+
+    /// <summary>The read-only <c>ListComplianceScans</c> RPC.</summary>
+    ListComplianceScans,
+
+    /// <summary>The <c>CancelComplianceScan</c> RPC.</summary>
+    CancelComplianceScan,
+
+    /// <summary>The accept-then-poll <c>StartRemediation</c> RPC.</summary>
+    StartRemediation,
+
+    /// <summary>The accept-then-poll <c>StartMigration</c> RPC.</summary>
+    StartMigration,
+
+    /// <summary>The accept-then-poll <c>StartAdvanceAndMigrate</c> RPC.</summary>
+    StartAdvanceAndMigrate,
+
+    /// <summary>The <c>GetSchemaOperationStatus</c> RPC. Carries no target tree: the facade scopes the read to the caller.</summary>
+    GetSchemaOperationStatus,
+
+    /// <summary>The <c>ListSchemaOperations</c> RPC. Carries no target tree: the facade scopes the listing to the caller.</summary>
+    ListSchemaOperations,
+
+    /// <summary>The <c>CancelSchemaOperation</c> RPC. Carries no target tree: the facade scopes and authorizes the cancel.</summary>
+    CancelSchemaOperation,
 }
 
 /// <summary>

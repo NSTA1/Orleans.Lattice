@@ -34,9 +34,8 @@ public partial class BackupSchedulesPage : IDisposable
     private bool _statusLoaded;
     private string? _statusError;
     private string _kind = FullKind;
-    private string? _hours = "24";
-    private string? _minutes = "0";
-    private string? _intervalError;
+    private TimeSpan? _interval = TimeSpan.FromHours(24);
+    private LtDurationInput? _intervalField;
     private string? _scheduleMessage;
     private string? _scheduleError;
     private bool _busy;
@@ -172,7 +171,6 @@ public partial class BackupSchedulesPage : IDisposable
 
         _scheduleMessage = null;
         _scheduleError = null;
-        _intervalError = null;
         var incremental = _kind == IncrementalKind;
         if (!CanChange(incremental))
         {
@@ -180,9 +178,13 @@ public partial class BackupSchedulesPage : IDisposable
             return;
         }
 
-        if (!BackupsFormat.TryParseInterval(_hours, _minutes, out var interval))
+        if (_intervalField is not null && !await _intervalField.ConfirmAsync())
         {
-            _intervalError = "Give a whole number of hours and minutes, more than zero in total.";
+            return;
+        }
+
+        if (_interval is not { } interval)
+        {
             return;
         }
 

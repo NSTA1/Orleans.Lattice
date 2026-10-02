@@ -154,7 +154,7 @@ For day-to-day use and operations:
 For internals (the "how"):
 
 - [Change Feed](change-feed.md) - `IChangeFeed` seam, per-partition offset cursor, async enumerable shape.
-- [Anti-entropy digest probe](anti-entropy-digest-probe.md) - the detection stage: a low-frequency, read-only pass comparing the content digest of each shard below the tree's pinned shard count against every peer's.
+- [Anti-entropy digest probe](anti-entropy-digest-probe.md) - the detection stage: a low-frequency, read-only pass comparing the content digest of each shard the tree's live shard map routes to against every peer's.
 - [Anti-entropy Merkle walk](anti-entropy-merkle-walk.md) - the localisation stage: a read-only top-down descent that narrows a shard mismatch to the diverged leaves and their covering ranges.
 - [Anti-entropy leaf re-replay](anti-entropy-leaf-rereplay.md) - the repair stage: re-ships the retained WAL entries covering those ranges down the ordinary TX-aware apply path, de-duplicated at the receiver.
 - [Anti-entropy bootstrap fallback](anti-entropy-bootstrap-fallback.md) - the repair path taken when re-replay cannot reach the divergence, such as a WAL trimmed past the divergence point.

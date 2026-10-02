@@ -36,10 +36,11 @@ public sealed class ClusterToolsPageTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("A shard index from 0 to 3.")));
 
         Compaction(cut, "4");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("The tree has 4 shards: enter 0 to 3."));
+        // #4254: the error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("The tree has 4 shards: enter 0 to 3.")));
 
         Compaction(cut, "2");
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("shard 2"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("shard 2")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-result").TextContent, Is.EqualTo("Compaction accepted for shard 2.")));
@@ -58,7 +59,8 @@ public sealed class ClusterToolsPageTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("One of this tree's shards: 0, 2 or 5.")));
 
         Compaction(cut, "1");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Shard 1 is not in this tree's shard map: enter 0, 2 or 5."));
+        // #4254: the error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Shard 1 is not in this tree's shard map: enter 0, 2 or 5.")));
 
         Compaction(cut, "5");
         ConfirmTyping(cut, TreeId);
@@ -123,7 +125,8 @@ public sealed class ClusterToolsPageTests : ClusterTestContext
 
         cut.Find("textarea").Change(string.Join('\n', Enumerable.Range(0, 300).Select(index => $"k{index:0000}=v{index}")));
         cut.Find("form[aria-label='Compose a bulk load']").Submit();
-        Assert.That(cut.Markup, Does.Contain("Load 300 entries into").And.Contain("in 2 chunks"));
+        // #4254: the review markup renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Load 300 entries into").And.Contain("in 2 chunks")));
         Button(cut, "Bulk load...").Click();
         ConfirmTyping(cut, TreeId);
 

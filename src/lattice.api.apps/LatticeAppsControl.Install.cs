@@ -19,6 +19,12 @@ internal sealed partial class LatticeAppsControl
     /// consent to the bridge grants the manifest requests; an upgrade keeps the consented grants, so an upgrade
     /// that requests more cannot activate until <see cref="UpdateConsentAsync"/> re-consents them.
     /// </para>
+    /// <para>
+    /// The manifest is resolved again at commit. When <see cref="AppInstallRequest.ExpectedManifestDigest"/> is set,
+    /// the install or upgrade is refused with <see cref="InvalidOperationException"/>, before anything is recorded,
+    /// unless the manifest resolved now has that digest - the one <see cref="AppDescriptor.ManifestDigest"/> reported
+    /// at review.
+    /// </para>
     /// </remarks>
     public async Task<AppLifecycleResult> InstallAsync(AppInstallRequest request, CancellationToken cancellationToken = default)
     {
@@ -62,6 +68,13 @@ internal sealed partial class LatticeAppsControl
         var slug = AppsControlMapping.ParseSlug(request.Slug, nameof(request));
         var version = AppsControlMapping.ParseVersion(request.Version, nameof(request));
         var bindings = AppsControlMapping.ToEngineBindings(request.RoleBindings);
+        var expectedDigest = request.ExpectedManifestDigest;
+        if (expectedDigest is not null && !AppManifestDigest.IsWellFormed(expectedDigest))
+        {
+            throw new ArgumentException(
+                "The expected manifest digest must be a SHA-256 digest of 64 lower-case hex characters.", nameof(request));
+        }
+
         var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
         var ceiling = AppsControlMapping.ToEngineCeiling(request.Ceiling, tenant);
 
@@ -69,6 +82,17 @@ internal sealed partial class LatticeAppsControl
 
         var resolved = await _source.ResolveFromAsync(slug, version, request.SourceKey, cancellationToken).ConfigureAwait(false);
         var manifest = AppsControlFailures.RequireResolved(slug, version, resolved);
+        var provenance = resolved.Provenance ?? manifest.Identity.Provenance;
+
+        // REVIEW PIN (#4021). The manifest is resolved again here, at commit, and a fresh install consents to
+        // the bridge grants it requests. When the caller pinned the digest it reviewed, the install is refused
+        // unless the manifest resolved now is that same manifest, so a source that changed it in between - for
+        // example adding a non-data bridge operation - cannot have the change consented unseen.
+        if (expectedDigest is not null
+            && !string.Equals(expectedDigest, AppManifestDigest.Compute(manifest, provenance), StringComparison.Ordinal))
+        {
+            throw AppsControlFailures.ManifestChanged(slug, version);
+        }
 
         ThrowIfUndeclaredRoles(manifest, bindings);
 
@@ -79,7 +103,7 @@ internal sealed partial class LatticeAppsControl
             {
                 Slug = slug,
                 Version = version,
-                Provenance = resolved.Provenance ?? manifest.Identity.Provenance,
+                Provenance = provenance,
             },
             Ceiling = ceiling,
             RoleBindings = bindings,

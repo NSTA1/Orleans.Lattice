@@ -86,7 +86,20 @@ internal static class SchemaFormat
         LatticeSchemaRemediationPhase.Cutover => "Cutting over",
         LatticeSchemaRemediationPhase.Completed => "Completed",
         LatticeSchemaRemediationPhase.Aborted => "Aborted",
+        LatticeSchemaRemediationPhase.Cancelled => "Cancelled",
         _ => phase.ToString(),
+    };
+
+    /// <summary>A tracked schema operation phase as words.</summary>
+    /// <param name="phase">The operation phase.</param>
+    /// <returns>The words.</returns>
+    public static string OperationPhase(string phase) => phase switch
+    {
+        SchemaOperationPhases.Advance => "Advancing the target version",
+        SchemaOperationPhases.DryRun => "Checking every value",
+        SchemaOperationPhases.Build => "Building the remediated copy",
+        SchemaOperationPhases.Cutover => "Cutting over",
+        _ => phase,
     };
 
     /// <summary>A dead letter's ingest source as words.</summary>

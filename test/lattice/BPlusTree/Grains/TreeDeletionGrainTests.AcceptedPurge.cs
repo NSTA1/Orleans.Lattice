@@ -230,7 +230,39 @@ public partial class TreeDeletionGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(during.IsDeleted, Is.True, "a purge still finalising must not read as a live re-created tree");
-            Assert.That(during.PurgeComplete, Is.True);
+            Assert.That(during.PurgeComplete, Is.False,
+                "a purge whose registry entry is still being removed must not read as complete (issue #4252)");
+            Assert.That(during.PurgeInProgress, Is.True);
+            Assert.That(during.PurgedShardCount, Is.EqualTo(ShardCount), "every shard has been walked");
+            Assert.That(during.PurgeShardCount, Is.EqualTo(ShardCount));
+        });
+    }
+
+    [Test]
+    public async Task A_synchronous_purge_is_not_reported_complete_before_its_registry_entry_is_removed()
+    {
+        // Issue #4252 on the PurgeNowAsync path, which finalises the same way.
+        var h = CreateTimedGrain(DeletedJustNow);
+        var registry = RegistryOf(h.Factory);
+        var unregister = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        registry.UnregisterAsync(TreeId).Returns(unregister.Task);
+
+        var purging = h.Grain.PurgeNowAsync();
+        await TestPoll.UntilAsync(
+            () => Task.FromResult(registry.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ILatticeRegistry.UnregisterAsync))),
+            "the purge to reach the registry unregister",
+            timeout: TimeSpan.FromSeconds(10));
+        var during = await h.Grain.GetDeletionStatusAsync();
+        var persistedDuring = h.State.State.PurgeComplete;
+        unregister.SetResult();
+        await purging;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(persistedDuring, Is.True, "precondition: the completion was persisted first");
+            Assert.That(during.PurgeComplete, Is.False);
+            Assert.That(during.PurgeInProgress, Is.True);
+            Assert.That((await h.Grain.GetDeletionStatusAsync()).PurgeComplete, Is.True);
         });
     }
 

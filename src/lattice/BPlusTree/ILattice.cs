@@ -706,7 +706,9 @@ public interface ILattice : IGrainWithStringKey
     /// Permanently removes the tree's leaf and internal node state and unregisters
     /// it. On an aliased tree it purges the live copy the delete pinned and
     /// unregisters both that copy and the logical tree. Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted.
+    /// deleted. Once the purge completes, a read or delete of the id answers as
+    /// an empty tree without registering it again; a write or an explicit create
+    /// reuses the id for a new tree.
     /// <para>
     /// Accept-then-poll: the purge is recorded as in progress and its shard walk
     /// runs in the background on the tree's deletion coordinator, where no
@@ -1013,6 +1015,18 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="ShardMap"/>. Used by infrastructure helpers (e.g. the
     /// streaming bulk loader) that need to address shard grains directly
     /// without re-implementing alias resolution and shard-map fetching.
+    /// <para>
+    /// The snapshot is cached per activation and is not invalidated when a
+    /// reshard, split or fold changes the map, or when a resize, snapshot or
+    /// restore swaps the alias: a routed operation corrects it on its first
+    /// stale-routing refusal, but a read that only enumerates the shards, names a
+    /// shard by index or resolves the physical tree for a non-routed read never
+    /// meets one. Such a caller, or one whose correctness depends on seeing a
+    /// just-landed map, must use
+    /// <see cref="GetRoutingAsync(bool, CancellationToken)"/> with
+    /// <c>forceRefresh: true</c>. Every unforced caller in the library is listed,
+    /// with its reason, by a structural guard test.
+    /// </para>
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);

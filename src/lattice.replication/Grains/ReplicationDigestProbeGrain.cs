@@ -186,17 +186,22 @@ internal sealed class ReplicationDigestProbeGrain(
             return;
         }
 
-        int shardCount;
+        // Probe the physical shards the tree's live routing map reaches, resolved
+        // fresh once per pass (#4206). The pinned ShardCount is not a substitute: an
+        // adaptive split or a reshard moves slots to an index above the pin without
+        // changing it, and a fold retires indices below it, so 0..ShardCount-1 would
+        // skip the shards a split populated and name ones a fold retired (#3753).
+        IReadOnlyList<int> shardIndices;
         try
         {
-            shardCount = await _shardCounts.GetShardCountAsync(TreeName, CancellationToken.None).ConfigureAwait(true);
+            shardIndices = await _shardCounts.GetShardIndicesAsync(TreeName, CancellationToken.None).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            // Could not resolve the shard count this tick; do not advance
+            // Could not resolve the tree's routing this tick; do not advance
             // the cadence so the next phase tick retries.
             Logger.LogWarning(ex,
-                "Resolving shard count failed for {Context}; will retry the digest probe on the next phase tick",
+                "Resolving the shard map failed for {Context}; will retry the digest probe on the next phase tick",
                 LogContext);
             return;
         }
@@ -216,8 +221,13 @@ internal sealed class ReplicationDigestProbeGrain(
         // transport, so each peer re-establishes its own scope server-side).
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
 
-        for (var shard = 0; shard < shardCount && !latched; shard++)
+        foreach (var shard in shardIndices)
         {
+            if (latched)
+            {
+                break;
+            }
+
             LeafProjectionDigest local;
             try
             {
@@ -701,11 +711,13 @@ internal sealed class ReplicationDigestProbeGrain(
     /// can repoint the logical tree to a new
     /// physical tree underneath a live probe, and a cached physical id would
     /// leave the Merkle walk descending the retired tree's frozen structure.
-    /// The read is read-only and cheap relative to the walk it precedes.
+    /// The read is read-only and cheap relative to the walk it precedes. It must
+    /// force a refresh: the tree's stateless worker caches the alias per
+    /// activation and nothing on this path would ever invalidate it (#4180).
     /// </summary>
     private static async Task<string> EnsurePhysicalTreeIdAsync(ILattice lattice)
     {
-        var routing = await lattice.GetRoutingAsync(CancellationToken.None).ConfigureAwait(true);
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, CancellationToken.None).ConfigureAwait(true);
         return routing.PhysicalTreeId;
     }
 

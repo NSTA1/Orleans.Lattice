@@ -999,7 +999,7 @@ Two traps there, both of which silently cost coverage rather than failing:
 - `--collect:"XPlat Code Coverage"` needs the test project to reference **`coverlet.collector`**. Without it the flag is accepted, the tests pass, and no report is emitted at all. Every test project the lane discovers must carry it (the lane skips `test/microbench/` and `test/azure-throughput-silo/`, which carry none), and `CoverageCollectorReferenceTests` fails the build for any discovered project that does not. The lane also withholds the whole Codecov upload when any suite's test host was aborted or a suite produced no report, rather than uploading a partial figure (`CiCoverageUploadCompletenessTests` pins that shape), so a missing collector now stalls main's coverage figure instead of silently dropping one package.
 
 When you add a test project, verify it is actually discovered and actually emits a `coverage.cobertura.xml` - do not assume the naming convention matched.
-Like `Explorer CI`, it is **advisory rather than a required check** - it does not run on most PRs, and a required check that never reports leaves a PR pending forever. Treat a failure as blocking by convention.
+Like the other advisory lanes (`videos.yml`), it is **advisory rather than a required check** - it does not run on most PRs, and a required check that never reports leaves a PR pending forever. Treat a failure as blocking by convention. On a `*/epic/**` push it skips when the pushed ref is a member branch (see `ci.yml`'s `pushref` step), because that member's own pull request run already covers it.
 
 ### Keep the suite small
 

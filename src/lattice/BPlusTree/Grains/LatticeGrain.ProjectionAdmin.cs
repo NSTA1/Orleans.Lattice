@@ -22,7 +22,10 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced: an operator names a shard by index, not by key, so a cached map
+        // from before a reshard would reject a new shard or rebuild a retired one,
+        // and nothing on this path would ever refresh it (issue #4180).
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Validate the supplied shard index against the per-tree map;
@@ -73,7 +76,8 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
 
-        var (_, shardMap) = await GetRoutingAsync();
+        // Forced for the same reason as RebuildLeafProjectionAsync.
+        var (_, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShards = shardMap.GetPhysicalShardIndices();
@@ -113,7 +117,9 @@ internal sealed partial class LatticeGrain
         // made for the observe-only metadata verbs.
         await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced: the fan-out enumerates shards and routes no key, so a cached map
+        // or alias would measure a pre-reshard shard set or a retired tree (#4180).
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShards = shardMap.GetPhysicalShardIndices();

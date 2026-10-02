@@ -31,8 +31,8 @@ The Backups area is tenant-scoped. These route forms exist in the shipped pages:
 | Capture | `/backups/new` | `/t/{tenant}/backups/new` | Captures a full, incremental, or set backup. `?tree={tree}` seeds the tree field. |
 | Schedules | `/backups/schedules` | `/t/{tenant}/backups/schedules` | Manages a tree's full and incremental schedules. Query key: `tree`. |
 | Health | `/backups/health` | `/t/{tenant}/backups/health` | Lists backup health where health monitoring applies. `?backup={id}` focuses one backup. |
-| Maintenance | `/backups/maintenance` | `/t/{tenant}/backups/maintenance` | Rebuilds and checks the catalogue where the connection serves the in-process extensions. |
-| Operation status | `/backups/operations/{operationId}` | `/t/{tenant}/backups/operations/{operationId}` | Shows a staged operation started in this Explorer circuit. |
+| Maintenance | `/backups/maintenance` | `/t/{tenant}/backups/maintenance` | Rebuilds and checks the catalogue as cluster operations, and shows the latest run of each. |
+| Operation status | `/backups/operations/{operationId}` | `/t/{tenant}/backups/operations/{operationId}` | Shows a backup or restore operation tracked by the cluster, or a staged operation started in this Explorer circuit. |
 
 ## Navigation row
 
@@ -59,7 +59,7 @@ The **Filter by tree** field is a [picker](navigation-model.md#pickers) that sug
 
 When inventory extensions are served, the lede summarises total backups, full and incremental counts, catalogue bytes, and newest backup time. If inventory is not served, the area falls back to the newest catalogue row. A selected tree filter also shows schedule status for that tree: full and incremental schedule registration, last successes, last scheduled run outcome, and chain depth, with a link to that tree's Schedules page.
 
-Rows link to the Backup details page. When health monitoring is available, rows also show the latest stored health report as a health pill. The page lists recent operations from the current circuit and links to their status pages.
+Rows link to the Backup details page. When health monitoring is available, rows also show the latest stored health report as a health pill. The page lists the caller's 10 most recent backup and restore operations as the cluster tracks them - so an operation started in another tab or before a reload is listed - each with its state and, while it runs, its phase and progress in real units. A denied listing is hidden; any other fault says the operations could not be listed. Staged operations from the current circuit that never reached the cluster are listed separately.
 
 ## Capture
 
@@ -69,9 +69,9 @@ The Capture page can start three staged operations:
 - **Incremental** captures changes since a selected full backup. The page can find up to 50 newest full backups for the named tree and requires a base before capture.
 - **Set of trees** captures one full backup per tree under one set manifest. The set can be captured at one cross-tree consistency fence.
 
-A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. The **Tree** and **Tree to add** fields are pickers that accept only a tree you can reach; the key or prefix is typed. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. The first operation stage checks access before the capture call.
+A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. The **Tree** and **Tree to add** fields are pickers that accept only a tree you can reach; the key or prefix is typed. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. Its first stage checks access; its second starts the capture on the cluster, which accepts it and runs it in the background. The page then hands off to the cluster operation's own address.
 
-Capture operations report links to the captured backup pages, the number of backups captured, artifact count, and size.
+A succeeded capture links to the captured backup pages and, for a set, reports the number of backups captured.
 
 ## Backup details
 
@@ -83,7 +83,7 @@ The **Artifacts** section lists artifact id, size, chunk count, and an **Export*
 
 ### Restore
 
-Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where in-process extensions are served, a cold-restore option that reads from the backup store alone. The target tree defaults to the backup's own tree and is a picker that also accepts a new name: naming an existing tree is flagged, because restoring replaces what it holds, and a new name restores into a new tree.
+Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where the connection serves backup operations, a cold-restore option that reads from the backup store alone. Cold restore runs on the cluster as a tracked operation, so it is offered over the gRPC binding too. The target tree defaults to the backup's own tree and is a picker that also accepts a new name: naming an existing tree is flagged, because restoring replaces what it holds, and a new name restores into a new tree.
 
 Both restore modes are confirmed before the operation starts:
 
@@ -92,7 +92,7 @@ Both restore modes are confirmed before the operation starts:
 
 The confirmation is named **Restore this backup?** and requires the target tree name. If the target belongs to an app that declares the tree rebuildable, the confirmation warns that re-deriving may be a better choice.
 
-A restore starts a staged operation and navigates to its operation status page. A finished point-in-time restore can be reverted from that status page.
+A restore checks access and that the backup still exists, starts the restore on the cluster, and hands off to the cluster operation's status page. A finished point-in-time restore can be reverted from that status page.
 
 ### Delete
 
@@ -104,19 +104,21 @@ The Schedules page works on one tree, selected with `?tree={tree}` or the **Show
 
 Each row shows whether a schedule is registered, its interval, last run, and last success. A registered schedule can be cancelled when the caller may capture that backup kind. Cancelling opens a dialog named **Cancel this schedule?** and states that existing backups are kept.
 
-The registration form can create or change a full or incremental schedule. It asks for hours and minutes, rejects non-whole or zero total intervals, and notes that an interval under one minute is raised to one minute by the scheduler. Successful saves and cancellations reload the schedule status.
+The registration form can create or change a full or incremental schedule. Its **Every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes; it refuses a box that is not a whole number and an interval under one minute, the shortest the scheduler runs. Successful saves and cancellations reload the schedule status.
 
 ## Health
 
 Health appears only when the backup sink is durable and external. The Health page lists the newest 25 backups and their latest stored health reports. A focused address, `/backups/health?backup={id}`, shows one backup, its latest report, **Check now**, and periodic monitoring settings.
 
+**Check now** starts a health check on the cluster as a tracked operation and follows it on the page with the shared progress display, counting the backup's artifacts checked; when it succeeds the page reads the fresh report. The check keeps running if the tab is closed. Reopening the backup's health page while a check started from the Explorer is still running picks that check up instead of starting another; **Open the check's page** links to its operation status page.
+
 A health report shows status, checked time, explanation, whether the manifest is present, missing or uncommitted artifacts, hash mismatches, and peer-cluster visibility when applicable. Focused health actions are offered only when the scope probe grants list authority for that backup.
 
-Periodic monitoring can be turned on or off per backup. The form asks for hours and minutes and saves a monitoring interval; the monitor applies the config on its next sweep.
+Periodic monitoring can be turned on or off per backup. Its **Verify every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes, at least one minute; the monitor applies the config on its next sweep.
 
 ## Maintenance
 
-Maintenance covers in-process catalogue extensions. A connection that does not serve them shows:
+Rebuild and check run on the cluster as tracked operations, so they are served over the gRPC binding too. A connection that does not serve backup operations at all shows:
 
 > This connection does not serve this operation. Run it from a silo host, where the backup control API is in process.
 
@@ -124,18 +126,22 @@ Maintenance covers in-process catalogue extensions. A connection that does not s
 
 **Check the catalogue against the store** finds catalogue rows whose backup is gone from the store. The check changes nothing. If a check finds orphan rows, **Remove orphan rows...** opens a destructive confirmation named **Remove orphan rows?**. Removing orphan rows touches only the catalogue; the store is not touched, and a rebuild restores any row whose backup reappears.
 
-All maintenance actions run as staged operations with status pages.
+Each section shows its latest run as the cluster reports it - started from this page, another tab, or another client - with the shared progress display while it runs (manifests re-registered or rows checked, with no total, then orphan rows removed when pruning) and a one-sentence outcome linking to the run's status page. A closed tab never stops a run. **Remove orphan rows...** is offered when the latest check found orphan rows it did not remove. The page looks back through at most the caller's 200 most recent backup operations.
 
 ## Operation status pages
 
-Every capture, restore, revert, rebuild, and scrub operation started from the Explorer creates a circuit-scoped status page at `/backups/operations/{id}`. The page can be left and resumed while the circuit lives. It shows:
+Captures, restores, health checks, and catalogue rebuilds and checks are accept-then-poll operations tracked by the cluster (see [Backup and restore operations](../lattice.api.backup/operations.md)). Their status page at `/backups/operations/{id}` reads the cluster's status, so it survives closing the tab, a reload, or another circuit: open the address again and it picks the operation up where it is. While the page is open it reads the status every few seconds, backing off while reads fail, and stops once the operation finishes. It shows:
 
-- title and start or finish time;
-- a status pill and message;
-- ordered stages, with the current stage marked;
-- facts and links reported by the operation;
-- orphan rows for catalogue scrub operations;
-- revert controls for a completed point-in-time restore.
+- the title and a status pill (**Cancelling** once a cancel was asked for);
+- while it runs, the step among the operation's phases and a progress bar over the current phase's units - determinate only when the phase total is known, otherwise the count so far, never an invented percentage;
+- **Cancel operation** while it runs;
+- once it stops early, the phase and units it stopped at and why;
+- once it succeeds, links to what it produced, its figures, and the orphan rows a catalogue check found;
+- revert controls for a completed point-in-time restore, and a link to the revert once one was made.
+
+An operation id the caller cannot see - another tenant's, or one past its retention - is not found. The progress display is the shared `LtOperationProgress` component, so every area that runs long operations draws them the same way.
+
+Reverts still run as staged operations in the current circuit. Their status page can be left and resumed while the circuit lives, and shows the title and start or finish time, a status pill and message, the ordered stages with the current stage marked, and facts and links.
 
 Reverting a point-in-time restore opens a destructive confirmation named **Revert this restore?**. It says the tree returns to the copy it held before the restore and every write made since the restore is dropped. The revert itself becomes a new operation status page.
 
@@ -163,8 +169,9 @@ Only backups the caller may read are returned.
 - Backup-id completions scan at most 2000 ids.
 - Scope probes return no capabilities when they fault.
 - Health availability is remembered once known; a fault reads as unavailable but is not remembered as a definitive true value.
-- Inventory not served withdraws the in-process extensions for the circuit; a denied inventory keeps them offered.
-- Staged operations are kept in the current Explorer circuit. Ending the circuit cancels still-running client-side operations.
+- Inventory not served withdraws the inventory for the circuit; a denied inventory keeps it offered. Cold restore and catalogue maintenance do not depend on it: they follow whether backup operations are served, and only a listing refused as not served withdraws them.
+- Captures, restores, health checks, rebuilds and catalogue checks run on the cluster and outlive the circuit. Staged reverts are kept in the current Explorer circuit; ending the circuit cancels one still running.
+- The operation list shows the 10 most recent operations and is reused for 2 seconds per caller and tenant.
 
 ## Server authority
 

@@ -1,6 +1,10 @@
 using Grpc.Core;
 using NSubstitute;
 
+// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
+// they stay supported until the next major version.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
 /// <summary>
@@ -622,6 +626,22 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
         var catalog = await _host.Client.ListTagIndexesAsync();
 
         Assert.That(catalog.Indexes, Is.Empty);
+    }
+
+    [Test]
+    public async Task set_config_over_the_client_reports_not_found_for_a_missing_tree_and_creates_nothing()
+    {
+        // Issue #4230: the registry's configuration verbs no longer create a row for
+        // a tree that does not exist; the refusal is a KeyNotFoundException, which
+        // the binding surfaces as NotFound.
+        var missingTree = "set-config-missing-" + Guid.NewGuid().ToString("N");
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await _host.Client.SetTreeConfigAsync(
+            missingTree,
+            new TreeConfigurationUpdate { ApplyPublishEvents = true, PublishEvents = true }));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        Assert.That((await _host.Client.CheckTreeExistsAsync(missingTree)).Exists, Is.False);
     }
 
     [Test]

@@ -1,22 +1,20 @@
 @page "/backups/operations/{p1}"
 @page "/t/{tenant}/backups/operations/{p1}"
 @inherits ExplorerPage
+@using Orleans.Lattice.Explorer.UI.Operations
 @*
-    /backups/operations/{id}: one staged operation's status page (epic E15).
-    It can be left and resumed for as long as the session lasts. A finished
-    point-in-time restore offers its revert here, behind a type-the-name
-    confirmation.
+    /backups/operations/{id}: one backup operation's status page.
+    A capture, restore, health check, catalogue rebuild or scrub is the cluster's
+    tracked operation (#4122, #4125): its progress is read from the cluster, so the
+    page survives a closed tab or a reload, and a running one can be cancelled. A
+    revert is staged in the session (epic E15) and can be left and resumed for as
+    long as it lasts. A finished point-in-time restore offers its revert here,
+    behind a type-the-name confirmation.
 *@
 
-<PageTitle>@(_operation?.Title ?? "Operation") - Orleans.Lattice Explorer</PageTitle>
+<PageTitle>@PageTitleText - Orleans.Lattice Explorer</PageTitle>
 
-@if (_operation is not { } operation)
-{
-    <h1 class="lt-shell-page-title">Operation</h1>
-    <BackupsNav />
-    <LtSkeleton Lines="3" Label="Loading the operation" />
-}
-else
+@if (_operation is { } operation)
 {
     <h1 class="lt-shell-page-title">@operation.Title</h1>
     <p class="lt-shell-page-lede">Started @BackupsFormat.Time(operation.StartedAt)@(operation.CompletedAt is { } done ? ", finished " + BackupsFormat.Time(done) : string.Empty).</p>
@@ -45,44 +43,42 @@ else
         }
     </ol>
 
-    @if (operation.Facts.Count > 0)
+    @Outcome(operation.Facts, operation.Links, operation.Items)
+}
+else if (_follower?.Status is { } status)
+{
+    <h1 class="lt-shell-page-title">@BackupClusterOperation.Title(status)</h1>
+    <p class="lt-shell-page-lede">Started @BackupsFormat.Time(status.StartedAtUtc)@(status.FinishedAtUtc is { } finished ? ", finished " + BackupsFormat.Time(finished) : string.Empty).</p>
+    <BackupsNav />
+
+    <div role="status" aria-live="polite">
+        <LtOperationProgress Status="@status" Label="Operation progress" PhaseName="BackupClusterOperation.PhaseName" />
+    </div>
+
+    @if (_follower.LastError is { } readError)
     {
-        <LtDefinitionList>
-            @foreach (var fact in operation.Facts)
-            {
-                <LtDefinition Term="@fact.Key">@fact.Value</LtDefinition>
-            }
-        </LtDefinitionList>
+        <p class="lt-backups-note" role="alert">The latest status could not be read: @BackupsFaults.Describe(readError) The page keeps trying.</p>
     }
 
-    @if (operation.Links.Count > 0)
+    @if (!status.IsTerminal && !status.CancelRequested)
     {
-        <ul class="lt-backups-list">
-            @foreach (var link in operation.Links)
-            {
-                <li @key="link.Text"><a class="lt-backups-link" href="@Navigator.Canonicalize(link.Target).ToHref()">@link.Text</a></li>
-            }
-        </ul>
+        <p>
+            <LtButton OnClick="CancelAsync" Disabled="@_cancelling">Cancel operation</LtButton>
+        </p>
     }
 
-    @if (operation.Items.Count > 0)
+    @if (_cancelError is { } cancelError)
     {
-        <section class="lt-backups-section" aria-labelledby="lt-backups-items-title">
-            <h2 id="lt-backups-items-title" class="lt-backups-section__title">Orphan rows</h2>
-            <ul class="lt-backups-list">
-                @foreach (var item in operation.Items)
-                {
-                    <li class="lt-backups-list__item" @key="item">@item</li>
-                }
-            </ul>
-        </section>
+        <p class="lt-backups-note" role="alert">@cancelError</p>
     }
 
-    @if (operation.RevertedBy is { } revertedBy)
+    @Outcome(BackupClusterOperation.Facts(status), BackupClusterOperation.Links(status), BackupClusterOperation.Items(status))
+
+    @if (Operations.RevertOf(status.OperationId) is { } revert)
     {
-        <p class="lt-backups-note">This restore was reverted. <a class="lt-backups-link" href="@Navigator.Canonicalize(BackupsAddresses.Operation(revertedBy)).ToHref()">See the revert</a>.</p>
+        <p class="lt-backups-note">This restore was reverted. <a class="lt-backups-link" href="@Navigator.Canonicalize(BackupsAddresses.Operation(revert.Id)).ToHref()">See the revert</a>.</p>
     }
-    else if (operation.CanRevert && operation.RestoreResult is { } restore)
+    else if (BackupClusterOperation.CanRevert(status) && BackupClusterOperation.RestoreResult(status) is { } restore)
     {
         <section class="lt-backups-section" aria-labelledby="lt-backups-revert-title">
             <h2 id="lt-backups-revert-title" class="lt-backups-section__title">Revert this restore</h2>
@@ -99,4 +95,64 @@ else
             <p>The tree returns to the copy it held before the restore. Every write made to it since the restore is dropped.</p>
         </LtConfirmDestructive>
     }
+}
+else
+{
+    <h1 class="lt-shell-page-title">Operation</h1>
+    <BackupsNav />
+    @if (_follower?.LastError is { } error)
+    {
+        <LtEmptyState Title="The operation could not be read">
+            <ChildContent><p>@BackupsFaults.Describe(error)</p></ChildContent>
+            <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtSkeleton Lines="3" Label="Loading the operation" />
+    }
+}
+
+@code {
+    // What an operation produced: its figures, links to what it made, and any
+    // identifiers it reported (such as the orphan rows a scrub found). Shared by
+    // the session-staged and the cluster-tracked operations.
+    private RenderFragment Outcome(
+        IReadOnlyList<KeyValuePair<string, string>> facts,
+        IReadOnlyList<BackupOperationLink> links,
+        IReadOnlyList<string> items) => __builder =>
+    {
+        @if (facts.Count > 0)
+        {
+            <LtDefinitionList>
+                @foreach (var fact in facts)
+                {
+                    <LtDefinition Term="@fact.Key">@fact.Value</LtDefinition>
+                }
+            </LtDefinitionList>
+        }
+
+        @if (links.Count > 0)
+        {
+            <ul class="lt-backups-list">
+                @foreach (var link in links)
+                {
+                    <li @key="link.Text"><a class="lt-backups-link" href="@Navigator.Canonicalize(link.Target).ToHref()">@link.Text</a></li>
+                }
+            </ul>
+        }
+
+        @if (items.Count > 0)
+        {
+            <section class="lt-backups-section" aria-labelledby="lt-backups-items-title">
+                <h2 id="lt-backups-items-title" class="lt-backups-section__title">Orphan rows</h2>
+                <ul class="lt-backups-list">
+                    @foreach (var item in items)
+                    {
+                        <li class="lt-backups-list__item" @key="item">@item</li>
+                    }
+                </ul>
+            </section>
+        }
+    };
 }

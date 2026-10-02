@@ -12,6 +12,33 @@ siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
 
 The `name` parameter is the storage provider name (`"lattice"`). Replace `AddMemoryGrainStorage` with any Orleans storage provider (Azure Blob, Azure Table, ADO.NET, etc.) for durable grain state. The write-ahead log is a separate seam: `AddLattice` registers an in-memory WAL provider, so a durable deployment also registers a durable WAL provider - see [WAL storage providers](wal-storage-providers.md).
 
+### The grain storage provider must enforce ETags
+
+The provider `configureStorage` registers must enforce ETags (optimistic concurrency) on write: a write that presents an ETag other than the stored row's current one must fail with Orleans' `InconsistentStateException`. Orleans' memory, Azure Table, Azure Blob, Cosmos DB and ADO.NET providers all do. Lattice depends on it in two ways:
+
+- **Direct writes.** The durable write-ahead-log pin store writes its bucketed slots straight through the provider rather than through `IPersistentState`, and when that grain cannot be reached during shutdown the leaf cursor reporter writes the same slots itself, from outside any grain. Both read a slot and write it back with the ETag they read, so only the provider's ETag check stops one writer from overwriting the other.
+- **Duplicate activations.** Orleans' default grain directory is eventually consistent, so during a membership change two activations of the same grain can briefly coexist. The provider's ETag check is what rejects the stale activation's write.
+
+With a provider that accepts a stale write, a stale activation can persist an older leaf checkpoint while the durable write-ahead-log pin, which merges by maximum, keeps the newer offset. The write-ahead-log garbage collector can then trim entries a later cold rebuild of that leaf needs. Nothing fails at the time, so the loss is silent.
+
+Each silo checks the requirement once as it becomes active. It writes a reserved probe row (grain type and state name `_lattice_grain-storage-fencing-probe`, one row shared by the cluster) twice, then writes it again presenting the first, now stale, ETag, and expects `InconsistentStateException`. What happens next is set by `LatticeGrainStorageFencingOptions.Mode`:
+
+| Mode | Provider rejects the stale write | Provider accepts the stale write | Probe cannot decide |
+|------|----------------------------------|----------------------------------|---------------------|
+| `Warn` (default) | Logs the posture at `Information`. | Logs a `Warning`; the silo starts. | Logs a `Warning`; the silo starts. |
+| `Reject` | Logs the posture at `Information`. | Logs an `Error` and fails silo start. | Logs a `Warning`; the silo starts. |
+| `Disabled` | No probe runs; the silo logs once that the check is disabled. | | |
+
+The probe cannot decide when the provider faults, throws something other than `InconsistentStateException` on the stale write, keeps losing races to other silos' probes, is not registered, or does not finish within `ProbeTimeout` (30 seconds by default). Those are not evidence the provider is unsafe, so even `Reject` only warns on them rather than turning a transient storage fault into a failed start.
+
+Use `Reject` to make the requirement fail closed:
+
+```csharp verify
+siloBuilder.ConfigureLatticeGrainStorageFencing(o => o.Mode = LatticeGrainStorageFencingMode.Reject);
+```
+
+`Warn` is the default so that upgrading never turns a running deployment's next restart into a failed start. Use `Disabled` only for a deliberately non-durable provider, such as a benchmark's no-op storage, where the probe's writes are wasted.
+
 ## Setting Options
 
 Lattice uses the standard .NET [named options](https://learn.microsoft.com/dotnet/core/extensions/options#named-options-support-using-iconfigurenamedoptions) pattern. Each tree resolves its options by name (the tree ID passed to `GetGrain<ILattice>(treeId)`).

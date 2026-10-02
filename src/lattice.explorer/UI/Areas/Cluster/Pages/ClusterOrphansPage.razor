@@ -1,10 +1,11 @@
+@using Orleans.Lattice.Explorer.UI.Operations
 <PageTitle>Orphaned leaves - Cluster - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Orphaned leaves</h1>
 <p class="lt-shell-page-lede">Find leaves spliced into a shard's sibling chain that no descent from its root reaches - left by an interrupted split, they pin the WAL so it never trims - and unsplice the ones whose keys are all readable elsewhere.</p>
 
 <div class="lt-toolbar">
-    <form class="lt-cluster-inline-form" @onsubmit="Choose" aria-label="Choose a tree">
+    <form class="lt-control-row" @onsubmit="Choose" aria-label="Choose a tree">
         <LtComboBox @ref="_treeBox" Label="Tree" @bind-Value="_tree" Error="@_treeError" Source="@Suggestions.ClusterTrees" Noun="tree" />
         <LtButton Type="LtButtonType.Submit">Choose</LtButton>
     </form>
@@ -30,17 +31,45 @@ else
             <LtCheckbox Label="Survey every orphan key" Hint="A read-only census of each orphan's keys. Slower; changes nothing." @bind-Checked="_survey" Disabled="@Running" />
             @if (Running)
             {
-                <LtButton OnClick="Stop">Stop</LtButton>
+                <LtButton data-lt-cluster="stop" Disabled="@(_cancelling || _watch.Status is { CancelRequested: true })" OnClick="StopAsync">Stop</LtButton>
             }
             else
             {
-                <LtButton data-lt-cluster="audit" OnClick="AuditAsync">@(_pass is null ? "Audit" : "Audit again")</LtButton>
-                @if (_access.CanManageTreeLifecycle && _pass is { Complete: true } finished && finished.Repairable > 0)
+                <LtButton data-lt-cluster="audit" OnClick="AuditAsync">@(_pass is null && _totals is null ? "Audit" : "Audit again")</LtButton>
+                @if (CanRepair)
                 {
                     <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="repair" OnClick="() => _confirm = true">Repair...</LtButton>
                 }
             }
         </div>
+
+        @if (_watch.Status is { } operation)
+        {
+            <div class="lt-cluster-stage" data-lt-cluster="orphan-progress">
+                <LtOperationProgress Status="@operation" Label="@(operation.Kind == TreeAdminOperationKinds.OrphanedLeavesRepair ? "Orphaned-leaf repair progress" : "Orphaned-leaf audit progress")" />
+            </div>
+            @if (_watch.LastError is not null)
+            {
+                <p class="lt-cluster-note" role="alert">The pass's progress could not be read just now; trying again. It keeps running on the cluster.</p>
+            }
+            else if (!operation.IsTerminal)
+            {
+                <p class="lt-cluster-note">The pass runs on the cluster: you can leave this page and come back to follow it.</p>
+            }
+        }
+
+        @if (_totals is { } totals)
+        {
+            <div class="lt-cluster-stage">
+                <LtStatusPill State="@TotalsState(totals)" Text="@TotalsLabel(totals)" />
+                <span>@TotalsSentence(totals)</span>
+            </div>
+            <p class="lt-cluster-note">@(totals.Repair ? "Repair" : "Audit"): @ClusterFormat.Plural(totals.LeavesWalked, "leaf", "leaves") walked.</p>
+            @if (!totals.IsClean && !Running)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" data-lt-cluster="findings" OnClick="FindingsAsync">Show each leaf</LtButton>
+            }
+        }
 
         @if (_pass is { } pass)
         {
@@ -94,6 +123,6 @@ else
     <LtConfirmDestructive @bind-Open="_confirm"
                           Title="Repair orphaned leaves" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Repair"
                           OnConfirm="RepairAsync">
-        <p>Unsplices every orphaned leaf whose keys were all shown to be readable elsewhere. This changes the tree's structure and cannot be undone. A leaf that cannot be shown safe is left exactly as it is. The page audits again when the repair finishes.</p>
+        <p>Unsplices every orphaned leaf whose keys were all shown to be readable elsewhere. This changes the tree's structure and cannot be undone. A leaf that cannot be shown safe is left exactly as it is. The repair runs on the cluster, and the page audits again when it finishes.</p>
     </LtConfirmDestructive>
 }

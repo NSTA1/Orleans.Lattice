@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Operations;
 using Orleans.Lattice.Explorer.UI.Transport;
 using Orleans.Lattice.Explorer.UI.Suggestions;
 
@@ -40,6 +42,8 @@ public partial class BackupsCataloguePage : IDisposable
     private BackupScopeStatus? _scopeStatus;
     private bool _scopeStatusLoading;
     private string? _scopeStatusError;
+    private IReadOnlyList<LatticeOperationStatus>? _clusterOperations;
+    private string? _clusterOperationsError;
 
     [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
@@ -52,6 +56,16 @@ public partial class BackupsCataloguePage : IDisposable
 
     [Inject]
     internal BackupOperations Operations { get; set; } = default!;
+
+    [Inject]
+    internal BackupOperationList ClusterOperationList { get; set; } = default!;
+
+    /// <summary>
+    /// The session's own staged operations that the cluster does not track: reverts,
+    /// catalogue maintenance, and starts that never reached the cluster.
+    /// </summary>
+    private IReadOnlyList<BackupOperation> SessionOperations =>
+        [.. Operations.Recent.Where(static operation => operation.ClusterOperationId is null).Take(10)];
 
     private string KindValue => Address.GetQuery(BackupsAddresses.KindQuery) switch
     {
@@ -102,6 +116,17 @@ public partial class BackupsCataloguePage : IDisposable
     }
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
+
+    private static string OperationProgressText(LatticeOperationStatus operation)
+    {
+        var parts = new List<string>(2) { OperationText.Phase(operation.Phase) };
+        if (OperationText.Units(operation) is { } units)
+        {
+            parts.Add(units);
+        }
+
+        return ", " + string.Join(", ", parts);
+    }
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -222,6 +247,7 @@ public partial class BackupsCataloguePage : IDisposable
             var inventory = Access.GetInventoryAsync(cancellationToken);
             var health = Access.IsHealthMonitoringAvailableAsync(cancellationToken);
             var status = Tree is { } tree ? LoadScopeStatusAsync(tree, cancellationToken) : Task.CompletedTask;
+            var operations = LoadClusterOperationsAsync(cancellationToken);
 
             _healthAvailable = await health;
             if (_healthAvailable && _page is { } page)
@@ -235,11 +261,26 @@ public partial class BackupsCataloguePage : IDisposable
             }
 
             await status;
+            await operations;
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // A newer load replaced this one.
+        }
+    }
+
+    private async Task LoadClusterOperationsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _clusterOperations = await ClusterOperationList.RecentAsync(cancellationToken);
+            _clusterOperationsError = null;
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
+        {
+            _clusterOperations = null;
+            _clusterOperationsError = BackupsFaults.IsDenied(exception) ? null : BackupsFaults.Describe(exception);
         }
     }
 

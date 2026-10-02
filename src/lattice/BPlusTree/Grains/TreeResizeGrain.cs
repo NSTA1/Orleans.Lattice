@@ -281,13 +281,16 @@ internal sealed class TreeResizeGrain(
     /// <summary>
     /// Empty-tree fast-path: repins <c>MaxLeafKeys</c> /
     /// <c>MaxInternalChildren</c> in the registry without running the online
-    /// resize pipeline.
+    /// resize pipeline. Fails closed on a tree with no registry row rather than
+    /// creating one (issue #4230): the resize's options resolve registers a
+    /// never-created tree, so a missing row here means it was purged.
     /// </summary>
     private async Task ApplyEmptyTreeResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
         var registry = grainFactory.GetLatticeRegistry();
-        var existing = await registry.GetEntryAsync(TreeId);
-        var updated = (existing ?? new State.TreeRegistryEntry()) with
+        var existing = await registry.GetEntryAsync(TreeId)
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(ResizeAsync));
+        var updated = existing with
         {
             MaxLeafKeys = newMaxLeafKeys,
             MaxInternalChildren = newMaxInternalChildren,
@@ -985,8 +988,17 @@ internal sealed class TreeResizeGrain(
         };
         await registry.UpdateAsync(TreeId, entry);
 
-        // Set alias to redirect to the new physical tree.
-        await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
+        // Set alias to redirect to the new physical tree. System origin, as
+        // backup's shadow cutover does: the swap is library maintenance already
+        // authorized when the resize was accepted, and the phase timer that
+        // usually drives it carries no request context, so the registry's access
+        // gate would otherwise judge it as an anonymous user-origin alias change
+        // and refuse it on every tick (issue 4128). The ownership guard still
+        // runs: it binds system origin too.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
+        }
 
         var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Reject;

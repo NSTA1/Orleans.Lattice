@@ -167,11 +167,16 @@ The fallback also reads the retained log raw, which the history view does not. T
 view holds an atomic batch's staged writes back until the batch commits, discards
 them if it aborts, and skips the records compaction writes. The fallback lists a
 staged write as a revision whether its batch later commits, aborts or is still in
-flight, so an aborted batch's writes appear as revisions that never took effect. It
-also lists the reap mark compaction writes when it removes a deleted or expired entry
-past its grace period as a further delete revision, stamped with that entry's own
-clock: a compacted delete appears twice, and a reaped expired entry shows a delete
-nobody issued.
+flight, so an aborted batch's writes appear as revisions that never took effect.
+
+The log can also hold one revision several times. A resize or snapshot copy, a
+reshard migration, a leaf split's redistribution and a replication apply each
+append the entry they copy again, under the clock its author stamped, and the reap
+mark compaction writes when it removes a deleted or expired entry past its grace
+period carries that entry's own clock too. The fallback identifies a revision by
+its clock, as the history view keys its rows, and reports each one once, across
+pages too, so none of these internal records shows as a change to the key. A
+write at a clock of its own is always reported, whatever its record is marked.
 
 ## The accumulative guard
 

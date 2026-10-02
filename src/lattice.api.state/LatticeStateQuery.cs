@@ -238,7 +238,9 @@ internal sealed class LatticeStateQuery(
         }
 
         var report = await tree.DiagnoseAsync(deep, cancellationToken).ConfigureAwait(false);
-        return TreeSummaryResult.Found(MapTree(treeId, report, BuildConfig(effectiveTreeId, report)));
+        var registry = _grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
+        return TreeSummaryResult.Found(MapTree(treeId, report, BuildConfig(effectiveTreeId, report, entry)));
     }
 
     public async Task<ShardSummariesResult> GetShardSummariesAsync(
@@ -304,7 +306,9 @@ internal sealed class LatticeStateQuery(
 
         // Routing carries the physical shard map, so this is one grain call with
         // no per-shard fan-out - safe against a saturated tree's contended roots.
-        var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+        // Forced: a count routes no key, so the tree's stateless worker would
+        // otherwise answer from a map it cached before a reshard (issue #4180).
+        var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
         return routing.Map.GetPhysicalShardIndices().Count;
     }
 
@@ -1439,7 +1443,8 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            // Forced for the same reason as GetPhysicalShardCountAsync (#4180).
+            var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
             shardIndices = routing.Map.GetPhysicalShardIndices();
         }
 
@@ -2759,14 +2764,14 @@ internal sealed class LatticeStateQuery(
         };
     }
 
-    private TreeConfigSummary BuildConfig(string treeId, TreeDiagnosticReport report)
+    private TreeConfigSummary BuildConfig(string treeId, TreeDiagnosticReport report, TreeRegistryEntry? entry)
     {
         var opts = _options.Get(treeId);
         return new TreeConfigSummary
         {
             ShardCount = report.ShardCount,
             VirtualShardCount = report.VirtualShardCount,
-            WalPartitions = opts.WalPartitions,
+            WalPartitions = entry?.WalPartitions ?? opts.WalPartitions,
             SoftDeleteDuration = opts.SoftDeleteDuration,
         };
     }

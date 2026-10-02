@@ -194,6 +194,11 @@ public static class LatticeBackupServiceCollectionExtensions
             sp => sp.GetRequiredService<LatticeBackupCaptureService>());
         builder.Services.TryAddSingleton<ILatticeBackupScheduler, LatticeBackupScheduler>();
 
+        // Backup and restore as tracked long-running operations (#4122): the
+        // backup engine's client of the shared coordinator AddLattice registers.
+        builder.Services.TryAddSingleton<Operations.LatticeOperationRunner>();
+        builder.Services.TryAddSingleton<BackupOperationService>();
+
         return builder;
     }
 

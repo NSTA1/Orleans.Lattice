@@ -444,7 +444,7 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   - **CI runs on epic-targeted and release-line pull requests.**
     `.github/workflows/ci.yml` triggers on
     `pull_request: branches: [main, '*/epic/**', 'release/**']`, and the
-    advisory `explorer-ci.yml`, `ui-tests.yml`, and `videos.yml` lanes mirror that
+    advisory `ui-tests.yml` and `videos.yml` lanes mirror that
     branch list behind their own `paths:` filters. Without the second pattern a
     pull request
     into an epic branch would run no checks at all, which trades serialisation
@@ -457,12 +457,17 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     only, `publish.yml` is push-triggered, and
     `ci-serial-old.yml` and `promote-videos.yml` are manual-dispatch only, so
     none of them is affected.)
-    The same four workflows also run on `push` to `*/epic/**` (never
+    The same three workflows also run on `push` to `*/epic/**` (never
     `release/**`): an advisory integration-branch lane that evaluates the bucket
-    itself after each member merge - `ci.yml` unconditionally, the other three
+    itself after each member merge - `ci.yml` unconditionally, the other two
     only when that merge touched their `paths:` - and blocks nothing.
     `CiIntegrationBranchTriggerTests` fails the build if a workflow that gates
-    epic pull requests lacks that push trigger.
+    epic pull requests lacks that push trigger. Because `*/epic/**` also
+    matches every member branch, each of the three classifies the pushed ref
+    with `ci.yml`'s `pushref` rule and skips its expensive jobs on a member
+    push, whose own pull request already gates it; the same fixture fails the
+    build if a push-triggered lane lacks that guard or its copy of the rule
+    drifts from `ci.yml`'s.
   - **An epic branch must never carry branch protection, and in particular
     never a required status check with `strict` (require branches to be up to
     date before merging).** That setting on `main` is precisely what serialises

@@ -140,7 +140,7 @@ else
                 {
                     <LtSelect Label="Restore point" Options="@PointOptions" Value="@_point" ValueChanged="value => _point = value" Hint="Restore the tree as it stood at an earlier backup in the chain." />
                 }
-                @if (_extensionsServed)
+                @if (_coldRestoreServed)
                 {
                     <LtCheckbox Label="Restore from the backup store alone (cold restore)" Checked="@_cold" CheckedChanged="value => _cold = value" Hint="For a cluster that lost its catalogue: reads the backup from the store rather than the catalogue." />
                 }

@@ -19,6 +19,7 @@ internal static partial class ShellServiceCollectionExtensions
     {
         services.TryAddScoped<AppsFacades>();
         services.TryAddScoped<AppsAccess>();
+        services.TryAddScoped<AppsMembership>();
         services.TryAddScoped<AppsLifecycleIntents>();
         services.TryAddScoped<AppInstallFlowStore>();
         services.TryAddScoped<AppsCompletionSource>();

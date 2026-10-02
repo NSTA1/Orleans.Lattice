@@ -4,6 +4,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -30,9 +31,11 @@ public sealed class HotGrainPlacementSpreadTests
     public async Task OneTimeSetUp()
     {
         var builder = new TestClusterBuilder(initialSilosCount: 2);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]

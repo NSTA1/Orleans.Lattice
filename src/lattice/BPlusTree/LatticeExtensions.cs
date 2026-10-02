@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Views;
 using Orleans.Runtime;
 using Orleans.Streams;
 
@@ -397,10 +398,11 @@ public static class LatticeExtensions
     /// stream preserves the relative order within each partition.
     /// </para>
     /// <para>
-    /// Routing is resolved up front via <see cref="ILattice.GetRoutingAsync"/>,
-    /// so entries are correctly partitioned by the tree's persisted
+    /// Routing is resolved up front, once, via
+    /// <see cref="ILattice.GetRoutingAsync(bool, CancellationToken)"/> with a forced
+    /// refresh, so entries are correctly partitioned by the tree's persisted
     /// <see cref="ShardMap"/> - including non-default maps produced by adaptive
-    /// shard splits.
+    /// shard splits, and a reshard or alias swap since the tree last routed.
     /// </para>
     /// </summary>
     /// <param name="lattice">The tree to load into.</param>
@@ -420,7 +422,11 @@ public static class LatticeExtensions
         ArgumentNullException.ThrowIfNull(grainFactory);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
+        // Forced, once per load (#4206): the shard-root bulk-append path checks no
+        // slot ownership, so routing the tree's stateless worker cached before a
+        // reshard or alias swap would append keys to shards the live map no longer
+        // routes them to, where no read would find them.
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         var physicalTreeId = routing.PhysicalTreeId;
         var shardMap = routing.Map;
         var physicalShards = shardMap.GetPhysicalShardIndices();
@@ -670,6 +676,10 @@ public static class LatticeExtensions
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
         var reassertCredential = LatticeCredentialContext.Current;
 
+        // The same holds for the view-read capability an ILatticeView handle
+        // opens around its read (see ScanEntriesAsyncCore).
+        var reassertViewRead = ViewReadContext.IsAuthorised;
+
         string? lastKey = null;
         var attempt = 0;
 
@@ -694,6 +704,7 @@ public static class LatticeExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            using var viewReadScope = reassertViewRead ? ViewReadContext.BeginScope() : null;
             // raw-enumeration-ok: this is the wrapper that makes the raw
             // primitive safe; it reopens the enumeration itself.
             var enumerator = (predicate is null
@@ -1030,6 +1041,14 @@ public static class LatticeExtensions
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
         var reassertCredential = LatticeCredentialContext.Current;
 
+        // The view-read capability (ViewReadContext) lives on the same
+        // RequestContext and is lost the same way. An ILatticeView handle opens
+        // it inside its own async iterator, and an async iterator resumes every
+        // MoveNextAsync after a yield on its consumer's execution context, so a
+        // reopen after the first row would otherwise reach a view tree without it
+        // and be refused by LatticeGrain's protected-view read guard (issue 4186).
+        var reassertViewRead = ViewReadContext.IsAuthorised;
+
         string? lastKey = null;
         var attempt = 0;
 
@@ -1052,6 +1071,7 @@ public static class LatticeExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            using var viewReadScope = reassertViewRead ? ViewReadContext.BeginScope() : null;
             // raw-enumeration-ok: this is the wrapper that makes the raw
             // primitive safe; it reopens the enumeration itself.
             var enumerator = (predicate is null

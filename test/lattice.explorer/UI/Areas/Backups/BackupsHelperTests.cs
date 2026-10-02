@@ -101,26 +101,8 @@ public sealed class BackupsHelperTests
     }
 
     [Test]
-    [TestCase("1", "30", 90)]
-    [TestCase("", "5", 5)]
-    [TestCase("2", null, 120)]
-    public void An_interval_reads_from_hours_and_minutes(string? hours, string? minutes, int expectedMinutes)
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(BackupsFormat.TryParseInterval(hours, minutes, out var interval), Is.True);
-            Assert.That(interval, Is.EqualTo(TimeSpan.FromMinutes(expectedMinutes)));
-        });
-    }
-
-    [Test]
-    [TestCase("0", "0")]
-    [TestCase("-1", "0")]
-    [TestCase("x", "1")]
-    [TestCase("1.5", "0")]
-    [TestCase("200000", "0")]
-    public void A_bad_interval_is_refused(string hours, string minutes) =>
-        Assert.That(BackupsFormat.TryParseInterval(hours, minutes, out _), Is.False);
+    public void The_shortest_interval_is_the_one_minute_the_engine_raises_a_shorter_one_to() =>
+        Assert.That(BackupsFormat.ShortestInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
 
     [Test]
     public void Every_fault_becomes_one_plain_sentence()

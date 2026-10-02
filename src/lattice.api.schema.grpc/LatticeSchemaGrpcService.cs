@@ -2,6 +2,7 @@ using System.Globalization;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Api.Schema.Grpc;
@@ -14,7 +15,9 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// <c>SetVersionConfig</c>, <c>GetVersionConfig</c>, <c>AdvanceTargetVersion</c>,
 /// <c>AdvanceAndMigrate</c>, <c>MigrateToTargetVersion</c>,
 /// <c>ClearVersionConfig</c>, <c>Remediate</c>, <c>GetRemediationStatus</c>,
-/// <c>ScanCompliance</c>, <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>) and the
+/// <c>ScanCompliance</c>, <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>, and the
+/// accept-then-poll <c>StartComplianceScan</c>, <c>GetComplianceScanStatus</c>,
+/// <c>ListComplianceScans</c> and <c>CancelComplianceScan</c>) and the
 /// server-streaming RPC (<c>StreamDeadLetters</c>).
 /// </summary>
 /// <remarks>
@@ -85,6 +88,36 @@ internal abstract class LatticeSchemaGrpcServiceBase
     /// </summary>
     public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
 
+    /// <summary>Starts an accept-then-poll compliance scan. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartComplianceScan(SchemaComplianceScanStartRequest request, ServerCallContext context);
+
+    /// <summary>Reads a compliance-scan operation's status. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<SchemaComplianceOperationStatusResponse> GetComplianceScanStatus(SchemaComplianceOperationRequest request, ServerCallContext context);
+
+    /// <summary>Lists the caller's compliance-scan operations. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationPage> ListComplianceScans(LatticeOperationListRequest request, ServerCallContext context);
+
+    /// <summary>Requests cancellation of a compliance-scan operation. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<SchemaComplianceOperationStatusResponse> CancelComplianceScan(SchemaComplianceOperationRequest request, ServerCallContext context);
+
+    /// <summary>Starts a tracked remediation and returns on acceptance. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartRemediation(RemediateRequest request, ServerCallContext context);
+
+    /// <summary>Starts a tracked eager migration and returns on acceptance. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartMigration(SchemaMigrationStartRequest request, ServerCallContext context);
+
+    /// <summary>Starts a tracked advance-and-migrate and returns on acceptance. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartAdvanceAndMigrate(AdvanceVersionRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tracked schema operation's status. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<SchemaOperationStatusResponse> GetSchemaOperationStatus(SchemaOperationRequest request, ServerCallContext context);
+
+    /// <summary>Lists the caller's tracked schema operations. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationPage> ListSchemaOperations(LatticeOperationListRequest request, ServerCallContext context);
+
+    /// <summary>Requests cancellation of a tracked schema operation. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
+    public abstract Task<SchemaOperationStatusResponse> CancelSchemaOperation(SchemaOperationRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -120,6 +153,16 @@ internal abstract class LatticeSchemaGrpcServiceBase
             binder.AddMethod(methods.ScanCompliance, (UnaryServerMethod<SchemaTreeRequest, SchemaComplianceReportResponse>?)null);
             binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<SchemaTreeRequest, LatticeSchemaCapabilities>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
+            binder.AddMethod(methods.StartComplianceScan, (UnaryServerMethod<SchemaComplianceScanStartRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.GetComplianceScanStatus, (UnaryServerMethod<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse>?)null);
+            binder.AddMethod(methods.ListComplianceScans, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
+            binder.AddMethod(methods.CancelComplianceScan, (UnaryServerMethod<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse>?)null);
+            binder.AddMethod(methods.StartRemediation, (UnaryServerMethod<RemediateRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartMigration, (UnaryServerMethod<SchemaMigrationStartRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartAdvanceAndMigrate, (UnaryServerMethod<AdvanceVersionRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.GetSchemaOperationStatus, (UnaryServerMethod<SchemaOperationRequest, SchemaOperationStatusResponse>?)null);
+            binder.AddMethod(methods.ListSchemaOperations, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
+            binder.AddMethod(methods.CancelSchemaOperation, (UnaryServerMethod<SchemaOperationRequest, SchemaOperationStatusResponse>?)null);
             return;
         }
 
@@ -139,6 +182,16 @@ internal abstract class LatticeSchemaGrpcServiceBase
         binder.AddMethod(methods.ScanCompliance, new UnaryServerMethod<SchemaTreeRequest, SchemaComplianceReportResponse>(serviceImpl.ScanCompliance));
         binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<SchemaTreeRequest, LatticeSchemaCapabilities>(serviceImpl.ProbeCapabilities));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
+        binder.AddMethod(methods.StartComplianceScan, new UnaryServerMethod<SchemaComplianceScanStartRequest, LatticeOperationHandle>(serviceImpl.StartComplianceScan));
+        binder.AddMethod(methods.GetComplianceScanStatus, new UnaryServerMethod<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse>(serviceImpl.GetComplianceScanStatus));
+        binder.AddMethod(methods.ListComplianceScans, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListComplianceScans));
+        binder.AddMethod(methods.CancelComplianceScan, new UnaryServerMethod<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse>(serviceImpl.CancelComplianceScan));
+        binder.AddMethod(methods.StartRemediation, new UnaryServerMethod<RemediateRequest, LatticeOperationHandle>(serviceImpl.StartRemediation));
+        binder.AddMethod(methods.StartMigration, new UnaryServerMethod<SchemaMigrationStartRequest, LatticeOperationHandle>(serviceImpl.StartMigration));
+        binder.AddMethod(methods.StartAdvanceAndMigrate, new UnaryServerMethod<AdvanceVersionRequest, LatticeOperationHandle>(serviceImpl.StartAdvanceAndMigrate));
+        binder.AddMethod(methods.GetSchemaOperationStatus, new UnaryServerMethod<SchemaOperationRequest, SchemaOperationStatusResponse>(serviceImpl.GetSchemaOperationStatus));
+        binder.AddMethod(methods.ListSchemaOperations, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListSchemaOperations));
+        binder.AddMethod(methods.CancelSchemaOperation, new UnaryServerMethod<SchemaOperationRequest, SchemaOperationStatusResponse>(serviceImpl.CancelSchemaOperation));
     }
 }
 
@@ -181,6 +234,7 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
     private readonly ILatticeSchemaApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeSchemaApiGrpcOptions> _options;
     private readonly ILogger<LatticeSchemaGrpcService> _logger;
+    private readonly ILatticeSchemaComplianceOperations? _complianceOperations;
 
     /// <summary>
     /// Initialises the service. The <paramref name="methods"/> parameter is
@@ -197,7 +251,8 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         ILatticeSchemaApiCredentialBridge credentialBridge,
         ILatticeSchemaApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeSchemaApiGrpcOptions> options,
-        ILogger<LatticeSchemaGrpcService> logger)
+        ILogger<LatticeSchemaGrpcService> logger,
+        ILatticeSchemaComplianceOperations? complianceOperations = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -211,6 +266,7 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         _authSchemeSource = authSchemeSource;
         _options = options;
         _logger = logger;
+        _complianceOperations = complianceOperations;
     }
 
     /// <summary>
@@ -357,6 +413,7 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
             return new VersionConfigResponse { Config = config };
         });
 
+#pragma warning disable LATTICE0002 // The deprecated blocking RPCs serve the deprecated facade verbs until their removal.
     /// <inheritdoc />
     public override Task<SchemaRemediationReportResponse> AdvanceAndMigrate(AdvanceVersionRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static async (control, req, ct) =>
@@ -388,6 +445,7 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
             var report = await control.RemediateAsync(req.TreeId, req.Transform, req.TargetPolicy, ct).ConfigureAwait(false);
             return new SchemaRemediationReportResponse { Report = report };
         });
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<SchemaRemediationReportResponse> GetRemediationStatus(SchemaTreeRequest request, ServerCallContext context)
@@ -398,12 +456,89 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         });
 
     /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartRemediation(RemediateRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) =>
+            RequireOperations(control).StartRemediationAsync(req.TreeId, req.Transform, req.TargetPolicy, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartMigration(SchemaMigrationStartRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) =>
+            RequireOperations(control).StartMigrationAsync(req.TreeId, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartAdvanceAndMigrate(AdvanceVersionRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) =>
+            RequireOperations(control).StartAdvanceAndMigrateAsync(req.TreeId, req.NewTargetVersion, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<SchemaOperationStatusResponse> GetSchemaOperationStatus(SchemaOperationRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) => new SchemaOperationStatusResponse
+        {
+            Status = await RequireOperations(control).GetOperationStatusAsync(req.OperationId, ct).ConfigureAwait(false),
+        });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationPage> ListSchemaOperations(LatticeOperationListRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => RequireOperations(control).ListOperationsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<SchemaOperationStatusResponse> CancelSchemaOperation(SchemaOperationRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) => new SchemaOperationStatusResponse
+        {
+            Status = await RequireOperations(control).CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
+        });
+
+    /// <summary>
+    /// The accept-then-poll surface of the hosted facade. The default facade serves
+    /// both; a host that registered its own control without it answers the
+    /// operation RPCs <see cref="StatusCode.Unimplemented"/>.
+    /// </summary>
+    private static ILatticeSchemaOperations RequireOperations(ILatticeSchemaControl control) =>
+        control as ILatticeSchemaOperations
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented, "This schema control API does not serve tracked schema operations."));
+
+    /// <inheritdoc />
     public override Task<SchemaComplianceReportResponse> ScanCompliance(SchemaTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static async (control, req, ct) =>
         {
+            // The deprecated blocking RPC (LATTICE0002) is served by the deprecated
+            // verb, unchanged, until the next major version removes both.
+#pragma warning disable LATTICE0002
             var report = await control.ScanComplianceAsync(req.TreeId, ct).ConfigureAwait(false);
+#pragma warning restore LATTICE0002
             return new SchemaComplianceReportResponse { Report = report };
         });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartComplianceScan(SchemaComplianceScanStartRequest request, ServerCallContext context)
+        => InvokeAsync(ComplianceOperations, request, context, static (operations, req, ct) =>
+            operations.StartComplianceScanAsync(req.TreeId, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<SchemaComplianceOperationStatusResponse> GetComplianceScanStatus(SchemaComplianceOperationRequest request, ServerCallContext context)
+        => InvokeAsync(ComplianceOperations, request, context, static async (operations, req, ct) =>
+            new SchemaComplianceOperationStatusResponse
+            {
+                Status = await operations.GetOperationStatusAsync(req.OperationId, ct).ConfigureAwait(false),
+            });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationPage> ListComplianceScans(LatticeOperationListRequest request, ServerCallContext context)
+        => InvokeAsync(ComplianceOperations, request, context, static (operations, req, ct) => operations.ListOperationsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<SchemaComplianceOperationStatusResponse> CancelComplianceScan(SchemaComplianceOperationRequest request, ServerCallContext context)
+        => InvokeAsync(ComplianceOperations, request, context, static async (operations, req, ct) =>
+            new SchemaComplianceOperationStatusResponse
+            {
+                Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
+            });
+
+    private ILatticeSchemaComplianceOperations ComplianceOperations => _complianceOperations
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented,
+            "This host registers no ILatticeSchemaComplianceOperations, so the accept-then-poll compliance-scan RPCs are unavailable."));
 
     /// <inheritdoc />
     public override Task<LatticeSchemaCapabilities> ProbeCapabilities(SchemaTreeRequest request, ServerCallContext context)
@@ -420,10 +555,17 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         return Task.FromResult(_authSchemeSource.GetAdvertisement());
     }
 
-    private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
+    private Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
         Func<ILatticeSchemaControl, TRequest, CancellationToken, Task<TResponse>> handler)
+        => InvokeAsync(_control, request, context, handler);
+
+    private async Task<TResponse> InvokeAsync<TFacade, TRequest, TResponse>(
+        TFacade facade,
+        TRequest request,
+        ServerCallContext context,
+        Func<TFacade, TRequest, CancellationToken, Task<TResponse>> handler)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
@@ -433,7 +575,7 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
 
         try
         {
-            return await handler(_control, request, context.CancellationToken).ConfigureAwait(false);
+            return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
         }
         catch (RpcException)
         {

@@ -3,13 +3,13 @@ id: restore
 name: "Restore or revert tree and backup restore points"
 surfaces:
   in_process:
-    api: "ILatticeTreeAdmin.RestoreTreeAsync and ILatticeBackupControl.RestoreBackupAsync"
+    api: "ILatticeTreeAdmin.RestoreTreeAsync and ILatticeBackupOperations.StartRestoreAsync"
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/RestoreTree and orleans.lattice.api.backup/RestoreBackup"
+    api: "/orleans.lattice.api.treeadmin/RestoreTree and orleans.lattice.api.backup/StartRestore"
     source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTreeMethodName"
   mcp_tool:
-    api: "lattice_treeadmin_tree_restore and lattice_backup_restore"
+    api: "lattice_treeadmin_tree_restore and lattice_backup_start_restore"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
   - id: backup-exists
@@ -41,10 +41,10 @@ steps:
     expects: "Returns per-member restore results this cluster applied."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
   - n: 4
-    action: "For backup-facade restore, select mode according to rollback semantics."
-    api: "ILatticeBackupControl.RestoreBackupAsync / RestoreBackup"
-    expects: "InPlace converges by HLC; ShadowCutover is a true point-in-time replacement."
-    source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+    action: "For backup-facade restore, start a tracked restore with the mode that matches the rollback objective."
+    api: "ILatticeBackupOperations.StartRestoreAsync / StartRestore / lattice_backup_start_restore"
+    expects: "Returns an operation handle; poll status for progress and the restore result. InPlace converges by HLC; ShadowCutover is a true point-in-time replacement."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartRestoreAsync"
   - n: 5
     action: "Revert a wrong shadow-cutover using the restore result fields."
     api: "ILatticeTreeAdmin.RevertTreeRestoreAsync or ILatticeBackupControl.RevertRestoreAsync"
@@ -72,6 +72,10 @@ failure_modes:
     signal: "Coordinated restore of a replicated tree refuses to start unless every peer is reachable."
     effect: "No fleet cutover occurs."
     response: "Restore peer reachability and retry."
+  - id: operation-runner-lost
+    signal: "Tracked restore status becomes Failed after the accepting silo is lost or stops heartbeating."
+    effect: "The background restore is not resumed."
+    response: "Start a new tracked restore after confirming the previous status."
 rollback:
   supported: true
   mechanism: "ShadowCutover restore is reverted by passing the restore result back to the revert API; InPlace restore is not undoable."
@@ -90,9 +94,12 @@ concurrency:
     source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.RestoreSetAsync"
   - rule: "Replicated tree restore is promoted to coordinated restore across current replication peers."
     source: "reference-architecture.md"
+  - rule: "Tracked restore operations run on the accepting silo and are marked Failed on silo loss or lease lapse; resumption is not supported."
+    source: "docs/lattice.api.abstractions/operations.md"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs"
+  - "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs"
   - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
   - "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs"
   - "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"

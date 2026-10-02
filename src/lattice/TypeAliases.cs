@@ -218,6 +218,11 @@ internal static class TypeAliases
     // server fault - the API bindings map it to a client-error status.
     internal const string LatticeReservedTreeNamespace = "ol.rtn";
 
+    // A registry verb that changes an existing tree's row (shard map, per-tree
+    // configuration, WAL placement, digest latch) refused because the tree has no
+    // row - never registered, or purged. It never creates one (issue #4230).
+    internal const string LatticeTreeNotRegistered = "ol.tnr";
+
     // Per-tree admission-control quota surface. Thrown by the public ILattice
     // write guard when a locally-authored write is refused because the tree's
     // cached live-key count or estimated-byte footprint has reached the
@@ -499,6 +504,12 @@ internal static class TypeAliases
     internal const string ILatticeStats = "ol.gls";
     internal const string ILatticeStorageUsage = "ol.gsu";
     internal const string ILatticeWalUsage = "ol.gwu";
+
+    /// <summary>Alias for the per-tree WAL floor-holder probe grain interface (issue #4195).</summary>
+    internal const string ILatticeWalFloorHolderProbe = "ol.gfh";
+
+    /// <summary>Alias for the WAL floor-holder probe's report (issue #4195).</summary>
+    internal const string WalFloorHolderProbeReport = "ol.wfh";
     internal const string ILatticeAdmin = "ol.gad";
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
@@ -718,4 +729,47 @@ internal static class TypeAliases
     /// incremental flush ceiling has advanced past. See issue #2165.
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
+
+    /// <summary>Alias for the coordinated-operation grain interface.</summary>
+    internal const string ILatticeOperationGrain = "ol.opg";
+
+    /// <summary>Alias for the coordinated-operation record.</summary>
+    internal const string LatticeOperationRecord = "ol.opr";
+
+    /// <summary>Alias for a coordinated-operation progress report.</summary>
+    internal const string LatticeOperationProgressReport = "ol.opp";
+
+    /// <summary>Alias for a coordinated-operation completion.</summary>
+    internal const string LatticeOperationCompletion = "ol.opc";
+
+    /// <summary>Alias for a coordinated-operation begin request.</summary>
+    internal const string LatticeOperationBeginRequest = "ol.opb";
+
+    /// <summary>Alias for a coordinated-operation begin result.</summary>
+    internal const string LatticeOperationBeginResult = "ol.opn";
+
+    /// <summary>Alias for the coordinated-operation grain state.</summary>
+    internal const string LatticeOperationGrainState = "ol.ops";
+
+    /// <summary>Alias for the coordinated-operation index grain interface.</summary>
+    internal const string ILatticeOperationIndexGrain = "ol.oig";
+
+    /// <summary>Alias for the coordinated-operation index state.</summary>
+    internal const string LatticeOperationIndexState = "ol.ois";
+
+    /// <summary>Alias for one coordinated-operation index entry.</summary>
+    internal const string LatticeOperationIndexEntry = "ol.oie";
+
+    /// <summary>Alias for one page of the coordinated-operation index.</summary>
+    internal const string LatticeOperationIndexPage = "ol.oip";
+
+    /// <summary>Alias for the ticket a tracked grain call relays progress through.</summary>
+    internal const string LatticeOperationTicket = "ol.opt";
+
+    /// <summary>Alias for the admin grain's tracked (operation-relayed) surface.</summary>
+    internal const string ILatticeAdminTrackedGrain = "ol.atg";
+
+    // Grain-storage fencing probe
+    internal const string GrainStorageFencingProbeState = "ol.gfp";
 }
+

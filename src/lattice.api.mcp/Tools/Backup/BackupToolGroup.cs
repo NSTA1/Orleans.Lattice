@@ -11,10 +11,13 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <summary>
 /// The backup tool module: an <see cref="ILatticeApiMcpToolGroup"/> for
 /// <see cref="LatticeApiMcpGroup.Backup"/> whose tools are thin adapters over the
-/// <see cref="ILatticeBackupControl"/> facade. The read-only inspect
-/// tools (list, describe, inventory, scope status, artifact export) are always
-/// contributed; the mutating control tools (capture, incremental capture,
-/// restore, revert, delete) are contributed only when backup control is opted in
+/// <see cref="ILatticeBackupControl"/> and <see cref="ILatticeBackupOperations"/>
+/// facades. The read-only inspect tools (list, describe, inventory, scope status,
+/// artifact export, operation status and operation list) are always contributed;
+/// the mutating control tools (the accept-then-poll start tools, operation cancel,
+/// revert, delete, and the deprecated <c>lattice_backup_create</c>,
+/// <c>lattice_backup_create_incremental</c> and <c>lattice_backup_restore</c>
+/// aliases of the start tools) are contributed only when backup control is opted in
 /// via <see cref="LatticeApiMcpOptions.EnableBackupControlTools"/> or
 /// <c>AddBackupTools(enableControl: true)</c>. Every control tool is annotated
 /// destructive and non-read-only.
@@ -60,22 +63,53 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
 
     private static IReadOnlyList<McpServerTool> BuildTools(bool enableControl)
     {
-        var tools = new List<McpServerTool>(enableControl ? 10 : 5)
+        var tools = new List<McpServerTool>(enableControl ? 20 : 7)
         {
             CreateListTool(),
             CreateDescribeTool(),
             CreateInventoryTool(),
             CreateScopeStatusTool(),
             CreateExportArtifactTool(),
+            CreateOperationStatusTool(),
+            CreateOperationListTool(),
         };
 
         if (enableControl)
         {
-            tools.Add(CreateCreateBackupTool());
-            tools.Add(CreateCreateIncrementalTool());
-            tools.Add(CreateRestoreTool());
+            tools.Add(CreateStartBackupTool(
+                "lattice_backup_start",
+                "Start backup",
+                "Starts a tracked full capture of the requested scope and returns an operation handle at once. Poll "
+                + "lattice_backup_operation_status for progress (entries captured of total) and the backup id. "
+                + "Mutating: subject to the fail-closed backup access gate. Requires backup control to be enabled on "
+                + "the server."));
+            tools.Add(CreateStartIncrementalTool(
+                "lattice_backup_start_incremental",
+                "Start incremental backup",
+                "Starts a tracked incremental capture layered on a base backup and returns an operation handle at "
+                + "once. Poll lattice_backup_operation_status for progress and the backup id. Mutating: subject to the "
+                + "fail-closed backup access gate. Requires backup control to be enabled on the server."));
+            tools.Add(CreateStartBackupSetTool());
+            tools.Add(CreateStartRestoreTool());
+            tools.Add(CreateStartHealthCheckTool());
+            tools.Add(CreateStartCatalogRebuildTool());
+            tools.Add(CreateStartCatalogScrubTool());
+            tools.Add(CreateOperationCancelTool());
             tools.Add(CreateRevertRestoreTool());
             tools.Add(CreateDeleteTool());
+
+            // Deprecated aliases (one release; removed in the next major version).
+            tools.Add(CreateStartBackupTool(
+                "lattice_backup_create",
+                "Create backup (deprecated alias)",
+                "Use lattice_backup_start. Starts a tracked full capture and returns an operation handle; poll "
+                + "lattice_backup_operation_status." + DeprecatedAliasNote));
+            tools.Add(CreateStartIncrementalTool(
+                "lattice_backup_create_incremental",
+                "Create incremental backup (deprecated alias)",
+                "Use lattice_backup_start_incremental. Starts a tracked incremental capture and returns an operation "
+                + "handle; poll lattice_backup_operation_status." + DeprecatedAliasNote));
+            tools.Add(CreateRestoreAliasTool());
         }
 
         return tools;
@@ -209,7 +243,11 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 UseStructuredContent = true,
             });
 
-    private static McpServerTool CreateCreateBackupTool()
+    private const string DeprecatedAliasNote =
+        " Deprecated alias kept for one release and removed in the next major version: it now starts the "
+        + "operation and returns a handle at once rather than blocking until the work completes.";
+
+    private static McpServerTool CreateStartBackupTool(string name, string title, string description)
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
@@ -218,26 +256,25 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 CancellationToken cancellationToken,
                 [Description("Scope extent: WholeTree (default), Prefix, or Key.")] string? scopeKind = null,
                 [Description("The exact key or key prefix for a Prefix/Key scope; null for WholeTree.")] string? keyOrPrefix = null,
-                [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0) =>
+                [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0,
+                [Description("Optional idempotency id for the tracked operation (1-128 of A-Z, a-z, 0-9, '-', '_', '.'); a retried start with the same id returns the existing operation. Null generates one.")] string? operationId = null) =>
             {
                 using var scope = StampCredential(context.Services!);
-                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
-                return BackupToolInvocations.CreateBackupAsync(control, name, treeId, scopeKind, keyOrPrefix, pageSize, cancellationToken);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartBackupAsync(operations, name, treeId, scopeKind, keyOrPrefix, pageSize, operationId, cancellationToken);
             },
             new McpServerToolCreateOptions
             {
-                Name = "lattice_backup_create",
+                Name = name,
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
-                Title = "Create backup",
-                Description =
-                    "Captures a full backup of the requested scope. Mutating: subject to the fail-closed backup access "
-                    + "gate. Requires backup control to be enabled on the server.",
+                Title = title,
+                Description = description,
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
             });
 
-    private static McpServerTool CreateCreateIncrementalTool()
+    private static McpServerTool CreateStartIncrementalTool(string name, string title, string description)
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
@@ -247,59 +284,282 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 CancellationToken cancellationToken,
                 [Description("Scope extent: WholeTree (default), Prefix, or Key.")] string? scopeKind = null,
                 [Description("The exact key or key prefix for a Prefix/Key scope; null for WholeTree.")] string? keyOrPrefix = null,
-                [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0) =>
+                [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
                 using var scope = StampCredential(context.Services!);
-                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
-                return BackupToolInvocations.CreateIncrementalBackupAsync(control, name, treeId, scopeKind, keyOrPrefix, baseBackupId, pageSize, cancellationToken);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartIncrementalBackupAsync(operations, name, treeId, scopeKind, keyOrPrefix, baseBackupId, pageSize, operationId, cancellationToken);
             },
             new McpServerToolCreateOptions
             {
-                Name = "lattice_backup_create_incremental",
+                Name = name,
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
-                Title = "Create incremental backup",
-                Description =
-                    "Captures an incremental backup layered on a base backup. Mutating: subject to the fail-closed "
-                    + "backup access gate. Requires backup control to be enabled on the server.",
+                Title = title,
+                Description = description,
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
             });
 
-    private static McpServerTool CreateRestoreTool()
+    private static McpServerTool CreateStartBackupSetTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The human-readable set name recorded on every member and the set manifest.")] string name,
+                [Description("The tree ids to capture, one whole-tree member each.")] IReadOnlyList<string> treeIds,
+                CancellationToken cancellationToken,
+                [Description("When true, capture every member at one causal fence so a cross-tree atomic write is never torn across the set.")] bool crossTreeConsistent = false,
+                [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartBackupSetAsync(operations, name, treeIds, crossTreeConsistent, pageSize, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_set",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup set",
+                Description =
+                    "Starts a tracked backup-set capture - one full backup per tree, grouped under a set manifest - and "
+                    + "returns an operation handle at once. Poll lattice_backup_operation_status for progress (members "
+                    + "captured of total) and the set id. Mutating: subject to the fail-closed backup access gate. "
+                    + "Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateStartRestoreTool()
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
                 [Description("The content-addressed id of the backup to restore to.")] string backupId,
                 CancellationToken cancellationToken,
                 [Description("The tree to restore into; null restores into the captured tree.")] string? targetTreeId = null,
-                [Description("Restore mode. InPlace (default): an HLC-preserving last-writer-wins merge into the live tree that heals missing or stale entries (a captured entry wins only when its clock is newer than, or the key is absent from, the live tree) and therefore never overwrites data that is newer live - it is a convergent repair, NOT a rollback. ShadowCutover: rebuilds the scope into a fresh physical tree and atomically swaps it in, a wholesale point-in-time replacement (true rollback) that is reversible via lattice_backup_revert_restore.")] string? mode = null,
-                [Description("Idempotency key that makes a retried restore a no-op; null derives one.")] string? operationId = null) =>
+                [Description(RestoreModeDescription)] string? mode = null,
+                [Description("The restore's own idempotency key, which makes a retried restore a no-op; null derives one.")] string? restoreOperationId = null,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
                 using var scope = StampCredential(context.Services!);
-                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
-                return BackupToolInvocations.RestoreBackupAsync(control, backupId, targetTreeId, mode, operationId, cancellationToken);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartRestoreAsync(operations, backupId, targetTreeId, mode, restoreOperationId, operationId, cancellationToken);
             },
             new McpServerToolCreateOptions
             {
-                Name = "lattice_backup_restore",
+                Name = "lattice_backup_start_restore",
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
-                Title = "Restore backup",
-                Description =
-                    "Restores a backup into its target tree, walking its base chain. Two modes with different "
-                    + "semantics: InPlace (default) applies an HLC-preserving last-writer-wins merge into the live "
-                    + "tree - it heals missing or stale entries (the backup wins only where its clock is newer, or "
-                    + "the key is absent live) but never clobbers entries that are newer live, so it converges/repairs "
-                    + "rather than rolling a diverged tree back to an older state. ShadowCutover rebuilds the scope into "
-                    + "a fresh physical tree and atomically swaps it in for a wholesale point-in-time replacement (a "
-                    + "true rollback); the result carries the physical tree ids needed to revert it via "
-                    + "lattice_backup_revert_restore. Mutating: subject to the fail-closed backup access gate. Requires "
-                    + "backup control to be enabled on the server.",
+                Title = "Start restore",
+                Description = "Starts a tracked restore and returns an operation handle at once. " + RestoreSemantics
+                    + " Poll lattice_backup_operation_status for progress; a succeeded status carries the restore "
+                    + "result to round-trip into lattice_backup_revert_restore. Mutating: subject to the fail-closed "
+                    + "backup access gate. Requires backup control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
             });
 
+    private static McpServerTool CreateStartHealthCheckTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The content-addressed id of the backup to verify.")] string backupId,
+                CancellationToken cancellationToken,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartHealthCheckAsync(operations, backupId, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_health_check",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup health check",
+                Description =
+                    "Starts a tracked health verification of one backup against the durable sink - manifest and "
+                    + "artifact presence, and a re-hash of every present artifact - and returns an operation handle at "
+                    + "once. Poll lattice_backup_operation_status for progress (artifacts checked of total) and the "
+                    + "verdict (result key healthStatus); the fresh report is persisted as the backup's latest health "
+                    + "state. Mutating: subject to the fail-closed backup access gate. Requires backup control to be "
+                    + "enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateStartCatalogRebuildTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                CancellationToken cancellationToken,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartCatalogRebuildAsync(operations, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_catalog_rebuild",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup catalog rebuild",
+                Description =
+                    "Starts a tracked rebuild of the backup catalog from the durable sink - every manifest the sink "
+                    + "holds is re-registered - and returns an operation handle at once. Poll "
+                    + "lattice_backup_operation_status for progress (manifests re-registered; no total) and the counts "
+                    + "(result keys scannedCount, registeredCount, reconciledCount). Cluster-wide: requires the restore "
+                    + "grant over the backup catalog. Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateStartCatalogScrubTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                CancellationToken cancellationToken,
+                [Description("When true, remove the orphan rows found; when false (the default), only flag them.")] bool pruneOrphans = false,
+                [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartCatalogScrubAsync(operations, pruneOrphans, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_start_catalog_scrub",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Start backup catalog scrub",
+                Description =
+                    "Starts a tracked scrub of the backup catalog against the durable sink - every catalog row is "
+                    + "probed for a resolvable sink payload - and returns an operation handle at once. Poll "
+                    + "lattice_backup_operation_status for progress (rows probed, then orphans removed when pruning) "
+                    + "and the counts (result keys scannedCount, orphanCount, removedCount, pruned, orphanBackupIds). "
+                    + "Non-destructive unless pruneOrphans is true. Cluster-wide: requires the restore grant over the "
+                    + "backup catalog. Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateRestoreAliasTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The content-addressed id of the backup to restore to.")] string backupId,
+                CancellationToken cancellationToken,
+                [Description("The tree to restore into; null restores into the captured tree.")] string? targetTreeId = null,
+                [Description(RestoreModeDescription)] string? mode = null,
+                [Description("The restore's own idempotency key, which makes a retried restore a no-op; null derives one.")] string? operationId = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.StartRestoreAsync(operations, backupId, targetTreeId, mode, operationId, operationId: null, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_restore",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Restore backup (deprecated alias)",
+                Description = "Use lattice_backup_start_restore. Starts a tracked restore and returns an operation handle; "
+                    + "poll lattice_backup_operation_status." + DeprecatedAliasNote,
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateOperationStatusTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The operation id from a start tool's handle.")] string operationId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.GetOperationStatusAsync(operations, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = McpBackupOperationHandle.StatusToolName,
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Backup operation status",
+                Description =
+                    "Reads a tracked backup or restore operation: its state (Queued, Running, Succeeded, Failed or "
+                    + "Cancelled), current phase, and progress as completed of total units (entries, shards, members or "
+                    + "manifests; the total is null while unknown). A succeeded operation carries its result. Reports "
+                    + "found=false for an unknown id or one the caller may not see. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateOperationListTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                CancellationToken cancellationToken,
+                [Description("Maximum operations per page; <= 0 uses the server default (50, at most 500).")] int pageSize = 0,
+                [Description("Continuation cursor from a previous page's nextPageToken; null starts at the newest.")] string? pageToken = null) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.ListOperationsAsync(operations, pageSize, pageToken, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_operation_list",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "List backup operations",
+                Description =
+                    "Lists one page of the caller's tracked backup and restore operations, newest-first, including "
+                    + "finished ones until their retention window lapses. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateOperationCancelTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The operation id to cancel.")] string operationId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
+                return BackupToolInvocations.CancelOperationAsync(operations, operationId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_operation_cancel",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Cancel backup operation",
+                Description =
+                    "Requests cancellation of a tracked backup or restore operation; it stays Running until the work "
+                    + "observes the request, then reads Cancelled. Requires the grant that starting it required. "
+                    + "Mutating. Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private const string RestoreModeDescription =
+        "Restore mode. InPlace (default): an HLC-preserving last-writer-wins merge into the live tree that heals missing "
+        + "or stale entries (a captured entry wins only when its clock is newer than, or the key is absent from, the live "
+        + "tree) and therefore never overwrites data that is newer live - it is a convergent repair, NOT a rollback. "
+        + "ShadowCutover: rebuilds the scope into a fresh physical tree and atomically swaps it in, a wholesale "
+        + "point-in-time replacement (true rollback) that is reversible via lattice_backup_revert_restore.";
+
+    private const string RestoreSemantics =
+        "Two modes with different semantics: InPlace (default) applies an HLC-preserving last-writer-wins merge into "
+        + "the live tree - it heals missing or stale entries but never clobbers entries that are newer live, so it "
+        + "converges/repairs rather than rolling a diverged tree back. ShadowCutover rebuilds the scope into a fresh "
+        + "physical tree and atomically swaps it in for a wholesale point-in-time replacement (a true rollback).";
     private static McpServerTool CreateRevertRestoreTool()
         => McpServerTool.Create(
             (

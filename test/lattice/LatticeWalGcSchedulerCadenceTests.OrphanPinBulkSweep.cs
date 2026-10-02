@@ -55,6 +55,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public Exception? ReadThrowsFor { get; set; }
 
+        /// <summary>When set, every pin removal throws it (issue #4246's <c>retire_failed</c> arm).</summary>
+        public Exception? RemoveThrows { get; set; }
+
         public void Seed(string key, string consumerId)
         {
             if (!_grains.TryGetValue(key, out var grain))
@@ -135,6 +138,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
             public Task RemoveAsync(string consumerId)
             {
+                if (store.RemoveThrows is { } ex)
+                {
+                    throw ex;
+                }
+
                 store.Removals.Add((key, consumerId));
                 Pins.Remove(consumerId);
                 return Task.CompletedTask;
@@ -196,6 +204,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public void PutMissing(GrainId leaf) => _states[leaf] = null;
 
+        /// <summary>Seeds an explicit leaf state, for a shape the canned seeds do not cover.</summary>
+        public void Put(GrainId leaf, LeafNodeState state) => _states[leaf] = state;
+
         /// <summary>
         /// A live leaf that has never checkpointed partition 0. The offset is
         /// born <c>0</c> rather than at the <c>-1</c> sentinel, so
@@ -256,8 +267,15 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Task.CompletedTask;
     }
 
+    /// <summary>
+    /// A guid-keyed leaf id, the only key shape a <c>BPlusLeafGrain</c> has. It
+    /// must be one: the sweep refuses to retire a pin whose leaf id is not a
+    /// leaf's own (issue #4238).
+    /// </summary>
     private static GrainId OrphanLeafGrainId(int ordinal) =>
-        GrainId.Create("bplusleaf", "leaf-3105-" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        GrainId.Create(
+            GrainType.Create("bplusleaf"),
+            GrainIdKeyExtensions.CreateGuidKey(new Guid(ordinal, 3105, 0, new byte[8])));
 
     private static string OrphanConsumerId(int ordinal, string treeId = OrphanSweepTree) =>
         $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{OrphanLeafGrainId(ordinal)}";
@@ -555,8 +573,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Distinct()
             .ToArray();
 
-        Assert.That(arms, Is.EquivalentTo(new[] { "retired", "deferred", "live", "unresolved", "unreadable" }),
-            "every arm must be minted for a tree the sweep reached, so a zero is a measured zero.");
+        Assert.That(arms, Is.EquivalentTo(new[]
+            {
+                "retired", "retire_failed", "deferred", "refused_malformed_id", "refused_ambiguous_partition",
+                "live", "unresolved", "unreadable",
+            }),
+            "every arm must be minted for a tree the sweep reached, so a zero is a measured zero (the decision arms by issue #4246).");
     }
 
     [Test]

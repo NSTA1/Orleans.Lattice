@@ -6484,7 +6484,8 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Outcome of each durable materialiser pin examined by the WAL GC's bulk
-    /// orphan sweep (issue #3105), tagged by tree and status.
+    /// orphan sweep (issue #3105), tagged by tree and status, and on the
+    /// removal-decision arms by cause (issue #4246).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -6514,18 +6515,33 @@ public static class LatticeMetrics
     /// steady healthy progress. Every arm is zero-primed per tree so a zero is a
     /// measured zero rather than an absence a reader has to interpret.
     /// </para>
+    /// <para>
+    /// <b>Every branch of the removal decision is its own arm, and carries its
+    /// cause (issue #4246).</b> Removal rests on one of two storage reads with
+    /// opposite meanings: a record with no tree id (<c>orphaned</c>) is a leaf
+    /// that was reclaimed, while no record at all (<c>no_durable_state</c>) is
+    /// also what a live leaf misresolved to a grain that never existed reads as
+    /// (issue #4238). Both used to land on one untagged <c>retired</c> arm, and
+    /// a refusal by the fail-safe gate landed on <c>unresolved</c>, so a
+    /// misresolution was indistinguishable from healthy reclaim. The decision
+    /// arms now carry <see cref="TagPinRetirementCause"/>, and a refusal lands on
+    /// <c>refused_malformed_id</c> or <c>refused_ambiguous_partition</c>.
+    /// </para>
     /// </remarks>
     public static readonly Counter<long> WalGcOrphanPinSweep =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.orphan_pin_sweep", unit: "{pin}",
-            description: "Outcome of each durable materialiser pin examined by the WAL GC bulk orphan sweep (issue #3105), tagged by tree and status. The arms partition the examined population, so sum by tree over one sweep is the tree's whole durable pin count - the only place it is visible, since the floor's blocking report is capped. 'retired' is a pin whose leaf state carries no bound tree id and which was removed. 'deferred' is such a pin left in place because the pass's retirement budget was spent, and is the backlog signal: a sustained non-zero rate means orphans remain, and zero while 'retired' stops advancing means the backlog has drained. 'live' is a pin whose leaf still holds a bound tree id, which the sweep never touches. 'unresolved' is a consumer id that does not parse back to a leaf grain id. 'unreadable' is a storage read that failed, and the sweep fails closed on it - an unreadable leaf is never retired. All arms are zero-primed per tree.");
+            description: "Outcome of each durable materialiser pin examined by the WAL GC bulk orphan sweep (issue #3105), tagged by tree and status. The arms partition the examined population, so sum by tree over one sweep is the tree's whole durable pin count - the only place it is visible, since the floor's blocking report is capped. 'retired' is a pin whose leaf read as gone and which was removed from every shard key it was found under. 'retire_failed' is such a pin whose removal did not complete on every key, so it stays registered. 'deferred' is such a pin left in place because the pass's retirement budget was spent, and is the backlog signal: a sustained non-zero rate means orphans remain, and zero while 'retired' stops advancing means the backlog has drained. 'refused_malformed_id' and 'refused_ambiguous_partition' are such a pin the fail-safe gate declined to remove because its consumer id is not provably the leaf's own (issue #4238); the second is where a partition misresolution lands. Those five decision arms also carry cause: 'orphaned' when the leaf's record exists with no bound tree id, 'no_durable_state' when no record exists at all (issue #4246). 'live' is a pin whose leaf still holds a bound tree id, which the sweep never touches. 'unresolved' is a consumer id that does not parse back to a leaf grain id. 'unreadable' is a storage read that failed, and the sweep fails closed on it - an unreadable leaf is never retired. All arms are zero-primed per tree.");
 
     /// <summary>Canonical name of <see cref="WalGcOrphanPinSweep"/>.</summary>
     public const string WalGcOrphanPinSweepName = "orleans.lattice.wal.gc.orphan_pin_sweep";
 
     /// <summary>
-    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for a
-    /// pin whose leaf state carries no bound tree id and which the sweep
-    /// removed.
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> (and
+    /// <see cref="WalGcDriveOrphanPinRetirements"/>) for a pin whose leaf read as
+    /// gone and which was removed from every shard key it was found under. On
+    /// the sweep it carries <see cref="TagPinRetirementCause"/>, so a retirement
+    /// on an orphaned record and one on an absent record are separate series
+    /// (issue #4246).
     /// </summary>
     public static readonly KeyValuePair<string, object?> OrphanPinRetired =
         new(TagStatus, "retired");
@@ -6534,7 +6550,8 @@ public static class LatticeMetrics
     /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for an
     /// orphaned pin left in place because the pass's retirement budget was
     /// spent. The backlog signal - see the remarks on
-    /// <see cref="WalGcOrphanPinSweep"/>.
+    /// <see cref="WalGcOrphanPinSweep"/>. Carries
+    /// <see cref="TagPinRetirementCause"/>.
     /// </summary>
     public static readonly KeyValuePair<string, object?> OrphanPinDeferred =
         new(TagStatus, "deferred");
@@ -6563,6 +6580,96 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> OrphanPinUnreadable =
         new(TagStatus, "unreadable");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> and
+    /// <see cref="WalGcDriveOrphanPinRetirements"/> for a pin whose removal was
+    /// attempted and did not complete on every shard key it was found under
+    /// (issue #4246). The pin stays at least partly registered and is
+    /// re-examined by a later sweep.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinRetireFailed =
+        new(TagStatus, "retire_failed");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> and
+    /// <see cref="WalGcDriveOrphanPinRetirements"/> for a pin whose leaf read as
+    /// gone but whose removal the fail-safe gate refused because the consumer id
+    /// is not a leaf's own: another tree's prefix, not a grain id, or a leaf key
+    /// that is not a canonical guid (issues #4238, #4246).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinRefusedMalformedId =
+        new(TagStatus, "refused_malformed_id");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> and
+    /// <see cref="WalGcDriveOrphanPinRetirements"/> for a pin whose leaf read as
+    /// gone but whose removal the fail-safe gate refused because the consumer
+    /// id's partition cannot be read unambiguously against the tree's
+    /// registry-pinned partition count (issues #4238, #4246). This is the arm the
+    /// #4238 misresolution lands on.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinRefusedAmbiguousPartition =
+        new(TagStatus, "refused_ambiguous_partition");
+
+    /// <summary>
+    /// Tag key naming the evidence a WAL GC pin-removal decision rested on
+    /// (issue #4246). Carried only by the decision arms of
+    /// <see cref="WalGcOrphanPinSweep"/> (<c>retired</c>, <c>retire_failed</c>,
+    /// <c>deferred</c> and the two refusals) and by every arm of
+    /// <see cref="WalGcDriveOrphanPinRetirements"/>.
+    /// </summary>
+    public const string TagPinRetirementCause = "cause";
+
+    /// <summary>
+    /// <see cref="TagPinRetirementCause"/> value for a removal decision resting
+    /// on a storage read that found the leaf's record with no bound tree id: the
+    /// leaf was reclaimed or purged after it published the pin.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PinRetirementCauseOrphaned =
+        new(TagPinRetirementCause, "orphaned");
+
+    /// <summary>
+    /// <see cref="TagPinRetirementCause"/> value for a removal decision resting
+    /// on a storage read that found no record at all for the parsed leaf. Benign
+    /// when the leaf really is gone, and the signature of a live leaf misresolved
+    /// to a grain that never existed when it is not (issue #4238), which is why
+    /// it is never folded into <see cref="PinRetirementCauseOrphaned"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PinRetirementCauseNoDurableState =
+        new(TagPinRetirementCause, "no_durable_state");
+
+    /// <summary>
+    /// <see cref="TagPinRetirementCause"/> value for a removal decision resting
+    /// on a starvation drive's <c>NotDriven</c> verdict: the activated leaf held
+    /// no bound tree id. An activation cannot tell a record with no tree id from
+    /// no record, so this is its own cause rather than either of the two the
+    /// sweep's storage read distinguishes.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PinRetirementCauseNotDriven =
+        new(TagPinRetirementCause, "not_driven");
+
+    /// <summary>
+    /// Every orphan-pin removal decision the WAL GC blocked-leaf drive takes on a
+    /// <c>NotDriven</c> verdict, tagged by tree, status and cause (issue #4246).
+    /// </summary>
+    /// <remarks>
+    /// The drive is the second route that deletes a durable materialiser pin
+    /// (the bulk sweep, <see cref="WalGcOrphanPinSweep"/>, is the first). Its
+    /// <c>orphaned</c> arm on <see cref="WalGcBlockedLeafReactivations"/> records
+    /// the leaf's verdict, not what was done about the pin, so a refusal by the
+    /// fail-safe gate and a removal were indistinguishable there. The arms here
+    /// partition every decision: <c>retired</c>, <c>retire_failed</c>,
+    /// <c>refused_malformed_id</c> and <c>refused_ambiguous_partition</c>, all
+    /// with <c>cause="not_driven"</c>. Zero-primed per tree on the tree's first
+    /// GC pass, so a zero is a measured absence.
+    /// </remarks>
+    public static readonly Counter<long> WalGcDriveOrphanPinRetirements =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.drive_orphan_pin_retirement", unit: "{pin}",
+            description: "Every orphan-pin removal decision the WAL GC blocked-leaf drive takes when a leaf reports NotDriven (issue #4246), tagged by tree, status and cause. 'retired' removed the pin; 'retire_failed' attempted the removal and it threw, so the pin stays registered; 'refused_malformed_id' and 'refused_ambiguous_partition' are the fail-safe gate declining because the consumer id is not provably the driven leaf's own (issue #4238), so the pin is left holding the floor. cause is always 'not_driven'. All arms are zero-primed per tree.");
+
+    /// <summary>Canonical name of <see cref="WalGcDriveOrphanPinRetirements"/>.</summary>
+    public const string WalGcDriveOrphanPinRetirementsName = "orleans.lattice.wal.gc.drive_orphan_pin_retirement";
 
     /// <summary>
     /// How much of a tree's durable materialiser pin population the WAL GC

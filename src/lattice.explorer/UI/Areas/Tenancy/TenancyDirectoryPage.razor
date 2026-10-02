@@ -56,7 +56,7 @@ else
             <LtColumn TItem="TenancyDirectoryRow" Title="Resident in" Mono="true">
                 @if (context.Regions is { } regions)
                 {
-                    <a href="@Href(TenancyRoutes.TenantRegions(context.TenantId))" aria-label="@RegionsLabel(context, regions)">@TenancyFormat.RegionList(regions, TenancyFormat.NoResidency)</a>
+                    <a href="@Href(TenancyRoutes.TenantRegions(context.TenantId))" aria-label="@RegionsLabel(context, regions)">@TenancyFormat.RegionList(regions, context.NoRegionText)</a>
                 }
                 else
                 {

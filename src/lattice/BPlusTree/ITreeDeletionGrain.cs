@@ -120,6 +120,17 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task<bool> IsDeletedAsync();
 
     /// <summary>
+    /// Returns <c>true</c> when this grain durably records a completed purge of
+    /// the id - physical or logical - so the id's registry row was removed by
+    /// that purge. A lazy, read-side registration must refuse such an id rather
+    /// than recreate its row (issue #4219); only a deliberate create or write
+    /// may register it again. A pure read of the state as last persisted, with
+    /// no registry call, so it is safe to call from any resolve.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> HoldsCompletedPurgeAsync();
+
+    /// <summary>
     /// Returns a read-only snapshot of the tree's soft-deletion lifecycle state -
     /// whether it is deleted, when, the recovery deadline derived from the
     /// configured soft-delete duration, whether a purge is in progress or has

@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 using System.Collections.Concurrent;
 using System.Text;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -99,6 +100,7 @@ public class MultiSiloRestartChaosTests
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
 
         var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync("dummy-warmup-tree", new TreeRegistryEntry

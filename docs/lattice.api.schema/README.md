@@ -42,14 +42,18 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 | Advance and migrate | Advance the target version and migrate existing values to it. |
 | Migrate to target version | Migrate existing values up to the current target version. |
 | Clear version config | Remove the tree's version config and report whether one was present. |
-| Remediate | Apply a value transform across a tree and adopt a target policy. |
+| Remediate | Apply a value transform across a tree and adopt a target policy (deprecated: blocks until done; see Start remediation). |
 | Get remediation status | Read the status or last report of remediation for a tree. |
-| Scan compliance | Run a read-only compliance audit and return counts and reasons. |
+| Scan compliance | Run a read-only compliance audit and return counts and reasons. Deprecated in favour of the accept-then-poll scan below. |
+| Start a compliance scan | Start the same audit in the background and poll its progress and report (`ILatticeSchemaComplianceOperations`; see [Schema operations](operations.md)). |
+| Start remediation, start migration, start advance and migrate | Start the run in the background and return at once; poll the operation for its phase and values processed (`ILatticeSchemaOperations`; see [Schema operations](operations.md)). |
+| Operation status, list, cancel | Read, page or cancel the caller's remediation and migration operations. |
 | Probe capabilities | Report, with no side effects, which schema operations the caller may perform over a tree. |
 
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.
+- [Schema operations](operations.md) - the accept-then-poll compliance scan, remediation and migration, and migrating from the deprecated blocking verbs.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
 - [Architecture](architecture.md) - how the facade authorizes, streams dead letters, gates versioning, and audits compliance.
 

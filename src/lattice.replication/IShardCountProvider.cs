@@ -1,37 +1,37 @@
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Internal testability seam over the core library''s
-/// <see cref="BPlusTree.LatticeOptionsResolver"/> shard-count component and
-/// the tree's live routing. Replication-package consumers need either the
-/// pinned <c>ShardCount</c> of the resolved options for a tree
-/// (<see cref="GetShardCountAsync"/>) or the shard-root keys its routing map
-/// reaches (<see cref="GetShardRootKeysAsync"/>), but the resolver itself takes
-/// <c>IGrainFactory</c> + <c>IOptionsMonitor&lt;LatticeOptions&gt;</c>
-/// and chains through <c>ILatticeRegistry.GetEntryAsync</c> for non-system
-/// trees - tedious to substitute in unit tests. This seam exposes only
-/// those lookups so the consumers' tests can stub a single
-/// method instead of the full grain-factory + registry graph.
+/// Internal testability seam over the tree's live routing. Replication-package
+/// consumers need either the physical shard indices its routing map reaches
+/// (<see cref="GetShardIndicesAsync"/>) or the shard-root keys of those shards
+/// (<see cref="GetShardRootKeysAsync"/>), but resolving routing takes an
+/// <c>IGrainFactory</c> and the tree's <c>ILattice</c> grain - tedious to
+/// substitute in unit tests. This seam exposes only those lookups so the
+/// consumers' tests can stub a single method instead of the full grain graph.
 /// <para>
-/// The default implementation
-/// (<see cref="DefaultShardCountProvider"/>) wraps
-/// <see cref="BPlusTree.LatticeOptionsResolver"/>; hosts that need a
-/// different shard-count source (e.g. tests, benchmarks) can register
-/// their own implementation before
+/// The default implementation (<see cref="DefaultShardCountProvider"/>) reads a
+/// freshly resolved routing snapshot; hosts that need a different source (e.g.
+/// tests, benchmarks) can register their own implementation before
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>.
+/// </para>
+/// <para>
+/// The pinned <c>ShardCount</c> of a tree's resolved options is deliberately not
+/// offered: an adaptive split or a reshard moves slots to a physical index above
+/// the pin without changing it, and a fold retires indices below it, so
+/// <c>0..ShardCount-1</c> both misses live shards and names retired ones (#3753,
+/// #4206).
 /// </para>
 /// </summary>
 internal interface IShardCountProvider
 {
     /// <summary>
-    /// Returns the resolved shard count for <paramref name="treeId"/>.
-    /// Lazy first-use seeding via the registry is performed by the
-    /// underlying resolver; the call is a single grain hop in steady
-    /// state.
+    /// Returns every physical shard index the tree's live routing map can send a
+    /// key to, in ascending order, for callers that address a shard by index
+    /// through the tree's <c>ILattice</c> grain (the anti-entropy digest probe).
     /// </summary>
-    /// <param name="treeId">The tree id whose shard count to resolve. Must be non-null and non-empty.</param>
+    /// <param name="treeId">The logical tree id. Must be non-null and non-empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<int> GetShardCountAsync(string treeId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<int>> GetShardIndicesAsync(string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the <c>{physicalTreeId}/{shardIndex}</c> grain key of every shard
@@ -39,11 +39,9 @@ internal interface IShardCountProvider
     /// every shard holding the tree's data (the saga write fence, the local
     /// vector-clock seeder).
     /// <para>
-    /// The pinned shard count from <see cref="GetShardCountAsync"/> is not a
-    /// substitute: an adaptive split moves slots to a physical index above the pin
-    /// without changing it, and a resize or restore swaps the tree onto a new
-    /// physical id behind an alias, so <c>{treeId}/0..ShardCount-1</c> can both
-    /// miss live shards and name a retired copy.
+    /// A resize or restore swaps the tree onto a new physical id behind an alias,
+    /// so <c>{treeId}/{i}</c> can name a retired copy; the keys therefore carry the
+    /// resolved physical id.
     /// </para>
     /// </summary>
     /// <param name="treeId">The logical tree id. Must be non-null and non-empty.</param>

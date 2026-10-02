@@ -15,4 +15,10 @@ public sealed record TreeAdminTagIndexRequest
 {
     /// <summary>The logical tag-index name the operation targets.</summary>
     [Id(0)] public required string IndexName { get; init; }
+
+    /// <summary>
+    /// The idempotency id of the tracked operation an accept-then-poll start RPC
+    /// creates, or <see langword="null"/> to generate one. Ignored by the blocking RPCs.
+    /// </summary>
+    [Id(1)] public string? TrackingOperationId { get; init; }
 }

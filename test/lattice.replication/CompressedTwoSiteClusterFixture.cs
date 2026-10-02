@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Replication;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -101,9 +102,11 @@ internal sealed class CompressedTwoSiteClusterFixture
         where TConfigurator : ISiloConfigurator, new()
     {
         var builder = new TestClusterBuilder(initialSilosCount: 2);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<TConfigurator>();
         var cluster = builder.Build();
         await cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(cluster);
         return cluster;
     }
 

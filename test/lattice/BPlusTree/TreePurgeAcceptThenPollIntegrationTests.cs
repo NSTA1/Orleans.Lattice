@@ -21,7 +21,8 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// 30 s response timeout. The cluster's response timeout is shortened so the hold
 /// outlasts it in seconds rather than minutes. Before the fix the purge call timed
 /// out, the status read queued behind the walk, and nothing reported the purge as
-/// running.
+/// running. Every answer made while a hold is in force is proven with
+/// <see cref="InterleaveProbe"/>, never against a clock (issue #4142).
 /// </para>
 /// <para>
 /// The short timeout is meant for the purge section only, not for seeding the
@@ -43,9 +44,6 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
 
     /// <summary>The silo's runtime response timeout while a test seeds its tree.</summary>
     private static readonly TimeSpan SetupResponseTimeout = TimeSpan.FromSeconds(60);
-
-    /// <summary>How long a purge call or status read may take to answer while a shard is held.</summary>
-    private static readonly TimeSpan PromptAnswer = TimeSpan.FromSeconds(10);
 
     private TestCluster _cluster = null!;
     private IGrainFactory _siloGrains = null!;
@@ -70,6 +68,7 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
     public async Task OneTimeTearDown()
     {
         PurgeGate.ReleaseAll();
+        UnregisterGate.Disarm();
         await _cluster.StopAllSilosAsync();
         await _cluster.DisposeAsync();
     }
@@ -90,13 +89,14 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
         var hold = PurgeGate.Arm(shardKey => shardKey == $"{treeId}/0");
         try
         {
-            await AnswerPromptlyAsync(tree.PurgeTreeAsync(), "the purge call");
-            await hold.Entered.Task.WaitAsync(PromptAnswer);
+            await InterleaveProbe.AnswersWhileHeldAsync(tree.PurgeTreeAsync(), hold.Release.Task, "the purge call");
+            await hold.Entered.Task.WaitAsync(InterleaveProbe.HangBound);
 
             // The shard is still held past the response timeout, yet the status
             // answers, and it says the purge is running rather than nothing at all.
             await Task.Delay(ResponseTimeout);
-            var running = await AnswerPromptlyAsync(deletion.GetDeletionStatusAsync(), "the deletion status read");
+            var running = await InterleaveProbe.AnswersWhileHeldAsync(deletion.GetDeletionStatusAsync(),
+                hold.Release.Task, "the deletion status read");
             Assert.Multiple(() =>
             {
                 Assert.That(running.PurgeInProgress, Is.True, "a purge whose shard is being walked is in progress");
@@ -106,27 +106,28 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
                 Assert.That(running.PurgedShardCount, Is.Zero, "the held shard has not finished");
             });
 
-            // The walk's timer tick holds the deletion coordinator for up to a
-            // response timeout each time it re-asks the held shard, so a status
-            // read that queued behind it would stall for seconds. Sampled across
-            // more than one retry cycle, every read must still answer at once.
-            for (var i = 0; i < 12; i++)
+            // Each retry of the held shard runs in a timer tick that holds the
+            // deletion coordinator's turn until the shard answers. Pin one such
+            // tick on its way out to the shard, so the coordinator sits inside it
+            // for as long as the test chooses: a status read must answer while it
+            // does, and one that queued behind the walk never would.
+            var tick = PurgeTickGate.Arm($"{treeId}/0");
+            try
             {
-                var sample = deletion.GetDeletionStatusAsync();
-                try
-                {
-                    await sample.WaitAsync(TimeSpan.FromSeconds(1));
-                }
-                catch (TimeoutException)
-                {
-                    Assert.Fail("the deletion status read queued behind the purge walk instead of answering at once");
-                }
-                await Task.Delay(500);
+                await tick.Entered.Task.WaitAsync(InterleaveProbe.HangBound);
+                var during = await InterleaveProbe.AnswersWhileHeldAsync(deletion.GetDeletionStatusAsync(),
+                    tick.Release.Task, "the deletion status read issued while a purge tick holds the coordinator");
+                Assert.That(during.PurgeInProgress, Is.True);
+            }
+            finally
+            {
+                PurgeTickGate.Disarm();
+                tick.Release.TrySetResult();
             }
 
             // A retry while it runs is acknowledged, not refused or timed out.
-            await AnswerPromptlyAsync(tree.PurgeTreeAsync(), "a retried purge call");
-            Assert.That(hold.Release.Task.IsCompleted, Is.False, "precondition: the shard was held throughout");
+            await InterleaveProbe.AnswersWhileHeldAsync(tree.PurgeTreeAsync(), hold.Release.Task,
+                "a retried purge call");
         }
         finally
         {
@@ -150,7 +151,7 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
         });
 
         // A retry after completion reports the success rather than a failure.
-        await AnswerPromptlyAsync(tree.PurgeTreeAsync(), "a purge call after completion");
+        await tree.PurgeTreeAsync();
     }
 
     [Test]
@@ -178,11 +179,12 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
         var hold = PurgeGate.Arm(shardKey => shardKey == $"{copy}/0");
         try
         {
-            await AnswerPromptlyAsync(tree.PurgeTreeAsync(), "the purge call");
-            await hold.Entered.Task.WaitAsync(PromptAnswer);
+            await InterleaveProbe.AnswersWhileHeldAsync(tree.PurgeTreeAsync(), hold.Release.Task, "the purge call");
+            await hold.Entered.Task.WaitAsync(InterleaveProbe.HangBound);
             await Task.Delay(ResponseTimeout);
 
-            var running = await AnswerPromptlyAsync(deletion.GetDeletionStatusAsync(), "the deletion status read");
+            var running = await InterleaveProbe.AnswersWhileHeldAsync(deletion.GetDeletionStatusAsync(),
+                hold.Release.Task, "the deletion status read");
             Assert.Multiple(() =>
             {
                 Assert.That(running.PurgeInProgress, Is.True);
@@ -205,7 +207,76 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
             Assert.That(await registry.ExistsAsync(treeId), Is.False, "the logical tree is unregistered");
             Assert.That(await registry.ExistsAsync(copy), Is.False, "the copy is unregistered");
         });
-        await AnswerPromptlyAsync(tree.PurgeTreeAsync(), "a purge call after completion");
+        await tree.PurgeTreeAsync();
+    }
+
+    /// <summary>
+    /// Issue #4252: the deletion grain persists a purge's completion before it
+    /// removes the tree's registry entry, and <see cref="ILattice.PurgeTreeAsync"/>
+    /// returned as soon as the status read reported that completion - so it could
+    /// return "purged" while <see cref="ILattice.TreeExistsAsync"/> still found the
+    /// tree. The unregister is held on its way out of the deletion grain, so the
+    /// window stays open for as long as the test chooses.
+    /// </summary>
+    [Test]
+    public async Task A_purge_is_not_reported_complete_while_its_registry_entry_still_exists()
+    {
+        var treeId = $"purge-finalising-{Guid.NewGuid():N}";
+        await SeedAsync(async grains =>
+        {
+            var seed = grains.GetGrain<ILattice>(treeId);
+            await WriteAsync(seed);
+            await seed.DeleteTreeAsync();
+        });
+
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        var deletion = _cluster.Client.GetGrain<ITreeDeletionGrain>(treeId);
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var hold = UnregisterGate.Arm(treeId);
+        try
+        {
+            // The purge call returns within its wait budget either way; what it
+            // must not do is leave the status reporting a completion the registry
+            // contradicts.
+            await InterleaveProbe.AnswersWhileHeldAsync(tree.PurgeTreeAsync(), hold.Release.Task, "the purge call");
+            await hold.Entered.Task.WaitAsync(InterleaveProbe.HangBound);
+
+            var finalising = await InterleaveProbe.AnswersWhileHeldAsync(deletion.GetDeletionStatusAsync(),
+                hold.Release.Task, "the deletion status read while the unregister is held");
+            var rowExists = await InterleaveProbe.AnswersWhileHeldAsync(registry.ExistsAsync(treeId),
+                hold.Release.Task, "the registry existence read while the unregister is held");
+            Assert.Multiple(() =>
+            {
+                Assert.That(rowExists, Is.True, "precondition: the held unregister has not removed the row");
+                Assert.That(finalising.PurgeComplete, Is.False,
+                    "a purge whose registry entry still exists must not read as complete");
+                Assert.That(finalising.PurgeInProgress, Is.True);
+                Assert.That(finalising.PurgedShardCount, Is.EqualTo(finalising.PurgeShardCount), "every shard is walked");
+            });
+
+            // A retry while the unregister is held is acknowledged, and still
+            // does not turn the status complete.
+            await InterleaveProbe.AnswersWhileHeldAsync(tree.PurgeTreeAsync(), hold.Release.Task, "a retried purge call");
+            var retried = await InterleaveProbe.AnswersWhileHeldAsync(deletion.GetDeletionStatusAsync(),
+                hold.Release.Task, "the deletion status read after the retry");
+            Assert.That(retried.PurgeComplete, Is.False);
+        }
+        finally
+        {
+            UnregisterGate.Disarm();
+            hold.Release.TrySetResult();
+        }
+
+        await TestPoll.UntilAsync(
+            async () => (await deletion.GetDeletionStatusAsync()).PurgeComplete,
+            "the purge to complete once its registry entry is removed",
+            timeout: TimeSpan.FromSeconds(60));
+        Assert.That(await registry.ExistsAsync(treeId), Is.False,
+            "a purge reported complete has removed the tree's registry entry");
+
+        // With the window closed, the public call returns only once the row is gone.
+        await tree.PurgeTreeAsync();
+        Assert.That(await tree.TreeExistsAsync(), Is.False);
     }
 
     /// <summary>
@@ -233,33 +304,6 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
     {
         for (var i = 0; i < 48; i++)
             await tree.SetAsync($"k{i:D3}", Encoding.UTF8.GetBytes($"v{i}"));
-    }
-
-    private static async Task AnswerPromptlyAsync(Task call, string what)
-    {
-        try
-        {
-            await call.WaitAsync(PromptAnswer);
-        }
-        catch (TimeoutException ex)
-        {
-            Assert.Fail($"{what} did not answer: {ex.Message}. It was bounded by the walk of a shard held past "
-                + "the response timeout instead of being accepted and returned.");
-        }
-    }
-
-    private static async Task<T> AnswerPromptlyAsync<T>(Task<T> call, string what)
-    {
-        try
-        {
-            return await call.WaitAsync(PromptAnswer);
-        }
-        catch (TimeoutException ex)
-        {
-            Assert.Fail($"{what} did not answer: {ex.Message}. It queued behind the walk of a shard held past "
-                + "the response timeout.");
-            throw;
-        }
     }
 
     /// <summary>
@@ -308,6 +352,89 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
     }
 
     /// <summary>
+    /// Holds the deletion coordinator's next outgoing <see cref="IShardRootGrain.PurgeAsync"/>
+    /// to an armed shard before it is sent, so the purge timer tick that issued it
+    /// keeps the coordinator's non-reentrant turn for as long as the test chooses.
+    /// The call has not been sent while it is held, so no response timeout ends the
+    /// tick early; that is what makes "a status read answers while a tick holds the
+    /// coordinator" provable without a clock.
+    /// </summary>
+    private sealed class PurgeTickGate : IOutgoingGrainCallFilter
+    {
+        private static volatile string? _shardKey;
+        private static volatile Hold? _hold;
+
+        internal static Hold Arm(string shardKey)
+        {
+            var hold = new Hold();
+            _hold = hold;
+            _shardKey = shardKey;
+            return hold;
+        }
+
+        internal static void Disarm()
+        {
+            _shardKey = null;
+            _hold = null;
+        }
+
+        public async Task Invoke(IOutgoingGrainCallContext context)
+        {
+            if (_hold is { } hold
+                && context.MethodName == nameof(IShardRootGrain.PurgeAsync)
+                && context.InterfaceMethod?.DeclaringType == typeof(IShardRootGrain)
+                && context.TargetId.Key.ToString() == _shardKey)
+            {
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+
+            await context.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Holds the next outgoing <see cref="ILatticeRegistry.UnregisterAsync"/> for the
+    /// armed tree before it is sent, keeping a finishing purge between persisting
+    /// its completion and removing the registry entry. Held on the caller's side,
+    /// so the registry itself stays free to answer.
+    /// </summary>
+    private sealed class UnregisterGate : IOutgoingGrainCallFilter
+    {
+        private static volatile string? _treeId;
+        private static volatile Hold? _hold;
+
+        internal static Hold Arm(string treeId)
+        {
+            var hold = new Hold();
+            _hold = hold;
+            _treeId = treeId;
+            return hold;
+        }
+
+        internal static void Disarm()
+        {
+            _treeId = null;
+            _hold = null;
+        }
+
+        public async Task Invoke(IOutgoingGrainCallContext context)
+        {
+            if (_hold is { } hold
+                && context.MethodName == nameof(ILatticeRegistry.UnregisterAsync)
+                && context.InterfaceMethod?.DeclaringType == typeof(ILatticeRegistry)
+                && context.Request.GetArgumentCount() > 0
+                && context.Request.GetArgument(0) as string == _treeId)
+            {
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+
+            await context.Invoke();
+        }
+    }
+
+    /// <summary>
     /// The silo's runtime response timeout. The configured
     /// <see cref="SiloMessagingOptions.ResponseTimeout"/> is only read once, when the
     /// runtime client is built, so relaxing it for setup has to go through the
@@ -346,6 +473,8 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.Configure<SiloMessagingOptions>(o => o.ResponseTimeout = ResponseTimeout);
             siloBuilder.AddIncomingGrainCallFilter<PurgeGate>();
+            siloBuilder.AddOutgoingGrainCallFilter<PurgeTickGate>();
+            siloBuilder.AddOutgoingGrainCallFilter<UnregisterGate>();
         }
     }
 

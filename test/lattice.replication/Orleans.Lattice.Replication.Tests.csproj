@@ -28,4 +28,9 @@
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared multi-silo WAL harness (issue #4196): one WAL store per test cluster. -->
+    <Compile Include="..\lattice\Fakes\SharedInMemoryWal.cs" Link="Shared\SharedInMemoryWal.cs" />
+  </ItemGroup>
+
 </Project>

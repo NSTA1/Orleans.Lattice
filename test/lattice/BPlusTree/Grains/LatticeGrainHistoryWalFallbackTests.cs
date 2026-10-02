@@ -296,6 +296,84 @@ public sealed class LatticeGrainHistoryWalFallbackTests
     }
 
     [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_reports_a_revision_once_when_copies_replay_it()
+    {
+        // A resize copy, a reshard migration and a split redistribution each append
+        // the entry again under its author's clock; the sample showed four rows.
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[29], 10, origin: "east"));
+        reader.Append(TreeId, 0, Set("k", new byte[29], 10, origin: "east") with { IsMerge = true });
+        reader.Append(TreeId, 0, Set("k", new byte[29], 10, origin: "east") with { IsMerge = true });
+        reader.Append(TreeId, 0, Set("k", new byte[29], 10, origin: "east") with { IsMerge = true });
+        var grain = CreateGrain(ServicesWith(reader));
+
+        var page = await grain.ScanEntryHistoryAsync("k", null, null, 100, null);
+
+        Assert.That(page.Revisions.Select(r => r.Hlc.WallClockTicks).ToList(), Is.EqualTo(new long[] { 10 }));
+    }
+
+    [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_collapses_a_tombstone_reap_into_the_delete_it_reaps()
+    {
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1 }, 10));
+        reader.Append(TreeId, 0, Delete("k", 20));
+        reader.Append(TreeId, 0, Delete("k", 20) with
+        {
+            Kind = MutationKind.Tombstone,
+            IsMerge = true,
+            Category = MutationCategory.Maintenance,
+        });
+        var grain = CreateGrain(ServicesWith(reader));
+
+        var page = await grain.ScanEntryHistoryAsync("k", null, null, 100, null);
+
+        Assert.That(page.Revisions.Select(r => r.Kind).ToList(), Is.EqualTo(new[] { HistoryRowKind.Set, HistoryRowKind.Delete }));
+    }
+
+    [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_does_not_report_a_replay_of_an_earlier_page()
+    {
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1 }, 10));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 2 }, 20));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1 }, 10) with { IsMerge = true });
+        reader.Append(TreeId, 0, Set("k", new byte[] { 3 }, 30));
+        var grain = CreateGrain(ServicesWith(reader));
+
+        var collected = new List<long>();
+        string? continuation = null;
+        for (var guard = 0; guard < 10; guard++)
+        {
+            var page = await grain.ScanEntryHistoryAsync("k", null, null, 1, continuation);
+            collected.AddRange(page.Revisions.Select(r => r.Hlc.WallClockTicks));
+            continuation = page.Continuation;
+            if (continuation is null)
+            {
+                break;
+            }
+        }
+
+        Assert.That(collected, Is.EqualTo(new long[] { 10, 20, 30 }));
+    }
+
+    [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_reports_every_write_at_its_own_clock_whatever_it_is_marked()
+    {
+        // Collapsing is by clock alone, so no record's own marking can hide a
+        // write: a merge or maintenance record at a new clock is still a revision.
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1 }, 10, origin: "east"));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 2 }, 11, origin: "west") with { IsMerge = true });
+        reader.Append(TreeId, 0, Set("k", new byte[] { 3 }, 12) with { Category = MutationCategory.Maintenance });
+        var grain = CreateGrain(ServicesWith(reader));
+
+        var page = await grain.ScanEntryHistoryAsync("k", null, null, 100, null);
+
+        Assert.That(page.Revisions.Select(r => r.Hlc.WallClockTicks), Is.EqualTo(new long[] { 10, 11, 12 }));
+    }
+
+    [Test]
     public async Task ScanEntryHistoryAsync_wal_fallback_honours_hlc_bounds()
     {
         var reader = new FakeCommitLogReader();

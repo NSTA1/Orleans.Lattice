@@ -444,6 +444,45 @@ a marker node at the top. In the header it is inlined so it follows the theme.
 `favicon.svg` sets the same mark on an ink tile so it reads on light and dark
 tab strips.
 
+### Fields and toolbars (Explorer)
+
+The Explorer draws every field one way, so a toolbar or a form lines up
+wherever it is (issue #4120).
+
+- **One field structure.** Every field primitive (`LtTextInput`, `LtNameInput`,
+  `LtComboBox`, `LtMultiComboBox`, `LtSelect`, `LtSearchInput`,
+  `LtDateTimeInput`, `LtDurationInput`) is a visible label row over a control box. The label is one line
+  (`--lt-op-label-line-height`, 20px) at the label weight. The control box is one
+  control height (`--lt-op-control-height`: 44px comfortable, 28px compact), with
+  the same control border, sunken fill and padding in Paper and Board. A search
+  box has a visible label like any other field, and that label is its
+  accessible name, so label-in-name (WCAG 2.5.3) holds. A checkbox and a switch
+  are the only controls whose label sits beside them.
+- **One control-row rule.** A toolbar (`.lt-toolbar`) or a control row
+  (`.lt-control-row`) lines its controls up on their control boxes, never on
+  their label rows. Items start at the top of the row, so a hint, note or error
+  grows a field downwards without moving a control. In a row that holds a
+  labelled field, anything without a label row - a button, a segmented group, a
+  switch, a checkbox, a status line - starts one label row
+  (`--lt-op-label-row`) down. Below 768px the row stacks, each item as tall as
+  its content, with no offset. An area stylesheet never re-aligns a toolbar.
+- **One placeholder face.** A placeholder is a hint, never a value, so it is
+  prose in the UI face, even in a field whose value is an id set in mono.
+- **Time is never free text.** A point in time is an `LtDateTimeInput`: a typed
+  ISO 8601 instant to the second, the zone (always UTC) written in its control
+  box, a calendar button, and the reader's local time as secondary text, so no
+  time is converted silently. Its picker floats below the field on a hairline
+  rule and opens in the flow of the page on a phone; the chosen day takes the
+  marker with an ink ring and the strong weight, and today is ringed. A
+  duration is an `LtDurationInput`: a whole-number box per unit, each followed
+  by its unit, in one control box. `ShellTimeFieldHygieneTests` keeps a field
+  that names a date, a time or a duration from being a bare `LtTextInput`.
+
+`ControlAlignmentTests` measures these rules in a browser across every area,
+at desktop and phone widths, in Paper and Board and in both densities.
+`FieldPrimitiveStructureTests` and `ShellControlRowHygieneTests` hold the
+structure and the stylesheets to them.
+
 ## Do's and Don'ts
 
 ### Do:
@@ -464,6 +503,9 @@ tab strips.
 - **Don't** use a second accent colour, a gradient, or a coloured bar wider than
   a hairline on a card, callout, or list item.
 - **Don't** add cards, icon tiles, or feature grids. The site is read, not sold.
+- **Don't** hand-roll an input, select or label in an Explorer toolbar, hide a
+  field's label, or re-align a toolbar in an area stylesheet. Use a field
+  primitive and the one control-row rule.
 - **Don't** set a second proportional typeface, or use the mono face for
   anything that is not code, data, or a state.
 - **Don't** add shadows to anything that sits on the page.

@@ -43,6 +43,25 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_schema_advance_and_migrate",
         "lattice_treeadmin_schema_migrate_to_target",
         "lattice_treeadmin_schema_remediate",
+        "lattice_treeadmin_schema_remediation_start",
+        "lattice_treeadmin_schema_migration_start",
+        "lattice_treeadmin_schema_advance_and_migrate_start",
+    };
+
+    /// <summary>The schema remediation and migration status and list tools (#4209), always contributed.</summary>
+    private static readonly string[] SchemaOperationReadToolNames =
+    {
+        "lattice_treeadmin_schema_operation_status",
+        "lattice_treeadmin_schema_operation_list",
+    };
+
+    /// <summary>
+    /// The schema operation cancel tool (#4209): contributed with schema control, and
+    /// annotated mutating but not destructive, since it only stops a run before cutover.
+    /// </summary>
+    private static readonly string[] SchemaOperationCancelToolNames =
+    {
+        "lattice_treeadmin_schema_operation_cancel",
     };
 
     private static readonly string[] DiagnosticsToolNames =
@@ -67,6 +86,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_snapshot_status",
         "lattice_treeadmin_wal_placement_inspect",
         "lattice_treeadmin_wal_placement_audit",
+        "lattice_treeadmin_wal_reclamation",
         "lattice_treeadmin_orphaned_leaves_audit",
         "lattice_treeadmin_wal_move_plan",
         "lattice_treeadmin_view_list",
@@ -74,6 +94,8 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tag_index_list",
         "lattice_treeadmin_tag_index_status",
         "lattice_treeadmin_retention_get",
+        "lattice_treeadmin_operation_status",
+        "lattice_treeadmin_operation_list",
     };
 
     private static readonly string[] LifecycleWriteToolNames =
@@ -102,6 +124,11 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_drop",
         "lattice_treeadmin_tag_index_reconcile",
+        "lattice_treeadmin_view_rebuild_start",
+        "lattice_treeadmin_view_reconcile_start",
+        "lattice_treeadmin_tag_index_reconcile_start",
+        "lattice_treeadmin_wal_move_start",
+        "lattice_treeadmin_orphaned_leaves_repair_start",
     };
 
     /// <summary>
@@ -114,11 +141,38 @@ public sealed class TreeAdminToolGroupTests
     {
         "lattice_treeadmin_compaction_trigger",
         "lattice_treeadmin_retention_set",
+        "lattice_treeadmin_orphaned_leaves_audit_start",
+        "lattice_treeadmin_operation_cancel",
+    };
+
+    /// <summary>The read-only accept-then-poll status and list tools (#4126), always contributed.</summary>
+    private static readonly string[] OperationReadToolNames =
+    {
+        "lattice_treeadmin_schema_compliance_scan_status",
+        "lattice_treeadmin_schema_compliance_scan_list",
+        "lattice_treeadmin_storage_usage_refresh_status",
+        "lattice_treeadmin_storage_usage_refresh_list",
+    };
+
+    /// <summary>
+    /// The accept-then-poll start and cancel tools (#4126): always contributed, since a
+    /// scan and a refresh are reads, and annotated mutating but never destructive.
+    /// </summary>
+    private static readonly string[] OperationMutateToolNames =
+    {
+        "lattice_treeadmin_schema_compliance_scan_start",
+        "lattice_treeadmin_schema_compliance_scan_cancel",
+        "lattice_treeadmin_storage_usage_refresh_start",
+        "lattice_treeadmin_storage_usage_refresh_cancel",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
     private static IEnumerable<string> ReadOnlyToolNames =>
-        InspectionToolNames.Concat(DiagnosticsToolNames).Concat(LifecycleReadToolNames);
+        InspectionToolNames.Concat(DiagnosticsToolNames).Concat(LifecycleReadToolNames).Concat(OperationReadToolNames)
+            .Concat(SchemaOperationReadToolNames);
+
+    /// <summary>Every tool contributed regardless of any opt-in.</summary>
+    private static IEnumerable<string> AlwaysOnToolNames => ReadOnlyToolNames.Concat(OperationMutateToolNames);
 
 
     private static TreeAdminToolGroup CreateGroup(bool enableSchemaControl, bool enableLifecycle = false)
@@ -151,7 +205,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames));
+            Assert.That(Names(group), Is.EquivalentTo(AlwaysOnToolNames));
             foreach (var management in ManagementToolNames)
             {
                 Assert.That(Names(group), Does.Not.Contain(management),
@@ -173,7 +227,25 @@ public sealed class TreeAdminToolGroupTests
     {
         var group = CreateGroup(enableSchemaControl: true);
 
-        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames)));
+        Assert.That(Names(group), Is.EquivalentTo(AlwaysOnToolNames.Concat(ManagementToolNames).Concat(SchemaOperationCancelToolNames)));
+    }
+
+    [Test]
+    public void Schema_operation_cancel_is_gated_on_schema_control_and_is_not_destructive()
+    {
+        var off = CreateGroup(enableSchemaControl: false);
+        var on = CreateGroup(enableSchemaControl: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in SchemaOperationCancelToolNames)
+            {
+                Assert.That(Names(off), Does.Not.Contain(name), $"{name} needs schema control.");
+                var annotations = ServerTool(on, name).ProtocolTool.Annotations;
+                Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} records a cancel request.");
+                Assert.That(annotations?.DestructiveHint, Is.False, $"{name} only stops a run before cutover.");
+            }
+        });
     }
 
     [Test]
@@ -209,6 +281,22 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
+    public void Operation_start_and_cancel_tools_are_always_present_and_mutating_but_not_destructive()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: false);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in OperationMutateToolNames)
+            {
+                var annotations = ServerTool(group, name).ProtocolTool.Annotations;
+                Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} records an operation, so it is not read-only.");
+                Assert.That(annotations?.DestructiveHint, Is.False, $"{name} never mutates data.");
+            }
+        });
+    }
+
+    [Test]
     public void Lifecycle_read_tools_are_always_present_even_without_the_opt_in()
     {
         var group = CreateGroup(enableSchemaControl: false, enableLifecycle: false);
@@ -236,7 +324,7 @@ public sealed class TreeAdminToolGroupTests
     {
         var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
 
-        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
+        Assert.That(Names(group), Is.EquivalentTo(AlwaysOnToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -278,7 +366,8 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             Names(group),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames).Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
+            Is.EquivalentTo(AlwaysOnToolNames.Concat(ManagementToolNames).Concat(SchemaOperationCancelToolNames)
+                .Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -293,7 +382,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
+            Is.EquivalentTo(AlwaysOnToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -395,7 +484,7 @@ public sealed class TreeAdminToolGroupTests
         Assert.Multiple(() =>
         {
             Assert.That(group.Group, Is.EqualTo(LatticeApiMcpGroup.TreeAdmin));
-            Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Is.EquivalentTo(ReadOnlyToolNames));
+            Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Is.EquivalentTo(AlwaysOnToolNames));
         });
     }
 
@@ -411,7 +500,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames)));
+            Is.EquivalentTo(AlwaysOnToolNames.Concat(ManagementToolNames).Concat(SchemaOperationCancelToolNames)));
     }
 
     [Test]

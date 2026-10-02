@@ -28,7 +28,11 @@ internal sealed partial class LatticeGrain
             effectiveEntries = await InterceptEntriesAsync(
                 LatticeOperation.BulkLoad, list, atomic: false, cancellationToken);
         }
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced, once per call (#4206): a shard root's bulk-load path checks no slot
+        // ownership, so a map cached before a reshard would graft keys onto a shard
+        // the live map no longer routes them to, and a cached alias onto a retired
+        // physical tree; nothing on this path would ever invalidate either.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
         var operationId = Guid.NewGuid().ToString("N");
@@ -44,7 +48,7 @@ internal sealed partial class LatticeGrain
         }
 
         // Fan out to *every* physical shard, including those whose bucket
-        // is empty. Each shard's own `RootNodeId is not null` guard inside
+        // is empty. Each shard's own emptiness guard inside
         // `ShardRootGrain.BulkLoadAsync` fires before the empty-list
         // short-circuit, so a shard that already contains data on this
         // tree (from a prior `SetAsync` or earlier bulk load) rejects the
@@ -110,7 +114,9 @@ internal sealed partial class LatticeGrain
         if (effectiveEntries.Count == 0)
             return 0;
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced, once per chunk call rather than per entry (#4206), for the reason
+        // BulkLoadAsync gives: the shard-side graft checks no slot ownership.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Partition this chunk across physical shards. Only shards that actually
@@ -242,6 +248,17 @@ internal sealed partial class LatticeGrain
         }
 
         InvalidateRegistrationMemo();
+
+        // The purge stopped the tree's compaction reminder and autonomic loops.
+        // Forget that this activation armed them, so a write that reuses the id
+        // (issue #3940) arms them for the new tree instead of trusting a latch
+        // set for the purged one (issue #4219).
+        if (status.PurgeComplete)
+        {
+            _compactionEnsured = false;
+            _monitorEnsured = false;
+            _healingEnsured = false;
+        }
     }
 
     /// <summary>
@@ -412,6 +429,7 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var registry = grainFactory.GetLatticeRegistry();
+        await EnsureRegisteredForConfigurationAsync(registry, nameof(SetPublishEventsEnabledAsync));
         await registry.SetPublishEventsAsync(TreeId, enabled);
         // Make sure this activation re-reads the registry next time it publishes
         // so the override takes effect immediately locally.
@@ -428,11 +446,33 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var registry = grainFactory.GetLatticeRegistry();
+        await EnsureRegisteredForConfigurationAsync(registry, nameof(SetHistoryRetentionAsync));
         await registry.SetHistoryRetentionAsync(TreeId, mode, window);
         LatticeMetrics.ConfigChanged.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
             LatticeTenantLabel.ForTree(TreeId));
+    }
+
+    /// <summary>
+    /// Registers this tree before a configuration verb rewrites its registry
+    /// row, because the registry's per-field mutators no longer create a missing
+    /// row (issue #4230). Configuring a tree before its first write is a
+    /// supported flow - the system-data initializers pin history retention on
+    /// trees that hold nothing yet - so an id that was never registered is
+    /// registered here, with its structural pins seeded, exactly as its first
+    /// write would. A purged id is refused instead: a configuration change is not
+    /// a write, and registering it would silently undo the purge (issue #4219).
+    /// Runs outside any registry turn, so the extra registry hops cannot re-enter
+    /// it.
+    /// </summary>
+    private async Task EnsureRegisteredForConfigurationAsync(ILatticeRegistry registry, string operation)
+    {
+        if (await registry.ExistsAsync(TreeId))
+            return;
+        if (await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId))
+            throw new LatticeTreeNotRegisteredException(TreeId, operation);
+        await registry.RegisterAsync(TreeId);
     }
 
     public async Task<HistoryRetentionSettings> GetHistoryRetentionAsync(CancellationToken cancellationToken = default)

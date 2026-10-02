@@ -39,6 +39,12 @@ public sealed class SchemaGrpcInterceptorMappingTests
             AssertOp(LatticeSchemaGrpcMethods.GetRemediationStatusMethodName, LatticeSchemaApiOperation.GetRemediationStatus);
             AssertOp(LatticeSchemaGrpcMethods.ScanComplianceMethodName, LatticeSchemaApiOperation.ScanCompliance);
             AssertOp(LatticeSchemaGrpcMethods.ProbeCapabilitiesMethodName, LatticeSchemaApiOperation.ProbeCapabilities);
+            AssertOp(LatticeSchemaGrpcMethods.StartRemediationMethodName, LatticeSchemaApiOperation.StartRemediation);
+            AssertOp(LatticeSchemaGrpcMethods.StartMigrationMethodName, LatticeSchemaApiOperation.StartMigration);
+            AssertOp(LatticeSchemaGrpcMethods.StartAdvanceAndMigrateMethodName, LatticeSchemaApiOperation.StartAdvanceAndMigrate);
+            AssertOp(LatticeSchemaGrpcMethods.GetSchemaOperationStatusMethodName, LatticeSchemaApiOperation.GetSchemaOperationStatus);
+            AssertOp(LatticeSchemaGrpcMethods.ListSchemaOperationsMethodName, LatticeSchemaApiOperation.ListSchemaOperations);
+            AssertOp(LatticeSchemaGrpcMethods.CancelSchemaOperationMethodName, LatticeSchemaApiOperation.CancelSchemaOperation);
         });
 
         static void AssertOp(string methodName, LatticeSchemaApiOperation expected)
@@ -75,9 +81,11 @@ public sealed class SchemaGrpcInterceptorMappingTests
                     TargetPolicy = new LatticeSchemaPolicy(Array.Empty<LatticeSchemaRule>()),
                 },
                 "t5");
+            AssertTarget(new SchemaMigrationStartRequest { TreeId = "t6" }, "t6");
+            AssertTarget(new SchemaOperationRequest { OperationId = "op-1" }, null);
         });
 
-        static void AssertTarget<TRequest>(TRequest request, string expected)
+        static void AssertTarget<TRequest>(TRequest request, string? expected)
         {
             var (_, targetId) = LatticeSchemaApiGrpcAuthInterceptor.DescribeCall(
                 Svc + LatticeSchemaGrpcMethods.SetPolicyMethodName, request);

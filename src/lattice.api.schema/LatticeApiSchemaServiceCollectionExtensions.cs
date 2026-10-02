@@ -64,8 +64,16 @@ public static class LatticeApiSchemaServiceCollectionExtensions
         builder.Services.AddOptions<LatticeApiSchemaOptions>();
 
         // The transport-agnostic control facade. Registered as a silo singleton
-        // that every transport binding (for example gRPC) adapts over.
-        builder.Services.TryAddSingleton<ILatticeSchemaControl, LatticeSchemaControl>();
+        // that every transport binding (for example gRPC) adapts over. The
+        // accept-then-poll operations facade (#4123) is the same singleton, so a
+        // blocking verb and a start share one authorization path.
+        builder.Services.TryAddSingleton<LatticeSchemaControl>();
+        builder.Services.TryAddSingleton<ILatticeSchemaControl>(sp => sp.GetRequiredService<LatticeSchemaControl>());
+        builder.Services.TryAddSingleton<ILatticeSchemaOperations>(sp => sp.GetRequiredService<LatticeSchemaControl>());
+
+        // Accept-then-poll compliance scans (#4126), run on the core operation
+        // coordinator that AddLattice registers.
+        builder.Services.TryAddSingleton<ILatticeSchemaComplianceOperations, LatticeSchemaComplianceOperations>();
 
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any

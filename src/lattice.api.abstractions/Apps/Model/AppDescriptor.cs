@@ -40,4 +40,10 @@ public sealed record AppDescriptor
     [Id(13)] public AppUiDescriptor? Ui { get; init; }
     /// <summary>The key of the source the description came from; null when not recorded or the server predates it.</summary>
     [Id(14)] public string? SourceKey { get; init; }
+    /// <summary>
+    /// The SHA-256 digest, as lower-case hex, of the described manifest and its provenance; null when
+    /// it cannot be computed or the server predates it. Send it back as
+    /// <see cref="AppInstallRequest.ExpectedManifestDigest"/> to pin the install to what was reviewed.
+    /// </summary>
+    [Id(15)] public string? ManifestDigest { get; init; }
 }

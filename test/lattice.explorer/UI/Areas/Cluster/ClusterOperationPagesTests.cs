@@ -30,13 +30,14 @@ public sealed class ClusterOperationPagesTests : ClusterTestContext
         Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Reshard a/crm/orders"));
 
         Stage(cut, "4");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("The tree already has 4 physical shards"));
+        // #4254: the field error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("The tree already has 4 physical shards")));
         Stage(cut, "5000");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 4096"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 4096")));
         Stage(cut, "eight");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("whole number"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("whole number")));
         Stage(cut, "8");
-        Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 4 physical shards to 8 physical shards"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 4 physical shards to 8 physical shards")));
 
         Button(cut, "Reshard...").Click();
         ConfirmTyping(cut, TreeId);
@@ -88,6 +89,8 @@ public sealed class ClusterOperationPagesTests : ClusterTestContext
         var cut = RenderAt("/cluster/trees/a/crm/orders/reshard");
         cut.WaitUntil(() => Assert.That(cut.FindAll("form"), Has.Count.EqualTo(1)));
         Stage(cut, "8");
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 4 physical shards to 8 physical shards")));
         Button(cut, "Reshard...").Click();
         ConfirmTyping(cut, TreeId);
 
@@ -106,17 +109,21 @@ public sealed class ClusterOperationPagesTests : ClusterTestContext
         cut.FindAll("form input")[0].Input("1");
         cut.FindAll("form input")[1].Input("2");
         cut.Find("form").Submit();
-        Assert.That(cut.FindAll(".lt-field__error"), Has.Count.EqualTo(2));
+        // #4254: the field errors render after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-field__error"), Has.Count.EqualTo(2)));
 
         cut.FindAll("form input")[0].Input("256");
         cut.FindAll("form input")[1].Input("32");
         cut.Find("form").Submit();
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(HasButton(cut, "Resize..."), Is.True));
         Button(cut, "Resize...").Click();
         ConfirmTyping(cut, TreeId);
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Resizing to 256 keys per leaf and 32 children per node.")));
 
         Button(cut, "Undo the last resize...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("deletes the resized copy"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("deletes the resized copy")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() =>
@@ -152,23 +159,26 @@ public sealed class ClusterOperationPagesTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("No snapshot is running.")));
 
         cut.Find("form").Submit();
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Name the new tree"));
+        // #4254: the field error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Name the new tree")));
 
         cut.FindAll("form input")[0].Input(TreeId);
         cut.Find("form").Submit();
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("cannot copy a tree into itself"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("cannot copy a tree into itself")));
 
         cut.FindAll("form input")[0].Input("a/crm/orders-copy");
         cut.Find("form select").Change("Offline");
         cut.FindAll("form input")[1].Input("1");
         cut.Find("form").Submit();
-        Assert.That(cut.FindAll(".lt-field__error").Select(error => error.TextContent), Has.Some.Contains("Sizing must be whole numbers"));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-field__error").Select(error => error.TextContent), Has.Some.Contains("Sizing must be whole numbers")));
 
         cut.FindAll("form input")[1].Input("64");
         cut.Find("form").Submit();
-        Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("offline: the source stops serving"));
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("offline: the source stops serving")));
         Button(cut, "Snapshot...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("stops serving reads and writes"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("stops serving reads and writes")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Copying into a/crm/orders-copy, offline.")));

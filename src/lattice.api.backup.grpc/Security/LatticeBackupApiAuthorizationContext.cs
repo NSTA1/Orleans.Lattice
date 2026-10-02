@@ -68,6 +68,44 @@ public enum LatticeBackupApiOperation
     /// rather than have it silently masquerade as a benign catalog operation.
     /// </summary>
     Unknown,
+
+    // The values below were appended after Unknown (#4122) so the shipped
+    // numeric values of every earlier member, Unknown included, stay stable.
+
+    /// <summary>The <c>StartBackup</c> accept-then-poll full-capture RPC.</summary>
+    StartBackup,
+
+    /// <summary>The <c>StartIncrementalBackup</c> accept-then-poll incremental-capture RPC.</summary>
+    StartIncrementalBackup,
+
+    /// <summary>The <c>StartBackupSet</c> accept-then-poll backup-set-capture RPC.</summary>
+    StartBackupSet,
+
+    /// <summary>The <c>StartRestore</c> accept-then-poll restore RPC.</summary>
+    StartRestore,
+
+    /// <summary>The <c>StartColdRestore</c> accept-then-poll cold-restore RPC.</summary>
+    StartColdRestore,
+
+    /// <summary>The <c>GetBackupOperationStatus</c> RPC.</summary>
+    GetBackupOperationStatus,
+
+    /// <summary>The <c>ListBackupOperations</c> RPC.</summary>
+    ListBackupOperations,
+
+    /// <summary>The <c>CancelBackupOperation</c> RPC.</summary>
+    CancelBackupOperation,
+
+    // Appended for #4125, again after every earlier member.
+
+    /// <summary>The <c>StartBackupHealthCheck</c> accept-then-poll health-check RPC.</summary>
+    StartBackupHealthCheck,
+
+    /// <summary>The <c>StartCatalogRebuild</c> accept-then-poll catalog-rebuild RPC.</summary>
+    StartCatalogRebuild,
+
+    /// <summary>The <c>StartCatalogScrub</c> accept-then-poll catalog-scrub RPC.</summary>
+    StartCatalogScrub,
 }
 
 /// <summary>

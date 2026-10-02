@@ -28,6 +28,7 @@ public sealed class AppsFailureMessagesTests
     [TestCase("The enable of app 'x' failed (AuthorizationNotRegistered).", "no authorization policy store")]
     [TestCase("App 'x' is offered by more than one app source (a, b); name the source key to use.", "more than one source")]
     [TestCase("App 'x' is already installed at that version; update its consent instead.", "already installed")]
+    [TestCase("App 'x' version '1.0.0' no longer matches the manifest that was reviewed; review it again before installing.", "Review it again")]
     [TestCase("something new: " + Secret, "The cluster refused the change.")]
     public void An_invalid_operation_is_recognised_by_its_documented_category(string message, string expected)
     {

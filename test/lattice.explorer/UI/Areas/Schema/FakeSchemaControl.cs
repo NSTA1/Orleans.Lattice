@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 /// and gates that hold the long-running verbs until a test releases them, so no
 /// test depends on timing.
 /// </summary>
-internal sealed class FakeSchemaControl : ILatticeSchemaControl
+internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
 {
     /// <summary>The policies, by tree.</summary>
     public Dictionary<string, LatticeSchemaPolicy> Policies { get; } = new(StringComparer.Ordinal);
@@ -155,6 +155,7 @@ internal sealed class FakeSchemaControl : ILatticeSchemaControl
         return Task.FromResult(Advance(treeId, newTargetVersion));
     }
 
+#pragma warning disable LATTICE0002 // Test fake implements the legacy contract; Explorer tests assert production uses ILatticeSchemaOperations.
     /// <inheritdoc />
     public async Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
     {
@@ -188,6 +189,7 @@ internal sealed class FakeSchemaControl : ILatticeSchemaControl
         LastRemediation = (transform, targetPolicy);
         return await RunAsync(treeId, cancellationToken);
     }
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)

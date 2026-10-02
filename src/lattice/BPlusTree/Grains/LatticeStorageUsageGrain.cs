@@ -131,8 +131,11 @@ internal sealed class LatticeStorageUsageGrain(
     {
         // Resolve routing (physical tree ID + shard map) via the public
         // entry point so registry-alias resolution is handled uniformly.
+        // Force-refreshed for the reason LatticeStatsGrain gives: a cached
+        // map outlives a reshard, and this walk never meets the stale-routing
+        // refusal that would correct it (#4146).
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShardIndices = routing.Map.GetPhysicalShardIndices();

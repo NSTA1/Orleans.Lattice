@@ -56,11 +56,15 @@ for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's k
 starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
 at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
-boundary notes and a live tail. A revision that kept only the value's size and
-hash is marked "metadata only", and the timeline explains what that means once,
-rather than under each such revision. The **As of (UTC)** field starts empty,
-with a hint giving its form (`yyyy-MM-ddTHH:mm:ssZ`, empty for the latest).
-`?at=` marks the revision that was in effect at the chosen UTC instant, and
+boundary notes and a live tail. A revision whose value the tree's history
+retention did not keep, only its size and hash, reads "Set - value not kept", and
+the timeline explains once, rather than under each such revision, that it is still
+a write to the key and not a metadata change. Copies that resizing, resharding or
+replication make of a revision are not shown as revisions of their own. The **As of** field is a
+[date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
+It starts empty, which means the latest, and refuses a time in the future;
+pick a day and a time, use a quick pick (now, an hour, a day or a week ago), or
+type an instant as `yyyy-MM-ddTHH:mm:ssZ`, then choose **Show as of**. `?at=` marks the revision that was in effect at the chosen UTC instant, and
 disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
@@ -84,6 +88,16 @@ For callers that can administer the source tree, Reconcile compares the
 expected view with the live one and swaps it only when they differ; Rebuild
 builds a new generation and swaps it in. Both actions are behind destructive
 confirmations and both read every source key.
+
+A tag-index reconcile and a view reconcile or rebuild run on the cluster as
+tracked operations (see [Tracked operations](../lattice.api.treeadmin/operations.md)).
+The tab shows the shared operation progress - its step, the phase and the
+cluster's own count of keys or shards - with a **Stop** button, and when it is
+reopened, after a reload or in another tab, it finds the operation still running
+for one of its views or indexes and follows it again. A finished operation is
+announced once; a failed or stopped one stays on the tab with the phase it
+reached and why. The actions are drawn only when the Explorer's tree-administration
+facade runs tracked operations.
 
 App-owned trees use logical ids shaped like `a/{slug}/...`. Data links their
 owner badge to `/apps/{slug}`, and tag and view member rows preserve those
@@ -161,11 +175,14 @@ tenant gets `tenancy.change-residency` ("Change residency") and
 A tenant's Regions page splits **Allowed regions (set by a platform operator)**
 from **Residency (where the tenant's data is kept)**, and says what each region's
 lifecycle status means for the tenant and whether it is served there: with no
-residency set every region serves the tenant, a Provisioning region waits for a
-platform operator of the hosting deployment to promote it, and once a tenant has
-any residency it is served only in Online regions. A change is previewed region
-by region before it is applied. One that would leave the tenant served nowhere
-turns **Apply residency** off, and goes through only by a quiet **Apply anyway
+residency set every region serves the tenant, an added region waits for a
+platform operator of the hosting deployment to promote it, a removed region's own
+silos complete its drain on their own, and once a tenant has any residency it is
+served only in Online regions. A region part-way along its add or remove path
+shows the step it has reached ("Step 1 of 3", never a percentage), and the page
+follows it live, announcing each stage change, until every region is steady. A
+change is previewed region by region before it is applied. One that would stop
+serving the tenant, leaving it served nowhere, turns **Apply residency** off, and goes through only by a quiet **Apply anyway
 and stop serving {tenant}...** button whose confirmation keeps serving by
 default; creating a tenant with an initial residency is confirmed too. The directory's **Resident in** column, and the **Resident in** and
 **Allowed** lines of a tenant's overview, link to its Regions page, and Home
@@ -335,7 +352,7 @@ region diagram.
 | `/cluster/trees/{tree-path}/reshard` | Resumable online reshard status and staging. |
 | `/cluster/trees/{tree-path}/resize` | Resumable online resize status, staging and undo. |
 | `/cluster/trees/{tree-path}/snapshot` | Resumable snapshot status and staging. |
-| `/cluster/wal?tree=&partition=&target=` | WAL placement audit, move planning, execution and source reclaim. |
+| `/cluster/wal?tree=&partition=&target=` | WAL placement audit, [WAL reclamation](#wal-reclamation), move planning, execution and source reclaim. |
 | `/cluster/orphans?tree=` | Orphaned-leaf survey, audit and repair. |
 
 The route under `/cluster` accepts at most eight path segments after `cluster`.
@@ -353,7 +370,11 @@ system trees, ... stored.").
 The overview reads cluster identity and shallow storage usage in parallel. The
 storage card can refresh the shallow summary or open a destructive confirmation
 for a deep re-measure. Deep re-measure walks every leaf of every shard of every
-tree, changes nothing, and is described as expensive. The region diagram rolls
+tree, changes nothing, and is described as expensive. It runs on the cluster as a
+[tracked operation](../lattice.api.treeadmin/operations.md) of kind
+`treeadmin.storage-usage-refresh`: the card shows its progress in trees measured,
+offers **Stop re-measuring**, and reads the refreshed shallow summary once it
+succeeds. A re-measure still running is picked up again when the overview opens. The region diagram rolls
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 
@@ -379,6 +400,10 @@ The open tab is carried in `?tab=`: `configuration`, `shards`, `storage` or
 Denied probes become an all-deny answer, so controls stay hidden even though
 the cluster still authorises every real operation when attempted.
 
+The retention **Window** is a
+[duration field](theming-and-density.md#dates-times-and-durations) in days,
+hours, minutes and seconds; leave it empty for no age bound.
+
 Configuration and history-retention saves are forward-only configuration
 changes, so they do not ask for destructive confirmation. Lifecycle operations
 do: Delete soft-deletes the tree and schedules purge, Recover restores normal
@@ -393,7 +418,8 @@ Shards tab lists one row per physical shard the live shard map routes to; the
 diagnostics and hotness reads only fill in those rows, so a shard a shrink has
 retired, which a cached read can still name, never gains a row. Without the map,
 the rows are the shards those reports name. The tab can run a confirmed deep
-read to count tombstones because it walks every leaf. The Storage tab links to
+read to count tombstones because it walks every leaf. The Storage tab shows the
+tree's [WAL reclamation](#wal-reclamation) beside its retained WAL, and links to
 the WAL page.
 
 The tools page exposes only the tools the capability probe admits. Compaction
@@ -464,16 +490,22 @@ to the link resumes the same preview. Planning changes nothing. Executing a
 move quiesces the partition briefly, copies the tail, flips placement and
 retains the source; reclaiming discards that retained source and removes the
 ability to revert. Execute and Reclaim both require destructive confirmations
-and the TreeLifecycle grant.
+and the TreeLifecycle grant. A move runs on the cluster as a tracked operation:
+the plan shows its copy (entries copied of the tail), verification and flip, and
+reopening the plan's address follows a move still running for that partition.
+**Stop** is honoured only before the flip, leaving the partition on its source.
 
 The Orphaned leaves page audits a named tree for leaves that are in a shard's
-sibling chain but unreachable from the root. It can run a read-only survey of
-every orphan key, stop a running pass, and drive a pass batch by batch up to
-1000 batches. It distinguishes clean, partial and not-judged verdicts. Repair
-is shown only with TreeLifecycle authority and repairable findings, is behind a
-destructive confirmation, unsplices only leaves whose keys were shown readable
-elsewhere, and always audits again when repair completes.
-
+sibling chain but unreachable from the root. An audit or repair runs on the
+cluster as a tracked whole-tree operation: the page shows the shards walked,
+can stop it, and when reopened follows the one still running for the tree. Its
+verdict comes from the pass's totals and distinguishes clean, found and
+not-judged; **Show each leaf** then reads the per-leaf findings batch by batch.
+The read-only survey of every orphan key is driven batch by batch from the page
+(up to 1000 batches) and can be stopped. Repair is shown only with TreeLifecycle
+authority and repairable leaves, is behind a destructive confirmation, unsplices
+only leaves whose keys were shown readable elsewhere, and always audits again
+when repair completes.
 The Cluster palette commands are:
 
 | Command id | Label | Effect |
@@ -490,6 +522,31 @@ say the cluster does not know the tree; unserved operations say the cluster does
 not serve that operation; timeouts say the cluster did not answer in time. Pages
 show the error sentence beside the surface that made the call, or keep the status
 that the cluster owns and let the caller return to the same address later.
+
+### WAL reclamation
+
+The WAL page, under the placement audit, and a tree's Storage tab show which
+durable pin holds the tree's write-ahead-log floor, read through
+`ILatticeWalReclamation` (see
+[WAL reclamation](../lattice.api.treeadmin/README.md#wal-reclamation)). A tree
+that reclaims nothing because one pin can never move reads, on its storage
+figures alone, exactly like a tree with nothing to reclaim; this section tells
+them apart. It names the floor-holding leaf, its partition, its pin offset, the
+leaf's persisted checkpoint and its state, and gives one verdict:
+
+| Verdict | When |
+| --- | --- |
+| **Blocked** | The holder carries a usable pin offset (`>= 0`) above a checkpoint the leaf never persisted (`-1`). The page says plainly that this does not clear on its own: the durable pin store cannot be lowered and the WAL GC will not drive a leaf with no proven checkpoint ([#4191](https://github.com/NSTA1/Orleans.Lattice/issues/4191), [#3258](https://github.com/NSTA1/Orleans.Lattice/issues/3258)). |
+| **Waiting for a checkpoint** | No pin reports a usable offset, and the one named reports `-1` from a leaf that has never checkpointed. This is the benign sentinel; it holds no offset floor and clears once the leaf checkpoints ([#4198](https://github.com/NSTA1/Orleans.Lattice/issues/4198)). |
+| **Not blocked** | The holder has checkpointed, or the tree holds no pin. WAL below the holder's offset can be reclaimed. |
+| **Not established** | The pin store did not answer, or the holder leaf's state could not be read. |
+
+The verdict is keyed on the holder's pin offset beside its state, never on
+growth or on the count of never-checkpointed pins: a wedged tree need not be
+growing, and a never-checkpointed pin at `-1` is the benign case. The section
+names the leaf, never the pin's consumer id, which carries the physical tree
+id. It is hidden when the Explorer serves no WAL reclamation read, and is a
+quiet note when the cluster does not answer it.
 
 ## See also
 

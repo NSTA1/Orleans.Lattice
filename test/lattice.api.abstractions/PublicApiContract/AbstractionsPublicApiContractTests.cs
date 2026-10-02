@@ -39,6 +39,10 @@ public class AbstractionsPublicApiContractTests
         typeof(ILatticeTreeAdmin),
         typeof(ILatticeTelemetry),
         typeof(Orleans.Lattice.Api.Apps.ILatticeAppsControl),
+        typeof(Orleans.Lattice.Api.Operations.ILatticeOperations),
+        typeof(ILatticeBackupOperations),
+        typeof(ILatticeSchemaComplianceOperations),
+        typeof(ILatticeStorageUsageOperations),
     };
 
     private static readonly IReadOnlyList<string> ContractNamespaces = new[]
@@ -54,6 +58,7 @@ public class AbstractionsPublicApiContractTests
         "Orleans.Lattice.Api.Telemetry",
         "Orleans.Lattice.Api.TreeAdmin",
         "Orleans.Lattice.Api.Apps",
+        "Orleans.Lattice.Api.Operations",
     };
 
     [TestCaseSource(nameof(ServiceInterfaces))]

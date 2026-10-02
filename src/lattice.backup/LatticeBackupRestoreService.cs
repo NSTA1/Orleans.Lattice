@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Backup;
 
@@ -115,9 +116,24 @@ internal sealed class LatticeBackupRestoreService(
                 .ConfigureAwait(false);
 
             phase = LatticeBackupMetrics.PhaseVerify;
+            var progress = LatticeOperationProgress.Current;
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Validating, 0, chain.Count, BackupOperationUnits.Manifests).ConfigureAwait(false);
+            }
+
+            var validated = 0;
             foreach (var manifest in chain)
             {
                 await ValidateManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+                validated++;
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(
+                        BackupOperationPhases.Validating, validated, chain.Count, BackupOperationUnits.Manifests)
+                        .ConfigureAwait(false);
+                }
             }
 
             var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
@@ -336,6 +352,18 @@ internal sealed class LatticeBackupRestoreService(
         {
             await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
                 .BeginAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
+
+            // Carry the previous tree's map back with the alias (#4250): the commit
+            // moved the shadow's map onto the target and recorded the one it
+            // replaced on the shadow. Without this a revert onto a tree whose map
+            // differs from the shadow's reads most of its keys as absent.
+            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId))
+            {
+                await AliasCutoverShardMaps.PrepareRevertAsync(
+                    grainFactory, restore.TargetTreeId, restore.ShadowPhysicalTreeId,
+                    restore.PreviousPhysicalTreeId, cancellationToken).ConfigureAwait(false);
+            }
+
             if (string.Equals(restore.PreviousPhysicalTreeId, restore.TargetTreeId, StringComparison.Ordinal))
             {
                 await registry.RemoveAliasAsync(restore.TargetTreeId).ConfigureAwait(false);
@@ -343,6 +371,13 @@ internal sealed class LatticeBackupRestoreService(
             else
             {
                 await registry.SetAliasAsync(restore.TargetTreeId, restore.PreviousPhysicalTreeId).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId)
+                && !string.Equals(restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId, StringComparison.Ordinal))
+            {
+                await AliasCutoverShardMaps.CompleteRevertAsync(grainFactory, restore.ShadowPhysicalTreeId)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -369,8 +404,8 @@ internal sealed class LatticeBackupRestoreService(
                 RoutingInfo shadowRouting;
                 using (LatticeAccessGateContext.EnterSystemOrigin())
                 {
-                    shadowRouting = await grainFactory.GetGrain<ILattice>(restore.ShadowPhysicalTreeId)
-                        .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+                    shadowRouting = await ResolveRetainedRoutingAsync(
+                        restore.ShadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
                 }
 
                 await MarkRetainedTreeRedirectAsync(
@@ -414,7 +449,11 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            routing = await lattice.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            // Forced (#4206): both apply paths below partition every record by this
+            // map and send it straight to a shard root, so a map or alias the target's
+            // stateless worker cached before a reshard or resize would land records
+            // on shards the live map no longer routes them to.
+            routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
         }
 
         // Fast path: a brand-new (never registered) target restored from a single
@@ -541,14 +580,27 @@ internal sealed class LatticeBackupRestoreService(
         {
             await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
                 .BeginAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
-            // Resolve the retained tree's routing BEFORE the alias swap. A
-            // never-aliased tree's retained physical id equals its logical name,
-            // so resolving it after the swap would follow the alias to the
-            // shadow tree and arm the wrong shards.
+
+            // Carry the shadow's map onto the target before the swap (#4250). Routing
+            // reads the map under the target's id, but the shadow was built by
+            // routing under its own, so swapping only the alias would read most of
+            // the restored keys as absent. The map the target addressed its
+            // previous physical tree by is recorded on the shadow for a revert, and
+            // is the authoritative description of that tree's shards: when the
+            // target was already aliased, splits and reshards wrote it under the
+            // target's id, never the previous tree's own. Resolved before the
+            // prepare moves the target's map, so a resumed commit can tell which
+            // physical tree the recorded map describes.
+            var replacedPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
+            var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(
+                grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
             if (armRedirect)
             {
-                retainedRouting = await grainFactory.GetGrain<ILattice>(previousPhysicalTreeId!)
-                    .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+                var describesPrevious = string.Equals(replacedPhysical, previousPhysicalTreeId, StringComparison.Ordinal)
+                    || string.Equals(replacedPhysical, shadowPhysicalTreeId, StringComparison.Ordinal);
+                retainedRouting = replacedMap is not null && describesPrevious
+                    ? new RoutingInfo(previousPhysicalTreeId!, replacedMap)
+                    : await ResolveRetainedRoutingAsync(previousPhysicalTreeId!, cancellationToken).ConfigureAwait(false);
             }
             await registry.SetAliasAsync(targetTreeId, shadowPhysicalTreeId).ConfigureAwait(false);
         }
@@ -782,8 +834,7 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            routing = await grainFactory.GetGrain<ILattice>(shadowPhysicalTreeId)
-                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            routing = await ResolveRetainedRoutingAsync(shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
         }
 
         // Every physical shard of the shadow is purged. Each call targets a
@@ -957,8 +1008,8 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo retainedRouting;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            retainedRouting = await grainFactory.GetGrain<ILattice>(retainedPhysicalTreeId)
-                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            retainedRouting = await ResolveRetainedRoutingAsync(retainedPhysicalTreeId, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var indices = retainedRouting.Map.GetPhysicalShardIndices();
@@ -973,6 +1024,33 @@ internal sealed class LatticeBackupRestoreService(
             }
             await Task.WhenAll(tasks).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Resolves the live routing of a physical tree a restore step retains,
+    /// builds, reverts or discards, for a step that enumerates its shards to arm or
+    /// clear redirects or to purge them. The caller supplies the system-origin scope.
+    /// <para>
+    /// Forced (#4206): the tree's stateless worker caches routing per activation and
+    /// nothing on these lifecycle paths routes a key, so an unforced read would keep
+    /// a map from before a reshard and skip the shards it added or name the ones it
+    /// folded away. The physical id is then pinned to <paramref name="physicalTreeId"/>:
+    /// on a never-aliased tree that id is also the logical name, and once a cutover
+    /// has swapped the alias a forced resolve of that name would follow it to the
+    /// destination, so a resumed step would act on the wrong tree. The map is read
+    /// under the addressed id either way, so pinning keeps the retained tree's own
+    /// map.
+    /// </para>
+    /// </summary>
+    private async Task<RoutingInfo> ResolveRetainedRoutingAsync(
+        string physicalTreeId,
+        CancellationToken cancellationToken)
+    {
+        var routing = await grainFactory.GetGrain<ILattice>(physicalTreeId)
+            .GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+        return string.Equals(routing.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+            ? routing
+            : routing with { PhysicalTreeId = physicalTreeId };
     }
 
     // ---- Apply seams -----------------------------------------------------
@@ -997,9 +1075,29 @@ internal sealed class LatticeBackupRestoreService(
         // large physical index, so no input regresses.
         var perShard = new ShardSlots<List<LwwEntry>>(routing.Map.GetPhysicalShardIndices());
         long total = 0;
+
+        // Tracked-operation progress (#4122). Every streamed record counts as one
+        // applied unit, dead-lettered or not, so the count matches the chain total.
+        var progress = LatticeOperationProgress.Current;
+        long? streamTotal = null;
+        long streamed = 0;
+        if (progress is not null)
+        {
+            streamTotal = CountChainEntries(chain, rangeStart, rangeEnd);
+            await progress.ReportAsync(
+                BackupOperationPhases.Applying, 0, streamTotal, BackupOperationUnits.Entries).ConfigureAwait(false);
+        }
+
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
         {
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Applying, ++streamed, streamTotal, BackupOperationUnits.Entries)
+                    .ConfigureAwait(false);
+            }
+
             // Per-record tenant admission: a record addressed outside the active
             // tenant's namespace or beyond its quota is dead-lettered (skipped),
             // never written. Null on the tenancy-off path (a single branch).
@@ -1029,7 +1127,11 @@ internal sealed class LatticeBackupRestoreService(
         // per shard to preserve an ordering that never existed between shards.
         var pending = DrainShardBuckets(perShard);
         cancellationToken.ThrowIfCancellationRequested();
-        if (pending.Count == 1)
+        if (progress is not null)
+        {
+            await ReplayWithProgressAsync(routing, operationId, pending, progress).ConfigureAwait(false);
+        }
+        else if (pending.Count == 1)
         {
             // Single-shard trees are the dominant shape and have nothing to
             // overlap: keep the direct await rather than building a task array.
@@ -1045,6 +1147,56 @@ internal sealed class LatticeBackupRestoreService(
         }
 
         return total;
+    }
+
+    /// <summary>
+    /// The tracked-operation form of the bulk-load drain: the same bounded fan-out,
+    /// reporting one <see cref="BackupOperationPhases.Replaying"/> unit per shard
+    /// as each completes.
+    /// </summary>
+    private async Task ReplayWithProgressAsync(
+        RoutingInfo routing,
+        string operationId,
+        List<(int ShardIndex, List<LwwEntry> Bucket)> pending,
+        ILatticeOperationProgress progress)
+    {
+        await progress.ReportAsync(
+            BackupOperationPhases.Replaying, 0, pending.Count, BackupOperationUnits.Shards).ConfigureAwait(false);
+        var replayed = 0;
+        await BoundedFanOut.ForEachAsync(
+            pending,
+            BoundedFanOut.DefaultWidth,
+            async bucket =>
+            {
+                await BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket).ConfigureAwait(false);
+                await progress.ReportAsync(
+                    BackupOperationPhases.Replaying,
+                    Interlocked.Increment(ref replayed),
+                    pending.Count,
+                    BackupOperationUnits.Shards).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Counts the entries a chain stream yields for a range: one per in-range key
+    /// descriptor of every manifest, which is exactly what
+    /// <see cref="StreamChainEntriesAsync"/> enumerates.
+    /// </summary>
+    private static long CountChainEntries(IReadOnlyList<BackupManifest> chain, string? rangeStart, string? rangeEnd)
+    {
+        long count = 0;
+        foreach (var manifest in chain)
+        {
+            foreach (var descriptor in manifest.KeyDescriptors)
+            {
+                if (InRange(descriptor.Key, rangeStart, rangeEnd))
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -1097,9 +1249,27 @@ internal sealed class LatticeBackupRestoreService(
         var batchCapacity = Math.Clamp(applyBatchSize, 0, MergeBatchPresizeLimit);
         long total = 0;
 
+        // Tracked-operation progress (#4122), as on the bulk-load path.
+        var progress = LatticeOperationProgress.Current;
+        long? streamTotal = null;
+        long streamed = 0;
+        if (progress is not null)
+        {
+            streamTotal = CountChainEntries(chain, rangeStart, rangeEnd);
+            await progress.ReportAsync(
+                BackupOperationPhases.Applying, 0, streamTotal, BackupOperationUnits.Entries).ConfigureAwait(false);
+        }
+
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
         {
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.Applying, ++streamed, streamTotal, BackupOperationUnits.Entries)
+                    .ConfigureAwait(false);
+            }
+
             // Per-record tenant admission: a record addressed outside the active
             // tenant's namespace or beyond its quota is dead-lettered (skipped),
             // never merged. Null on the tenancy-off path (a single branch).

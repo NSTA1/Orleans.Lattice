@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
 using Orleans.Serialization;
 
@@ -20,7 +21,15 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// inspection (<c>DescribeBackup</c>), lifecycle (<c>DeleteBackup</c> /
 /// <c>RestoreBackup</c> / <c>RevertRestore</c>), artifact export
 /// (<c>ExportArtifact</c> server-streaming), and unauthenticated discovery
-/// (<c>GetAuthScheme</c>). Contract-versioning policy: fields on the wire
+/// (<c>GetAuthScheme</c>), plus the accept-then-poll operation RPCs
+/// (<c>StartBackup</c>, <c>StartIncrementalBackup</c>, <c>StartBackupSet</c>,
+/// <c>StartRestore</c>, <c>StartColdRestore</c>, <c>StartBackupHealthCheck</c>,
+/// <c>StartCatalogRebuild</c>, <c>StartCatalogScrub</c>, <c>GetBackupOperationStatus</c>,
+/// <c>ListBackupOperations</c>, <c>CancelBackupOperation</c>). The blocking
+/// <c>CreateBackup</c>, <c>CreateIncrementalBackup</c>, <c>CreateBackupSet</c>,
+/// <c>RestoreBackup</c> and <c>CheckBackupHealth</c> RPCs are deprecated (diagnostic
+/// <c>LATTICE0002</c>) and will
+/// be removed in the next major version. Contract-versioning policy: fields on the wire
 /// messages are additive-only (new <c>[Id(n)]</c>); aliases and field numbers
 /// are never renumbered, so a newer response decodes cleanly under an older
 /// client.
@@ -87,6 +96,39 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary configure-backup-health RPC method name.</summary>
     public const string ConfigureBackupHealthMethodName = "ConfigureBackupHealth";
 
+    /// <summary>The unary accept-then-poll full-capture start RPC method name.</summary>
+    public const string StartBackupMethodName = "StartBackup";
+
+    /// <summary>The unary accept-then-poll incremental-capture start RPC method name.</summary>
+    public const string StartIncrementalBackupMethodName = "StartIncrementalBackup";
+
+    /// <summary>The unary accept-then-poll backup-set-capture start RPC method name.</summary>
+    public const string StartBackupSetMethodName = "StartBackupSet";
+
+    /// <summary>The unary accept-then-poll restore start RPC method name.</summary>
+    public const string StartRestoreMethodName = "StartRestore";
+
+    /// <summary>The unary accept-then-poll cold-restore start RPC method name.</summary>
+    public const string StartColdRestoreMethodName = "StartColdRestore";
+
+    /// <summary>The unary backup-operation status RPC method name.</summary>
+    public const string GetBackupOperationStatusMethodName = "GetBackupOperationStatus";
+
+    /// <summary>The unary backup-operation listing RPC method name.</summary>
+    public const string ListBackupOperationsMethodName = "ListBackupOperations";
+
+    /// <summary>The unary backup-operation cancellation RPC method name.</summary>
+    public const string CancelBackupOperationMethodName = "CancelBackupOperation";
+
+    /// <summary>The unary accept-then-poll backup health-check start RPC method name.</summary>
+    public const string StartBackupHealthCheckMethodName = "StartBackupHealthCheck";
+
+    /// <summary>The unary accept-then-poll catalog-rebuild start RPC method name.</summary>
+    public const string StartCatalogRebuildMethodName = "StartCatalogRebuild";
+
+    /// <summary>The unary accept-then-poll catalog-scrub start RPC method name.</summary>
+    public const string StartCatalogScrubMethodName = "StartCatalogScrub";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
@@ -123,7 +165,14 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<BackupHealthGetRequestMessage> healthGetRequestSerializer,
         Serializer<BackupHealthReportResponse> healthReportResponseSerializer,
         Serializer<BackupHealthConfigureRequestMessage> healthConfigureRequestSerializer,
-        Serializer<BackupHealthConfigureResponse> healthConfigureResponseSerializer)
+        Serializer<BackupHealthConfigureResponse> healthConfigureResponseSerializer,
+        Serializer<LatticeOperationHandle> operationHandleSerializer,
+        Serializer<BackupOperationRequestMessage> operationRequestSerializer,
+        Serializer<BackupOperationStatusResponse> operationStatusResponseSerializer,
+        Serializer<LatticeOperationListRequest> operationListRequestSerializer,
+        Serializer<LatticeOperationPage> operationPageSerializer,
+        Serializer<BackupCatalogRebuildRequestMessage> catalogRebuildRequestSerializer,
+        Serializer<BackupCatalogScrubRequestMessage> catalogScrubRequestSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -160,6 +209,11 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(healthReportResponseSerializer);
         ArgumentNullException.ThrowIfNull(healthConfigureRequestSerializer);
         ArgumentNullException.ThrowIfNull(healthConfigureResponseSerializer);
+        ArgumentNullException.ThrowIfNull(operationHandleSerializer);
+        ArgumentNullException.ThrowIfNull(operationRequestSerializer);
+        ArgumentNullException.ThrowIfNull(operationStatusResponseSerializer);
+        ArgumentNullException.ThrowIfNull(operationListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(operationPageSerializer);
 
         CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
             type: MethodType.Unary,
@@ -293,6 +347,55 @@ internal sealed class LatticeBackupGrpcMethods
             name: ConfigureBackupHealthMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigureRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigureResponseSerializer));
+
+        var handleMarshaller = LatticeBackupGrpcMarshallers.Create(operationHandleSerializer);
+        var operationRequestMarshaller = LatticeBackupGrpcMarshallers.Create(operationRequestSerializer);
+        var operationStatusMarshaller = LatticeBackupGrpcMarshallers.Create(operationStatusResponseSerializer);
+
+        StartBackup = new Method<BackupCaptureRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartBackupMethodName,
+            LatticeBackupGrpcMarshallers.Create(captureRequestSerializer), handleMarshaller);
+
+        StartIncrementalBackup = new Method<BackupIncrementalCaptureRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartIncrementalBackupMethodName,
+            LatticeBackupGrpcMarshallers.Create(incrementalCaptureRequestSerializer), handleMarshaller);
+
+        StartBackupSet = new Method<BackupSetCaptureRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartBackupSetMethodName,
+            LatticeBackupGrpcMarshallers.Create(setCaptureRequestSerializer), handleMarshaller);
+
+        StartRestore = new Method<RestoreRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartRestoreMethodName,
+            LatticeBackupGrpcMarshallers.Create(restoreRequestSerializer), handleMarshaller);
+
+        StartColdRestore = new Method<RestoreRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartColdRestoreMethodName,
+            LatticeBackupGrpcMarshallers.Create(restoreRequestSerializer), handleMarshaller);
+
+        GetBackupOperationStatus = new Method<BackupOperationRequestMessage, BackupOperationStatusResponse>(
+            MethodType.Unary, ServiceName, GetBackupOperationStatusMethodName,
+            operationRequestMarshaller, operationStatusMarshaller);
+
+        ListBackupOperations = new Method<LatticeOperationListRequest, LatticeOperationPage>(
+            MethodType.Unary, ServiceName, ListBackupOperationsMethodName,
+            LatticeBackupGrpcMarshallers.Create(operationListRequestSerializer),
+            LatticeBackupGrpcMarshallers.Create(operationPageSerializer));
+
+        CancelBackupOperation = new Method<BackupOperationRequestMessage, BackupOperationStatusResponse>(
+            MethodType.Unary, ServiceName, CancelBackupOperationMethodName,
+            operationRequestMarshaller, operationStatusMarshaller);
+
+        StartBackupHealthCheck = new Method<BackupHealthCheckRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartBackupHealthCheckMethodName,
+            LatticeBackupGrpcMarshallers.Create(healthCheckRequestSerializer), handleMarshaller);
+
+        StartCatalogRebuild = new Method<BackupCatalogRebuildRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartCatalogRebuildMethodName,
+            LatticeBackupGrpcMarshallers.Create(catalogRebuildRequestSerializer), handleMarshaller);
+
+        StartCatalogScrub = new Method<BackupCatalogScrubRequestMessage, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartCatalogScrubMethodName,
+            LatticeBackupGrpcMarshallers.Create(catalogScrubRequestSerializer), handleMarshaller);
     }
 
     /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
@@ -352,6 +455,39 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>ConfigureBackupHealth</c> per-backup monitor-config RPC.</summary>
     public Method<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse> ConfigureBackupHealth { get; }
 
+    /// <summary>The unary <c>StartBackup</c> accept-then-poll full-capture RPC.</summary>
+    public Method<BackupCaptureRequestMessage, LatticeOperationHandle> StartBackup { get; }
+
+    /// <summary>The unary <c>StartIncrementalBackup</c> accept-then-poll incremental-capture RPC.</summary>
+    public Method<BackupIncrementalCaptureRequestMessage, LatticeOperationHandle> StartIncrementalBackup { get; }
+
+    /// <summary>The unary <c>StartBackupSet</c> accept-then-poll backup-set-capture RPC.</summary>
+    public Method<BackupSetCaptureRequestMessage, LatticeOperationHandle> StartBackupSet { get; }
+
+    /// <summary>The unary <c>StartRestore</c> accept-then-poll restore RPC.</summary>
+    public Method<RestoreRequestMessage, LatticeOperationHandle> StartRestore { get; }
+
+    /// <summary>The unary <c>StartColdRestore</c> accept-then-poll cold-restore RPC.</summary>
+    public Method<RestoreRequestMessage, LatticeOperationHandle> StartColdRestore { get; }
+
+    /// <summary>The unary <c>GetBackupOperationStatus</c> RPC.</summary>
+    public Method<BackupOperationRequestMessage, BackupOperationStatusResponse> GetBackupOperationStatus { get; }
+
+    /// <summary>The unary <c>ListBackupOperations</c> RPC.</summary>
+    public Method<LatticeOperationListRequest, LatticeOperationPage> ListBackupOperations { get; }
+
+    /// <summary>The unary <c>CancelBackupOperation</c> RPC.</summary>
+    public Method<BackupOperationRequestMessage, BackupOperationStatusResponse> CancelBackupOperation { get; }
+
+    /// <summary>The unary <c>StartBackupHealthCheck</c> accept-then-poll health-check RPC.</summary>
+    public Method<BackupHealthCheckRequestMessage, LatticeOperationHandle> StartBackupHealthCheck { get; }
+
+    /// <summary>The unary <c>StartCatalogRebuild</c> accept-then-poll catalog-rebuild RPC.</summary>
+    public Method<BackupCatalogRebuildRequestMessage, LatticeOperationHandle> StartCatalogRebuild { get; }
+
+    /// <summary>The unary <c>StartCatalogScrub</c> accept-then-poll catalog-scrub RPC.</summary>
+    public Method<BackupCatalogScrubRequestMessage, LatticeOperationHandle> StartCatalogScrub { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -396,7 +532,14 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<BackupHealthGetRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupHealthReportResponse>>(),
             serializerProvider.GetRequiredService<Serializer<BackupHealthConfigureRequestMessage>>(),
-            serializerProvider.GetRequiredService<Serializer<BackupHealthConfigureResponse>>());
+            serializerProvider.GetRequiredService<Serializer<BackupHealthConfigureResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationHandle>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupOperationRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupOperationStatusResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCatalogRebuildRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCatalogScrubRequestMessage>>());
     }
 }
 

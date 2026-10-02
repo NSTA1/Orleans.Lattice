@@ -316,6 +316,19 @@ internal sealed class LatticeRegistryGrain(
         return bytes is not null ? DeserializeEntry(bytes) : null;
     }
 
+    /// <summary>
+    /// Reads the row a non-create verb is about to rewrite, failing closed when
+    /// there is none (issue #4230). Such a verb used to upsert from an empty
+    /// <see cref="TreeRegistryEntry"/>, so a late split, a leaf latch, or a
+    /// configuration change against a never-registered or purged id created a
+    /// row with no structural pins - for a purged id, silently undoing the
+    /// purge. Only <see cref="RegisterAsync"/>, <see cref="UpdateAsync"/> and
+    /// <see cref="SetAliasAsync"/> may create a row. No await beyond the backing
+    /// read is added to the registry turn.
+    /// </summary>
+    private async Task<TreeRegistryEntry> GetRegisteredEntryCoreAsync(string treeId, string operation) =>
+        await GetEntryCoreAsync(treeId) ?? throw new LatticeTreeNotRegisteredException(treeId, operation);
+
     public Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
     {
         ArgumentNullException.ThrowIfNull(treeIds);
@@ -588,7 +601,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(map);
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(SetShardMapAsync));
         // Bump the map version on every persist so strongly-consistent scans
         // can detect topology changes via a single long comparison.
         //
@@ -626,7 +639,7 @@ internal sealed class LatticeRegistryGrain(
         // that is harmless, because the entry is rewritten by the single
         // terminal SetAsync below, so a reader sees it wholly before or wholly
         // after.
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(ReassignSlotsAsync));
         var currentMap = existing.ShardMap ?? fallbackMap;
         var newSlots = (int[])currentMap.Slots.Clone();
         foreach (var slot in slots)
@@ -673,7 +686,7 @@ internal sealed class LatticeRegistryGrain(
         // entire method body runs without another mutator interleaving,
         // guaranteeing each split coordinator receives a distinct target shard
         // index.
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(AllocateNextShardIndexAsync));
         var floor = Math.Max(existing.NextShardIndex ?? -1, currentMaxFromMap);
         var allocated = floor + 1;
         var updated = existing with { NextShardIndex = allocated };
@@ -685,7 +698,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(SetPublishEventsAsync));
         var updated = existing with { PublishEvents = enabled };
         await UpdateAsync(treeId, updated);
     }
@@ -695,7 +708,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         HistoryRetentionValidator.Validate(mode, window);
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(SetHistoryRetentionAsync));
         var updated = existing with
         {
             HistoryRetentionMode = mode,
@@ -708,7 +721,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(SetMaintainProjectionDigestAsync));
         var updated = existing with { MaintainProjectionDigest = enabled };
         await UpdateAsync(treeId, updated);
     }
@@ -725,7 +738,7 @@ internal sealed class LatticeRegistryGrain(
                 + "value-payload bytes per cache activation with LRU payload eviction).");
         }
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(SetMaxCacheValueBytesAsync));
         var updated = existing with { MaxCacheValueBytes = maxCacheValueBytes };
         await UpdateAsync(treeId, updated);
     }
@@ -742,7 +755,7 @@ internal sealed class LatticeRegistryGrain(
                 + "retained-byte ceiling the WAL garbage collector evaluates byte pressure against).");
         }
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(SetWalMaxRetainedBytesAsync));
         var updated = existing with { WalMaxRetainedBytes = walMaxRetainedBytes };
         await UpdateAsync(treeId, updated);
     }
@@ -751,7 +764,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(LatchProjectionDigestPermanentlyDisabledAsync));
         if (existing.ProjectionDigestPermanentlyDisabled == true)
         {
             // Idempotent: latch is one-way and re-stamping is a no-op.
@@ -778,7 +791,7 @@ internal sealed class LatticeRegistryGrain(
         // Atomic read-validate-write: the registry grain is singleton-keyed and
         // this method carries no [AlwaysInterleave], so the compare-and-swap
         // below cannot interleave with a concurrent placement change.
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(UpdateWalPlacementAsync));
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
         {
@@ -809,7 +822,7 @@ internal sealed class LatticeRegistryGrain(
         // this method carries no [AlwaysInterleave], so the compare-and-swap
         // below applies every move under one version bump with no intermediate
         // placement observable.
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(UpdateWalPlacementAsync));
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
         {

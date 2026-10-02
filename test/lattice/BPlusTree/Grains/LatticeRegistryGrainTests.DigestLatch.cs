@@ -16,7 +16,7 @@ public partial class LatticeRegistryGrainTests
     public async Task SetMaintainProjectionDigestAsync_persists_override()
     {
         var (grain, tree) = CreateGrain();
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
         byte[]? captured = null;
         await tree.SetAsync("my-tree", Arg.Do<byte[]>(b => captured = b));
 
@@ -30,7 +30,7 @@ public partial class LatticeRegistryGrainTests
     public async Task SetMaintainProjectionDigestAsync_null_clears_override()
     {
         var (grain, tree) = CreateGrain();
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
         byte[]? captured = null;
         await tree.SetAsync("my-tree", Arg.Do<byte[]>(b => captured = b));
 
@@ -73,7 +73,7 @@ public partial class LatticeRegistryGrainTests
     public async Task LatchProjectionDigestPermanentlyDisabledAsync_stamps_when_unset()
     {
         var (grain, tree) = CreateGrain();
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
         byte[]? captured = null;
         await tree.SetAsync("my-tree", Arg.Do<byte[]>(b => captured = b));
 

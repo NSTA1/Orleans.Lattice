@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Data;
@@ -6,6 +7,7 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Operations;
 using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Api.TreeAdmin;
@@ -43,7 +45,7 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// surface is byte-for-byte identical to a non-tenant cluster.
 /// </para>
 /// </remarks>
-internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
+internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTreeAdminOperations
 {
     private readonly ILatticeSchemaControl _schemaControl;
     private readonly IGrainFactory _grainFactory;
@@ -54,6 +56,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private readonly ILatticeViewFactory? _viewFactory;
     private readonly ILatticeTagIndexFactory? _tagIndexFactory;
     private readonly ITenantAdmissionController? _admission;
+    private readonly LatticeOperationRunner? _operationRunner;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -103,6 +106,13 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// registers one. When <c>null</c> or inactive, and for a system-origin call,
     /// creates are not quota-checked.
     /// </param>
+    /// <param name="operationRunner">
+    /// The core coordinator the accept-then-poll verbs of
+    /// <see cref="ILatticeTreeAdminOperations"/> run on, registered by <c>AddLattice</c>,
+    /// or <c>null</c> for a facade built without it. When <c>null</c> the start verbs
+    /// throw <see cref="InvalidOperationException"/> and the deprecated blocking verbs
+    /// call the engine directly instead of wrapping an operation.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeTreeAdmin(
         ILatticeSchemaControl schemaControl,
@@ -114,7 +124,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         IViewCatalog? viewCatalog = null,
         ILatticeViewFactory? viewFactory = null,
         ILatticeTagIndexFactory? tagIndexFactory = null,
-        ITenantAdmissionController? admission = null)
+        ITenantAdmissionController? admission = null,
+        LatticeOperationRunner? operationRunner = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -131,6 +142,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         _viewFactory = viewFactory;
         _tagIndexFactory = tagIndexFactory;
         _admission = admission;
+        _operationRunner = operationRunner;
     }
 
     /// <summary>
@@ -414,8 +426,13 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
+        // Force-refreshed: the tree's stateless worker caches its routing per
+        // activation, a reshard does not invalidate that cache, and this read
+        // meets no stale-routing refusal that would. An unforced read went on
+        // reporting the pre-reshard map - version 0 and the old shard count -
+        // while the registry held the new one (#4146).
         var routing = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .GetRoutingAsync(cancellationToken)
+            .GetRoutingAsync(forceRefresh: true, cancellationToken)
             .ConfigureAwait(false);
 
         var physical = routing.Map.GetPhysicalShardIndices();
@@ -428,6 +445,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             indices.Add(physical[i]);
         }
         indices.Sort();
+        var sorted = indices.MoveToImmutable();
+
+        // Count the virtual slots each shard owns, position for position with
+        // the sorted indices; every slot names one of them.
+        var slotCounts = new int[sorted.Length];
+        foreach (var shard in routing.Map.Slots)
+        {
+            var position = sorted.BinarySearch(shard);
+            if (position >= 0)
+            {
+                slotCounts[position]++;
+            }
+        }
 
         return new ShardMapInspection
         {
@@ -436,7 +466,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             VirtualShardCount = routing.Map.VirtualShardCount,
             PhysicalShardCount = physical.Count,
             MapVersion = routing.Map.Version,
-            PhysicalShardIndices = indices.MoveToImmutable(),
+            PhysicalShardIndices = sorted,
+            SlotCounts = ImmutableCollectionsMarshal.AsImmutableArray(slotCounts),
         };
     }
 
@@ -1462,6 +1493,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
+
+        // Deprecated blocking verb (LATTICE0002): start, then wait.
+        if (_operationRunner is not null)
+        {
+            var (tenantId, launch) = await StartWalMoveCoreAsync(
+                treeId, partition, targetProviderKey, options, LatticeOperationKey.NewId(), cancellationToken)
+                .ConfigureAwait(false);
+            return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
+        }
+
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         ThrowIfReserved(effectiveTreeId);
         await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
@@ -1630,6 +1671,17 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string viewName, CancellationToken cancellationToken = default)
     {
         RequireViews();
+
+        // Deprecated blocking verb (LATTICE0002): start, then wait.
+        if (_operationRunner is not null)
+        {
+            var start = await StartViewCoreAsync(rebuild: true, viewName, LatticeOperationKey.NewId(), cancellationToken)
+                .ConfigureAwait(false);
+            await AwaitOperationAsync(start.TenantId, start.Launch, cancellationToken).ConfigureAwait(false);
+            return await CaptureViewStatusAsync(start.EffectiveViewName, viewName, start.Resolved, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
         var resolved =
             await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
@@ -1648,6 +1700,22 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string viewName, CancellationToken cancellationToken = default)
     {
         RequireViews();
+
+        // Deprecated blocking verb (LATTICE0002): start, then wait.
+        if (_operationRunner is not null)
+        {
+            var start = await StartViewCoreAsync(rebuild: false, viewName, LatticeOperationKey.NewId(), cancellationToken)
+                .ConfigureAwait(false);
+            var driftRepaired = await AwaitOperationAsync(start.TenantId, start.Launch, cancellationToken)
+                .ConfigureAwait(false);
+            return new TreeViewReconcileResult
+            {
+                ViewName = viewName,
+                SourceTreeId = start.Resolved.SourceTreeId,
+                DriftRepaired = driftRepaired,
+            };
+        }
+
         var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
         var resolved =
             await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
@@ -1783,6 +1851,23 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireTagIndex();
         ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        // Deprecated blocking verb (LATTICE0002): start, then wait.
+        if (_operationRunner is not null)
+        {
+            var (tenantId, launch, indexTreeId) = await StartTagIndexReconcileCoreAsync(
+                indexName, LatticeOperationKey.NewId(), cancellationToken).ConfigureAwait(false);
+            var swept = await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
+            return new TreeTagReconcileReport
+            {
+                IndexName = indexName,
+                TreeId = indexTreeId,
+                TreesCovered = swept.TreesCovered,
+                KeysScanned = swept.KeysScanned,
+                MembershipRowsScanned = swept.MembershipRowsScanned,
+                OrphanRowsRemoved = swept.OrphanRowsRemoved,
+            };
+        }
 
         // Derived, not caller-supplied: see GetTagIndexStatusAsync - nothing here
         // is a tenant-local tree name, so nothing is composed.

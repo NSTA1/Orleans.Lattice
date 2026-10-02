@@ -15,8 +15,7 @@ internal sealed partial class ShardRootGrain
         ThrowIfRetired();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
-        if (state.State.RootNodeId is not null)
-            throw new InvalidOperationException("BulkLoadAsync requires an empty shard. This shard already has data.");
+        var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadAsync));
 
         if (sortedEntries.Count == 0) return;
 
@@ -55,6 +54,7 @@ internal sealed partial class ShardRootGrain
         });
 
         await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+        await RetireSeededRootLeafAsync(seededRoot);
     }
 
     /// <inheritdoc />
@@ -67,8 +67,7 @@ internal sealed partial class ShardRootGrain
         ThrowIfRetired();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
-        if (state.State.RootNodeId is not null)
-            throw new InvalidOperationException("BulkLoadRawAsync requires an empty shard. This shard already has data.");
+        var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadRawAsync));
 
         if (sortedEntries.Count == 0) return;
 
@@ -100,6 +99,69 @@ internal sealed partial class ShardRootGrain
         });
 
         await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+        await RetireSeededRootLeafAsync(seededRoot);
+    }
+
+    /// <summary>
+    /// Refuses a bulk load unless the shard holds no data, returning the empty
+    /// root leaf to retire once the load has published its own root.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A shard with no root is empty. So is one whose root is the single leaf
+    /// <see cref="EnsureRootAsync"/> seeds, as long as that leaf holds no entry at
+    /// all (issue #4251). Any read seeds that leaf - the emptiness probe a reshard
+    /// or resize runs first among them - so testing for "no root" alone refused a
+    /// tree that had never held a key. The test is made here, against the shard's
+    /// contents, rather than by keeping the probe from seeding, because every read
+    /// seeds and the probe is only one of them.
+    /// </para>
+    /// <para>
+    /// The leaf must hold no tombstone either, live or pending. A tombstone means
+    /// the shard held data that was deleted, and a bulk load stamps its entries
+    /// from a zero clock, so such a shard keeps being refused exactly as before.
+    /// An internal root, or a promotion or graft in flight, is data by
+    /// construction and is refused without asking a leaf.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">The bulk-load operation name for the refusal message.</param>
+    /// <returns>
+    /// The empty seeded root leaf the load replaces, or <see langword="null"/>
+    /// when the shard has no root.
+    /// </returns>
+    private async Task<GrainId?> EnsureEmptyForBulkLoadAsync(string operation)
+    {
+        if (state.State.RootNodeId is not { } rootId) return null;
+
+        if (RootIsLeafTyped
+            && state.State.PendingPromotion is null
+            && state.State.PendingBulkGraft is null)
+        {
+            var stats = await grainFactory.GetGrain<IBPlusLeafGrain>(rootId).GetStatsAsync();
+            if (stats.LiveKeys == 0 && stats.Tombstones == 0) return rootId;
+        }
+
+        throw new InvalidOperationException($"{operation} requires an empty shard. This shard already has data.");
+    }
+
+    /// <summary>
+    /// Retires the empty seeded root leaf a bulk load replaced, so it does not
+    /// linger unreachable with its materialiser pins holding the tree's WAL.
+    /// </summary>
+    /// <remarks>
+    /// Runs only after the new root is persisted, so a failure before it leaves
+    /// the shard on its seeded root, and the leaf is cleared only while it still
+    /// holds nothing. A crash in between leaves an empty unreachable leaf whose
+    /// pins the WAL GC's orphan sweep retires.
+    /// </remarks>
+    private async Task RetireSeededRootLeafAsync(GrainId? seededRoot)
+    {
+        if (seededRoot is not { } leafId || state.State.RootNodeId == leafId) return;
+
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        var stats = await leaf.GetStatsAsync();
+        if (stats.LiveKeys == 0 && stats.Tombstones == 0)
+            await leaf.ClearGrainStateAsync();
     }
 
     /// <summary>
@@ -321,7 +383,9 @@ internal sealed partial class ShardRootGrain
 
         if (sortedEntries.Count == 0) return;
 
-        await EnsureRootAsync();
+        // A bulk load writes data, so its seed may register a tree that has no
+        // row (issue #4219); see PrepareForWriteAsync.
+        await EnsureRootAsync(forWrite: true);
         await ResumePendingPromotionAsync();
 
         var shardKey = context.GrainId.Key.ToString()!;

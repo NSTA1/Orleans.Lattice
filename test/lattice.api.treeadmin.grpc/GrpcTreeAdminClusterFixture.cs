@@ -76,6 +76,9 @@ internal sealed class GrpcTreeAdminClusterFixture
         ILatticeTreeAdmin? controlOverride = null)
     {
         var control = controlOverride ?? Control;
+        var storageUsageOperations = controlOverride is null
+            ? SiloServices.GetService<ILatticeStorageUsageOperations>()
+            : null;
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -86,6 +89,16 @@ internal sealed class GrpcTreeAdminClusterFixture
                     services.AddLogging();
                     services.AddRouting();
                     services.AddSingleton(control);
+                    if (controlOverride is null)
+                    {
+                        services.AddSingleton(SiloServices.GetRequiredService<ILatticeTreeAdminOperations>());
+                    }
+
+                    if (storageUsageOperations is not null)
+                    {
+                        services.AddSingleton(storageUsageOperations);
+                    }
+
                     if (authorizer is not null)
                     {
                         services.AddSingleton(authorizer);

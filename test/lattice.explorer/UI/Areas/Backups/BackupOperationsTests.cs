@@ -8,8 +8,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 
 /// <summary>
 /// Staged operations (epic E15): each action checks access first, advances
-/// through its stages as the facade answers, reports what it produced, and
-/// fails with one plain sentence. Every call is held open on a
+/// through its stages as the facade answers, and fails with one plain sentence; a
+/// capture or restore hands off to the cluster's tracked operation (#4122). Every call is held open on a
 /// <see cref="TaskCompletionSource"/>, so no test depends on timing.
 /// </summary>
 [TestFixture]
@@ -17,10 +17,10 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 public sealed class BackupOperationsTests : BackupsTestContext
 {
     [Test]
-    public async Task A_full_capture_checks_access_captures_and_records_in_stages()
+    public async Task A_full_capture_checks_access_starts_on_the_cluster_and_hands_off()
     {
-        var capture = new TaskCompletionSource<LatticeBackupCaptureResult>();
-        Backups.Capture = _ => capture.Task;
+        var start = new TaskCompletionSource();
+        Backups.StartGate = start.Task;
 
         var operation = Actions.CaptureFull("nightly", BackupScopeSelector.WholeTree("a/crm/orders"));
 
@@ -28,29 +28,27 @@ public sealed class BackupOperationsTests : BackupsTestContext
         {
             Assert.That(operation.Kind, Is.EqualTo(BackupOperationKind.FullCapture));
             Assert.That(operation.Title, Is.EqualTo("Capture a full backup of orders"));
+            Assert.That(operation.Stages, Is.EqualTo(new[] { BackupActions.CheckAccessStage, BackupActions.StartStage }));
             Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Running));
-            Assert.That(operation.CurrentStage, Is.EqualTo(1), "the probe answered, so the capture is under way");
-            Assert.That(operation.Message, Is.Null);
+            Assert.That(operation.CurrentStage, Is.EqualTo(1), "the probe answered, so the start is under way");
+            Assert.That(operation.ClusterOperationId, Is.Null);
         });
 
-        var manifest = FakeBackupControl.Manifest("b9", "nightly", "a/crm/orders", artifacts: ["a1", "a2"]);
-        capture.SetResult(new LatticeBackupCaptureResult("b9", manifest));
+        start.SetResult();
         await operation.Completion;
 
         Assert.Multiple(() =>
         {
             Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
-            Assert.That(operation.CurrentStage, Is.EqualTo(2));
-            Assert.That(operation.Message, Is.EqualTo("Captured backup nightly."));
-            Assert.That(operation.Links.Single().Target, Is.EqualTo(BackupsAddresses.Backup("b9")));
-            Assert.That(operation.Facts.Select(fact => fact.Key), Is.EqualTo(new[] { "Backups captured", "Artifacts", "Size" }));
-            Assert.That(operation.Facts[2].Value, Is.EqualTo("4 KiB"));
-            Assert.That(operation.CompletedAt, Is.EqualTo(Time.GetUtcNow()));
+            Assert.That(operation.ClusterOperationId, Is.EqualTo("op-1"));
+            Assert.That(operation.Message, Does.Contain("keeps running if you close this page"));
+            Assert.That(Backups.LastOf<LatticeBackupCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupAsync)).Name, Is.EqualTo("nightly"));
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateBackupAsync)), Is.Zero, "the deprecated blocking verb is never called");
         });
     }
 
     [Test]
-    public void A_capture_the_probe_denies_stops_at_the_access_stage_without_capturing()
+    public void A_capture_the_probe_denies_stops_at_the_access_stage_without_starting()
     {
         Backups.Probe = scope => Task.FromResult(FakeBackupControl.DenyAll(scope));
 
@@ -61,7 +59,24 @@ public sealed class BackupOperationsTests : BackupsTestContext
             Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Failed));
             Assert.That(operation.CurrentStage, Is.Zero);
             Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotPermitted));
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateBackupAsync)), Is.Zero);
+            Assert.That(operation.ClusterOperationId, Is.Null);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartBackupAsync)), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void A_start_the_cluster_refuses_fails_with_a_sentence_and_hands_off_nothing()
+    {
+        Backups.StartFault = new LatticeAuthorizationDeniedException("no");
+
+        var operation = Actions.CaptureFull("nightly", BackupScopeSelector.WholeTree("orders"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Failed));
+            Assert.That(operation.CurrentStage, Is.EqualTo(1));
+            Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotPermitted));
+            Assert.That(operation.ClusterOperationId, Is.Null);
         });
     }
 
@@ -72,19 +87,19 @@ public sealed class BackupOperationsTests : BackupsTestContext
         var denied = Actions.CaptureIncremental("delta", BackupScopeSelector.WholeTree("orders"), "base1");
 
         Backups.Probe = scope => Task.FromResult(FakeBackupControl.AllowAll(scope));
-        var captured = Actions.CaptureIncremental("delta", BackupScopeSelector.WholeTree("orders"), "base1");
+        var started = Actions.CaptureIncremental("delta", BackupScopeSelector.WholeTree("orders"), "base1");
 
         Assert.Multiple(() =>
         {
             Assert.That(denied.Status, Is.EqualTo(BackupOperationStatus.Failed));
-            Assert.That(captured.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
-            Assert.That(captured.Message, Does.StartWith("Captured incremental backup"));
-            Assert.That(Backups.LastOf<LatticeBackupIncrementalCaptureRequest>(nameof(ILatticeBackupControl.CreateIncrementalBackupAsync)).BaseBackupId, Is.EqualTo("base1"));
+            Assert.That(started.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
+            Assert.That(started.ClusterOperationId, Is.Not.Null);
+            Assert.That(Backups.LastOf<LatticeBackupIncrementalCaptureRequest>(nameof(ILatticeBackupOperations.StartIncrementalBackupAsync)).BaseBackupId, Is.EqualTo("base1"));
         });
     }
 
     [Test]
-    public void A_set_capture_checks_every_member_and_links_every_member_backup()
+    public void A_set_capture_checks_every_member_and_starts_one_set()
     {
         var operation = Actions.CaptureSet("quarter", [BackupScopeSelector.WholeTree("orders"), BackupScopeSelector.WholeTree("a/crm/customers")], crossTreeConsistent: true);
 
@@ -92,52 +107,28 @@ public sealed class BackupOperationsTests : BackupsTestContext
         {
             Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
             Assert.That(operation.Title, Is.EqualTo("Capture a backup set of 2 trees"));
-            Assert.That(operation.Stages[1], Is.EqualTo("Capture every tree at one fence"));
-            Assert.That(operation.Links, Has.Count.EqualTo(2));
-            Assert.That(operation.Message, Is.EqualTo("Captured backup set quarter with 2 members."));
-            Assert.That(Backups.LastOf<LatticeBackupSetCaptureRequest>(nameof(ILatticeBackupControl.CreateBackupSetAsync)).CrossTreeConsistent, Is.True);
+            Assert.That(operation.ClusterOperationId, Is.Not.Null);
+            Assert.That(Backups.LastOf<LatticeBackupSetCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupSetAsync)).CrossTreeConsistent, Is.True);
             Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.ProbeCapabilitiesAsync)), Is.EqualTo(2));
         });
     }
 
     [Test]
-    public async Task A_restore_validates_the_chain_restores_and_keeps_its_result_for_revert()
+    public void A_restore_checks_the_backup_exists_and_starts_with_its_mode_and_target()
     {
         Seed(FakeBackupControl.Manifest("b1"));
-        var restore = new TaskCompletionSource<LatticeRestoreResult>();
-        Backups.Restore = _ => restore.Task;
 
         var operation = Actions.Restore("b1", "orders", LatticeRestoreMode.ShadowCutover, cold: false);
-        Assert.That(operation.CurrentStage, Is.EqualTo(2));
 
-        var request = Backups.LastOf<LatticeRestoreRequest>(nameof(ILatticeBackupControl.RestoreBackupAsync));
-        restore.SetResult(FakeBackupControl.RestoreResult(request));
-        await operation.Completion;
-
+        var request = Backups.LastOf<LatticeRestoreRequest>(nameof(ILatticeBackupOperations.StartRestoreAsync));
         Assert.Multiple(() =>
         {
+            Assert.That(operation.Kind, Is.EqualTo(BackupOperationKind.Restore));
             Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
-            Assert.That(operation.CanRevert, Is.True);
-            Assert.That(operation.RestoreResult!.ShadowPhysicalTreeId, Is.Not.Null);
-            Assert.That(operation.Facts.Select(fact => fact.Value), Has.None.Contains("physical"), "physical tree ids are never shown");
-            Assert.That(operation.Facts.Single(fact => fact.Key == "Entries applied").Value, Is.EqualTo("42"));
+            Assert.That(operation.ClusterOperationId, Is.Not.Null);
             Assert.That(request.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
             Assert.That(request.TargetTreeId, Is.EqualTo("orders"));
-        });
-    }
-
-    [Test]
-    public void An_in_place_restore_cannot_be_reverted()
-    {
-        Seed(FakeBackupControl.Manifest("b1"));
-
-        var operation = Actions.Restore("b1", "orders", LatticeRestoreMode.InPlace, cold: false);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
-            Assert.That(operation.CanRevert, Is.False);
-            Assert.That(() => Actions.Revert(operation), Throws.InvalidOperationException);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RestoreBackupAsync)), Is.Zero);
         });
     }
 
@@ -150,7 +141,8 @@ public sealed class BackupOperationsTests : BackupsTestContext
         {
             Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Failed));
             Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotFound));
-            Assert.That(operation.CurrentStage, Is.EqualTo(1));
+            Assert.That(operation.CurrentStage, Is.Zero);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartRestoreAsync)), Is.Zero);
         });
     }
 
@@ -165,93 +157,105 @@ public sealed class BackupOperationsTests : BackupsTestContext
         Assert.Multiple(() =>
         {
             Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotPermitted));
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RestoreBackupAsync)), Is.Zero);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartRestoreAsync)), Is.Zero);
         });
     }
 
     [Test]
-    public void A_cold_restore_skips_the_catalogue_and_a_refusal_as_not_served_withdraws_the_extensions()
+    public void A_cold_restore_skips_the_catalogue_and_starts_a_cold_restore()
     {
         var operation = Actions.Restore("b1", "orders", LatticeRestoreMode.InPlace, cold: true);
 
         Assert.Multiple(() =>
         {
             Assert.That(operation.Kind, Is.EqualTo(BackupOperationKind.ColdRestore));
-            Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotServed));
+            Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
             Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.DescribeBackupAsync)), Is.Zero);
-            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.False);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartColdRestoreAsync)), Is.EqualTo(1));
         });
     }
 
     [Test]
-    public void A_served_cold_restore_succeeds()
+    public void A_cold_restore_refused_as_not_served_fails_its_start_but_leaves_the_extensions_alone()
     {
-        Backups.ColdRestore = request => Task.FromResult(FakeBackupControl.RestoreResult(request) with { DeadLetteredOverQuota = 2, DeadLetteredCrossTenant = 1 });
+        Backups.StartFault = new NotSupportedException("not served");
 
         var operation = Actions.Restore("b1", "orders", LatticeRestoreMode.InPlace, cold: true);
 
         Assert.Multiple(() =>
         {
-            Assert.That(operation.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
-            Assert.That(operation.Facts.Select(fact => fact.Key), Does.Contain("Set aside: over quota").And.Contain("Set aside: another tenant's keys"));
+            Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotServed));
+            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.Null, "cold restore is a cluster operation, not an extension (#4218)");
         });
     }
 
     [Test]
-    public void Reverting_a_point_in_time_restore_marks_it_reverted()
+    public void Reverting_a_point_in_time_restore_swaps_back_and_is_found_by_the_restore()
     {
-        Seed(FakeBackupControl.Manifest("b1"));
-        var restore = Actions.Restore("b1", "orders", LatticeRestoreMode.ShadowCutover, cold: false);
+        var result = FakeBackupControl.RestoreResult(new LatticeRestoreRequest("b1", "orders", mode: LatticeRestoreMode.ShadowCutover));
 
-        var revert = Actions.Revert(restore);
+        var revert = Actions.Revert("op-restore", result);
 
         Assert.Multiple(() =>
         {
             Assert.That(revert.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
-            Assert.That(restore.RevertedBy, Is.EqualTo(revert.Id));
-            Assert.That(restore.CanRevert, Is.False);
-            Assert.That(Backups.LastOf<LatticeRestoreResult>(nameof(ILatticeBackupControl.RevertRestoreAsync)), Is.SameAs(restore.RestoreResult));
-            Assert.That(() => Actions.Revert(null!), Throws.ArgumentNullException);
+            Assert.That(revert.Reverts, Is.EqualTo("op-restore"));
+            Assert.That(Operations.RevertOf("op-restore"), Is.SameAs(revert));
+            Assert.That(revert.Links.Single().Target, Is.EqualTo(BackupsAddresses.Operation("op-restore")));
+            Assert.That(Backups.LastOf<LatticeRestoreResult>(nameof(ILatticeBackupControl.RevertRestoreAsync)), Is.SameAs(result));
         });
     }
 
     [Test]
-    public void Catalogue_rebuild_and_scrub_report_their_figures()
+    public void A_failed_revert_leaves_the_restore_revertible_and_only_a_point_in_time_restore_reverts()
     {
-        Backups.Rebuild = () => Task.FromResult(new BackupCatalogRebuildReport(10, 3, 7));
-        Backups.Scrub = prune => Task.FromResult(new BackupCatalogScrubReport(10, 2, prune ? 2 : 0, prune, ["o1", "o2"]));
+        Backups.Probe = scope => Task.FromResult(FakeBackupControl.AllowAll(scope) with { CanRestore = false });
+        var shadow = FakeBackupControl.RestoreResult(new LatticeRestoreRequest("b1", "orders", mode: LatticeRestoreMode.ShadowCutover));
+        var inPlace = FakeBackupControl.RestoreResult(new LatticeRestoreRequest("b1", "orders", mode: LatticeRestoreMode.InPlace));
 
+        var revert = Actions.Revert("op-restore", shadow);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(revert.Status, Is.EqualTo(BackupOperationStatus.Failed));
+            Assert.That(Operations.RevertOf("op-restore"), Is.Null);
+            Assert.That(() => Actions.Revert("op-restore", inPlace), Throws.InvalidOperationException);
+            Assert.That(() => Actions.Revert("op-restore", null!), Throws.ArgumentNullException);
+            Assert.That(() => Actions.Revert(string.Empty, shadow), Throws.ArgumentException);
+        });
+    }
+    [Test]
+    public void Catalogue_rebuild_and_scrub_start_on_the_cluster_and_hand_off()
+    {
         var rebuild = Actions.RebuildCatalogue();
         var check = Actions.ScrubCatalogue(pruneOrphans: false);
         var prune = Actions.ScrubCatalogue(pruneOrphans: true);
 
         Assert.Multiple(() =>
         {
-            Assert.That(rebuild.Facts.Select(fact => fact.Value), Is.EqualTo(new[] { "10", "3", "7" }));
-            Assert.That(check.Items, Is.EqualTo(new[] { "o1", "o2" }));
-            Assert.That(check.Message, Does.StartWith("Found 2 orphan rows"));
-            Assert.That(prune.Message, Is.EqualTo("Removed 2 orphan rows from the catalogue."));
+            Assert.That(rebuild.ClusterOperationId, Is.EqualTo("op-1"));
+            Assert.That(check.ClusterOperationId, Is.EqualTo("op-2"));
+            Assert.That(prune.ClusterOperationId, Is.EqualTo("op-3"));
+            Assert.That(Backups.Statuses["op-1"].Kind, Is.EqualTo(BackupOperationKinds.CatalogRebuild));
+            Assert.That(Backups.Calls.Where(call => call.Verb == nameof(ILatticeBackupOperations.StartCatalogScrubAsync)).Select(call => call.Argument), Is.EqualTo(new object[] { false, true }));
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RebuildCatalogFromSinkAsync)) + Backups.CountOf(nameof(ILatticeBackupControl.ScrubCatalogAgainstSinkAsync)), Is.Zero);
             Assert.That(Operations.Latest(BackupOperationKind.ScrubCatalogue), Is.SameAs(prune));
-            Assert.That(Operations.Recent.First(), Is.SameAs(prune));
         });
     }
 
     [Test]
-    public void A_clean_scrub_says_so_and_unserved_maintenance_withdraws_the_extensions()
+    public void Unserved_maintenance_fails_its_start_but_leaves_the_extensions_alone()
     {
-        Backups.Scrub = _ => Task.FromResult(new BackupCatalogScrubReport(4, 0, 0, false, []));
-        Assert.That(Actions.ScrubCatalogue(false).Message, Is.EqualTo("Every catalogue row has its backup in the store."));
+        Backups.StartFault = new NotSupportedException();
 
-        Backups.Rebuild = () => Task.FromException<BackupCatalogRebuildReport>(new NotSupportedException());
         var rebuild = Actions.RebuildCatalogue();
-        Backups.Scrub = _ => Task.FromException<BackupCatalogScrubReport>(new NotSupportedException());
         var scrub = Actions.ScrubCatalogue(true);
 
         Assert.Multiple(() =>
         {
             Assert.That(rebuild.Message, Is.EqualTo(BackupsFaults.NotServed));
             Assert.That(scrub.Message, Is.EqualTo(BackupsFaults.NotServed));
-            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.False);
+            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.Null, "the inventory's answer is its own");
         });
     }
 
@@ -324,7 +328,7 @@ public sealed class BackupOperationsTests : BackupsTestContext
         {
             Assert.That(() => Actions.Restore("", "t", LatticeRestoreMode.InPlace, false), Throws.ArgumentException);
             Assert.That(() => Actions.Restore("b", "", LatticeRestoreMode.InPlace, false), Throws.ArgumentException);
-            Assert.That(() => new BackupActions(null!, null!, null!), Throws.ArgumentNullException);
+            Assert.That(() => new BackupActions(null!, null!, null!, null!), Throws.ArgumentNullException);
         });
     }
 

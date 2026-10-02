@@ -8,6 +8,10 @@ using Orleans.Lattice;
 using Orleans.Lattice.Backup;
 using Orleans.Serialization;
 
+// These tests exercise the deprecated blocking CheckBackupHealth RPC (LATTICE0002) on
+// purpose: they prove the wrapper still behaves exactly as before.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 
 /// <summary>
@@ -19,7 +23,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 /// two streaming RPCs; the success round trips are covered by the E2E suite.
 /// </summary>
 [TestFixture]
-public sealed class LatticeBackupGrpcServiceUnitTests
+public sealed partial class LatticeBackupGrpcServiceUnitTests
 {
     private ServiceProvider _services = null!;
 
@@ -32,7 +36,8 @@ public sealed class LatticeBackupGrpcServiceUnitTests
 
     private LatticeBackupGrpcService CreateService(
         ILatticeBackupControl control,
-        ILatticeBackupApiCredentialBridge? bridge = null)
+        ILatticeBackupApiCredentialBridge? bridge = null,
+        ILatticeBackupOperations? operations = null)
     {
         var methods = LatticeBackupGrpcMethods.FromServiceProvider(_services);
         bridge ??= Substitute.For<ILatticeBackupApiCredentialBridge>();
@@ -43,7 +48,8 @@ public sealed class LatticeBackupGrpcServiceUnitTests
             bridge,
             schemeSource,
             Options.Create(new LatticeBackupApiGrpcOptions()),
-            Substitute.For<ILogger<LatticeBackupGrpcService>>());
+            Substitute.For<ILogger<LatticeBackupGrpcService>>(),
+            operations);
     }
 
     private static FakeServerCallContext Context(string method = "unit") => new(method);

@@ -19,4 +19,12 @@ public sealed record AppInstallRequest
     /// source; an ambiguous slug then fails rather than choosing a source.
     /// </summary>
     [Id(4)] public string? SourceKey { get; init; }
+    /// <summary>
+    /// The <see cref="AppDescriptor.ManifestDigest"/> of the version the operator reviewed, or null to
+    /// install without a review pin. When set, the install re-resolves the manifest at commit and is
+    /// refused unless its digest still equals this one, so a source that changes the manifest between
+    /// review and install - adding a bridge operation, role or tree - cannot have the change consented
+    /// unseen. Null keeps the behaviour of a server that predates the pin.
+    /// </summary>
+    [Id(5)] public string? ExpectedManifestDigest { get; init; }
 }

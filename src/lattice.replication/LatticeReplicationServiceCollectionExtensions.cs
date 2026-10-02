@@ -147,7 +147,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
                 sp.GetRequiredService<IGrainFactory>(),
                 sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
                 sp.GetRequiredService<ILogger<DeadLetterTrackingReplicationApplier>>(),
-                sp.GetService<ReplicationPeerStats>()));
+                sp.GetService<ReplicationPeerStats>(),
+                sp.GetService<ILatticeReplicationContext>()));
         builder.Services.TryAddSingleton<ILatticeReplicationDeadLetters>(sp =>
             new LatticeReplicationDeadLetters(
                 sp.GetRequiredService<IGrainFactory>(),
@@ -340,8 +341,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable
         // pin via IReplicationHighWaterMarkGrain.PinSnapshotAsync).
-        // IShardCountProvider is the testability seam wrapping the
-        // core LatticeOptionsResolver shard-count component.
+        // IShardCountProvider is the testability seam over the tree's
+        // live routing (its physical shard indices and shard-root keys).
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
         builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
 

@@ -50,7 +50,7 @@ else
 
     <LtTabs Label="Tree administration" ActiveId="@ActiveTab" ActiveIdChanged="OnTabChanged">
         <LtTab Id="summary" Title="Summary">
-            <ClusterTreeSummary TreeId="@TreeId" Capabilities="access" />
+            <ClusterTreeSummary TreeId="@TreeId" Capabilities="access" OperationSettled="OnOperationSettledAsync" />
         </LtTab>
         <LtTab Id="configuration" Title="Configuration">
             <ClusterTreeConfiguration TreeId="@TreeId" Capabilities="access" />

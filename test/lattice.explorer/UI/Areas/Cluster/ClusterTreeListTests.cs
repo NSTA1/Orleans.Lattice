@@ -118,7 +118,8 @@ public sealed class ClusterTreeListTests : ClusterTestContext
         });
 
         row.QuerySelector("button")!.Click();
-        Assert.That(cut.FindAll(".lt-dialog a.lt-cluster-link").Select(link => link.TextContent), Does.Contain("Administer this tree"));
+        // #4254: the dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog a.lt-cluster-link").Select(link => link.TextContent), Does.Contain("Administer this tree")));
     }
 
     [Test]
@@ -132,7 +133,8 @@ public sealed class ClusterTreeListTests : ClusterTestContext
         ExplorerCommandControls.AssertVisibleControl(cut, command);
 
         cut.Find($"[data-lt-command=\"{command.Id}\"]").Click();
-        Assert.That(cut.Find(".lt-dialog h2").TextContent, Is.EqualTo("Reshard a tree"));
+        // #4254: the dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog h2").TextContent, Is.EqualTo("Reshard a tree")));
         Assert.That(cut.Find(".lt-dialog").TextContent, Does.Contain("Name the tree to grow or shrink.").And.Not.Contain("Name the tree to grow."));
     }
 
@@ -148,11 +150,12 @@ public sealed class ClusterTreeListTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog"), Has.Count.EqualTo(1)));
 
         cut.Find(".lt-dialog form").Submit();
-        Assert.That(cut.Find(".lt-dialog .lt-field__error").TextContent, Does.Contain("Name the tree to reshard."));
+        // #4254: the error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog .lt-field__error").TextContent, Does.Contain("Name the tree to reshard.")));
 
         cut.Find(".lt-dialog input").Input("a/crm/missing");
         cut.Find(".lt-dialog form").Submit();
-        Assert.That(cut.Find(".lt-dialog .lt-field__error").TextContent, Does.Contain("No tree is named a/crm/missing."));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog .lt-field__error").TextContent, Does.Contain("No tree is named a/crm/missing.")));
 
         cut.Find(".lt-dialog input").Input("a/crm/orders");
         cut.Find(".lt-dialog form").Submit();
@@ -167,7 +170,8 @@ public sealed class ClusterTreeListTests : ClusterTestContext
 
         var cut = RenderAt("/cluster/trees");
 
-        Assert.That(cut.Find(".lt-dialog h2").TextContent, Is.EqualTo("Reshard a tree"));
+        // #4254: the signalled command's dialog can still open via an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog h2").TextContent, Is.EqualTo("Reshard a tree")));
     }
 
     [Test]
@@ -177,7 +181,8 @@ public sealed class ClusterTreeListTests : ClusterTestContext
 
         Button(cut, "Reshard tree...").Click();
 
-        Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end"));
+        // #4254: the dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end")));
     }
 
     [Test]

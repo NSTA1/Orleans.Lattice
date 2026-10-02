@@ -31,17 +31,19 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
 
         Stage(cut, "4");
 
-        Assert.Multiple(() =>
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll(".lt-field__error"), Is.Empty, "a count below the current one is a shrink, not an error");
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Shrink a/crm/orders from 8 physical shards to 4 physical shards."));
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("lower the tree's write and point-read throughput ceiling"));
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("scans, counts, snapshots and resizes fan out to fewer shards"));
             Assert.That(cut.Markup, Does.Not.Contain("only grows"));
-        });
+        }));
 
         Button(cut, "Reshard...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Shrinks the tree to 4 physical shards"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Shrinks the tree to 4 physical shards")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() =>
@@ -62,13 +64,15 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
 
         Stage(cut, "8");
 
-        Assert.Multiple(() =>
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.Multiple(() =>
         {
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Grow a/crm/orders from 4 physical shards to 8 physical shards."));
             Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Not.Contain("throughput ceiling"));
-        });
+        }));
         Button(cut, "Reshard...").Click();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Grows the tree to 8 physical shards"));
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("Grows the tree to 8 physical shards")));
     }
 
     [Test]
@@ -81,13 +85,14 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
         Assert.That(cut.Find(".lt-field__hint").TextContent, Does.Contain("From 2 to 16."));
 
         Stage(cut, "1");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at least 2"));
+        // #4254: the error renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at least 2")));
         Stage(cut, "8");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("already has 8 physical shards"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("already has 8 physical shards")));
         Stage(cut, "17");
-        Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 16"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("at most 16")));
         Stage(cut, "2");
-        Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 8 physical shards to 2 physical shards"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("from 8 physical shards to 2 physical shards")));
     }
 
     [Test]
@@ -128,6 +133,36 @@ public sealed class ClusterReshardShrinkTests : ClusterTestContext
             Assert.That(Time.ArmedTimers, Is.Zero);
         });
     }
+
+    [Test]
+    public void A_tree_no_reshard_has_mapped_shows_its_live_shard_count_not_zero()
+    {
+        // Issue #4146: the reshard status reports zero shards for a tree on the
+        // default map, so the page read "The tree has 0 now" and reviewed a grow
+        // "from 0 physical shards". The live map supplies the figures.
+        Admin.GetReshardStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeReshardStatus { TreeId = TreeId });
+        Admin.InspectShardMapAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new ShardMapInspection
+        {
+            TreeId = TreeId, PhysicalTreeId = TreeId, PhysicalShardCount = 64, VirtualShardCount = 4096,
+            PhysicalShardIndices = [.. Enumerable.Range(0, 64)], SlotCounts = [.. Enumerable.Repeat(64, 64)],
+        });
+        var cut = RenderAt(Address);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form"), Has.Count.EqualTo(1)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Definition(cut, "Physical shards"), Is.EqualTo("64"));
+            Assert.That(Definition(cut, "Virtual slots"), Is.EqualTo("4,096"));
+            Assert.That(cut.Find(".lt-field__hint").TextContent, Does.Contain("The tree has 64 now"));
+        });
+
+        Stage(cut, "72");
+        // #4254: the review renders after an async continuation.
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-review").TextContent, Does.Contain("Grow a/crm/orders from 64 physical shards to 72 physical shards.")));
+    }
+
+    private static string Definition(IRenderedComponent<ClusterPage> cut, string term) =>
+        cut.FindAll("dt").Single(dt => dt.TextContent.Trim() == term).NextElementSibling!.TextContent.Trim();
 
     private static void Stage(IRenderedComponent<ClusterPage> cut, string target)
     {

@@ -7,32 +7,54 @@ using Orleans.Lattice.Explorer.UI.Transport;
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
 /// <summary>
-/// Starts the Backups area's staged operations (epic decision E15). Each one
-/// first checks access with the capability probe, so a caller the probe denies
-/// is told so before anything is attempted, and then makes the one facade call
-/// that does the work; the server still authorizes that call fail-closed.
+/// Starts the Backups area's operations (epic decision E15). A capture, restore or
+/// revert first checks access with the capability probe, so a caller the probe
+/// denies is told so before anything is attempted; the server still authorizes
+/// every call fail-closed.
 /// </summary>
+/// <remarks>
+/// A capture, a restore, a catalogue rebuild or a catalogue scrub is started on the
+/// cluster as a tracked operation (#4122, #4125): the circuit's operation starts it
+/// and hands off to the cluster's operation id, whose status - with real progress -
+/// outlives the circuit, so closing the tab never stops the work. A revert runs in
+/// the circuit end to end.
+/// </remarks>
 internal sealed class BackupActions
 {
     /// <summary>The first stage of every operation that checks access first.</summary>
     public const string CheckAccessStage = "Check access";
 
+    /// <summary>The stage that hands a capture or restore to the cluster.</summary>
+    public const string StartStage = "Start on the cluster";
+
     private readonly ILatticeBackupControl _control;
+    private readonly ILatticeBackupOperations _clusterOperations;
     private readonly BackupsAccess _access;
     private readonly BackupOperations _operations;
+    private readonly BackupOperationList? _list;
 
     /// <summary>Creates the actions.</summary>
     /// <param name="control">The backup facade.</param>
+    /// <param name="clusterOperations">The backup operations facade the captures and restores start on.</param>
     /// <param name="access">The area's probes.</param>
     /// <param name="operations">The circuit's operations.</param>
-    public BackupActions([FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control, BackupsAccess access, BackupOperations operations)
+    /// <param name="list">The recent-operations list, forgotten whenever an operation starts; optional.</param>
+    public BackupActions(
+        [FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control,
+        [FromKeyedServices(ShellFacades.Key)] ILatticeBackupOperations clusterOperations,
+        BackupsAccess access,
+        BackupOperations operations,
+        BackupOperationList? list = null)
     {
         ArgumentNullException.ThrowIfNull(control);
+        ArgumentNullException.ThrowIfNull(clusterOperations);
         ArgumentNullException.ThrowIfNull(access);
         ArgumentNullException.ThrowIfNull(operations);
         _control = control;
+        _clusterOperations = clusterOperations;
         _access = access;
         _operations = operations;
+        _list = list;
     }
 
     /// <summary>Starts capturing a full backup of <paramref name="scope"/>.</summary>
@@ -44,15 +66,13 @@ internal sealed class BackupActions
         return _operations.Start(
             BackupOperationKind.FullCapture,
             "Capture a full backup of " + BackupTreeName.Parse(scope.TreeId).Name,
-            [CheckAccessStage, "Capture", "Record in the catalogue"],
+            [CheckAccessStage, StartStage],
             async (operation, cancellationToken) =>
             {
                 await RequireAsync(scope, static capabilities => capabilities.CanCapture, cancellationToken).ConfigureAwait(false);
                 operation.Advance(1);
-                var result = await _control.CreateBackupAsync(request, cancellationToken).ConfigureAwait(false);
-                operation.Advance(2);
-                ReportCapture(operation, [result]);
-                operation.Succeed("Captured backup " + BackupsFormat.Name(result.Manifest) + ".");
+                var handle = await _clusterOperations.StartBackupAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
     }
 
@@ -66,15 +86,13 @@ internal sealed class BackupActions
         return _operations.Start(
             BackupOperationKind.IncrementalCapture,
             "Capture an incremental backup of " + BackupTreeName.Parse(scope.TreeId).Name,
-            [CheckAccessStage, "Capture the changes since the base", "Record in the catalogue"],
+            [CheckAccessStage, StartStage],
             async (operation, cancellationToken) =>
             {
                 await RequireAsync(scope, static capabilities => capabilities.CanCaptureIncremental, cancellationToken).ConfigureAwait(false);
                 operation.Advance(1);
-                var result = await _control.CreateIncrementalBackupAsync(request, cancellationToken).ConfigureAwait(false);
-                operation.Advance(2);
-                ReportCapture(operation, [result]);
-                operation.Succeed("Captured incremental backup " + BackupsFormat.Name(result.Manifest) + ".");
+                var handle = await _clusterOperations.StartIncrementalBackupAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
     }
 
@@ -88,7 +106,7 @@ internal sealed class BackupActions
         return _operations.Start(
             BackupOperationKind.SetCapture,
             "Capture a backup set of " + scopes.Count.ToString(CultureInfo.InvariantCulture) + (scopes.Count == 1 ? " tree" : " trees"),
-            [CheckAccessStage, crossTreeConsistent ? "Capture every tree at one fence" : "Capture every tree", "Record in the catalogue"],
+            [CheckAccessStage, StartStage],
             async (operation, cancellationToken) =>
             {
                 foreach (var scope in scopes)
@@ -97,11 +115,8 @@ internal sealed class BackupActions
                 }
 
                 operation.Advance(1);
-                var result = await _control.CreateBackupSetAsync(request, cancellationToken).ConfigureAwait(false);
-                operation.Advance(2);
-                ReportCapture(operation, result.Members);
-                operation.Succeed("Captured backup set " + result.SetManifest.Name + " with "
-                    + result.Members.Count.ToString(CultureInfo.InvariantCulture) + (result.Members.Count == 1 ? " member." : " members."));
+                var handle = await _clusterOperations.StartBackupSetAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
     }
 
@@ -121,49 +136,37 @@ internal sealed class BackupActions
         return _operations.Start(
             cold ? BackupOperationKind.ColdRestore : BackupOperationKind.Restore,
             (cold ? "Cold-restore " : "Restore ") + target.Name + (mode == LatticeRestoreMode.ShadowCutover ? " to a point in time" : " by repairing missing items"),
-            [CheckAccessStage, cold ? "Read the backup from the store" : "Validate the restore chain", mode == LatticeRestoreMode.ShadowCutover ? "Build and cut over" : "Apply missing items", "Done"],
+            [CheckAccessStage, StartStage],
             async (operation, cancellationToken) =>
             {
                 await RequireAsync(scope, static capabilities => capabilities.CanRestore, cancellationToken).ConfigureAwait(false);
-                operation.Advance(1);
                 if (!cold)
                 {
                     _ = await _control.DescribeBackupAsync(backupId, cancellationToken).ConfigureAwait(false)
                         ?? throw new KeyNotFoundException("No backup with this id exists.");
                 }
 
-                operation.Advance(2);
-                LatticeRestoreResult result;
-                try
-                {
-                    result = cold
-                        ? await _control.ColdRestoreAsync(request, cancellationToken).ConfigureAwait(false)
-                        : await _control.RestoreBackupAsync(request, cancellationToken).ConfigureAwait(false);
-                }
-                catch (NotSupportedException)
-                {
-                    _access.MarkExtensionsNotServed();
-                    throw;
-                }
-
-                operation.KeepRestore(result);
-                operation.Report(
-                    links: [new BackupOperationLink("The restored backup", BackupsAddresses.Backup(backupId))],
-                    facts: RestoreFacts(result));
-                operation.Succeed(mode == LatticeRestoreMode.ShadowCutover
-                    ? "Restored " + target.Name + " to the backup's point in time. The previous tree is kept, so this can be reverted."
-                    : "Repaired " + target.Name + " from the backup.");
+                operation.Advance(1);
+                var handle = cold
+                    ? await _clusterOperations.StartColdRestoreAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false)
+                    : await _clusterOperations.StartRestoreAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
     }
 
-    /// <summary>Starts reverting the point-in-time restore <paramref name="restore"/>.</summary>
-    /// <param name="restore">The restore operation to revert.</param>
-    public BackupOperation Revert(BackupOperation restore)
+    /// <summary>
+    /// Starts reverting the point-in-time restore that cluster operation
+    /// <paramref name="restoreOperationId"/> made, from its recorded result.
+    /// </summary>
+    /// <param name="restoreOperationId">The restore's cluster operation id.</param>
+    /// <param name="result">The restore's result, as its operation recorded it.</param>
+    public BackupOperation Revert(string restoreOperationId, LatticeRestoreResult result)
     {
-        ArgumentNullException.ThrowIfNull(restore);
-        if (!restore.CanRevert || restore.RestoreResult is not { } result)
+        ArgumentException.ThrowIfNullOrEmpty(restoreOperationId);
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.Mode != LatticeRestoreMode.ShadowCutover)
         {
-            throw new InvalidOperationException("Only a finished point-in-time restore that has not been reverted can be reverted.");
+            throw new InvalidOperationException("Only a point-in-time restore can be reverted.");
         }
 
         var target = BackupTreeName.Parse(result.TargetTreeId);
@@ -177,73 +180,41 @@ internal sealed class BackupActions
                 await RequireAsync(scope, static capabilities => capabilities.CanRestore, cancellationToken).ConfigureAwait(false);
                 operation.Advance(1);
                 await _control.RevertRestoreAsync(result, cancellationToken).ConfigureAwait(false);
-                restore.MarkReverted(operation.Id);
-                operation.Report(links: [new BackupOperationLink("The reverted restore", BackupsAddresses.Operation(restore.Id))]);
+                operation.Report(links: [new BackupOperationLink("The reverted restore", BackupsAddresses.Operation(restoreOperationId))]);
                 operation.Succeed("Reverted " + target.Name + " to the tree it held before the restore.");
-            });
+            },
+            reverts: restoreOperationId);
     }
-
-    /// <summary>Starts rebuilding the catalogue from the backup store.</summary>
+    /// <summary>
+    /// Starts rebuilding the catalogue from the backup store on the cluster (#4125),
+    /// handing off to the cluster's operation. The server authorizes it with the
+    /// restore grant over the catalogue.
+    /// </summary>
     public BackupOperation RebuildCatalogue() =>
         _operations.Start(
             BackupOperationKind.RebuildCatalogue,
             "Rebuild the catalogue from the backup store",
-            ["Scan the backup store", "Done"],
+            [StartStage],
             async (operation, cancellationToken) =>
             {
-                BackupCatalogRebuildReport report;
-                try
-                {
-                    report = await _control.RebuildCatalogFromSinkAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (NotSupportedException)
-                {
-                    _access.MarkExtensionsNotServed();
-                    throw;
-                }
-
-                operation.Report(facts:
-                [
-                    new("Manifests scanned", BackupsFormat.Count(report.ScannedCount)),
-                    new("Added to the catalogue", BackupsFormat.Count(report.RegisteredCount)),
-                    new("Reconciled in place", BackupsFormat.Count(report.ReconciledCount)),
-                ]);
-                operation.Succeed("Rebuilt the catalogue from the backup store.");
+                var handle = await _clusterOperations.StartCatalogRebuildAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
 
-    /// <summary>Starts checking the catalogue against the backup store.</summary>
+    /// <summary>
+    /// Starts checking the catalogue against the backup store on the cluster
+    /// (#4125), handing off to the cluster's operation.
+    /// </summary>
     /// <param name="pruneOrphans">Whether to remove orphan rows rather than only report them.</param>
     public BackupOperation ScrubCatalogue(bool pruneOrphans) =>
         _operations.Start(
             BackupOperationKind.ScrubCatalogue,
             pruneOrphans ? "Remove orphan rows from the catalogue" : "Check the catalogue against the backup store",
-            [pruneOrphans ? "Find and remove orphan rows" : "Find orphan rows", "Done"],
+            [StartStage],
             async (operation, cancellationToken) =>
             {
-                BackupCatalogScrubReport report;
-                try
-                {
-                    report = await _control.ScrubCatalogAgainstSinkAsync(pruneOrphans, cancellationToken).ConfigureAwait(false);
-                }
-                catch (NotSupportedException)
-                {
-                    _access.MarkExtensionsNotServed();
-                    throw;
-                }
-
-                operation.Report(
-                    facts:
-                    [
-                        new("Rows scanned", BackupsFormat.Count(report.ScannedCount)),
-                        new("Orphan rows", BackupsFormat.Count(report.OrphanCount)),
-                        new("Rows removed", BackupsFormat.Count(report.RemovedCount)),
-                    ],
-                    items: report.OrphanBackupIds);
-                operation.Succeed(report.OrphanCount == 0
-                    ? "Every catalogue row has its backup in the store."
-                    : report.Pruned
-                        ? "Removed " + BackupsFormat.Count(report.RemovedCount) + " orphan rows from the catalogue."
-                        : "Found " + BackupsFormat.Count(report.OrphanCount) + " orphan rows. They are never offered as restore points; remove them from the maintenance page.");
+                var handle = await _clusterOperations.StartCatalogScrubAsync(pruneOrphans, cancellationToken: cancellationToken).ConfigureAwait(false);
+                HandOff(operation, handle.OperationId);
             });
 
     private async Task RequireAsync(BackupScopeSelector scope, Func<BackupScopeCapabilities, bool> allowed, CancellationToken cancellationToken)
@@ -255,19 +226,17 @@ internal sealed class BackupActions
         }
     }
 
-    private static void ReportCapture(BackupOperation operation, IReadOnlyList<LatticeBackupCaptureResult> results) =>
-        operation.Report(
-            links: [.. results.Select(result => new BackupOperationLink(
-                BackupsFormat.Name(result.Manifest) + " (" + BackupTreeName.Parse(result.Manifest.Scope.TreeId).Name + ")",
-                BackupsAddresses.Backup(result.BackupId)))],
-            facts:
-            [
-                new("Backups captured", BackupsFormat.Count(results.Count)),
-                new("Artifacts", BackupsFormat.Count(results.Sum(result => result.Manifest.ContentDescriptors.Count))),
-                new("Size", BackupsFormat.Bytes(results.Sum(result => result.Manifest.ContentDescriptors.Sum(content => content.ByteLength)))),
-            ]);
+    private void HandOff(BackupOperation operation, string clusterOperationId)
+    {
+        _list?.Forget();
+        operation.HandOff(clusterOperationId);
+        operation.Succeed("Started on the cluster. It keeps running if you close this page.");
+    }
 
-    private static IReadOnlyList<KeyValuePair<string, string>> RestoreFacts(LatticeRestoreResult result)
+    /// <summary>The figures a finished restore reports.</summary>
+    /// <param name="result">The restore's result.</param>
+    /// <returns>The figures.</returns>
+    internal static IReadOnlyList<KeyValuePair<string, string>> RestoreFacts(LatticeRestoreResult result)
     {
         var facts = new List<KeyValuePair<string, string>>
         {
