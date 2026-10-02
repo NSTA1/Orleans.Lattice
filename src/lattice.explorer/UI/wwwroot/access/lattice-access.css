@@ -275,7 +275,14 @@
   overflow-wrap: anywhere;
 }
 
-/* 9. Forced colours: the platform draws the current tab's rule. */
+/* 9. A delegated tenant page's own region, below the navigation. */
+.lt-access-tenant {
+  display: block;
+  min-width: 0;
+  margin: 0;
+}
+
+/* 10. Forced colours: the platform draws the current tab's rule. */
 @media (forced-colors: active) {
   .lt-access-nav__link[aria-current="page"]::after {
     forced-color-adjust: none;
