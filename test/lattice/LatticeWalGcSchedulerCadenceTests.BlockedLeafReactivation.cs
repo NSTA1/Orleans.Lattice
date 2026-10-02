@@ -31,7 +31,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private const string StrandedTree = "stranded";
 
-    private static GrainId BlockedLeafGrainId() => GrainId.Create("bplusleaf", "leaf-2710");
+    /// <summary>
+    /// A guid-keyed leaf id, as every <c>BPlusLeafGrain</c> has: the drive's
+    /// orphan retirement refuses any other shape (issue #4238).
+    /// </summary>
+    private static GrainId BlockedLeafGrainId() =>
+        GrainId.Create(
+            GrainType.Create("bplusleaf"),
+            GrainIdKeyExtensions.CreateGuidKey(new Guid(2710, 0, 0, new byte[8])));
 
     private static string BlockedConsumerId(string treeId = StrandedTree) =>
         $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{BlockedLeafGrainId()}";

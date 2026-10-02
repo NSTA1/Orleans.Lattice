@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
@@ -60,7 +61,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         });
     }
 
-    private static ServiceProvider MissingProviderServices(IWalStorageProvider provider)
+    private static ServiceProvider MissingProviderServices(
+        IWalStorageProvider provider,
+        IOptionsMonitor<LatticeOptions>? monitor = null)
     {
         var registry = Substitute.For<ILatticeRegistry>();
         registry.GetWalPlacementAsync(Arg.Any<string>())
@@ -73,7 +76,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var services = new ServiceCollection();
         services.AddSingleton(provider);
         services.AddSingleton(new LatticeOptionsResolver(
-            factory, SinglePartitionMonitor(), logger: null, walProviderCatalog: catalog));
+            factory, monitor ?? SinglePartitionMonitor(), logger: null, walProviderCatalog: catalog));
         return services.BuildServiceProvider();
     }
 
@@ -117,9 +120,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             await registry.ReportCursorAsync(Tree, "shipper", OutcomeHlc(30));
         }
 
-        using var services = MissingProviderServices(provider);
+        // The resolver and the GC share one options monitor, as they do on a silo:
+        // with no registry pin the resolver falls back to that monitor's value, so
+        // two monitors would disagree about a partition count no silo can split
+        // (issue #4238 resolves the count through the resolver).
         var monitor = SinglePartitionMonitor();
         monitor.CurrentValue.WalPartitions = 2;
+        using var services = MissingProviderServices(provider, monitor);
         var gc = new LatticeWalGc(services, registry, monitor);
         var (arm, passes) = await OutcomeOfOnePassAsync(Tree, gc);
         using var recorder = passes;

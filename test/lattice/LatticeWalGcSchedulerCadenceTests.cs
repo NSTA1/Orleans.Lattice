@@ -70,7 +70,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Orleans.Lattice.BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null,
         Microsoft.Extensions.Logging.ILogger<LatticeWalGcScheduler>? logger = null,
         Orleans.Storage.IGrainStorage? leafStateStorage = null,
-        Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null)
+        Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null,
+        LatticeOptionsResolver? optionsResolver = null)
         => new(
             factory,
             gc,
@@ -79,7 +80,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             time,
             snapshotPins,
             leafStateStorage,
-            cursorReporter);
+            cursorReporter,
+            optionsResolver);
 
     private static LatticeWalGcReport Report(
         long entriesTrimmed,

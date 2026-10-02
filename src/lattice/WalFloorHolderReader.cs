@@ -81,6 +81,68 @@ internal static class WalFloorHolderReader
     }
 
     /// <summary>
+    /// Whether <paramref name="consumerId"/> is exactly the materialiser consumer
+    /// id a <c>BPlusLeafGrain</c> of a tree pinned to
+    /// <paramref name="walPartitions"/> WAL partitions would publish (issue
+    /// #4238). This is the gate every pin <i>removal</i> passes, and it is
+    /// deliberately stricter than <see cref="TryParseConsumerId"/>, which the
+    /// read-only diagnostics share.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A removal is authorised by a storage read of the parsed leaf finding no
+    /// record, or a record with no tree id. That evidence is about the parsed
+    /// grain, not about the publisher of the pin, so it is only evidence about
+    /// the publisher when the parse is provably the inverse of how the leaf
+    /// built the id. A parse that names some other grain - a partition suffix
+    /// left on, a grain-id suffix taken off - reads an absent record and would
+    /// delete the pin of a leaf that is still live, letting the GC trim WAL that
+    /// leaf has not replayed.
+    /// </para>
+    /// <para>
+    /// So the id is accepted only when all of these hold: it parses; the leaf
+    /// key is a 32-hex guid in the canonical form Orleans renders a guid key in,
+    /// which is the only key shape a <c>BPlusLeafGrain</c> has; the partition is
+    /// in range of the pinned count; and rebuilding the id from the parsed leaf
+    /// and partition, exactly as the leaf builds it (unsuffixed on a
+    /// single-partition tree, suffixed on a partitioned one), gives back the
+    /// same string. The last clause is what rejects every ambiguity at once -
+    /// an unsuffixed id on a partitioned tree, a non-canonical suffix, a suffix
+    /// on a single-partition tree - without enumerating them. Anything that
+    /// fails is left where it is: holding the floor costs retained WAL, never
+    /// data.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">The physical tree id the pin belongs to.</param>
+    /// <param name="consumerId">The materialiser consumer id.</param>
+    /// <param name="walPartitions">The tree's registry-pinned WAL partition count.</param>
+    /// <returns><see langword="true"/> only when the id is provably a leaf's own.</returns>
+    internal static bool IsLeafPublishedConsumerId(string treeId, string consumerId, int walPartitions)
+    {
+        if (walPartitions < 1
+            || !TryParseConsumerId(treeId, consumerId, walPartitions, out var leafGrainId, out var partition)
+            || partition < 0
+            || partition >= walPartitions)
+        {
+            return false;
+        }
+
+        var key = leafGrainId.Key.ToString();
+        if (key is not { Length: 32 }
+            || !Guid.TryParseExact(key, "N", out var guid)
+            || !string.Equals(guid.ToString("N"), key, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var expected = walPartitions == 1
+            ? $"{BPlusTree.Grains.ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{leafGrainId}"
+            : $"{BPlusTree.Grains.ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{leafGrainId}_{partition.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+        return string.Equals(expected, consumerId, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Reads one leaf's persisted projection checkpoint for a partition directly
     /// from the storage provider and maps it onto a
     /// <see cref="WalGcBlockingPinState"/>, returning the numeric checkpoint the
