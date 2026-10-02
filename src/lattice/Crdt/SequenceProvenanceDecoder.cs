@@ -73,9 +73,17 @@ public sealed class SequenceProvenanceDecoder : ICrdtProvenanceDecoder
             var inserts = delta.Inserts;
             if (inserts is { Count: > 0 })
             {
-                for (var j = 0; j < inserts.Count; j++)
+                // The delta DTO declares IReadOnlyList<T> because it is
+                // serialised public surface, so the indexer below dispatches
+                // through an interface and copies each node out by value.
+                // CrdtDeltaListSpan resolves the array and List<T> cases to a
+                // span; anything else keeps the interface walk. Nothing in this
+                // loop changes the scanned collection, so the span stays valid.
+                var insertsSpanned = CrdtDeltaListSpan.TryGetSpan(inserts, out var insertsSpan);
+                var insertCount = inserts.Count;
+                for (var j = 0; j < insertCount; j++)
                 {
-                    var node = inserts[j];
+                    var node = insertsSpanned ? insertsSpan[j] : inserts[j];
                     result.Add(new CrdtMemberChange
                     {
                         Element = node.Value ?? Array.Empty<byte>(),
@@ -90,9 +98,11 @@ public sealed class SequenceProvenanceDecoder : ICrdtProvenanceDecoder
             var tombstones = delta.Tombstones;
             if (tombstones is { Count: > 0 })
             {
-                for (var j = 0; j < tombstones.Count; j++)
+                var tombstonesSpanned = CrdtDeltaListSpan.TryGetSpan(tombstones, out var tombstonesSpan);
+                var tombstoneCount = tombstones.Count;
+                for (var j = 0; j < tombstoneCount; j++)
                 {
-                    var dot = tombstones[j];
+                    var dot = tombstonesSpanned ? tombstonesSpan[j] : tombstones[j];
                     result.Add(new CrdtMemberChange
                     {
                         Element = Array.Empty<byte>(),

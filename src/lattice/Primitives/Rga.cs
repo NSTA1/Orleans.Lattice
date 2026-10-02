@@ -106,6 +106,21 @@ public sealed class Rga : ICrdt<Rga>
     private IReadOnlyList<(OrSetDot Dot, byte[] Value)>? _materializedCache;
 
     /// <summary>
+    /// The backing list of <see cref="_materializedCache"/> when the cache was
+    /// built from one, so <see cref="ToList"/> can copy out over a span rather
+    /// than dispatching an indexer through <see cref="IReadOnlyList{T}"/> into
+    /// the <see cref="System.Collections.ObjectModel.ReadOnlyCollection{T}"/>
+    /// wrapper and back out to the inner list - two virtual calls and a 24-byte
+    /// struct returned by value, per element, per read. Private and never
+    /// handed out, so the read-only wrapper above remains the only shape an
+    /// internal caller can obtain; the only reader is the copy-out loop in
+    /// <see cref="ToList"/>. Never serialized, and invalidated in lockstep with
+    /// <see cref="_materializedCache"/>.
+    /// </summary>
+    [NonSerialized]
+    private List<(OrSetDot Dot, byte[] Value)>? _materializedList;
+
+    /// <summary>
     /// Transient live-node counter: the number of un-tombstoned nodes, or
     /// <c>null</c> when it must be rebuilt from <see cref="Nodes"/> on the
     /// next read. Never serialized (no <c>[Id]</c>): a deserialized or
@@ -277,6 +292,21 @@ public sealed class Rga : ICrdt<Rga>
         // A fresh array per call, so a caller that downcasts it mutates only
         // its own copy. Presized exactly; no List + AsReadOnly wrapper needed.
         var copy = new (OrSetDot, byte[])[count];
+        // Walk the cache's own backing list over a span where there is one.
+        // The cached projection is a ReadOnlyCollection wrapper, so the
+        // interface indexer below costs two virtual calls and returns the
+        // 24-byte tuple by value, per element, per read.
+        if (_materializedList is { } list && list.Count == count)
+        {
+            var span = CollectionsMarshal.AsSpan(list);
+            for (var i = 0; i < span.Length; i++)
+            {
+                ref readonly var entry = ref span[i];
+                copy[i] = (entry.Dot, entry.Value.AsSpan().ToArray());
+            }
+            return copy;
+        }
+
         for (var i = 0; i < count; i++)
         {
             var (dot, value) = shared[i];
@@ -304,7 +334,11 @@ public sealed class Rga : ICrdt<Rga>
         if (_materializedCache is { } cached) return cached;
         var nodes = Nodes;
         var n = nodes.Count;
-        if (n == 0) return _materializedCache = Array.Empty<(OrSetDot, byte[])>();
+        if (n == 0)
+        {
+            _materializedList = null;
+            return _materializedCache = Array.Empty<(OrSetDot, byte[])>();
+        }
 
         // Build the parent -> children index as a flat compressed layout
         // instead of a Dictionary<OrSetDot, List<RgaNode>>. The previous
@@ -385,6 +419,7 @@ public sealed class Rga : ICrdt<Rga>
         // in exchange for an internal caller never holding a mutable handle on
         // the cached projection's list shape. The value buffers are still the
         // live node arrays; ToList is what copies those on the way out.
+        _materializedList = result;
         return _materializedCache = result.AsReadOnly();
     }
 
@@ -793,7 +828,11 @@ public sealed class Rga : ICrdt<Rga>
     /// Discards the cached <see cref="ToList"/> materialisation so the next
     /// read rebuilds it. Called by every mutation path.
     /// </summary>
-    private void InvalidateMaterializedCache() => _materializedCache = null;
+    private void InvalidateMaterializedCache()
+    {
+        _materializedCache = null;
+        _materializedList = null;
+    }
 
     // Lexicographic byte-order comparison used as a convergence tie-breaker:
     // only the *sign* of the result is load-bearing, never its magnitude, so

@@ -64,6 +64,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Sequence copy-out walk.** `Rga.ToList` walked its cached projection through a read-only wrapper, two virtual calls per element. It caches the wrapper's backing list and walks a span now: 40-65% faster on the copy-out itself. ([#4316](https://github.com/NSTA1/Orleans.Lattice/pull/4316)) (`Orleans.Lattice`)
+
+- **Performance - CRDT provenance decode walks.** The version-vector current-value projection re-probed its dictionary once per replica; it sorts a pooled key/value window now, 11-22% less allocated. Five decoder delta walks resolve their dot lists to spans. ([#4316](https://github.com/NSTA1/Orleans.Lattice/pull/4316)) (`Orleans.Lattice`)
+
 - **Performance - Sort comparer sweep completed.** Sorting with an `IComparer<T>` still minted a delegate per call at the sites #4184 left behind. Two hot streaming scan paths, sixteen downstream ordinal sites and two custom comparers pass a cached comparison now. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Apps`)
 
 - **Performance - Pooled buffer return clearing.** Nine pooled staging sites returned their rental with `clearArray: true`, which memsets the whole rounded-up array rather than the bytes written. They clear exactly the written prefix now: 28-32% faster on a 4 KB to 64 KB staging call. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Api.Apps.Grpc`)
