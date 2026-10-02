@@ -639,8 +639,17 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         var adds = delta.Adds;
         if (adds is { Count: > 0 })
         {
-            foreach (var add in adds)
+            // foreach over an IReadOnlyList<T> binds IEnumerable<T>.GetEnumerator
+            // and heap-allocates a boxed enumerator per apply. Resolve the
+            // backing span where the concrete shape allows it and fall back to
+            // the interface indexer otherwise. The loop appends to the per-key
+            // entry lists, never to the scanned collection, so the span stays
+            // valid.
+            var addsSpanned = CrdtDeltaListSpan.TryGetSpan(adds, out var addsSpan);
+            var addCount = adds.Count;
+            for (var i = 0; i < addCount; i++)
             {
+                var add = addsSpanned ? addsSpan[i] : adds[i];
                 // A dot with no replica id carries no causal identity: it cannot
                 // be deduped, tombstoned, or ordered, and BumpContext would fault
                 // the whole batch on a null id. Every local mutation API rejects
@@ -678,8 +687,12 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         var tombs = delta.Tombstones;
         if (tombs is { Count: > 0 })
         {
-            foreach (var t in tombs)
+            // Same span resolution as the adds loop above.
+            var tombsSpanned = CrdtDeltaListSpan.TryGetSpan(tombs, out var tombsSpan);
+            var tombCount = tombs.Count;
+            for (var i = 0; i < tombCount; i++)
             {
+                var t = tombsSpanned ? tombsSpan[i] : tombs[i];
                 if (string.IsNullOrEmpty(t.ReplicaId)) continue;
 
                 BumpContext(t.ReplicaId, t.Counter);
