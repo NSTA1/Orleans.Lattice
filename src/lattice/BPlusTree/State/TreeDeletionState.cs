@@ -104,4 +104,14 @@ internal sealed class TreeDeletionState
     /// </summary>
     [Id(19)] public bool PurgeRequested { get; set; }
 
+    /// <summary>
+    /// Whether a completed purge still owes the removal of the tree's registry
+    /// entry. Persisted with <see cref="PurgeComplete"/> and cleared once the
+    /// entry is removed, so a removal that threw is re-driven by the keepalive
+    /// reminder or the next purge call rather than leaving the id reading as a
+    /// live tree that kept the purged tree's settings (issue #4265). Never set
+    /// for a tree whose purge keeps its registry entry. Legacy persisted state
+    /// decodes the missing slot to <see langword="false"/>.
+    /// </summary>
+    [Id(20)] public bool RegistryUnregisterPending { get; set; }
 }

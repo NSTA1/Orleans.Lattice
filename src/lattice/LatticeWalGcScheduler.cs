@@ -2674,6 +2674,14 @@ internal sealed class LatticeWalGcScheduler(
             }
             else if (floorBlocked)
             {
+                // Issue #4227. This arm never runs the floor-holder classifier,
+                // so a tree blocked on every pass reached no admission verdict
+                // and used to publish nothing on that instrument at all. Charged
+                // once per pass here, above the consumer-naming guard, so the
+                // pre-classifier exit is visible as itself rather than as an
+                // absence a reader would take for an unregistered tree.
+                RecordFloorHolderAdmission(LatticeMetrics.FloorHolderAdmissionUnreached, treeTag, tenantTag, 1);
+
                 // Blocked but naming no consumer keeps the episode rather than
                 // ending it. The GC always names the blocker it short-circuited
                 // on, so this is unreachable from a real report; if it were
@@ -3448,6 +3456,20 @@ internal sealed class LatticeWalGcScheduler(
         // sweep at all.
         RecordFloorHolderClassification(LatticeMetrics.FloorHolderClassified, treeTag, tenantTag, 0);
         RecordFloorHolderClassification(LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, 0);
+
+        // Issue #4227. The two floor-holder verdict instruments are primed on
+        // the same footing, because both used to be minted only inside the
+        // classifier - and a tree whose cursor floor reports blocked takes the
+        // heal arm, which never runs it. Such a tree published no series on
+        // either, byte-identical to a tree that was never registered: the
+        // ambiguity issue #3258 was filed to end, one stage earlier. The
+        // admission arms now exist for every evaluated tree, and 'unreached'
+        // names the pre-classifier exit as itself. The offset split is per
+        // partition, so it is primed at the reserved PartitionNone value
+        // exactly as blocking_pin_state is above, carrying the reachability
+        // claim and nothing else.
+        PrimeFloorHolderAdmission(treeTag, tenantTag);
+        PrimeNeverCheckpointedPinOffsets(LatticeMetrics.PartitionNone, treeTag, tenantTag);
 
         // Issue #2692 Half B. The drive verdicts are primed on the same footing
         // and for the same reason: 'drove_lifted' is the series a reader will
@@ -5018,6 +5040,12 @@ internal sealed class LatticeWalGcScheduler(
     /// <see cref="PrimeCoverageUnknownPinOffsets"/>, whose question is about its
     /// <c>offset_absent</c> slice, but the requirement is identical and so is
     /// the remedy.
+    /// </para>
+    /// <para>
+    /// Also called once per evaluated tree at
+    /// <see cref="LatticeMetrics.PartitionNone"/> (issue #4227), so a tree whose
+    /// passes never reach the floor-holder classifier still publishes a measured
+    /// zero rather than no series at all.
     /// </para>
     /// </remarks>
     private static void PrimeNeverCheckpointedPinOffsets(
@@ -7333,12 +7361,15 @@ internal sealed class LatticeWalGcScheduler(
         RecordFloorHolderClassification(
             LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, Math.Max(0, population - classified));
 
-        // Issue #3258. Prime BOTH arms on every sweep that reaches the
+        // Issue #3258. Prime every arm on every sweep that reaches the
         // classifier, before deciding which one to charge. Priming is what
-        // makes the three readings distinguishable: series absent means the
-        // classifier never ran on this tree, both arms present and static at
-        // zero means it ran and found no offset floor to admit, and a climbing
-        // "blocked" arm means it found one and refused it every time. Priming
+        // makes the readings distinguishable: both verdict arms static at zero
+        // means it ran and found no offset floor to admit, a climbing "blocked"
+        // arm means it found one and refused it every time, and (issue #4227)
+        // a climbing "unreached" arm means the tree's passes took the
+        // floor-blocked heal arm and never got here. The arms are also primed
+        // per tree in PrimeRetentionSeries, so the series exists for every
+        // evaluated tree whether or not it ever reaches this method. Priming
         // the arm that is about to be charged is harmless, since a zero add is
         // a no-op once the series exists.
         PrimeFloorHolderAdmission(treeTag, tenantTag);
@@ -7399,11 +7430,12 @@ internal sealed class LatticeWalGcScheduler(
         LatticeMetrics.WalGcFloorHolderAdmission.Add(delta, treeTag, status, tenantTag);
 
     /// <summary>
-    /// Publishes both <see cref="LatticeMetrics.WalGcFloorHolderAdmission"/>
-    /// arms at zero for a tree, so a wedged tree reads as a static
+    /// Publishes every <see cref="LatticeMetrics.WalGcFloorHolderAdmission"/>
+    /// arm at zero for a tree, so a wedged tree reads as a static
     /// <c>blocked = 0</c> beside a moving sibling rather than as an absent
     /// series indistinguishable from a tree the classifier never reached
-    /// (issue #3258).
+    /// (issue #3258), and a tree blocked before classification reads as a
+    /// climbing <c>unreached</c> arm rather than as silence (issue #4227).
     /// </summary>
     private static void PrimeFloorHolderAdmission(
         KeyValuePair<string, object?> treeTag,
@@ -7411,6 +7443,7 @@ internal sealed class LatticeWalGcScheduler(
     {
         RecordFloorHolderAdmission(LatticeMetrics.FloorHolderAdmissionAdmitted, treeTag, tenantTag, 0);
         RecordFloorHolderAdmission(LatticeMetrics.FloorHolderAdmissionBlocked, treeTag, tenantTag, 0);
+        RecordFloorHolderAdmission(LatticeMetrics.FloorHolderAdmissionUnreached, treeTag, tenantTag, 0);
     }
 
     /// <summary>

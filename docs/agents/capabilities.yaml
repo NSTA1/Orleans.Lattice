@@ -552,8 +552,10 @@ capabilities:
         source: "docs/lattice.backup/README.md"
       - statement: "Cold restore can recover a tree into a fresh cluster from the sink alone."
         source: "docs/lattice.backup/disaster-recovery.md"
-      - statement: "The backup facade exposes accept-then-poll operations with durable status, progress units, result maps, and cancellation."
+      - statement: "The backup facade exposes accept-then-poll capture, restore, health-check, catalog-rebuild, and catalog-scrub operations with durable status, progress units, result maps, and cancellation."
         source: "docs/lattice.api.backup/operations.md"
+      - statement: "RestoreSetAsync restores every member tree of a multi-tree backup set as one unit, promoted to a single all-or-nothing coordinated saga when any member is replicated."
+        source: "docs/lattice.backup/README.md"
       - statement: "A backup's consistency-cut HlcTimestamp is the wall-clock component of the highest HLC stamp the capture read, and an incremental pins the WAL at that frontier while it drains forward from its base."
         source: "docs/lattice.backup/api.md"
     non_guarantees:
@@ -618,15 +620,17 @@ capabilities:
         source: "docs/lattice/bulk-loading.md"
       - statement: "BulkLoadAsync is one-shot and requires every shard to be empty."
         source: "docs/lattice/bulk-loading.md"
+      - statement: "A shard counts as empty while it holds no entry, live or deleted, so a tree that has only been read from still accepts a bulk load; a shard that has held any key keeps refusing even after every key is deleted, because its tombstones are data."
+        source: "docs/lattice/bulk-loading.md"
       - statement: "The streaming extension does not resume and does not validate key order or tree emptiness."
         source: "docs/lattice/bulk-loading.md"
       - statement: "The streaming extension bypasses ILattice facade checks and write interception."
         source: "docs/lattice/bulk-loading.md"
     unsafe_sequences:
       - sequence:
-          - "bulk-load a tree whose shards already have roots"
+          - "bulk-load a tree whose shards have held keys, including keys since deleted"
           - "expect the import to succeed"
-        hazard: "Non-empty shards reject the one-shot bulk load."
+        hazard: "Shards that hold data, live or tombstoned, reject the one-shot bulk load with InvalidOperationException while the empty shards still load their share."
         source: "docs/lattice/bulk-loading.md"
       - sequence:
           - "stream keys out of ascending order"
@@ -1152,6 +1156,8 @@ capabilities:
         source: "docs/lattice.explorer/running-the-explorer.md"
       - statement: "MapLatticeExplorer emits baseline security response headers on every Explorer response."
         source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "The Apps area assesses whether the current operator holds any installed app role from role-to-group bindings and the caller's groups, warns when an install or re-binding leaves them with no role, and reports unknown membership rather than guessing."
+        source: "src/lattice.explorer/UI/Areas/Apps/Catalogue/AppRoleHoldingAssessment.cs#AppRoleHoldingAssessment"
     non_guarantees:
       - statement: "The Explorer surface is documented as in progress and its surface area and navigation are still moving."
         source: "FEATURES.md"
@@ -1414,6 +1420,8 @@ capabilities:
     guarantees:
       - statement: "Grain indexes are declared explicitly with AddGrainIndex and Include selectors."
         source: "docs/lattice.grainindex/README.md"
+      - statement: "Logical grain-index names containing / are rejected at startup so registry scans under an index-name prefix cannot include another index's entries."
+        source: "src/lattice.grainindex/GrainIndexDeclarationOptionsValidator.cs#GrainIndexDeclarationOptionsValidator.Validate"
       - statement: "A grain is indexed only when the silo declares an index and the persistent state is annotated with Indexed."
         source: "docs/lattice.grainindex/README.md"
       - statement: "Typed predicate queries run over indexed grain state and can stream grain references, keys, or projections."
@@ -2416,6 +2424,8 @@ capabilities:
         source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
       - statement: "A continuation token is issued only from a row returned to the caller."
         source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+      - statement: "Inbound peer-status contact rows are recorded only for runs the receiver locally admits; a non-enrolled tree, a wire-mode mismatch, or a missing enrollment source creates no inbound contact row."
+        source: "src/lattice.replication/ReplicationInboundContact.cs#ReplicationInboundContact.Record"
       - statement: "The gRPC status service maps GetPeerStatus to the same replication API authorization interceptor."
         source: "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor.DescribeCall"
     non_guarantees:
@@ -2438,6 +2448,8 @@ capabilities:
         source: "docs/lattice.api.replication/README.md"
       - statement: "A silo that fails to answer a peer-status read fails the whole read rather than producing a partial page."
         source: "docs/lattice.api.replication/README.md"
+      - statement: "New inbound contact rows are bounded by the inbound-row cap; after the cap is reached, existing inbound pairs keep updating and new pairs are not recorded."
+        source: "src/lattice.replication/ReplicationPeerStats.cs#ReplicationPeerStats.DefaultMaxInboundRows"
     sources:
       - "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
       - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
@@ -2445,6 +2457,7 @@ capabilities:
     name: "Repo-context MCP"
     packages:
       - "Orleans.Lattice.Api.Mcp.RepoContext"
+      - "Orleans.Lattice.Api.Mcp.RepoContext.Replication"
     concepts:
       - mcp-tool-group
       - repocontext-store
@@ -2453,6 +2466,8 @@ capabilities:
         source: "docs/lattice.api.mcp.repocontext/README.md"
       - statement: "Every record is stored as a CRDT value on a named Lattice tree and inherits Lattice durability, TTL, and tombstone-compaction behavior."
         source: "docs/lattice.api.mcp.repocontext/README.md"
+      - statement: "The repo-context multi-cluster companion replicates the store across clusters under per-tree merge modes."
+        source: "FEATURES.md"
       - statement: "Tool advertisement and invocation clear the same fail-closed authorization gate."
         source: "docs/lattice.api.mcp.repocontext/tools.md"
       - statement: "Onboarding runs asynchronously and is idempotent and resumable, with status reported by repocontext_index_status."
@@ -2739,6 +2754,10 @@ capabilities:
         source: "docs/lattice.schema/dead-letter-queue.md"
       - statement: "LatticeSchemaPolicyValidator evaluates a policy against a value locally, with the same rule semantics as enforcement, and never contacts the cluster."
         source: "docs/lattice.schema/README.md"
+      - statement: "The schema facade exposes accept-then-poll compliance scans, remediation, eager migration, and advance-and-migrate operations with durable status, progress units, result maps, and cancellation before cutover."
+        source: "docs/lattice.api.schema/operations.md"
+      - statement: "Schema administration is fail-closed and exposed in-process, over gRPC, and as MCP tools through the tree-administration surface."
+        source: "FEATURES.md"
     non_guarantees:
       - statement: "A tree with no schema policy and no version config behaves like a plain lattice."
         source: "docs/lattice.schema/README.md"
@@ -2811,6 +2830,8 @@ capabilities:
         source: "docs/lattice/security.md"
       - statement: "A range delete under partial authorization is hard-denied rather than narrowed."
         source: "docs/lattice/security.md"
+      - statement: "Membership and policy administration and authorization explanation are exposed through a fail-closed control facade in-process, over gRPC, or as MCP tools."
+        source: "FEATURES.md"
     non_guarantees:
       - statement: "Nothing in the security layer is enabled unless the host registers the add-on packages."
         source: "docs/lattice/security.md"
@@ -2838,9 +2859,16 @@ capabilities:
           - "leave membership edges that reference the group"
         hazard: "Group removal is non-cascading, so orphaned edges can keep contributing the deleted group id to a subject closure."
         source: "docs/lattice.membership/README.md"
+      - sequence:
+          - "grant access-administration delegation"
+          - "assume the delegate cannot administer tenants"
+        hazard: "The delegate satisfies platform-operator checks and can create, suspend, delete, and set quotas for any tenant where Orleans.Lattice.Api.TenantAdmin is registered."
+        source: "docs/lattice.api.auth/README.md"
     concurrency_rules:
       - statement: "Policy changes take effect once the compiled snapshot rebuilds from the updated policy tree."
         source: "docs/lattice/security.md"
+      - statement: "If the published authorization snapshot is empty, the first committed rule makes the gate wait for a rebuild that observes it instead of denying from the empty snapshot."
+        source: "src/lattice.auth/CompiledPolicySnapshotMaintainer.cs#CompiledPolicySnapshotMaintainer.IsWarm"
       - statement: "Strict epoch fencing rejects opted-in user writes while the local compiled policy epoch is below the required floor."
         source: "docs/lattice.auth/README.md"
       - statement: "System-origin writes and replication-applied writes are never fenced by strict policy epochs."
@@ -3103,6 +3131,8 @@ capabilities:
         source: "docs/lattice/consistency.md"
       - statement: "Live durable cursor steps are strongly consistent per step, not one atomic view across all steps."
         source: "docs/lattice/consistency.md"
+      - statement: "A resilient scan that reopens after an enumerator abort re-asserts the captured system-origin, credential, and view-read scopes for every reopened segment."
+        source: "src/lattice/BPlusTree/LatticeExtensions.cs#LatticeExtensions.ScanEntriesAsyncCore"
     unsafe_sequences:
       - sequence:
           - "run a resilient streaming scan"
@@ -3313,6 +3343,64 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice/tombstone-compaction.md"
+  - id: tracked-cluster-operations
+    name: "Tracked cluster operations"
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Api.Abstractions"
+    concepts:
+      - tracked-cluster-operation
+    guarantees:
+      - statement: "Start verbs return an operation handle immediately and the work continues independently of the start call's cancellation token, caller timeout, browser tab, or connection."
+        source: "src/lattice/Operations/LatticeOperationRunner.cs#LatticeOperationRunner.StartAsync"
+      - statement: "Status records carry operation id, open-string kind, tenant and tree scope, state, phase, progress units, timestamps, failure reason, result reference, result map, and CancelRequested."
+        source: "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs#LatticeOperationStatus"
+      - statement: "ListOperationsAsync returns newest-first pages and a continuation token; operation records pruned since indexing are skipped."
+        source: "src/lattice/Operations/LatticeOperationIndexGrain.cs#LatticeOperationIndexGrain.ListAsync"
+      - statement: "Finished operations are retained for the configured retention window and each tenant index is bounded by MaxIndexedOperations."
+        source: "src/lattice/Operations/LatticeOperationIndexGrain.cs#LatticeOperationIndexGrain.Prune"
+      - statement: "A live operation whose runner silo is declared dead or whose heartbeat lease lapses is recorded as Failed rather than left Running."
+        source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain.DescribeLoss"
+    non_guarantees:
+      - statement: "The engine does not resume interrupted work after accepting-silo loss."
+        source: "src/lattice/Operations/LatticeOperationRunner.cs#LatticeOperationRunner"
+      - statement: "A start id is idempotent only within the same tenant and kind; reusing it for a different kind is refused."
+        source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain.BeginAsync"
+      - statement: "CancelOperationAsync records a request and the state stays non-terminal until the work observes cancellation."
+        source: "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      - statement: "The result map is intentionally small and kind-defined; large or typed payloads stay behind package-specific result reads."
+        source: "src/lattice/Operations/LatticeOperationRecord.cs#LatticeOperationRecord.Result"
+    unsafe_sequences:
+      - sequence:
+          - "start a tracked operation"
+          - "lose the accepting silo"
+          - "assume the operation will resume from its last progress record"
+        hazard: "The next read marks the operation Failed; a caller must inspect status and start again if the work is still needed."
+        source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain.DescribeLoss"
+      - sequence:
+          - "request cancellation"
+          - "assume the operation is terminal immediately"
+        hazard: "CancelRequested is durable, but the operation remains Queued or Running until the runner or grain work observes it."
+        source: "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      - sequence:
+          - "page operations after finished records aged past retention"
+          - "treat a missing operation as proof it never existed"
+        hazard: "Completed records are pruned after retention and invisible operations are reported as not found."
+        source: "src/lattice/Operations/LatticeOperationIndexGrain.cs#LatticeOperationIndexGrain.Prune"
+    concurrency_rules:
+      - statement: "An operation grain is keyed by tenant and operation id, so the same id in different tenants addresses different records."
+        source: "src/lattice/Operations/LatticeOperationKey.cs#LatticeOperationKey"
+      - statement: "Starting again with the same tenant and id returns the existing operation and starts no duplicate work."
+        source: "src/lattice/Operations/LatticeOperationRunner.cs#LatticeOperationRunner.StartAsync"
+      - statement: "Progress never regresses within a phase; a late or replayed report with fewer completed units preserves the recorded count."
+        source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain.ReportAsync"
+      - statement: "Progress reports are coalesced and banked on every fault and cancellation path before a terminal state is recorded."
+        source: "src/lattice/Operations/LatticeOperationProgressSink.cs#LatticeOperationProgressSink"
+    sources:
+      - "docs/lattice.api.abstractions/operations.md"
+      - "src/lattice/Operations/LatticeOperationRunner.cs"
+      - "src/lattice/Operations/LatticeOperationGrain.cs"
+      - "src/lattice/Operations/LatticeOperationIndexGrain.cs"
   - id: tree-administration
     name: "Tree administration"
     packages:
@@ -3375,8 +3463,8 @@ capabilities:
         source: "docs/lattice.api.treeadmin/README.md"
       - statement: "Batch WAL moves flip the placement pin once under a single compare-and-swap."
         source: "docs/lattice/wal-storage-providers.md"
-      - statement: "Orphaned-leaf audit, survey, and repair are bounded batches resumed with resumeFrom."
-        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "Orphaned-leaf audit, survey, and repair force-refresh the live shard map, then walk bounded batches resumed with resumeFrom."
+        source: "src/lattice.api.treeadmin/LatticeTreeAdmin.Operations.cs#LatticeTreeAdmin.RunOrphanedLeafPassAsync"
       - statement: "Reshard, resize, snapshot and purge are accept-then-poll: the trigger returns once the coordinator accepts the intent, and a caller follows the operation through its status read rather than retrying."
         source: "docs/lattice.api.treeadmin/README.md"
     sources:
@@ -3395,8 +3483,8 @@ capabilities:
         source: "docs/lattice/tree-registry.md"
       - statement: "Registry entries track structural sizing pins, alias, shard map, runtime overrides, WAL partition count, WAL placement, and bookkeeping."
         source: "docs/lattice/tree-registry.md"
-      - statement: "A tree is automatically registered on first options resolution or first shard-root operation, including reads."
-        source: "docs/lattice/tree-registry.md"
+      - statement: "A tree is automatically registered on first options resolution or first shard-root operation, including reads, unless the id has a completed purge record; read-side resolution and background loops do not recreate a purged tree."
+        source: "src/lattice/BPlusTree/PurgedTreeRegistrationGuard.cs#PurgedTreeRegistrationGuard"
       - statement: "Registration must succeed before the root leaf pointer is persisted."
         source: "docs/lattice/tree-registry.md"
       - statement: "Structural sizing pins are seeded from hardcoded defaults when missing and later change only through resize and reshard."
@@ -3742,8 +3830,8 @@ capabilities:
       - wal
       - wal-storage-provider
     guarantees:
-      - statement: "IWalStorageProvider is the pluggable storage seam behind the per-shard WAL durability boundary."
-        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "IWalStorageProvider is the pluggable storage seam behind the partitioned WAL durability boundary."
+        source: "src/lattice/IWalStorageProvider.cs#IWalStorageProvider"
       - statement: "AppendBatchAsync and AppendEncodedBatchAsync are all-or-nothing per call."
         source: "docs/lattice/wal-storage-providers.md"
       - statement: "Providers preserve caller-assigned offsets verbatim and read entries in ascending offset order."
@@ -3752,7 +3840,7 @@ capabilities:
         source: "docs/lattice/api.md"
       - statement: "AddAzureTableWalStorage replaces the baseline and wires WAL cursor registry and garbage collection."
         source: "docs/lattice.storage.azuretable/api.md"
-      - statement: "AzureTableWalStorageProvider stores durable per-tree and per-shard WAL batches in Azure Table Storage."
+      - statement: "AzureTableWalStorageProvider stores durable per-tree and per-partition WAL batches in Azure Table Storage."
         source: "docs/lattice.storage.azuretable/README.md"
       - statement: "FileWalStorageProvider stores one wal.log per tree and shard and recovers by discarding torn or uncommitted tails."
         source: "docs/lattice.storage.file/architecture.md"

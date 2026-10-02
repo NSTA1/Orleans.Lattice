@@ -49,6 +49,8 @@ postconditions:
     source: "docs/lattice/tree-deletion.md"
   - check: "Purge is irreversible."
     source: "docs/lattice.api.treeadmin/README.md"
+  - check: "A purge counts as complete only once the tree's registry entry has been removed; until then the deletion status reports PurgeInProgress with every shard done, and TreeExistsAsync still finds the tree."
+    source: "docs/lattice/tree-deletion.md"
   - check: "On an aliased tree, delete, recover and purge act on the live backing copy the delete pinned, and purge unregisters both that copy and the logical tree."
     source: "docs/lattice/tree-registry.md"
   - check: "On an aliased tree, a shard that a split adds to the live copy after the alias is set is recorded against the logical tree, and delete, recover and purge read that record as well as the copy's, so they reach the shard with the rest of the copy."
@@ -74,6 +76,10 @@ failure_modes:
     signal: "Delete is rejected because the tree's alias targets a tree it does not own or another tree aliases it."
     effect: "Tree remains live and no tree is deleted through the wrong name."
     response: "Correct or remove the alias, or delete the aliasing tree first, then retry."
+  - id: purge-interrupted-before-unregister
+    signal: "A purge interrupted after recording its completion but before removing the registry entry leaves that entry behind."
+    effect: "The id reads as a live, empty tree that keeps the purged tree's registry settings."
+    response: "Check TreeExistsAsync before reusing the id; docs/lattice/tree-deletion.md states no automatic repair for the leftover entry."
 rollback:
   supported: true
   mechanism: "RecoverTreeAsync reverses soft delete within the recovery window; purge has no rollback."

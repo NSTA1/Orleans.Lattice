@@ -66,7 +66,10 @@ into a fraction.
 The same corpus and configuration always produce the same result set, so
 downstream suites are not flaky. Three mechanisms deliver that:
 
-- Results are totally ordered by descending score, then ascending key.
+- Results are totally ordered by descending score, then ascending key. A score
+  that is not a number - a vector or query with a non-finite component - ranks
+  below every numeric score, so it can never displace a real match and its rank
+  does not depend on the order the vectors were scanned in.
 - Training collects the live set **sorted by key** before sampling, so sampling
   and centroid seeding depend on contents rather than on insertion history.
 - The k-means mean recomputation is deliberately **serial in ascending order**
