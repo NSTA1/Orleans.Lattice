@@ -254,6 +254,115 @@
   font-size: var(--lt-text-sm);
 }
 
+/*
+  7a. A tenant's two rule layers (issue #4163), drawn as an order diagram: a
+  spine from the Platform layer down to the Tenant layer, a node per layer, the
+  deciding layer and rule on the join node (the marker, ringed by LtNode) with
+  the strong weight and the words "Decides" and "Deciding rule", and the layer
+  that lost in secondary ink.
+*/
+.lt-access-layers {
+  margin: 0 0 var(--lt-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.lt-access-layer {
+  margin: 0;
+  padding: 0 0 var(--lt-space-4) var(--lt-space-4);
+  border-left: 1.5px solid var(--lt-rule-strong);
+  color: var(--lt-ink);
+}
+
+.lt-access-layer:last-child {
+  padding-bottom: 0;
+}
+
+.lt-access-layer--losing {
+  color: var(--lt-ink-3);
+}
+
+.lt-access-layer__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  margin: 0 0 var(--lt-space-2) calc(var(--lt-space-4) * -1 - 5px);
+}
+
+.lt-access-layer__title {
+  margin: 0;
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-access-layer[aria-current="true"] .lt-access-layer__title {
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-access-layer__note {
+  color: inherit;
+  font-size: var(--lt-text-sm);
+}
+
+.lt-access-layer__decides {
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-access-layer__rules {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-access-layer__rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--lt-space-1) var(--lt-space-3);
+  padding: var(--lt-space-1) 0;
+  border-bottom: 1px solid var(--lt-rule);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-access-layer__rule--deciding {
+  font-weight: var(--lt-weight-strong);
+}
+
+/* A read-only layer's lock glyph, drawn in the text colour beside its heading. */
+.lt-access-lock {
+  width: 0.875em;
+  height: 0.875em;
+  margin-right: var(--lt-space-2);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  vertical-align: -0.0625em;
+}
+
+/* A tenant rule's revisions in the policy store, newest first. */
+.lt-access-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-access-history__rev {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  border-bottom: 1px solid var(--lt-rule);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-access-history__time {
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+}
+
 /* 8. A subject's provenance: the source it was chosen from, and its full id. */
 .lt-access-provenance {
   display: flex;
