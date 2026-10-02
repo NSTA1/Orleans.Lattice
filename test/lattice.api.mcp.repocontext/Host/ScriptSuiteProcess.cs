@@ -64,7 +64,21 @@ internal static class ScriptSuiteProcess
     /// combination that reaches the deadlock. In CI it would present as a blame-hang
     /// abort naming no fixture and no assertion.
     /// </para>
+    /// <para>
+    /// The <see langword="bool"/> from <c>WaitForExit(int)</c> is honoured. When it is
+    /// <see langword="false"/> the child is STILL RUNNING, so reading
+    /// <c>Process.ExitCode</c> throws an <see cref="InvalidOperationException"/> whose
+    /// message names neither the suite nor the timeout, and the <c>using</c> block
+    /// disposes the handle without killing the child - leaving an orphaned PowerShell
+    /// process holding the working directory for the rest of the run. The timeout branch
+    /// therefore kills the whole tree, drains whatever both pipes captured before the
+    /// kill, and throws a diagnosis naming the shell, the suite, the timeout, and that
+    /// partial output.
+    /// </para>
     /// </remarks>
+    /// <exception cref="TimeoutException">
+    /// <paramref name="suitePath"/> did not exit within <paramref name="timeoutMilliseconds"/>.
+    /// </exception>
     internal static (int ExitCode, string StandardOutput, string StandardError) Run(
         string shell,
         string suitePath,
@@ -82,10 +96,54 @@ internal static class ScriptSuiteProcess
         using var process = Process.Start(psi)!;
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit(timeoutMilliseconds);
+
+        if (!process.WaitForExit(timeoutMilliseconds))
+        {
+            Kill(process);
+            throw new TimeoutException(
+                $"'{shell} -NoProfile -File \"{suitePath}\"' did not exit within {timeoutMilliseconds} ms "
+                + $"(working directory '{workingDirectory}'). The process tree was killed."
+                + Environment.NewLine + "Captured stdout: " + DrainOrDescribe(stdoutTask)
+                + Environment.NewLine + "Captured stderr: " + DrainOrDescribe(stderrTask));
+        }
+
         return (
             process.ExitCode,
             stdoutTask.GetAwaiter().GetResult(),
             stderrTask.GetAwaiter().GetResult());
+    }
+
+    private static void Kill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // The child exited between the timeout and the kill.
+        }
+        catch (NotSupportedException)
+        {
+            // The platform cannot enumerate the tree; the direct child is already gone.
+        }
+    }
+
+    /// <summary>
+    /// Returns whatever a pipe captured before the kill, bounded so a drain that never
+    /// reaches EOF cannot replace the timeout diagnosis with a hang of its own.
+    /// </summary>
+    private static string DrainOrDescribe(Task<string> pipe)
+    {
+        try
+        {
+            return pipe.Wait(TimeSpan.FromSeconds(5))
+                ? pipe.GetAwaiter().GetResult()
+                : "<not drained within 5 s of the kill>";
+        }
+        catch (Exception ex)
+        {
+            return $"<unreadable: {ex.GetType().Name}: {ex.Message}>";
+        }
     }
 }
