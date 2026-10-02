@@ -41,6 +41,8 @@ public class AbstractionsPublicApiContractTests
         typeof(Orleans.Lattice.Api.Apps.ILatticeAppsControl),
         typeof(Orleans.Lattice.Api.Operations.ILatticeOperations),
         typeof(ILatticeBackupOperations),
+        typeof(ILatticeSchemaComplianceOperations),
+        typeof(ILatticeStorageUsageOperations),
     };
 
     private static readonly IReadOnlyList<string> ContractNamespaces = new[]

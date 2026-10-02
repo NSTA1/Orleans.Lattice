@@ -69,6 +69,10 @@ public static class LatticeApiTreeAdminServiceCollectionExtensions
         // every transport binding (for example gRPC, MCP) adapts over.
         builder.Services.TryAddSingleton<ILatticeTreeAdmin, LatticeTreeAdmin>();
 
+        // Accept-then-poll fresh storage usage (#4126), run on the core operation
+        // coordinator that AddLattice registers.
+        builder.Services.TryAddSingleton<ILatticeStorageUsageOperations, LatticeStorageUsageOperations>();
+
         // The fail-closed diagnostics authorization seam the facade consults before
         // every read-only diagnostics operation. It resolves the core access gate
         // (the no-op gate when no auth add-on is registered, so it is zero cost) and

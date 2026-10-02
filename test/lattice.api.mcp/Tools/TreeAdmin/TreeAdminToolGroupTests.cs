@@ -116,9 +116,33 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_retention_set",
     };
 
+    /// <summary>The read-only accept-then-poll status and list tools (#4126), always contributed.</summary>
+    private static readonly string[] OperationReadToolNames =
+    {
+        "lattice_treeadmin_schema_compliance_scan_status",
+        "lattice_treeadmin_schema_compliance_scan_list",
+        "lattice_treeadmin_storage_usage_refresh_status",
+        "lattice_treeadmin_storage_usage_refresh_list",
+    };
+
+    /// <summary>
+    /// The accept-then-poll start and cancel tools (#4126): always contributed, since a
+    /// scan and a refresh are reads, and annotated mutating but never destructive.
+    /// </summary>
+    private static readonly string[] OperationMutateToolNames =
+    {
+        "lattice_treeadmin_schema_compliance_scan_start",
+        "lattice_treeadmin_schema_compliance_scan_cancel",
+        "lattice_treeadmin_storage_usage_refresh_start",
+        "lattice_treeadmin_storage_usage_refresh_cancel",
+    };
+
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
     private static IEnumerable<string> ReadOnlyToolNames =>
-        InspectionToolNames.Concat(DiagnosticsToolNames).Concat(LifecycleReadToolNames);
+        InspectionToolNames.Concat(DiagnosticsToolNames).Concat(LifecycleReadToolNames).Concat(OperationReadToolNames);
+
+    /// <summary>Every tool contributed regardless of any opt-in.</summary>
+    private static IEnumerable<string> AlwaysOnToolNames => ReadOnlyToolNames.Concat(OperationMutateToolNames);
 
 
     private static TreeAdminToolGroup CreateGroup(bool enableSchemaControl, bool enableLifecycle = false)
@@ -151,7 +175,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames));
+            Assert.That(Names(group), Is.EquivalentTo(AlwaysOnToolNames));
             foreach (var management in ManagementToolNames)
             {
                 Assert.That(Names(group), Does.Not.Contain(management),
@@ -173,7 +197,7 @@ public sealed class TreeAdminToolGroupTests
     {
         var group = CreateGroup(enableSchemaControl: true);
 
-        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames)));
+        Assert.That(Names(group), Is.EquivalentTo(AlwaysOnToolNames.Concat(ManagementToolNames)));
     }
 
     [Test]
@@ -209,6 +233,22 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
+    public void Operation_start_and_cancel_tools_are_always_present_and_mutating_but_not_destructive()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: false);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in OperationMutateToolNames)
+            {
+                var annotations = ServerTool(group, name).ProtocolTool.Annotations;
+                Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} records an operation, so it is not read-only.");
+                Assert.That(annotations?.DestructiveHint, Is.False, $"{name} never mutates data.");
+            }
+        });
+    }
+
+    [Test]
     public void Lifecycle_read_tools_are_always_present_even_without_the_opt_in()
     {
         var group = CreateGroup(enableSchemaControl: false, enableLifecycle: false);
@@ -236,7 +276,7 @@ public sealed class TreeAdminToolGroupTests
     {
         var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
 
-        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
+        Assert.That(Names(group), Is.EquivalentTo(AlwaysOnToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -278,7 +318,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             Names(group),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames).Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
+            Is.EquivalentTo(AlwaysOnToolNames.Concat(ManagementToolNames).Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -293,7 +333,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
+            Is.EquivalentTo(AlwaysOnToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -395,7 +435,7 @@ public sealed class TreeAdminToolGroupTests
         Assert.Multiple(() =>
         {
             Assert.That(group.Group, Is.EqualTo(LatticeApiMcpGroup.TreeAdmin));
-            Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Is.EquivalentTo(ReadOnlyToolNames));
+            Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Is.EquivalentTo(AlwaysOnToolNames));
         });
     }
 
@@ -411,7 +451,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames)));
+            Is.EquivalentTo(AlwaysOnToolNames.Concat(ManagementToolNames)));
     }
 
     [Test]
