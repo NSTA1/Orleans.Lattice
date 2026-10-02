@@ -57,7 +57,8 @@ public sealed class RepoContextSelfIndexGrainGitSourceTests
     private static RepoContextSelfIndexGrain CreateGrain(
         RepoContextIndexSourceGate gate,
         IRepoIndexRunner runner,
-        IRepoIndexJobGrain job)
+        IRepoIndexJobGrain job,
+        RepoContextIndexingOptions? options = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("repoContextSelfIndex", RepoId));
@@ -71,7 +72,7 @@ public sealed class RepoContextSelfIndexGrainGitSourceTests
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IRepoIndexJobGrain>(RepoId, Arg.Any<string?>()).Returns(job);
 
-        var options = new RepoContextIndexingOptions { Role = RepoContextIndexingRole.Hub };
+        options ??= new RepoContextIndexingOptions { Role = RepoContextIndexingRole.Hub };
         var replication = Substitute.For<ILatticeReplicationContext>();
         var cache = new RepoContextVectorCache(TimeProvider.System, options);
         var writer = new RepoContextVectorWriter(
@@ -103,6 +104,26 @@ public sealed class RepoContextSelfIndexGrainGitSourceTests
                 ? (RepoIndexJobRequest?)null
                 : Request() with { CommitSha = persistedCommitSha });
         return job;
+    }
+
+    [Test]
+    public async Task EnsureRunningAsync_in_memory_only_mode_never_fetches_and_runs_the_seeded_request()
+    {
+        var fetcher = new StubGitFetcher(StubGitFetcher.Staged(FirstSha));
+        var gate = RepoContextSourceTestDoubles.Gate(
+            Registry(), RepoContextSourceTestDoubles.CredentialsFor(RepoId), fetcher);
+        var runner = Substitute.For<IRepoIndexRunner>();
+        var grain = CreateGrain(
+            gate,
+            runner,
+            Job(RepoIndexStatus.None, persistedCommitSha: null),
+            new RepoContextIndexingOptions { SourceIndexing = false });
+
+        await grain.EnsureRunningAsync(Request());
+
+        Assert.That(fetcher.FetchCount, Is.Zero, "a memory-only host reads no source, so it must never fetch");
+        await runner.Received(1).StartIndexAsync(
+            Arg.Is<RepoIndexJobRequest>(r => r.RepoRoot == MountedRoot && r.CommitSha == null));
     }
 
     [Test]

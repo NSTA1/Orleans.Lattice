@@ -366,6 +366,17 @@ internal sealed class RepoContextBootstrapService : IDisposable
         }
 
         var stopwatch = Stopwatch.StartNew();
+
+        // Memory-only mode: nothing is derived from source, so the pass neither
+        // resolves nor walks a root. Branching before the workspace resolve also keeps
+        // a git-sourced repository's staging root, which is never fetched in this
+        // mode, from being treated as a path that must exist.
+        if (!_options.SourceIndexing)
+        {
+            return await RunMemoryOnlyPassAsync(request.RepoId, progress, stopwatch, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var repoRoot = _workspaceGuard.Resolve(request.RepoRoot);
         var repoId = request.RepoId;
         var phase = RepoIndexPhase.Walking;
@@ -1223,6 +1234,68 @@ internal sealed class RepoContextBootstrapService : IDisposable
             _logger.LogInformation(
                 "Repo {RepoId}: indexing cancelled during the {Phase} phase after {Elapsed} ms; durable structural writes already committed are preserved and a re-run resumes from the first uncommitted chunk.",
                 repoId, phase, stopwatch.ElapsedMilliseconds);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The pass a memory-only host (<see cref="RepoContextIndexingOptions.SourceIndexing"/>
+    /// off) runs instead of a full ingestion: it stamps the repository marker so the
+    /// repository stays listed, then runs only the agent-memory embedding arm. No file
+    /// is walked, read, reconciled, or embedded, and no symbol is extracted or
+    /// embedded. Records an earlier source-indexing run left behind are neither read
+    /// nor pruned; <c>repocontext_reset_index</c> is what drops them.
+    /// </summary>
+    private async Task<RepoContextBootstrapResult> RunMemoryOnlyPassAsync(
+        string repoId,
+        IRepoIndexProgressSink? progress,
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ReportAsync(
+                progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Vectorising }, cancellationToken)
+                .ConfigureAwait(false);
+
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
+            await StampNoOpRepoNodeAsync(tree, repoId, liveFileCount: 0, commitSha: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            int memoryEmbedded;
+            try
+            {
+                memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
+                    repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                RecordArmFault(repoId, "ingest-memory", ex);
+                throw;
+            }
+
+            _logger.LogInformation(
+                "Repo {RepoId}: memory-only pass ({Key}=off) embedded {Entries} memory passage(s) in {Elapsed} ms; "
+                + "file and symbol indexing are disabled.",
+                repoId, RepoContextIndexingOptions.SourceIndexingKey, memoryEmbedded, stopwatch.ElapsedMilliseconds);
+
+            return new RepoContextBootstrapResult
+            {
+                RepoId = repoId,
+                FilesScanned = 0,
+                FilesAdded = 0,
+                FilesUpdated = 0,
+                FilesRemoved = 0,
+                FilesUnchanged = 0,
+                SymbolsCaptured = 0,
+                ElapsedMilliseconds = stopwatch.ElapsedMilliseconds,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            RecordPhaseCancellation(RepoIndexPhase.Vectorising, stopwatch.ElapsedMilliseconds);
             throw;
         }
     }
