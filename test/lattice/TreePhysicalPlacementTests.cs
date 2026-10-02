@@ -20,7 +20,22 @@ public sealed class TreePhysicalPlacementTests
     {
         // The struct is a value type: two independently produced baselines must
         // compare equal so a resolver result can be checked against Default.
-        Assert.That(TreePhysicalPlacement.Default, Is.EqualTo(TreePhysicalPlacement.Default));
+        // Bound to locals, and compared against a separately constructed
+        // equivalent, so the assertions are visibly between independently
+        // produced values rather than reading as a self-comparison.
+        var first = TreePhysicalPlacement.Default;
+        var second = TreePhysicalPlacement.Default;
+        var constructed = new TreePhysicalPlacement
+        {
+            WalProviderKey = IWalStorageProviderCatalog.DefaultProviderKey,
+            PlacementFilter = null,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.EqualTo(first));
+            Assert.That(constructed, Is.EqualTo(first));
+        });
     }
 
     [Test]
