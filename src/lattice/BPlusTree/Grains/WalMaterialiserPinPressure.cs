@@ -40,6 +40,26 @@ internal static class WalMaterialiserPinPressure
 {
     private static readonly ConcurrentDictionary<string, string> MetricTreeIds = new(StringComparer.Ordinal);
     private static readonly Dictionary<(string Tree, int Shard), long> MetricStalls = new();
+
+    /// <summary>
+    /// Clock backing every shed-window deadline below, in place of a direct
+    /// <see cref="Environment.TickCount64"/> read. Test seam only: production
+    /// always runs on the default <see cref="TimeProvider.System"/>, and a test
+    /// that injects a manual clock here must restore this to
+    /// <see cref="TimeProvider.System"/> itself, since the state is
+    /// process-static.
+    /// </summary>
+    internal static TimeProvider Clock { get; set; } = TimeProvider.System;
+
+    /// <summary>
+    /// The current instant in the same millisecond-tick units the shed-window
+    /// state stores, read from <see cref="Clock.GetTimestamp"/> (not
+    /// <see cref="TimeProvider.GetUtcNow"/>) so this stays monotonic like the
+    /// <see cref="Environment.TickCount64"/> read it replaces: immune to
+    /// wall-clock adjustments (NTP steps, manual clock changes), which a
+    /// shed-ceiling deadline must be.
+    /// </summary>
+    private static long NowTickMs() => (long)(Clock.GetTimestamp() * (1000.0 / Clock.TimestampFrequency));
     /// <summary>
     /// Multiple of the previous durable pin write's own measured duration for
     /// which subsequent <i>coalescible</i> reports to the same shard are shed
@@ -149,7 +169,7 @@ internal static class WalMaterialiserPinPressure
         // debounce rollback can retry it on the very next checkpoint.
         if (elapsedMs >= ShedTriggerFloorMs)
         {
-            var until = Environment.TickCount64 + (elapsedMs * ShedAmortisationFactor);
+            var until = NowTickMs() + (elapsedMs * ShedAmortisationFactor);
             _shedUntilTickMs.AddOrUpdate(shardKey, until, (_, existing) => Math.Max(existing, until));
         }
 
@@ -187,7 +207,7 @@ internal static class WalMaterialiserPinPressure
     /// </summary>
     internal static bool IsWindowOpen(string shardKey)
         => _shedUntilTickMs.TryGetValue(shardKey, out var until)
-            && Environment.TickCount64 < until;
+            && NowTickMs() < until;
 
     /// <summary>
     /// What <see cref="EvaluateShed"/> decided for one coalescible report.
@@ -248,7 +268,7 @@ internal static class WalMaterialiserPinPressure
     {
         if (metricTreeId is not null)
             MetricTreeIds[shardKey] = metricTreeId;
-        var now = Environment.TickCount64;
+        var now = NowTickMs();
 
         if (!IsWindowOpen(shardKey))
         {
@@ -281,7 +301,7 @@ internal static class WalMaterialiserPinPressure
     /// </summary>
     internal static IEnumerable<Measurement<long>> ObserveShedStalls()
     {
-        var now = Environment.TickCount64;
+        var now = NowTickMs();
         lock (MetricStalls)
         {
             MetricStalls.Clear();
@@ -313,6 +333,7 @@ internal static class WalMaterialiserPinPressure
         _shedUntilTickMs.Clear();
         _shedRunStartTickMs.Clear();
         MetricTreeIds.Clear();
+        Clock = TimeProvider.System;
     }
 
     /// <summary>
@@ -320,5 +341,5 @@ internal static class WalMaterialiserPinPressure
     /// <paramref name="durationMs"/>. Test seam only.
     /// </summary>
     internal static void ForceShedForTests(string shardKey, long durationMs)
-        => _shedUntilTickMs[shardKey] = Environment.TickCount64 + durationMs;
+        => _shedUntilTickMs[shardKey] = NowTickMs() + durationMs;
 }
