@@ -84,6 +84,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Reshard under atomic writes no longer duplicates keys.** A grow or shrink raced by `SetManyAtomicAsync` could leave a key on two leaves of one shard, so `CountAsync` over-counted and `ScanKeysAsync` skipped keys while point reads were correct. A saga's commit now sends a key a leaf split moved away to the leaf that holds it. ([#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)) (`Orleans.Lattice`)
+
 - **Core - Delete, recover and purge reach every shard.** A tree re-pinned to fewer shards while empty, and an aliased tree split after its alias was set, no longer leave shards readable after delete or in storage after purge. ([#4234](https://github.com/NSTA1/Orleans.Lattice/issues/4234)) (`Orleans.Lattice`)
 
 - **Core - Resize and restore revert no longer recreate a missing tree.** A resize swap or undo, or a restore revert, against a tree whose registry row is gone now fails as not found instead of writing back a row with no sizing. ([#4270](https://github.com/NSTA1/Orleans.Lattice/issues/4270)) (`Orleans.Lattice`)
