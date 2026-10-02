@@ -38,6 +38,13 @@ public sealed class RepoContextHostConfiguration
     public const string SqlitePathKey = "LATTICE_SQLITE_PATH";
 
     /// <summary>
+    /// Environment variable selecting the SQLite <c>auto_vacuum</c> mode:
+    /// <c>incremental</c> (the default), <c>full</c>, or <c>none</c>. An existing
+    /// database whose mode differs is converted once, at startup, with a <c>VACUUM</c>.
+    /// </summary>
+    public const string SqliteAutoVacuumKey = "LATTICE_SQLITE_AUTO_VACUUM";
+
+    /// <summary>
     /// Environment variable for the absolute dead-byte ceiling that forces a file WAL
     /// compaction regardless of the dead-byte ratio. Zero (the default) leaves the
     /// ceiling disabled, so only the ratio trigger applies.
@@ -99,6 +106,7 @@ public sealed class RepoContextHostConfiguration
         string dataRoot,
         string walDirectory,
         string sqlitePath,
+        SqliteAutoVacuumMode sqliteAutoVacuum,
         long walCompactionMaximumDeadBytes,
         string? postgresConnectionString,
         string? azureConnectionString,
@@ -119,6 +127,7 @@ public sealed class RepoContextHostConfiguration
         DataRoot = dataRoot;
         WalDirectory = walDirectory;
         SqlitePath = sqlitePath;
+        SqliteAutoVacuum = sqliteAutoVacuum;
         WalCompactionMaximumDeadBytes = walCompactionMaximumDeadBytes;
         PostgresConnectionString = postgresConnectionString;
         AzureConnectionString = azureConnectionString;
@@ -155,6 +164,14 @@ public sealed class RepoContextHostConfiguration
 
     /// <summary>The SQLite database file path (under the data root by default).</summary>
     public string SqlitePath { get; }
+
+    /// <summary>
+    /// The SQLite <c>auto_vacuum</c> mode applied to the database file.
+    /// <see cref="SqliteAutoVacuumMode.Incremental"/> by default, so deleted data is
+    /// returned to the filesystem by the paced background reclaimer rather than held on
+    /// SQLite's freelist for ever.
+    /// </summary>
+    public SqliteAutoVacuumMode SqliteAutoVacuum { get; }
 
     /// <summary>
     /// The absolute dead-byte ceiling that forces a file WAL compaction regardless of
@@ -247,6 +264,7 @@ public sealed class RepoContextHostConfiguration
         var dataRoot = Trimmed(configuration[DataRootKey]) ?? DefaultDataRoot;
         var walDirectory = Trimmed(configuration[WalDirKey]) ?? CombinePath(dataRoot, "wal");
         var sqlitePath = Trimmed(configuration[SqlitePathKey]) ?? CombinePath(dataRoot, "repocontext.db");
+        var sqliteAutoVacuum = ParseAutoVacuum(configuration[SqliteAutoVacuumKey]) ?? SqliteAutoVacuumMode.Incremental;
 
         var postgresConnectionString = Trimmed(configuration[PostgresConnectionKey]);
         var azureConnectionString = Trimmed(configuration[AzureConnectionKey]);
@@ -274,6 +292,7 @@ public sealed class RepoContextHostConfiguration
             dataRoot,
             walDirectory,
             sqlitePath,
+            sqliteAutoVacuum,
             walCompactionMaximumDeadBytes,
             postgresConnectionString,
             azureConnectionString,
@@ -393,6 +412,20 @@ public sealed class RepoContextHostConfiguration
             "azure" or "azuretable" => RelationalStore.Azure,
             _ => throw new InvalidOperationException(
                 $"{key}='{raw}' is not a known store provider (sqlite, postgres, azure)."),
+        };
+    }
+
+    private static SqliteAutoVacuumMode? ParseAutoVacuum(string? raw)
+    {
+        var value = Trimmed(raw);
+        return value?.ToLowerInvariant() switch
+        {
+            null => null,
+            "incremental" => SqliteAutoVacuumMode.Incremental,
+            "full" => SqliteAutoVacuumMode.Full,
+            "none" or "off" => SqliteAutoVacuumMode.None,
+            _ => throw new InvalidOperationException(
+                $"{SqliteAutoVacuumKey}='{raw}' is not a known auto_vacuum mode (incremental, full, none)."),
         };
     }
 

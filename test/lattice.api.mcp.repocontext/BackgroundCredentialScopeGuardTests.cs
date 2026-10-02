@@ -86,6 +86,11 @@ public sealed class BackgroundCredentialScopeGuardTests
             + "RepoContextDrainForecastService applies with extra force here: its readings are taken "
             + "while the process may be out of memory, and a credentialed store read on that path would "
             + "make the instrument a consumer of the very resource it exists to report the exhaustion of.",
+        ["SqliteAutoVacuumService.cs"] =
+            "Reclaims freed SQLite pages with PRAGMA incremental_vacuum over its own ADO.NET connection to "
+            + "the database file (issue #4327). It holds no ILattice reference and opens no tree, so there is "
+            + "no gated lattice read to authorize; the page moves it makes are below the grain-storage layer "
+            + "and change no stored value.",
     };
 
     private static readonly string[] ScanRoots =
