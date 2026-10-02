@@ -226,6 +226,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "partition pinned to a provider key the silo cannot resolve so configuration drift is caught before "
                 + "WAL shards begin to fail closed. Reports the silo's known provider keys. A pure read with no side "
                 + "effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminWalReclamationToolHandlers.GetWalReclamationAsync, TreeAdminWalReclamationToolHandlers.ToolName,
+                "Read a tree's WAL reclamation state",
+                "Reads which durable materialiser pin holds a tree's write-ahead-log floor - its consumer id, leaf, WAL "
+                + "partition and pin offset - with that leaf's persisted checkpoint and durable state, read without "
+                + "activating the leaf, plus the tree's pin counts. isWedged is true exactly when the holder carries a "
+                + "usable offset (>= 0) above a persisted checkpoint of -1: such a pin never moves, so the WAL never "
+                + "trims below it and the condition does not clear on its own. The verdict is keyed on the holder, never "
+                + "on WAL growth, because a wedged tree need not be growing. When pinStoreReadable is false nothing was "
+                + "established, so isWedged=false is not a clean bill of health. A pure read with no side effects. "
+                + "Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_audit",
                 "Audit a tree for orphaned leaves",
                 "Set survey=true for a full key census (read-only, off by default, at most 100000 keys per orphan). "
