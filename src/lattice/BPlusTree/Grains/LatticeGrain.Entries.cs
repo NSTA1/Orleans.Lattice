@@ -11,16 +11,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class LatticeGrain
 {
     /// <summary>
-    /// Pre-allocated comparers for entries reconciliation sorts. Hoisted so
-    /// the reconcile path does not allocate a closure on every split.
+    /// Pre-allocated orderings for entries reconciliation sorts. Hoisted so
+    /// the reconcile path does not allocate a closure on every split, and held
+    /// as <see cref="Comparison{T}"/> rather than <see cref="Comparer{T}"/>
+    /// because these are only ever handed to <c>Sort</c>: the
+    /// <see cref="IComparer{T}"/> overload re-converts <c>Compare</c> to a
+    /// delegate internally and so allocates once per scan page. See
+    /// <see cref="OrdinalStringOrder"/>.
     /// </summary>
-    private static readonly Comparer<KeyValuePair<string, byte[]>> EntriesForwardComparer =
-        Comparer<KeyValuePair<string, byte[]>>.Create(
-            static (a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
+    private static readonly Comparison<KeyValuePair<string, byte[]>> EntriesForwardComparer =
+        static (a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal);
 
-    private static readonly Comparer<KeyValuePair<string, byte[]>> EntriesReverseComparer =
-        Comparer<KeyValuePair<string, byte[]>>.Create(
-            static (a, b) => string.Compare(b.Key, a.Key, StringComparison.Ordinal));
+    private static readonly Comparison<KeyValuePair<string, byte[]>> EntriesReverseComparer =
+        static (a, b) => string.Compare(b.Key, a.Key, StringComparison.Ordinal);
 
     /// <summary>
     /// Enumerates the live key/value entries of this tree in strict sorted

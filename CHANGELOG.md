@@ -75,6 +75,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - WAL batch buffer pooling.** The two leaf merge paths staged their record batch in a list, and the CRDT apply path copied its list to a fresh array before dispatch. All three take a threshold-gated pooled rental now: 82 KB to zero on a 256-record batch. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
+
+- **Performance - Set accessor key probes.** Two set accessors materialised a base64 string purely to probe a dictionary, then dropped it. Both encode into a stack or pooled span and probe through an alternate lookup now, allocating nothing on either side of the stack threshold. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
+
+- **Performance - Sort comparer sweep completed.** Sorting with an `IComparer<T>` still minted a delegate per call at the sites #4184 left behind. Two hot streaming scan paths, sixteen downstream ordinal sites and two custom comparers pass a cached comparison now. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Tenancy`)
+
 - **Performance - Sort comparer delegate trims.** Sorting with an `IComparer<T>` minted a fresh `Comparison<T>` delegate per call, as the runtime converts its method group rather than caching it. Thirty-six CRDT, primitive and grain sort sites pass a cached comparison now and allocate nothing. ([#4184](https://github.com/NSTA1/Orleans.Lattice/pull/4184)) (`Orleans.Lattice`)
 
 - **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)
@@ -320,6 +326,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Vector - A removed key mapping came back after a flush.** `VectorKeyDictionary.RemoveAsync` and `ClearAsync` left records buffered by `GetOrAddBufferedAsync`, so the next flush wrote them back and a reload mapped the removed ids again. Both now discard those records. ([#4074](https://github.com/NSTA1/Orleans.Lattice/issues/4074)) (`Orleans.Lattice.Vector`)
 
 - **Core - Tree admin acted on undefined modes.** An unknown `TreeSnapshotMode` ran an Offline snapshot that quiesced the source, and an unknown `TreeHistoryRetentionMode` cleared the retention override. Both are now rejected with `ArgumentOutOfRangeException` before any side effect. ([#4075](https://github.com/NSTA1/Orleans.Lattice/issues/4075)) (`Orleans.Lattice.Api.TreeAdmin`)
+
+- **WAL - A batch running past the last offset was accepted.** Every WAL provider's density check wrapped at `long.MaxValue`, so a batch whose offsets ran off the end of the offset space passed and was stored out of order. The file, in-memory and Azure Table providers now reject it. ([#4221](https://github.com/NSTA1/Orleans.Lattice/issues/4221)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Storage.AzureTable`)
+
+- **Storage - A sub-byte capacity threshold disagreed with itself.** When a ceiling times the advisory ratio fell below one byte, the threshold truncated to zero: the aggregate read over threshold with nothing retained and the account never did. The threshold is now at least one byte. ([#4222](https://github.com/NSTA1/Orleans.Lattice/issues/4222)) (`Orleans.Lattice.Scaling`)
+
+- **Vector - A header declaring more centroid chunks than chunks was believed.** `VectorIndexHeader.Read` and `TryRead` now refuse it as a format no build writes, so a durable index whose manifest carries one rebuilds instead of waiting on centroid chunks that cannot exist. ([#4223](https://github.com/NSTA1/Orleans.Lattice/issues/4223)) (`Orleans.Lattice.Vector`)
 
 ### Security
 
