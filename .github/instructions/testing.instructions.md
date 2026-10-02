@@ -813,20 +813,24 @@ core unit-test suite both execute):**
   three inline commit/abort monotonicity branches in `TxRegistryGrain`'s
   `MarkCommittedAsync`, `MarkAbortedAsync`, and `RecordTerminalArrivalAsync`);
   covered by `TerminalDecisionGuardTests`, which exhaust every terminal-delivery
-  ordering over the {commit, abort} alphabet. This decision is **not** driven by
-  a Coyote model by design: every terminal delivery for one saga is classified by
-  the single registry activation that owns it, in the synchronous prologue of the
-  call before its first `await`. The mutating registry calls are
+  ordering over the {commit, abort} alphabet. That permutation-complete unit
+  suite, not a Coyote model, is what pins the load-bearing ordering invariant
+  (write-once, never both terminals): every terminal delivery for one saga is
+  classified by the single registry activation that owns it, in the synchronous
+  prologue of the call before its first `await`. The mutating registry calls are
   `[AlwaysInterleave]` for group commit (issue #3475), so they interleave at the
   durable-write await, but never inside the classification, so deliveries are
-  still classified one at a time rather than truly concurrently. The
-  load-bearing property is the ordering
-  invariant (write-once, never both terminals), which a permutation-complete unit
-  suite pins exactly; a Coyote schedule would only re-explore the same finite
-  sequence space.
+  still classified one at a time rather than truly concurrently, and a Coyote
+  schedule over the classification alone would only re-explore the same finite
+  sequence space. The Phase 6 `AtomicCommitInvariantModel` (see "Property
+  catalogue" below) does call the real `TerminalDecisionGuard.Classify` on its
+  duplicate terminal re-deliveries, interleaved with the decision write, the
+  terminal broadcast, and reader probes, so the guard's effect on those
+  interleaving invariants is model-checked there.
 - Terminal-arrival completeness gate - `TerminalArrivalTally` (the monotonic
   `MergeExpected` + `IsFinalArrival` quorum arithmetic in
-  `RecordTerminalArrivalAsync`); covered by `TerminalArrivalTallyTests`. The
+  `RecordTerminalArrivalAsync`); covered by its core unit-test suite
+  `TerminalArrivalTallyTests` rather than by a Coyote model. The
   count arithmetic is extracted; the dedup of *which* source shards have arrived
   stays in the grain (see documented exclusions below).
 
@@ -1088,10 +1092,10 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `SerializableExceptionDeepCopyGateEnrolmentTests` | Every package under `src/` records whether it owes the same-silo exception deep-copy contract: its test project enrols a concrete `SerializableExceptionDeepCopyContractTestsBase` subclass, or it is listed in `PackagesDeclaringNoSerializableException` and a comment-stripped source scan confirms it declares no `[GenerateSerializer]` exception. | A package that gains a `[GenerateSerializer]` exception adds `test/<package>/SerializableExceptionDeepCopyContractTests.cs` and leaves the exemption list; a new package with none is added to that list. The base audits the assembly its subclass names and asserts it found at least one exception, so "no subclass" alone cannot distinguish "not owed" from "forgotten" - this gate records the difference and re-verifies the exemption on every run. Repo-level gate over `src/` and `test/`; runs only in the core project. |
 | `UiCategoryHygieneTests` | Every `[TestFixture]` in `test/lattice.explorer.uitests/` carries `[Category("UI")]`. | Tag the fixture `[Category("UI")]`. Browser tests are excluded from every default filter by category alone, so an untagged fixture would silently run in lanes that have no browser installed - and fail there rather than in the UI workflow. |
 | `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every ` ```csharp verify `-fenced snippet in the fixture's docs slice compiles against the real product surface its test project references. The fence is opt-in: a plain ` ```csharp ` fence is never compiled and does not fail this gate, so the documentation skill's rule that every C# snippet under `docs/` carries `verify` is not machine-checked. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records, and in a method-body snippet the `MyReplicationObserver` / `MyRebindObserver` observer stubs). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
-| `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`) in `docs/lattice/performance-single-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
+| `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`, `perf-table:layer3`, `perf-chart:layer3`) in `docs/lattice/performance-single-silo.md` and `docs/lattice/performance-multi-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
 | `DuplicateXmlSummaryHygieneTests` | No member under `src/` carries two consecutive XML `summary` elements. C# does not diagnose it, documentation tooling takes the FIRST element, and XML summaries ship in the NuGet packages, so the published documentation for a public member is the stale text. | Verify a documentation rewrite by reading the resulting FILE, never the diff - the diff renders the stale block as unchanged context directly above the added one. Replace the existing block rather than adding a second. Where the first block documents a neighbouring member that was displaced, move it to that member rather than deleting it. Repo-level gate over `src/`; runs only in the core project. |
 | `FrameworkNamespaceShadowingHygieneTests` | No namespace declared under `src/` or `test/` has a segment, at any depth below the `Orleans.Lattice` root, that names an Orleans framework namespace - the set of names `X` for which a deployed `Orleans.*` assembly ships a public type in `Orleans.X` or beneath it, read from assembly metadata rather than written down (issue #2822). C# binds the leftmost identifier of a relative name such as `Runtime.GrainId` at the FIRST enclosing namespace that has a member of that name, so declaring `Orleans.Lattice.Runtime` breaks every such reference under `Orleans.Lattice` in every package, including ones the change never touched; a per-package build passes and only the solution build fails (#2816). | Rename the colliding segment. The shipped namespaces that already shadow one (`Orleans.Lattice.Storage`, `Orleans.Lattice.Internal`, `Orleans.Lattice.Explorer.Core`, and a few more) are recorded in the fixture with a reason, and the record is checked both ways, so a recorded namespace that is no longer declared fails too. Do not add a new record for new code. Repo-level gate over `src/` and `test/`; runs only in the core project. |
-| `FaultPathBankingContractTests` | Every `Bank*Async` helper under `src/` is still reachable from a fault path, and every one invoked from a `catch` lets that fault out rather than returning normally (issue #2545). Orleans does not run `OnDeactivateAsync` when `OnActivateAsync` throws, so a component that defers a durable write behind a coalescing window and faults part-way discards that progress unless it banks inline on the fault path. Four separate investigations paid for that lesson independently (#2280, #2538, #2541, #2544), which is why it is now a gate rather than a convention. | Bank on the fault path itself, inside the `catch`, then let the fault out - a bare `throw;` and a more specific exception wrapping the original both count as propagation. A graceful-teardown flush is not a substitute, because it is exactly what does not run. The helpers the earlier fixes added are named in `KnownFaultPathBankers`; renaming one updates that list in the same commit, which is a decision somebody makes rather than a silent loss of coverage. Repo-level gate over `src/`; runs only in the core project. |
+| `FaultPathBankingContractTests` | Every `Bank*Async` (or `TryBank*Async`) helper under `src/` that is invoked from a `catch` lets that fault out rather than returning normally, every private one is still invoked, and every one named in `KnownFaultPathBankers` is still invoked from a `catch` (issue #2545). Orleans does not run `OnDeactivateAsync` when `OnActivateAsync` throws, so a component that defers a durable write behind a coalescing window and faults part-way discards that progress unless it banks inline on the fault path. Four separate investigations paid for that lesson independently (#2280, #2538, #2541, #2544), which is why it is now a gate rather than a convention. | Bank on the fault path itself, inside the `catch`, then let the fault out - a bare `throw;` and a more specific exception wrapping the original both count as propagation. A graceful-teardown flush is not a substitute, because it is exactly what does not run. The helpers the earlier fixes added are named in `KnownFaultPathBankers`; renaming one updates that list in the same commit, which is a decision somebody makes rather than a silent loss of coverage. Repo-level gate over `src/`; runs only in the core project, and there only by name or in the project's full suite: its fully-qualified name (`Orleans.Lattice.Tests.FaultPathBankingContractTests`) carries none of `Formal`, `Hygiene` or `Docs`, so neither a `FullyQualifiedName~Hygiene` run nor the `content-gates` job selects it. |
 | `AppContextSwitchHygieneTests` | No C# or Razor source under its hand-picked roots - `samples/` and `reference-architecture/` in the core project, `src/lattice.explorer/` in the Explorer's - calls `AppContext.SetSwitch` or names the unencrypted-HTTP/2 switch outside a comment (issues #1784, #1796). The switch is process-global and effectively write-once, so one per-circuit channel factory setting it decided the posture for every later channel in the process. | An `http://` address is enough for h2c on .NET 10; do not set the switch. The roots are plain directories rather than registered slices, so this gate adds to the em-dash and mojibake coverage and never partitions it. |
 | `PerturbationResidueHygieneTests` | No perturbation-driver marker (the `LATTICE` + `-PERTURBATION` token) survives in any file in the repository. | Stamp the marker beside every edit a perturbation driver makes and stage explicit paths - see "A killed perturbation run leaves residue" under "False greens" above. Repo-wide with nothing excluded; runs only in the core project. |
 
@@ -1111,7 +1115,9 @@ every one of them while `build-and-test` still reported success. The em-dash gat
 exists to catch prose pasted from a word processor, which lands in markdown, so it
 was disabled on precisely the diff shape it was written for.
 
-They now run in a dedicated `content-gates` job that carries **no `if:` and no
+All of them except `FaultPathBankingContractTests` (see its row) and
+`UiCategoryHygieneTests`, whose browser project the filter below excludes, now
+run in a dedicated `content-gates` job that carries **no `if:` and no
 `needs:`**, so it executes on every pull request and cannot be skipped. It builds
 the solution once and runs
 

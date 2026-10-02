@@ -86,8 +86,9 @@ public sealed class LatticeAzureBlobCacheOptions
     /// Optional virtual-directory prefix prepended to every cache entry's blob
     /// name (for example <c>tokens/</c>). Lets several logical caches share one
     /// container without key collisions. Empty (the default) stores entries at
-    /// the container root. A trailing slash is optional; entries are named
-    /// <c>{KeyPrefix}{hash-of-key}</c>.
+    /// the container root. No separator is inserted - entries are named
+    /// <c>{KeyPrefix}{hash-of-key}</c> - so end the prefix with <c>/</c> to place
+    /// them in a virtual directory.
     /// </summary>
     public string KeyPrefix { get; set; } = string.Empty;
 

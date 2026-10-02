@@ -7,10 +7,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// (per-repository) and the default instance. A configured
 /// <see cref="RepoContextTtlOptions.DefaultMemoryTtl"/> must be strictly positive.
 /// Memory entries are written through the multi-value-register accessor
-/// (<see cref="MvRegisterAccessor{T}"/>), which does not reject a non-positive TTL
-/// but writes the entry with no TTL at all, so without this check such a default
-/// would silently leave every new memory entry durable; validating it catches the
-/// misconfiguration when the options value is resolved rather than never. Mirrors
+/// (<see cref="MvRegisterAccessor{T}"/>), which rejects a non-positive TTL with
+/// <see cref="ArgumentOutOfRangeException"/> at write time, so without this check
+/// such a default would surface as an unattributed argument error on every new
+/// memory entry; validating it names the misconfigured option when the options
+/// value is resolved. Mirrors
 /// how the view and replication options are validated.
 /// </summary>
 internal sealed class RepoContextTtlOptionsValidator : IValidateOptions<RepoContextTtlOptions>

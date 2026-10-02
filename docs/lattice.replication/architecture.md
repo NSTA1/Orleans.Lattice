@@ -5,7 +5,7 @@ existing `Orleans.Lattice` deployment. The core library does not depend on the
 replication package: the subsystem plugs into public extension points the core
 exposes, a per-cluster push transport, and - through an internals-visibility
 grant the core library extends to the replication package - core-internal
-machinery such as the per-shard WAL partitions and the core's replication-apply
+machinery such as the per-tree WAL partitions and the core's replication-apply
 path (see [Relationship to the core library](#relationship-to-the-core-library)).
 This document describes the end-to-end
 pipeline in behavioural terms and the invariants it preserves; for the core
@@ -23,7 +23,7 @@ them is internal machinery the host never wires by hand.
 flowchart LR
     subgraph "Cluster A (producer)"
         Leaf[Leaf commit]
-        Leaf -->|"step 1: append (commit-log writer)"| Wal[(Per-shard WAL)]
+        Leaf -->|"step 1: append (commit-log writer)"| Wal[(Per-tree WAL partitions)]
         Leaf -->|"step 2: apply"| Proj[(Leaf projection)]
         Leaf -->|"step 3: observe (nudge)"| Capture[IMutationObserver]
         Wal -->|"durable per-partition cursor, tailed + batched"| Ship[Per-peer shipper]
@@ -42,7 +42,7 @@ flowchart LR
 1. **Commit-time WAL append (the leaf commit-log writer) and replication nudge (`IMutationObserver`).** Every leaf commit on the
    producing cluster runs the core `wal -> apply -> observe` pipeline. The
    `wal` step is the durable capture: the leaf's commit-log writer is the single
-   WAL appender, writing each mutation to the per-shard log before the originating
+   WAL appender, writing each mutation to its WAL partition before the originating
    `SetAsync` / `DeleteAsync` reports success, so an append failure surfaces to the
    caller rather than silently dropping a change. The replication subsystem attaches
    to the `observe` step only as a low-latency nudge - it rings the per-peer
@@ -51,9 +51,10 @@ flowchart LR
    second WAL write, and is best-effort. The causal frontier the shipper sends
    is read from the leaf WAL it tails, never from an in-memory commit-time mirror.
 
-2. **Per-shard replication WAL.** Each commit is appended by the leaf's commit-log
-   writer to a per-tree,
-   per-shard write-ahead log addressed by a deterministic hash of the key. The
+2. **Partitioned replication WAL.** Each commit is appended by the leaf's commit-log
+   writer to the tree's write-ahead log, in the partition a deterministic hash of
+   the key selects; the partitions are per tree, not per shard, so every shard of
+   the tree shares them. The
    WAL is the source of truth for incremental replication: shipping and
    recovery read from it, never from the primary tree. Snapshot bootstrap is the
    exception - the default snapshot provider exports a point-in-time view of the
@@ -129,7 +130,7 @@ flowchart LR
 ## Invariants the pipeline preserves
 
 1. **The WAL append is atomic with the local commit.** The leaf's commit-log
-   writer appends to the per-shard WAL in the `wal` step of the leaf commit,
+   writer appends to the tree's WAL in the `wal` step of the leaf commit,
    before the write reports success, so a recorded entry always describes a
    committed mutation and an append failure surfaces to the original writer. The
    commit-time replication nudge in the later `observe` step is best-effort and
@@ -188,14 +189,14 @@ blocked floors that hold back WAL trimming; its own
 `IReplicationApplier` is the receiver-side merge seam. It also calls
 core-internal machinery directly, through an internals-visibility grant the
 core library extends to the replication package: the shipper, the WAL
-introspection seam, and the change feed read the per-shard WAL partitions; the
+introspection seam, and the change feed read the tree's WAL partitions; the
 applier writes through the core's internal replication-apply path; and the
 snapshot export walks shard and leaf state and reads the per-tree transaction
 registry. The
 single-cluster and multi-cluster code paths are identical up to the point where
 the transport carries a batch across a network boundary; there is no
 "replication mode" that changes how a foreground commit durabilizes. The WAL
-that replication reads is the same per-shard log the core library commits and
+that replication reads is the same partitioned log the core library commits and
 replays from - see [`../lattice/wal.md`](../lattice/wal.md).
 
 The chaos-test suite that exercises every invariant above end-to-end is

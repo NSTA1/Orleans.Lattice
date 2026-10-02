@@ -52,7 +52,7 @@ public static class LatticeBackupMetrics
     /// <summary><see cref="TagPhase"/> value: streaming captured entries out of the source (capture).</summary>
     public const string PhaseExport = "export";
 
-    /// <summary><see cref="TagPhase"/> value: writing an artifact or manifest to the sink (capture).</summary>
+    /// <summary><see cref="TagPhase"/> value: writing the manifest to the sink (capture). The artifact itself streams to the sink during <see cref="PhaseExport"/>.</summary>
     public const string PhaseSinkWrite = "sink-write";
 
     /// <summary><see cref="TagPhase"/> value: committing the manifest to the catalog (capture).</summary>

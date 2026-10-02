@@ -29,9 +29,10 @@ public sealed class RepoContextTtlOptions
     /// is created without an explicit per-entry TTL (updating an existing entry
     /// never applies it), or <see langword="null"/> (the default) to leave memory
     /// entries durable unless a TTL is supplied explicitly at write time. When set
-    /// it must be strictly positive - the memory write path would treat a
-    /// non-positive TTL as no TTL at all and leave the entry durable - which the
-    /// paired <c>RepoContextTtlOptionsValidator</c> enforces at first resolve.
+    /// it must be strictly positive - the multi-value-register accessor the memory
+    /// write path uses rejects a non-positive TTL with
+    /// <see cref="ArgumentOutOfRangeException"/> - which the paired
+    /// <c>RepoContextTtlOptionsValidator</c> reports by name at first resolve.
     /// </summary>
     public TimeSpan? DefaultMemoryTtl { get; set; }
 

@@ -363,7 +363,7 @@ The script:
    range covers the disruption rather than the steady state before it.
 8. **Captures an auto-discovered panel of summary scalars** while the stack is
    still up, by listing every
-   meter under the configured prefixes (`orleans.lattice` - covers both the
+   instrument under the configured name prefixes (`orleans.lattice` - covers both the
    core meter and `orleans.lattice.replication` - and `vehicle_fleet_simulator`
    - covers the sink, read-driver, write-driver, and atomic-saga-driver
    meters - plus a curated `dotnet.*`
@@ -437,7 +437,7 @@ Five configuration blocks at the top of `benchmark.ps1` drive it:
 
 | Variable                    | Purpose                                                                                                |
 |-----------------------------|--------------------------------------------------------------------------------------------------------|
-| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans_lattice_` - covers core + replication - and `vehicle_fleet_simulator_` - covers the sink and the read, write, and atomic-saga drivers). |
+| `$AutoDiscoverPrefixes`     | Instrument-name prefixes to walk, matched against the metric names `/api/v1/metadata` lists (default: `orleans_lattice_` - covers core + replication - and `vehicle_fleet_simulator_` - covers the sink and the read, write, and atomic-saga drivers). |
 | `$AutoDiscoverDotnetAllow`  | Allow-list of `dotnet.*` instruments to include (the runtime meter is noisy, so we curate).            |
 | `$ScalarPanelExclude`       | Names to drop after discovery (e.g. duplicates of curated extras).                                     |
 | `$ScalarPanelExtra`         | Hand-curated headline metrics. Keys here **win on collision** with auto-discovered ones.               |

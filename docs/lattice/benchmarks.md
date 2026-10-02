@@ -225,6 +225,13 @@ on the forking toolchain, for configurations BenchmarkDotNet refuses to run
 in process - which the `-Fidelity` flag does not. The
 committed defaults are `BENCH_MICROBENCH_FIDELITY=quick` and an empty
 workload filter (full suite), in `benchmark/scenarios/microbench.env`.
+`./benchmark.ps1` applies that file over the calling shell's environment,
+so any key the file sets - these two among them, and the
+`BENCH_MICROBENCH_PROFILE`, `BENCH_MICROBENCH_PROFILE_TOPN` and
+`BENCH_MICROBENCH_PROFILE_NETTRACE_PATH` profiling keys below - is changed
+by editing the file; a value exported in the shell is overwritten. A key
+the file does not set, such as `BENCH_MICROBENCH_SUITE`, is read from the
+shell.
 
 The available workload method names are listed by running
 `./benchmark.ps1 microbench -Workloads '*'` and reading the BDN summary
@@ -340,6 +347,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `leafrangedelete` | A four-key foreground range delete on a freshly attached 2,048-row leaf, the path that now reads and hydrates only the requested range. |
 | `crdtcoveragecollapse` | Three observed-remove dot-coverage tests that collapse a single-replica cancelling-dot list to its highest counter: the OR-Set and RW-Set live-member projections and the OR-Set folded-state decode. |
 | `crdtdotscantrims` | Three trims on the observed-remove dot primitives: span scans instead of list indexing, liveness reads that stop at the first surviving dot, and the merge-time compaction sweep. |
+| `crdtapplyprobetrims` | Three per-call trims on the CRDT delta-apply path: the capturing sizing lambda in the delta-run fold, the MV-register duplicate-dot probe returning an index instead of a nullable entry, and the OR-Flag / RW-Flag dot union walking a span. Read the fold group for allocation and the other two for time. |
 | `leafdigestscantrims` | Three per-element trims on the leaf read, digest and bisect paths: the range enumerator retiring its lower-bound test once satisfied, the digest transcoding each string field once, and a single-replica vector clock fed without a pooled sort. |
 | `leafboundhoistdotspan` | Three read-path trims, each with a baseline, an optimised and a no-gain control lane: the leaf range scan dropping per-row bound re-tests its window already enforces, the key range read sorting only when fresh pending keys were appended, and the provenance decoders' dot scans walking spans instead of the list indexer. |
 | `crdtprovenancedecode` | Three CRDT provenance-decode paths an entry-history read runs for every revision: the multi-value register's delta decode and current-value projection, and the OR-Map's folded-state decode and key projection. |
@@ -351,6 +359,11 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `rowtranscodecopytrims` | Three trims on the aggregation row encoder and the CRDT provenance decoders: the row writer transcoding a short string once instead of twice, the multi-value register's current-value projection without an intermediate list, and the flag provenance's constant UTF-8 conversion replaced by a literal. |
 | `leafsnapshotframetrims` | Three trims on the leaf snapshot frame codec that every bounded hydration reads through, each removing a repeated re-validation of the 24-byte frame header: hydration admission reading the header once instead of once per question and once per row, a lower-bound seek reading it once instead of once per binary-search probe, and a block hydration reading it once per block instead of once per row. Every group carries a control lane where the trim can buy little. |
 | `vvpresize` | The vector-clock presize in the leaf snapshot row decoder: filling a version vector sized to the row's already-bounded replica count instead of growing it entry by entry. |
+| `pooledreturntrims` | Three pooled-buffer and digest-staging trims: returning a pooled UTF-8 staging buffer after clearing only the prefix it wrote rather than the whole rental, transcoding a repository-context reconciler's chunk operation-id parts straight into one pooled UTF-8 buffer before hashing, and comparing and formatting a file content digest without an intermediate string. |
+| `digestappendfolds` | Three trims on the leaf projection-digest write path - folding a row's fixed-width fields into one hash append, folding a length prefix into the same append as its body, and sorting a vector clock's replicas together with their clocks so no per-replica lookup follows - plus clearing only the written prefix of a pooled rental on return. |
+| `sortcomparertrims` | The comparison delegate a sort reached through an `IComparer<T>` allocates on every call, against a cached comparison, over ordinal string-key sorts, the CRDT provenance decoders' causal member-change sorts and struct-array sorts; read it for bytes. |
+| `walbatchbuffertrims` | The transient WAL record batch buffer the leaf's CRDT batch-apply and two merge-batch commit-log dispatches built per call, against a pooled rental above a size threshold, with a below-threshold control lane. |
+| `setkeytrims` | The base64 string the OR-set and RW-set delta accessors built on every staged remove only to probe a dictionary, against encoding into a stack or pooled span and probing through an alternate lookup. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'

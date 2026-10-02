@@ -60,6 +60,7 @@ The `TreeDeleted`, `TreeRecovered` and `TreePurged` events describe the logical 
 The following APIs intentionally skip event publication to keep their bulk I/O profile predictable:
 
 - `ILattice.BulkLoadAsync`, `ILattice.BulkAppendChunkAsync` (and so the tree-administration bulk-load session built on it), and the streaming `LatticeExtensions.BulkLoadAsync` extension - the bulk-import paths are optimised for throughput and assume the importer already knows the full keyset.
+- `ILattice.MergeAsync` - a tree merge folds every entry of the source tree into this tree without publishing per-key events.
 - Cursor-page reads (`OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `NextKeysAsync` / `NextEntriesAsync` / `CloseCursorAsync`) - read-only, never emit events.
 - Inbound replicated last-writer-wins applies - a set, delete, range delete, or merged batch arriving from a peer cluster is merged directly into the owning shard and does **not** publish events at the receiving silo.
 

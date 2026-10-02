@@ -13,7 +13,8 @@ public sealed record TreeAdminStorageUsageRequest
 {
     /// <summary>
     /// When <see langword="true"/>, force an expensive fresh leaf-walk that
-    /// re-measures every shard; otherwise return the cheap cached WAL-poll aggregate.
+    /// re-measures every shard; otherwise each tree uses its short-lived
+    /// storage-usage cache refilled from shard-root byte totals and WAL partitions.
     /// </summary>
     [Id(0)] public bool Deep { get; init; }
 }

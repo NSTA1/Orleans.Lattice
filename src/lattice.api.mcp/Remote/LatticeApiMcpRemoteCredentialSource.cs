@@ -22,12 +22,14 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </item>
 /// <item>
 /// Otherwise the ambient <see cref="LatticeCredentialContext.Current"/> credential
-/// if one is stamped (for example by the backup tool module).
+/// if one is stamped - which the credential-stamping wrapper does for every group
+/// tool invocation, from the caller credential the MCP credential bridge resolves
+/// from the ambient HTTP request.
 /// </item>
 /// <item>
 /// Otherwise the caller credential the MCP credential bridge resolves from the
-/// ambient HTTP request, which is how the state, data, and auth tool modules
-/// present the caller identity (they do not stamp the ambient context).
+/// ambient HTTP request directly, for an outbound call made outside a stamped
+/// tool invocation.
 /// </item>
 /// </list>
 /// <para>

@@ -2,9 +2,10 @@
 
 Durable cursors are server-side, checkpointed iterators for long-running key
 scans and resumable range deletes. Unlike the stateless
-[`ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync`](api.md#enumeration)
-methods - which are bounded by `LatticeOptions.MaxScanRetries` and die with
-the client process - a cursor grain persists its position to Orleans storage
+[`ScanKeysAsync` / `ScanEntriesAsync`](api.md#enumeration) scans - which are
+bounded by `LatticeOptions.MaxScanRetries` and die with the client process -
+and a one-shot `DeleteRangeAsync`, which reports no progress until it returns,
+a cursor grain persists its position to Orleans storage
 after every page. A new activation reads that checkpoint and continues exactly
 where the previous one stopped, making export jobs, ETL pipelines, and
 range-delete sweeps transparent to silo failovers, client restarts, and

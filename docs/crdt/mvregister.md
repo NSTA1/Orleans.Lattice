@@ -10,7 +10,7 @@ discarding one. Your application then reads the conflict set and resolves it
 however it likes (newest, merge, ask the user).
 
 Each write stamps a causal *dot* and records the dots it has observed. On merge,
-a value is kept only if its dot is **not dominated** by the other side's context;
+a value survives unless the other side has **already seen and replaced** it;
 a write that causally follows (observed) an earlier value replaces it. So a
 value written *after seeing* both concurrent values collapses the register back
 to a single entry.

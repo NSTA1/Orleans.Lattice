@@ -13,11 +13,13 @@ namespace Orleans.Lattice.Replication;
 /// introducing additional meters.
 /// </summary>
 /// <remarks>
-/// Instruments fall into two shapes:
+/// Replication instruments include observable gauges, counters, up/down
+/// counters, and histograms. Representative groups include:
 /// <list type="bullet">
 ///   <item>
 ///     <b>Per-peer gauges</b> - <c>entries_behind</c>, <c>bytes_behind</c>,
-///     <c>consecutive_errors</c>, <c>last_contact_seconds</c>. Implemented as
+///     <c>ship_in_flight</c>, <c>consecutive_errors</c>, and
+///     <c>last_contact_seconds</c>. Implemented as
 ///     <see cref="ObservableGauge{T}"/> instruments backed by a singleton
 ///     <see cref="ReplicationPeerStats"/>. Tagged with <see cref="TagTree"/>
 ///     and <see cref="TagPeer"/>.
@@ -1061,9 +1063,9 @@ public static class LatticeReplicationMetrics
     /// <c>1</c> denotes fully-sequential apply (the default posture, or a
     /// single-tree batch where cross-tree parallelism does not apply); a
     /// value greater than <c>1</c> reports the achieved concurrency, which
-    /// is the host's configured
-    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/> clamped
-    /// to the number of distinct trees in the batch. Operators use the
+    /// is the maximum configured
+    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/> across
+    /// the batch's trees, clamped to the number of distinct trees in the batch. Operators use the
     /// distribution to confirm parallel apply is actually engaging under
     /// multi-tree load and to correlate it with <see cref="ApplyLag"/>.
     /// Untagged - the measurement describes the batch as a whole, which

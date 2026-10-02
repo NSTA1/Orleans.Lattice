@@ -233,7 +233,8 @@ cells with the new producer before making a cluster-ceiling claim.
 Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
 and charts omit affected workload curves rather than plot a misleading plateau.
 An omission note appears only when a curve was actually excluded. Resume and
-dry-run aggregation re-read retained logs; the evidence is retained in cohort
+dry-run aggregation (the `-Layer3 -DryRun` switch form; `-Layer 3 -DryRun` replays
+the single-silo document instead) re-read retained logs; the evidence is retained in cohort
 state as `producerSlipMaxMs`, `producerGenBlockedFrac`, `producerGeneratedPerSec`
 and the resulting `producerBound` verdict.
 
@@ -323,8 +324,8 @@ current short version, in the order an investigator reaches for them:
 | `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flush units the ingest engine dispatches (one saga per unit in the atomic modes; see [Workloads](#workloads)). |
 | `BENCH_POINT_FANOUT` | `BENCH_FLUSH_CONCURRENCY` | Concurrent calls per flush slot in the point modes (`set-point`, `set-point-mv`, `get-point`). The ACA cohort script sets it to the per-silo flush bound so point-mode in-flight scales linearly with silo count. |
 | `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (currently 8) | WAL grain count per tree. Pairs with `BENCH_FLUSH_CONCURRENCY`. Inherited from the shipping default so the bench tracks the library; override explicitly to A/B against a non-default fan-out. |
-| `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (currently 16) | Per-WalShardGrain pipeline depth. Inherited from the shipping default so the bench tracks the library; see [WAL Tuning](../../docs/lattice/wal-tuning.md) for the storage-account-throughput envelope above which raising this further stops helping. |
-| `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `LatticeGrain.SetManyAsync` may spend awaiting its per-shard fan-out before refusing the call with `LatticeSaturatedException` (`SetManyFanOut`). **One of two knobs here that deliberately do not inherit the library default**, which is `Timeout.InfiniteTimeSpan` so that the bound is opt-in on the released line ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). An unbounded fan-out is the [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) collapse itself, so the rig opts in to the recommended finite budget and measures the corrected configuration. Set `0` for infinite to reproduce the pre-fix shape. |
+| `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (currently 16) | Per-partition WAL pipeline depth. Inherited from the shipping default so the bench tracks the library; see [WAL Tuning](../../docs/lattice/wal-tuning.md) for the storage-account-throughput envelope above which raising this further stops helping. |
+| `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `ILattice.SetManyAsync` may spend awaiting its per-shard fan-out before refusing the call with `LatticeSaturatedException` (`SetManyFanOut`). **One of two knobs here that deliberately do not inherit the library default**, which is `Timeout.InfiniteTimeSpan` so that the bound is opt-in on the released line ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). An unbounded fan-out is the [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) collapse itself, so the rig opts in to the recommended finite budget and measures the corrected configuration. Set `0` for infinite to reproduce the pre-fix shape. |
 | `BENCH_WAL_ADMISSION_CALL_BUDGET_SEC` | `15` | Seconds **one top-level call** may spend waiting at the WAL admission saturation gate, summed across every append and every retry layer (`LatticeOptions.WalAdmissionSaturationCallBudget`). The second knob that deliberately does not inherit the library default, which is `Timeout.InfiniteTimeSpan` ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)). Left infinite, only the per-append `WalAdmissionSaturationWaitBudget` applies and the three nested retry layers each open a fresh one - the multiplication [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) names as remedy 3, recorded in its cohort logs as `10488ms of that was saturation back-off` against a 5 s per-append budget. Set `0` for infinite. |
 | `BENCH_TX_REGISTRY_SHARDS` | `1` (silo), `8` (via `-TxRegistryShards`) | Saga decision registry shards per tree (`LatticeOptions.TxRegistryShardCount`, [#3501](https://github.com/NSTA1/Orleans.Lattice/issues/3501)). The library default of `1` is the unsharded layout; `run-cohort-aca.ps1` opts in to `8` so atomic cohorts measure the sharded ceiling of about 100 sagas/s per shard. Clamped to `1..256`. |
 | `BENCH_TREE_ID` | rotates per cohort | Pin to re-use an existing WAL partition; otherwise every cohort starts on an empty manifest. |
@@ -402,7 +403,8 @@ workloads against N silos. It provisions a rig with `scripts/deploy-aca.ps1` (or
 one with `-ReuseAca <prefix>`), runs at least `-N` cohorts (default 3) of every workload
 at each count in `-SiloCounts` (default `1, 2, 4, 6, 8`) through `scripts/run-cohort-aca.ps1`,
 and deletes the resource group afterwards unless `-KeepAca` is set or the rig was
-reused. `-Resume` continues an interrupted sweep from its saved state. Both scripts can
+reused. `-Resume` continues an interrupted sweep from the state saved under its prefix, so
+repeat that prefix with `-NamePrefix` (or `-ReuseAca` for a rig that was kept). Both scripts can
 also be run by hand.
 
 A provisioning run names its rig from `-NamePrefix <prefix>` when given, otherwise from

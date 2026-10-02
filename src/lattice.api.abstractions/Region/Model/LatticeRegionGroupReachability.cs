@@ -12,7 +12,8 @@ namespace Orleans.Lattice.Api.Region;
 /// <c>lattice_list_regions</c> tool today, a facade / gRPC surface for the
 /// explorer later), so <see cref="Group"/> is the stable lower-case group name
 /// (<c>state</c>, <c>data</c>, <c>backup</c>, <c>auth</c>, <c>telemetry</c>,
-/// <c>replication</c>) rather than a binding-specific enum.
+/// <c>replication</c>, <c>treeadmin</c>, <c>repocontext</c>, and
+/// <c>tenantadmin</c>) rather than a binding-specific enum.
 /// </remarks>
 [GenerateSerializer]
 [Alias(ApiRegionTypeAliases.LatticeRegionGroupReachability)]

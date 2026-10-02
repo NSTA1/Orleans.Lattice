@@ -61,9 +61,12 @@ lifecycle, quota, and region-residency verbs (see the
   the quota-usage read) and no change is made. The read-only self-service surface
   scopes its answers to the caller instead of refusing, and the tenant-scoped tree
   facade relies on the facades it wraps (see
-  [`ILatticeTenantScopedTreeAdmin`](#ilatticetenantscopedtreeadmin)). The binding layer
-  additionally gates the whole surface behind an explicit opt-in capability, so a
-  cluster that does not enable it exposes nothing.
+  [`ILatticeTenantScopedTreeAdmin`](#ilatticetenantscopedtreeadmin)). The bindings
+  additionally gate every lifecycle, region-residency, access, grant, and quota-usage
+  call they serve behind an explicit opt-in (the gRPC binding's default-deny
+  authorizer, the MCP binding's control-tool switch), so a cluster that does not
+  enable it exposes none of them; the read-only self-service calls are deliberately
+  left outside that opt-in.
 - **Two-tier governance.** Tenant lifecycle and allowed-region authorization are
   **platform-operator** actions (cluster-wide `Admin` on the reserved auth policy
   tree, which the gate's control-plane isolation grants only to a platform operator).

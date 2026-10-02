@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Membership;
 /// Provider-neutral configuration for the <see cref="ILatticeIdentityDirectory"/>
 /// seam: the default and maximum page sizes applied to
 /// <see cref="DirectorySearchQuery"/>, and whether a supplied id must resolve to
-/// an existing principal before an operator may grant it access.
+/// an existing principal before an administrative create path records it.
 /// </summary>
 public sealed class LatticeIdentityDirectoryOptions
 {
@@ -27,9 +27,12 @@ public sealed class LatticeIdentityDirectoryOptions
     /// Whether a supplied principal id must resolve to an existing
     /// <see cref="DirectoryPrincipal"/> (via
     /// <see cref="ILatticeIdentityDirectory.ResolveAsync(string, System.Threading.CancellationToken)"/>)
-    /// before it may be granted access. <c>false</c> (the default) accepts ids
-    /// without validation, matching the behaviour of
-    /// <see cref="NullIdentityDirectory"/>.
+    /// before an administrative create path records it - a group upsert or
+    /// member add through the authorization administration facade, or a tenant
+    /// administration subject. The subject of an authorization rule is not
+    /// checked, and no validation runs while <see cref="NullIdentityDirectory"/>
+    /// is the active directory. <c>false</c> (the default) accepts ids without
+    /// validation, matching the behaviour of <see cref="NullIdentityDirectory"/>.
     /// </summary>
     public bool ValidationRequired { get; set; }
 }

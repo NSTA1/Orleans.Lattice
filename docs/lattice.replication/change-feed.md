@@ -1,6 +1,6 @@
 # Change feed (`IChangeFeed`)
 
-`IChangeFeed` is the public, in-process subscriber API over the per-shard write-ahead log. It lets in-process consumers - custom bridges and transports, integration tests, and in-process projections - read every locally-authored `WalRecord` for a tree without touching the primary state and without depending on transport-shaped acks. Entries installed on this cluster by inbound replication apply are filtered out; decorate `IReplicationApplier` to observe those.
+`IChangeFeed` is the public, in-process subscriber API over a tree's partitioned write-ahead log. It lets in-process consumers - custom bridges and transports, integration tests, and in-process projections - read every locally-authored `WalRecord` for a tree without touching the primary state and without depending on transport-shaped acks. Entries installed on this cluster by inbound replication apply are filtered out; decorate `IReplicationApplier` to observe those.
 
 The contract is deliberately neutral: there is no peer id, no per-call ack envelope, no notion of "live" vs. "snapshot" mode.
 

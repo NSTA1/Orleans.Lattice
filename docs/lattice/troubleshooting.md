@@ -392,7 +392,9 @@ Then decide which case you are in:
 | Flag never set even though one shard is obviously hot | The candidate is being suppressed. |
 
 For the last two cases, the metrics tell you which: `orleans.lattice.split.in_flight`
-shows how many of the tree's shards carry the flag on each monitor pass - the
+shows how many of the tree's shards carry the flag on each monitor pass that
+polls the shards (a pass held off by `AutoSplitEnabled`, by the minimum tree
+age, or by an in-flight resize, reshard, merge or snapshot records nothing) - the
 donor of an in-flight healing fold included, so a fold occupies one of the
 `MaxConcurrentAutoSplits` slots too; `orleans.lattice.split.candidates_suppressed`
 counts hot, eligible shards a monitor pass found but could not start, because
@@ -568,7 +570,7 @@ return a stale value is entirely determined by `CacheTtl`:
   before answering. When the primary leaf is activated on the same silo and its
   revision has not moved since the cache last refreshed, that local check is
   enough; otherwise the cache performs a delta refresh against the primary. The
-  version-vector comparison is cheap, and either way the default configuration
+  delivery-cursor comparison behind that refresh is cheap, and either way the default configuration
   does **not** serve stale values.
 - **`CacheTtl` set to a non-zero value.** When the primary leaf is on another
   silo, the cache may answer from its local dictionary without contacting the
@@ -608,8 +610,9 @@ Two secondary checks:
 - If you have set `MaxCacheValueBytes`, the cache evicts value payloads only -
   least recently used first, once the payload bytes it holds for a leaf exceed
   the budget - while each row's metadata envelope stays resident; a read
-  landing on an evicted payload transparently fetches from the primary and
-  counts as a miss. That costs an RPC but cannot return a stale value.
+  landing on an evicted payload transparently fetches from the primary, and a
+  single-key `GetAsync` counts it as a miss while a `GetManyAsync` batch leaves
+  it out of both counters. That costs an RPC but cannot return a stale value.
 
 ### How to fix
 

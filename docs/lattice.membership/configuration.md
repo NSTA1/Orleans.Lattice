@@ -9,7 +9,7 @@ The token-vs-directory group merge policy, the per-silo resolution-cache lifetim
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `GroupMergeMode` | `SubjectGroupMergeMode` | `Union` | How token-asserted and directory-derived groups combine into the resolved subject: whether resolution reads the directory closure at all (skipped under `TokenOnly`) and re-expands token and claim-projected seed groups through it, and how the default subject mapper merges the two sources. See [Group merge mode](README.md#group-merge-mode). Must be a defined `SubjectGroupMergeMode` value. |
-| `ResolutionCacheTtl` | `TimeSpan` | `5 minutes` | The maximum lifetime of a per-silo resolution-cache entry. A resolved subject is additionally never served past the inbound token's expiry, so the effective bound is the minimum of this value and the token's remaining validity. `TimeSpan.Zero` disables caching (every resolution re-validates). Must not be negative. Only a resolved (non-anonymous) subject is cached, at most 4,096 per silo, and the whole cache is flushed whenever a `sys-membership-*` tree mutates. |
+| `ResolutionCacheTtl` | `TimeSpan` | `5 minutes` | The maximum lifetime of a per-silo resolution-cache entry. A resolved subject is additionally never served past the inbound token's expiry, so the effective bound is the minimum of this value and the token's remaining validity. `TimeSpan.Zero` disables caching (every resolution re-validates). Must not be negative. Only a resolved (non-anonymous) subject is cached, at most 4,096 per silo, and the whole cache is flushed whenever this silo observes a `sys-membership-*` mutation. The mutation observer runs on the silo that commits the write, so in a multi-silo cluster another silo can keep serving an entry resolved before a membership change until that entry expires. |
 | `HistoryRetentionMode` | `HistoryRetentionMode` | `MetadataOnly` | The retention mode for the durable per-key history captured on the `sys-membership-*` trees. History is never disabled by default. Must be a defined `HistoryRetentionMode` value. |
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | The age after which a membership history revision row expires, or `null` for no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable per-key history materialised view over each `sys-membership-*` tree so membership changes remain auditable beyond the source write-ahead-log window. |
@@ -17,13 +17,13 @@ The token-vs-directory group merge policy, the per-silo resolution-cache lifetim
 
 ## `LatticeIdentityDirectoryOptions`
 
-Provider-neutral bounds for the identity-directory seam: the default and maximum search page sizes, and whether a supplied id must resolve before a grant. Configured through `AddLatticeMembership` (`services.Configure<LatticeIdentityDirectoryOptions>(...)`).
+Provider-neutral bounds for the identity-directory seam: the default and maximum search page sizes, and whether a supplied id must resolve before an administrative create path records it. Configured through `AddLatticeMembership` (`services.Configure<LatticeIdentityDirectoryOptions>(...)`).
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `DefaultPageSize` | `int` | `25` | The page size a provider applies when a directory search query requests none (its page size is `0`). Must be strictly positive and no greater than `MaxPageSize`. |
 | `MaxPageSize` | `int` | `100` | The upper bound a provider clamps a requested search page size to. Must be strictly positive. |
-| `ValidationRequired` | `bool` | `false` | Whether a supplied principal id must resolve to an existing directory principal before it may be granted access. `false` accepts ids without validation, matching the behaviour of the no-op null directory. |
+| `ValidationRequired` | `bool` | `false` | Whether a supplied principal id must resolve to an existing directory principal before an administrative create path records it: a group upsert or member add through `ILatticeAuthAdmin`, or a tenant admin subject (see [Fail-closed create validation](identity-directory-providers.md#fail-closed-create-validation-validationrequired)). The subject of an authorization rule is not checked. No validation runs while the no-op `NullIdentityDirectory` is active. `false` accepts ids without validation, matching the behaviour of the no-op null directory. |
 
 ## `JwtAuthenticatorOptions`
 

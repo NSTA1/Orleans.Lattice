@@ -117,10 +117,9 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// <inheritdoc />
     public WalSaturationState GetAggregateState()
     {
-        // Worst-case across every observed tree. Enumerating the
-        // dictionary is allocation-free (KeyValuePair<string,
-        // WalSaturationState> is a struct) and short - bounded by the
-        // number of trees the silo hosts, which is the same bound the
+        // Worst-case across every observed tree. The enumeration is short -
+        // bounded by the number of trees the silo hosts, which is the same
+        // bound the
         // existing storage-usage and projection-digest aggregators
         // already operate against without complaint.
         var worst = WalSaturationState.Healthy;

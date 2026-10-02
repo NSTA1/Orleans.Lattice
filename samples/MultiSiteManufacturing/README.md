@@ -86,7 +86,8 @@ points every silo at it through the Azure Blob sink
 (`ConnectionStrings:BackupBlobStorage` ->
 `AddLatticeBackupAzureBlob`, one shared `msmfg-shared-backup`
 container). When no shared blob account is configured (the legacy
-single-machine / in-process path where all silos share one host) the
+single-machine host-process path where all silos share one host; the
+in-memory quick-start registers no backup sink) the
 host falls back to `FileSystemBackupSink`
 (`src/MultiSiteManufacturing.Host/Backup/`), an `ILatticeBackupSink`
 backed by a shared filesystem directory (`Backup:SharedSinkPath`,
@@ -132,7 +133,7 @@ tiers 1 to 4b (tiers 4 and 4b through its *Cluster split* and
 | Tier | Models | Toggle |
 |---:|---|---|
 | 1 | Site unavailable / WAN latency | `IsPaused`, `DelayMs` on `IProcessSiteGrain` |
-| 2 | Per-backend storage jitter, transient failure, write amplification, ingress reordering | `IBackendChaosGrain` wrapping one backend |
+| 2 | Per-backend storage jitter, transient failure, write amplification, ingress reordering | `IBackendChaosGrain` per backend, read by the `ChaosFactBackend` decorator wrapping that backend |
 | 3 | Cross-site out-of-order arrival (the site grain releases admitted facts four at a time, shuffled) | `ReorderEnabled` on `IProcessSiteGrain` |
 | 4 | Simulated intra-cluster silo partition | `IPartitionChaosGrain` + router hash filter |
 | 4b | App-level cross-cluster replication pause | `IReplicationDisconnectGrain` |
@@ -179,13 +180,15 @@ three this sample exercises most are:
 
 - **Orleans.Lattice - Overview** - throughput, leaf-write percentiles,
   cache hit-rate, splits, atomic-write outcomes.
-- **Orleans.Lattice - Commit Path** - WAL-only per-step commit latency,
+- **Orleans.Lattice - Commit Path** - WAL-first per-step commit latency
+  (`wal` / `apply` / `observer` / `digest`),
   WAL append and writer admission, leaf activation replays.
 - **Orleans.Lattice - Replication** - ship/apply/lag percentiles,
   dead-letter churn, per-peer entries/bytes behind.
 
 > **Note** - every replicated tree in the sample ships through
-> `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts` and
+> `Orleans.Lattice.Replication` over the `Orleans.Lattice.Replication.Grpc`
+> push transport: `mfg-facts` and
 > `mfg-site-activity` as `LwwRegister`, its `tag-mfg-site` membership
 > tree as `OrFlag` (enable-wins flag-CRDT membership), `mfg-part-labels`
 > as `OrSet` (typed CRDT delta
@@ -337,6 +340,7 @@ samples/MultiSiteManufacturing/
 The sample is deliberately narrow: one product family (HPT blade), a
 five-state severity lattice, no operator sign-in (the only authentication
 is the replication shared secret and the optional state-API credential
-above), no grpc-web, no Kubernetes manifests, no CLI tool. It exists to
+above), no grpc-web, no Kubernetes manifests, no operator CLI (`tools/SeedParts`
+is a dev aid only). It exists to
 exercise `Orleans.Lattice` under realistic ordering and partition
 scenarios - not to be a production MES.

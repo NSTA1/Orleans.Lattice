@@ -7,9 +7,8 @@ using System.ComponentModel;
 /// <see cref="ILattice"/> operations the library itself needs to perform
 /// against reserved system trees (names starting with
 /// <see cref="LatticeConstants.SystemTreePrefix"/>, including the
-/// registry tree <see cref="LatticeConstants.RegistryTreeId"/> and the
-/// replication write-ahead-log prefix
-/// <see cref="LatticeConstants.WalTreePrefix"/>).
+/// registry tree <see cref="LatticeConstants.RegistryTreeId"/> and replication
+/// dead-letter queue trees under <see cref="LatticeConstants.WalTreePrefix"/>).
 /// <para>
 /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> implements both <see cref="ILattice"/>
 /// (public, guarded) and this interface (internal, unguarded) against the

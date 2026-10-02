@@ -426,12 +426,13 @@ public readonly record struct WireVersionNegotiationResult
 ///   </description></item>
 ///   <item><description>
 ///     Wire version 5 hoisted the per-entry merge mode into the header's
-///     packed slot. <c>WalRecord.Mode</c> carries no Orleans <c>[Id]</c>
-///     tag, so it is never serialised onto an entry segment in any
-///     version, and a version-4 producer's per-entry mode was uniformly
-///     the <see cref="LatticeMergeMode.LwwRegister"/> enum default
-///     (omitted by the serializer). A version-4 receiver therefore reads
-///     <see cref="LatticeMergeMode.LwwRegister"/> for every entry.
+///     packed slot. <c>WalRecord.Mode</c> is tagged with Orleans
+///     <c>[Id(26)]</c> on the durable record, but the canonical encoder
+///     omits the slot when it holds the
+///     <see cref="LatticeMergeMode.LwwRegister"/> enum default. A
+///     pre-tag receiver therefore reads
+///     <see cref="LatticeMergeMode.LwwRegister"/> for a version-4 LWW
+///     entry segment.
 ///   </description></item>
 /// </list>
 /// <para>
@@ -455,11 +456,13 @@ public readonly record struct WireVersionNegotiationResult
 /// <para>
 /// Framing-tail compression rides the header without a wire-version
 /// bump, so a pre-version-5 receiver is not guaranteed to carry the
-/// matching <see cref="ILatticeCompressor"/>; the helper therefore also
-/// refuses to down-stamp a compressed batch. Operators running a
-/// heterogeneous fleet leave
-/// <see cref="LatticeReplicationOptions.FramingCompression"/> at
-/// <see cref="LatticeCompression.None"/> until the fleet is uniform.
+/// matching <see cref="ILatticeCompressor"/>; the helper therefore
+/// refuses to down-stamp a compressed batch when called directly. The
+/// shipper's negotiation path drops framing-tail compression for such
+/// peers before invoking this helper, so LWW replication can continue
+/// during a rolling upgrade without forcing
+/// <see cref="LatticeReplicationOptions.FramingCompression"/> to
+/// <see cref="LatticeCompression.None"/> fleet-wide.
 /// </para>
 /// </summary>
 public static class WireVersionDownEncoder

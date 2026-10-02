@@ -10,10 +10,10 @@
 
 	The verdict-relevant entry point is Get-CohortExceptionCount, which
 	filters the raw `Exception` line count by the current cohort's tree
-	id. The motivation is that the silo runs for the lifetime of
-	performance-report.ps1 (not per cohort), so wedged WAL grains from a
-	prior cohort's tree continue to throw inside the current cohort's
-	wall-clock window. Counting those throws toward the current cohort's
+	id. The motivation is that earlier cohorts' trees stay registered
+	in the shared tables, so each freshly started silo's background work
+	can keep touching them inside the current cohort's wall-clock window.
+	Counting those throws toward the current cohort's
 	verdict misattributes prior-cohort failures, inflating HEALTHY runs
 	to DEGRADED.
 

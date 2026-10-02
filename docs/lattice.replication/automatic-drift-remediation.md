@@ -101,7 +101,7 @@ Every stage emits on the single `orleans.lattice.replication` meter. The table b
 | Guards | `digest_remediation.disabled` | An observable gauge of every `(tree, peer)` whose repair is currently disabled. |
 | Guards | `digest_remediation.skipped` | A repair pass skipped before sending traffic, tagged with its `reason`. |
 
-All metric names are exposed as constants on `LatticeReplicationMetrics` for dashboards built from the public surface. The shipped Grafana dashboard and the panel-to-metric mapping live under [observability](observability.md).
+All metric names are exposed as constants on `LatticeReplicationMetrics` for dashboards built from the public surface. The instrument catalogue is in [observability](observability.md); the shipped Grafana dashboards come from the separate `Orleans.Lattice.Dashboards` package, whose [metric-to-panel map](../lattice.dashboards/metrics-to-panel-map.md) records which panel charts each instrument.
 
 ## Failure-mode matrix
 

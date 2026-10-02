@@ -69,9 +69,10 @@ are listed in [The Explorer areas](areas.md).
 
 ### Routes and the not-found page
 
-Every route the Explorer declares is lower case and begins with a literal
-segment, and none is a catch-all. A hygiene test fails the build otherwise. A
-catch-all at the application root would also match static asset paths, so a
+Every page route the Explorer declares is lower case and, apart from Home's bare
+`/`, begins with a literal segment, and none is a catch-all. A hygiene test fails
+the build otherwise. A catch-all at the application root would also match static
+asset paths, so a
 request for a script could be answered by the whole console. An object deeper
 than an area's routes can express is carried in the query instead; for example,
 an app's in-app path beyond its declared segments travels as `?path=`.
@@ -317,8 +318,8 @@ are ignored.
 The list is a bounded answer (8 values by default), never a full listing. Typing
 does not start a query per key: at most one query is outstanding, a new keystroke
 cancels it, and the keys typed meanwhile collapse into one query for the latest
-text. Small lists such as regions, tenants and provider keys are read once and
-reused for up to 30 seconds.
+text. Small lists such as regions and tenants are read once and reused for up to
+30 seconds; a WAL move's provider keys are read once for each tree you name.
 
 A picker never blocks a form. When its source cannot list values (no identity
 directory is configured, the cluster does not serve the facade, or the read is

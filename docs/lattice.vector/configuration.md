@@ -143,7 +143,10 @@ the registration for its own index tree; see
   rewrite roughly 100 chunks plus 100 commit records. Batch before flushing, and
   you pay for the distinct chunks and cells you touched rather than for the
   updates you applied.
-- **`EnsureCapacity` before a bulk load** makes the insert run allocate nothing.
+- **`EnsureCapacity` before a bulk load** makes the insert run allocate nothing
+  on an untrained index, whose single cell takes the whole reservation; on a
+  trained index the reservation is spread evenly over the cells and is a hint
+  rather than a guarantee.
 - **The index's own storage is `dimensions * 4 + 12` bytes per vector, plus the
   centroid block** - about 1,549 bytes per vector measured at dimension 384 and
   1,000,000 vectors (the centroid block amortises away as the corpus grows, so a

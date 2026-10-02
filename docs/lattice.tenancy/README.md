@@ -841,8 +841,9 @@ also match the `_lattice_` and `sys-` platform trees.
   "an explicit rule an operator deliberately scopes at a registry tree" - is an
   *operator* act by construction, and here **operator** has a narrow, specific
   meaning: a **bootstrap administrator** (the break-glass root of trust configured on
-  the silo) or a subject a bootstrap administrator has **explicitly promoted to
-  access-administrator** through the access-administration delegation. It does **not**
+  the silo) or a subject **explicitly promoted to access-administrator** through the
+  access-administration delegation - by a bootstrap administrator, or by an existing
+  delegate, since a delegate may delegate further. It does **not**
   mean "any authenticated caller," "any caller with a broad data-plane grant," or "a
   tenant admin." The reason a tenant admin cannot perform this act is structural, not a
   matter of degree: authoring *any* authorization rule is a write to the reserved

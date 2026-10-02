@@ -46,6 +46,8 @@ See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation 
 | Typed CRDT write | `CounterIncrementAsync`, `SetAddAsync`, `OrFlagEnableAsync`, `RwFlagEnableAsync`, `GCounterIncrementAsync`, `GSetAddAsync`, `RwSetAddAsync`, `VersionVectorTickAsync`, `RegisterSetAsync`, `MaxRegisterSetAsync`, `MinRegisterSetAsync`, `SequenceInsertAtAsync`, `MapSetAsync`, and their matching mutation verbs | `CrdtWrite` | the typed CRDT facade extension surface |
 | Typed CRDT read | `CounterGetAsync`, `SetGetAsync`, `OrFlagGetAsync`, `RwFlagGetAsync`, `GCounterGetAsync`, `GSetGetAsync`, `RwSetGetAsync`, `VersionVectorGetAsync`, `RegisterGetAsync`, `MaxRegisterGetAsync`, `MinRegisterGetAsync`, `SequenceGetAsync`, `MapGetAsync` | `CrdtRead` | the typed CRDT read surface |
 
+A point read reports the entry's per-key `MergeMode` and flags every found value `Raw`, because the data plane returns stored bytes rather than a decoded value: a typed CRDT's bytes are its internal serialization, so read one through the typed CRDT read verbs. A range-read page likewise flags every entry `Raw` and leaves its `MergeMode` unset.
+
 ### Typed CRDT facade verbs
 
 The typed CRDT facade exposes these exact public methods. Mutating verbs go over the unified `CrdtWrite` RPC; read verbs go over `CrdtRead`.

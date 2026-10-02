@@ -64,7 +64,7 @@ Startup options validation rejects empty cluster ids, invalid replicated-tree de
 | [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) | `bool` | `false` |
 | [`MaintenanceGcInterval`](#maintenancegcinterval) | `TimeSpan` | 5 seconds |
 
-The core WAL - its per-shard grains, commit-log writer, and garbage collector - reads the tree's core `LatticeOptions`, not these fields. `AddLatticeReplication` mirrors `ReplogPartitions` (onto `LatticeOptions.WalPartitions`), `WalMaxBatchEntries`, `WalMaxBatchBytes`, `WalMaxPendingBatches`, `WalStorageProvider`, and `WalRetention` onto the same tree's `LatticeOptions`. The mirror is one-way and writes a field only when the replication-side value differs from its default here (is non-`null`, for the two nullable fields) and the core field is still at its own default, so a direct `LatticeOptions` override always wins. `WalMaxPendingBatches` is the one field whose defaults differ - `4` here, `16` on `LatticeOptions` - so leaving it at (or setting it to) `4` leaves the WAL at the core `16`.
+The core WAL - its partition grains, commit-log writer, and garbage collector - reads the tree's core `LatticeOptions`, not these fields. `AddLatticeReplication` mirrors `ReplogPartitions` (onto `LatticeOptions.WalPartitions`), `WalMaxBatchEntries`, `WalMaxBatchBytes`, `WalMaxPendingBatches`, `WalStorageProvider`, and `WalRetention` onto the same tree's `LatticeOptions`. The mirror is one-way and writes a field only when the replication-side value differs from its default here (is non-`null`, for the two nullable fields) and the core field is still at its own default, so a direct `LatticeOptions` override always wins. `WalMaxPendingBatches` is the one field whose defaults differ - `4` here, `16` on `LatticeOptions` - so leaving it at (or setting it to) `4` leaves the WAL at the core `16`.
 
 ### Apply and causal buffer
 
@@ -305,7 +305,7 @@ Cadence for peer liveness contact when no normal traffic is flowing: an idle pum
 
 ### `ShipBackoffMax`
 
-Maximum retry delay after repeated send failures.
+Cap on the doubled retry delay after repeated send failures. Jitter is applied after the cap, so a jittered delay can exceed it by up to the `ShipBackoffJitter` fraction (36 seconds at the defaults).
 
 ### `ShipBackoffJitter`
 
@@ -405,11 +405,11 @@ Enables negotiation of effective wire version with peers.
 
 ### `MinimumSupportedWireVersion`
 
-Oldest peer wire version the local shipper will interoperate with while `WireVersionNegotiationEnabled` is set. It is a sender-side floor, not a receive-side acceptance check: a peer whose acks advertise a lower `ReplicationAck.SupportedWireVersion` is not shipped to - the shipper logs an error and backs off until the peer upgrades. Must lie in `[1, EncodedBatchHeader.CurrentWireVersion]`.
+Oldest peer wire version the local shipper will interoperate with while `WireVersionNegotiationEnabled` is set. It is a sender-side floor, not a receive-side acceptance check: a peer whose acks advertise a lower `ReplicationAck.SupportedWireVersion` is not shipped to - the shipper logs an error and backs off until the peer upgrades. Must lie in `[1, EncodedBatchHeader.CurrentWireVersion]`. A value below `WireVersionDownEncoder.MinimumDownEncodableWireVersion` (`4`) does not widen what the shipper can serve: a peer that advertises a version below `4`, or below the current version for a tree in a CRDT merge mode, is not shipped to either, because the shipper cannot down-stamp a batch that far.
 
 ### `UnknownPeerWireVersionFloor`
 
-Wire version the shipper encodes at for a peer that has not yet advertised a `SupportedWireVersion` on an ack, while `WireVersionNegotiationEnabled` is set. Must lie in `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]`; lower it below the current version to make un-acked first batches conservative during a rolling upgrade.
+Wire version the shipper encodes at for a peer that has not yet advertised a `SupportedWireVersion` on an ack, while `WireVersionNegotiationEnabled` is set. Must lie in `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]`; lower it below the current version to make un-acked first batches conservative during a rolling upgrade. Only a last-writer-wins tree can be down-stamped, and only to `4` or above (any framing compression is dropped for those batches). A floor the tree cannot be down-stamped to - below `4`, or below the current version on a CRDT-mode tree - blocks every batch and liveness probe to a peer whose capability is still unknown, so no ack arrives to advertise it and replication to that peer stays paused. The advertised capability is held in memory, so each shipper activation starts from this floor again.
 
 ### `AdaptiveBatchSizingEnabled`
 

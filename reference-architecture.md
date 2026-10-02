@@ -601,7 +601,7 @@ Security is a first-class property of this architecture, not an afterthought:
   administrator (the deploying user by default, or an explicit `-SecurityAdmin`)
   as the root of trust. Under deny-by-default every other caller - operator or
   service - is refused until this administrator grants access at runtime through
-  the Explorer Access tab (itself administrator-gated). The seeded subject is
+  the Explorer Access area (itself administrator-gated). The seeded subject is
   matched on the Entra object id (`oid`) claim. Beyond the call-time bootstrap
   bypass, the silo host proactively seeds this administrator a cluster-wide
   full-access grant as an authored policy entry at startup (an idempotent,

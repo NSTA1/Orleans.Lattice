@@ -11,9 +11,9 @@ namespace Orleans.Lattice;
 /// <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/> and reuse
 /// it for any number of operations on the same key.
 /// <para>
-/// Mutating methods read-modify-write under optimistic concurrency
-/// control, retrying on CAS failure up to a configurable budget. Two
-/// callers operating on the same key from different replicas converge
+/// Mutating methods read the key once to mint a typed delta, then apply
+/// that delta through the tree's CRDT merge path. Two callers operating on
+/// the same key from different replicas converge
 /// because the underlying merge is the OR-Set state lattice; concurrent
 /// adds and removes survive the merge with their causal dot context
 /// preserved.
@@ -21,7 +21,7 @@ namespace Orleans.Lattice;
 /// </summary>
 public readonly record struct OrSetAccessor
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;
@@ -211,7 +211,7 @@ public readonly record struct OrSetAccessor
     }
 
     /// <summary>
-    /// Merges <paramref name="other"/> into the stored state under CAS.
+    /// Merges <paramref name="other"/> into the stored state with one typed delta apply.
     /// Useful for replication consumers that have computed a delta
     /// out-of-band and want to apply it without reading the full set
     /// twice.

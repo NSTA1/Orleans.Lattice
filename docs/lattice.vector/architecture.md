@@ -101,8 +101,11 @@ caller-chosen key prefix.
   chunks are written under a new epoch and committed by rewriting that
   partition's state record, which records the epoch each of its chunks lives
   under - so one cell's chunks can span several epochs. An interrupted flush
-  leaves an uncommitted epoch the loader ignores and the next flush sweeps, and
-  the chunk keys a committed flush superseded are reclaimed after its state swap.
+  leaves an uncommitted epoch the loader ignores. Nothing sweeps such an epoch
+  directly: its chunks are reclaimed only if a later flush commits under the same
+  epoch number and the partition later moves past it, or when its generation is
+  superseded or discarded. The chunk keys a committed flush superseded are
+  reclaimed after its state swap.
 
 Both are zero-padded so ordinal key order is numeric order, and neither is reused
 while the index's durable state survives: only a discard - the recovery path, or

@@ -152,7 +152,7 @@ to its object id), defaulting to the currently signed-in deploying user. That
 object id is threaded to every region's silo as `Auth:BootstrapAdministrators`,
 matched on the Entra `oid` claim. Only that administrator can reach the estate
 after the first deploy; they then grant further operators access at runtime
-through the Explorer Access tab, which is itself administrator-gated (every
+through the Explorer Access area, which is itself administrator-gated (every
 membership / policy write requires an `Admin` verdict on the authorization tree).
 
 ## Running it
@@ -249,7 +249,7 @@ subscription's tenant). For any other topology
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra.bicep`. |
 | `-ExplorerWebClientId` | no | Explorer console web-app (client) id, used only with `-EntraClientId`; otherwise read from the `entra.bicep` `explorerClientId` output. |
 | `-EntraAudiences` | no | Extra accepted token audiences. |
-| `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). Object id (GUID) or UPN / email (resolved to an object id). Defaults to the deploying user when Entra is enabled; add further administrators at runtime via the Explorer Access tab. |
+| `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). Object id (GUID) or UPN / email (resolved to an object id). Defaults to the deploying user when Entra is enabled; add further administrators at runtime via the Explorer Access area. |
 | `-EnableDataApi` | no | `$true` (default) exposes the read-write Data API; `-EnableDataApi:$false` withholds the write surface. |
 | `-EnableReplicationControl` | no | `$true` (default) co-hosts the runtime per-tree replication control plane (silo control binding plus the MCP `lattice_replication_*` tools), fail-closed behind an authored Replication grant; `-EnableReplicationControl:$false` withholds it. |
 | `-EnableBackupControl` | no | `$true` (default) makes the MCP head advertise the backup tool group, fail-closed behind an authored Backup grant; `-EnableBackupControl:$false` withholds it. |

@@ -100,7 +100,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra/entra.bicep`. |
 | `-ExplorerWebClientId` | no | Explorer console web-app (client) id, used only with `-EntraClientId` (when `entra/entra.bicep` is skipped); otherwise read from its `explorerClientId` output. |
 | `-EntraAudiences` | no | Extra accepted token audiences. |
-| `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). An object id (GUID) or a UPN / email (resolved to its object id). Defaults to the deploying user when Entra is enabled. Further administrators are granted at runtime via the Explorer Access tab. |
+| `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). An object id (GUID) or a UPN / email (resolved to its object id). Defaults to the deploying user when Entra is enabled. Further administrators are granted at runtime via the Explorer Access area. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
 | `-SkipImageBuild` | no | Reuse images already present at `-ImageTag`. |
 | `-WhatIf` | no | Preview without mutating Azure. Prints each `az` command through the pass-1 deployment, then stops (the Entra deployment and pass 2 need pass 1's outputs). |
@@ -381,7 +381,7 @@ pre-authorize it too (for example a GitHub Copilot app id captured from a real
 sign-in). A client that prompts for a client id can use the Visual Studio Code id
 `aebc6443-996d-45c2-90f0-388ff96faa56`. A signed-in caller sees no tool groups -
 only the `lattice_capabilities` meta-tool - until the security administrator
-grants their Entra object id (`oid`) access on the Explorer console Access tab;
+grants their Entra object id (`oid`) access in the Explorer console's Access area;
 discovery then advertises only the tool groups they hold, and
 every forwarded call is re-authorized at the silo.
 

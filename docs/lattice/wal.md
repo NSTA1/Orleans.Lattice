@@ -11,7 +11,7 @@ If you're looking for a different angle on the WAL:
   [`wal-storage-providers.md`](wal-storage-providers.md).
 - For how the in-memory projection is rebuilt from the WAL on activation see
   [`projection-rebuild.md`](projection-rebuild.md).
-- For the replication-side overlay (per-shard sharded sink, producer-side
+- For the replication-side overlay (partitioned sink, producer-side
   filters, and the `MutationCategory.Maintenance` skip) see
   [`../lattice.replication/wal.md`](../lattice.replication/wal.md).
 - For the causal+ entry-schema extension (vector clock + dependency
@@ -188,16 +188,15 @@ follow:
 
 ## WAL grain API
 
-The per-shard WAL is owned by the internal `IWalShardGrain`, keyed
+Each WAL partition is owned by an internal grain keyed
 `{treeId}/{partition}` where `partition` is a stable FNV-1a hash of the key
-reduced modulo the tree's pinned `LatticeOptions.WalPartitions` (default `8`). The grain is in the core
-`Orleans.Lattice.BPlusTree.Grains` namespace and is the single producer-side
+reduced modulo the tree's pinned `LatticeOptions.WalPartitions` (default `8`). The grain is internal to the core and is the single producer-side
 entry point for foreground commits and the read-back source for the
 replication change feed.
 
 | Member | Purpose |
 |---|---|
-| `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-shard sequence number. |
+| `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-partition sequence number. |
 | `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
 | `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight is returned, so a cursor-advancing reader never skips a prefix hole. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
 | `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
@@ -261,7 +260,7 @@ it from the ledger (see
 Each leaf reports one cursor per partition to the WAL cursor registry
 under consumer ids of the form
 `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}`, so the
-per-shard WAL GC trims each partition independently against its own
+WAL GC trims each partition independently against its own
 slowest consumer. With `WalPartitions = 1` the unsuffixed
 `_lattice_materialiser_{treeId}_{leafGrainId}` shape is preserved, so a
 tree pinned to a single partition stays wire-compatible with its existing
@@ -269,7 +268,7 @@ cursor registrations.
 
 ### Surviving a full restart
 
-The per-shard WAL GC trims through the minimum cursor across the
+The WAL GC trims each partition through the minimum cursor across the
 consumers currently registered in the WAL cursor registry. The default
 registry is process-local and is wiped when a silo restarts, so on a
 cold start a forward consumer that persists its own cursor (the
@@ -306,10 +305,10 @@ registered only with a `Zero` block-pin-only cursor contributed nothing
 to it, so it is treated as missing). The checkpoint offsets the pins
 record are used for every leaf, present or not: they form the durable
 materialiser offset floor, which stops each trim scan and can overrule
-the in-memory cursor (see [Predicate](#predicate)). A leaf
-that activated but never checkpointed seeds a durable `Zero` "block"
-pin, which holds the WAL head for that leaf until it produces its first
-checkpoint; the TTL ceiling (`LatticeOptions.WalRetention`) still bounds
+the in-memory cursor (see [Predicate](#predicate)). A leaf seeds a
+durable `Zero` "block" pin when it is created - before its data becomes
+reachable in the WAL - and that pin holds the WAL head for the leaf until it
+produces its first checkpoint; the TTL ceiling (`LatticeOptions.WalRetention`) still bounds
 growth in that state. Because durable WAL storage is the deployment
 shape most exposed to this hazard, `AddAzureTableWalStorage` and
 `AddFileWalStorage` automatically wire the cursor registry and WAL GC
@@ -323,16 +322,18 @@ checkpoint (the "fall off the log" wedge). Neither adds a synchronous
 durable write to the steady-state checkpoint path:
 
 - **First real frontier.** The first time a leaf crosses from its `Zero`
-  block pin to a real checkpoint frontier it *awaits* the durable pin
-  write (once per activation) instead of the fire-and-forget mirror, so a
-  leaf that has checkpointed at least once always leaves a durable floor
-  even under an ungraceful crash before the coalesced write would have
-  landed. Every subsequent advance uses the debounced fire-and-forget
-  mirror.
+  block pin to a real checkpoint frontier it *awaits* a batched report to
+  the pin store (once per activation) instead of the fire-and-forget mirror,
+  so the floor leaves `Zero` promptly rather than after a debounce window.
+  The pin store merges the report at once but coalesces its own durable
+  write, so a crash before that write lands leaves the durable pin at its
+  last persisted value - at worst the block pin seeded at the leaf's birth -
+  which only retains more WAL. Every subsequent advance uses the debounced
+  fire-and-forget mirror.
 - **Graceful deactivation.** On deactivation, after its final checkpoint
   flush (which publishes the pin it persists) and a snapshot capture for any
-  checkpointed partition no snapshot covers yet, the leaf *awaits* a durable
-  pin write of its current frontier. It skips that pin-store call, counting
+  checkpointed partition no snapshot covers yet, the leaf *awaits* the same
+  batched pin-store report of its current frontier. It skips that pin-store call, counting
   the skip on `orleans.lattice.leaf.deactivation.barrier.elided`, only when
   a pin this same deactivation already had acknowledged covers every
   partition. So a
@@ -343,6 +344,8 @@ durable write to the steady-state checkpoint path:
 Both writes go through the pin store's monotonic-max merge, so they are
 idempotent and never roll a pin backwards, and both swallow transient
 failures so neither deactivation nor the checkpoint path is ever blocked.
+A write that faults is not recorded as written, so the next report for
+those pins retries it rather than being coalesced away.
 
 ## Origin cluster id stamping
 
@@ -419,8 +422,8 @@ The batching limits and flush bounds:
 | Option | Default | Trigger |
 |---|---|---|
 | `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
-| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain encodes every captured `WalRecord` once through the registered `IWalRecordEncoder` (default: `OrleansBinaryWalRecordEncoder`, the canonical Orleans-binary codec) into a pooled buffer; the encoded length feeds the byte budget, and the same bytes are handed to the provider's `AppendEncodedBatchAsync` on flush without a second encode. The budget is an exact ceiling for any batch of more than one entry (a single entry larger than the whole budget is flushed alone rather than refused), suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). It bounds the batch, not each entry: the Azure Table provider also limits each entry's stored payload to 64 KiB (see [WAL storage providers](wal-storage-providers.md#azuretablewalstorageprovider)). |
-| `WalMaxPendingBatches` | `16` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The pre-6.1.0 default was `1`, which reproduced the original single-in-flight protocol bit-for-bit; the v6.1.0-v6.2.x default of `8` raised pipeline depth so writer-side bursts coalesced against higher-latency durable providers (e.g. Azure Tables). The post-v6.2 default of `16` was measured on Standard_D4as_v5 + Azure Tables Standard at 4,000 keys/s offered load to give a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression; see [WAL tuning](wal-tuning.md) for the storage-account-throughput envelope above which the dual-knob fan-out collapses to `429` throttling. The cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. Set explicitly to `1` to opt back into the legacy strict-serial-per-shard shape. |
+| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain encodes every captured `WalRecord` once through the registered `IWalRecordEncoder` (default: `OrleansBinaryWalRecordEncoder`, the canonical Orleans-binary codec) into a pooled buffer; the encoded length feeds the byte budget, and the same bytes are handed to the provider's `AppendEncodedBatchAsync` on flush without a second encode. The budget is an exact ceiling for any batch of more than one entry (a single entry larger than the whole budget is flushed alone rather than refused), suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). It bounds the batch, not each entry: on the Azure Table provider the Table service also limits each entry's stored payload to 64 KiB (see [WAL storage providers](wal-storage-providers.md#azuretablewalstorageprovider)). |
+| `WalMaxPendingBatches` | `16` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The pre-6.1.0 default was `1`, which reproduced the original single-in-flight protocol bit-for-bit; the v6.1.0-v6.2.x default of `8` raised pipeline depth so writer-side bursts coalesced against higher-latency durable providers (e.g. Azure Tables). The post-v6.2 default of `16` was measured on Standard_D4as_v5 + Azure Tables Standard at 4,000 keys/s offered load to give a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression; see [WAL tuning](wal-tuning.md) for the storage-account-throughput envelope above which the dual-knob fan-out collapses to `429` throttling. The cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. Set explicitly to `1` to opt back into the legacy strict-serial-per-partition shape. |
 | `WalFlushTimeout` | `15 s` | Upper bound on how long a single flush may take before the grain abandons the wait, faults the flush, resynchronises the dense-offset tail from the provider, and drains the chain so callers retry. Set to `Timeout.InfiniteTimeSpan` to restore the historical unbounded await. See [Flush deadline](#flush-deadline). |
 | `WalFlushPreflightTimeout` | `5 s` | Upper bound on a flush's preflight - the setup and initial scheduler yield before the provider call is issued - so a flush whose continuation never resumes faults as a `TimeoutException` and its slot drains. See [Flush deadline](#flush-deadline). |
 | `WalAppendCoalescingInFlightThreshold` | `4` | In-flight depth at or above which a batch append's final entry stops kicking a flush of its own and coalesces into the pending batch, drained by the follow-on flush that fires when an in-flight flush settles. Self-disabling below the threshold; `0` restores the unconditional final-entry kick. See [WAL tuning](wal-tuning.md). |
@@ -490,6 +493,8 @@ through this path are:
 | Entry point | Caller |
 |---|---|
 | `BPlusLeafGrain.SetManyAsync` | Foreground `ILattice.SetManyAsync` / `TypedLatticeExtensions.SetManyAsync`. |
+| The leaf's conditional batch write | Foreground `ILattice.SetManyWherePredicateAsync`, and the predicate overloads of `TypedLatticeExtensions.SetManyAsync` that call it. |
+| The leaf's batched CRDT delta apply | Foreground `ILattice.ApplyCrdtDeltaManyAsync`, and helpers built on it such as `CrdtLatticeExtensions.EnableManyAsync`. |
 | `BPlusLeafGrain.MergeEntriesAsync` | Leaf split completion (the right half moving into the new sibling), and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`. |
 | `BPlusLeafGrain.MergeManyAsync` | Every shard-level merge: replication apply, snapshot copy and restore, backup restore, tree merge, and cross-shard migration on shard split, online reshard and shard consolidation (including writes shadow-forwarded during a split). |
 
@@ -780,7 +785,7 @@ already-pending advance.
 
 The WAL grows monotonically and must be trimmed. Trim is driven by
 `ILatticeWalGc`, a per-tree single-pass collector that advances the
-per-shard trim watermark to the largest contiguous prefix that **every**
+per-partition trim watermark to the largest contiguous prefix that **every**
 registered consumer has already acknowledged.
 
 The collector ships in `Orleans.Lattice` so single-cluster deployments
@@ -1151,5 +1156,5 @@ The bundled Grafana dashboards consume these instruments directly; see
 - [`wal-causal-plus.md`](wal-causal-plus.md) - causal+ entry-schema
   extension (vector clock + dependency summary slots on `WalRecord`).
 - [`../lattice.replication/wal.md`](../lattice.replication/wal.md) - the
-  replication-side overlay: per-shard sharded sink, producer-side filters,
+  replication-side overlay: partitioned sink, producer-side filters,
   and the `MutationCategory.Maintenance` skip.

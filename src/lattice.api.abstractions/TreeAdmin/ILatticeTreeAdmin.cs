@@ -140,13 +140,14 @@ public interface ILatticeTreeAdmin
     /// <summary>
     /// Reads a cluster-wide storage accounting summary across every tree, split by
     /// surface (write-ahead log, snapshots, leaf state). When <paramref name="deep"/>
-    /// is <see langword="false"/> (the default) it returns the cheap cached WAL-poll
-    /// aggregate; when <see langword="true"/> it forces an expensive fresh leaf-walk
-    /// that re-measures every shard. Read-only, but still gated on
+    /// is <see langword="false"/> (the default), each tree's figures come from its
+    /// short-lived storage-usage cache, refilled from shard-root byte totals and WAL
+    /// partitions without walking leaves; when <see langword="true"/> it forces an
+    /// expensive fresh leaf-walk that re-measures every shard. Read-only, but still gated on
     /// <see cref="LatticeOperation.Telemetry"/> over the cluster-wide scope, so a
     /// caller without cluster telemetry authority is refused.
     /// </summary>
-    /// <param name="deep">Force a fresh leaf-walk re-measure; defaults to the cheap cached aggregate.</param>
+    /// <param name="deep">Force a fresh leaf-walk re-measure; defaults to the short-lived storage-usage cache.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The cluster-wide storage usage summary.</returns>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for cluster telemetry.</exception>

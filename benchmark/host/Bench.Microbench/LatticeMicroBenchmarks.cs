@@ -2896,7 +2896,7 @@ public class LatticeMicroBenchmarks
         // benchmark below pairs against EncodeWalBatch_AzureTable so the
         // added per-row compression CPU and allocation cost is the
         // measured delta. Raise BENCH_MICROBENCH_VALUE_BYTES well above
-        // the 512-byte default threshold to surface the large-blob regime
+        // the 256-byte default threshold to surface the large-blob regime
         // where compression dominates; the small-value default regime
         // surfaces the fixed per-row overhead.
         var compressingOptions = Microsoft.Extensions.Options.Options.Create(new AzureTableWalStorageOptions
@@ -3011,7 +3011,7 @@ public class LatticeMicroBenchmarks
     /// <c>BENCH_MICROBENCH_VALUE_BYTES</c> environment variable sizes the
     /// payload: the default (128 bytes) measures the fixed per-row
     /// compression overhead on incompressible-sized rows, while a value
-    /// well above the 512-byte default threshold (e.g. 4096) surfaces the
+    /// well above the 256-byte default threshold (e.g. 4096) surfaces the
     /// large-blob regime where the Zstd ratio dominates.
     /// </summary>
     [Benchmark(Description = "WAL encode batch (Azure Table, Zstd)")]

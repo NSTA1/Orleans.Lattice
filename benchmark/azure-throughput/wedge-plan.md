@@ -915,10 +915,11 @@ Two changes shipped to make this failure mode unmissable to the next investigato
 
 Reference for future cycles. Knobs are listed in the order an investigator typically reaches for them. Each knob comes with the failure mode it addresses; misdiagnosing the failure mode and turning the wrong knob is what made this campaign go on as long as it did.
 
-> **Snapshot note (added later):** the Default column records 2026-06-04. The library
-> default for `WalMaxPendingBatches` has since risen to 16 and the rig inherits it, so the
-> `BENCH_WAL_MAX_PENDING_BATCHES` row's "8 (bench), 1 (library default)" is out of date;
-> the Saturation knobs table in this folder's `README.md` carries the current defaults.
+> **Snapshot note (added later):** the Default column records 2026-06-04. The
+> `BENCH_WAL_MAX_PENDING_BATCHES` row's "8 (bench), 1 (library default)" is out of date:
+> the library default for `WalMaxPendingBatches` was already 8 on that date (section 16
+> cites that ceiling), and it has since risen to 16, which the rig inherits. The
+> Saturation knobs table in this folder's `README.md` carries the current defaults.
 
 | Knob | Default | What it bounds | When to turn |
 |---|---|---|---|

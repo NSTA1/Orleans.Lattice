@@ -177,7 +177,8 @@ The request records this package defines are Orleans-serialized `[GenerateSerial
 records whose stable aliases carry the `oitng.` prefix (the constants live in the public
 `GrpcTenantAdminTypeAliases` class). Responses are the facade result records from
 `Orleans.Lattice.Api.Abstractions`, whose aliases carry the `oitn.` prefix, except
-`ListAccessibleTenants`, which wraps its list in this package's `TenantSelfDescriptorList`.
+`ListAccessibleTenants`, which wraps its list in this package's `TenantSelfDescriptorList`,
+and `GetAuthScheme`, which answers with this package's `AuthSchemeAdvertisement`.
 Properties marked `required` must be set by the caller.
 
 | Record | Members | Used by |
@@ -204,10 +205,12 @@ Server side (an ASP.NET Core host co-located with the silo):
   **default-deny** `ILatticeTenantAdminApiAuthorizer`, the header-reading
   `ILatticeTenantAdminApiCredentialBridge`, and the options-backed
   `ILatticeTenantAdminApiAuthSchemeSource` (which advertises nothing by default).
-  Because each is a `TryAdd`, registering your own **before** this call is what
-  opts the surface in. The interceptor is the exception: each call appends it to the
-  gRPC pipeline again, so a repeated call authorizes every call to this service once
-  per registration - call it once.
+  Because each is a `TryAdd`, an implementation you register **before** this call is
+  kept, and one registered afterwards with `AddSingleton` also wins, because the last
+  registration of a service is the one resolved; registering a permissive authorizer
+  either way is what opts the surface in. The interceptor is the exception: each call
+  appends it to the gRPC pipeline again, so a repeated call authorizes every call to
+  this service once per registration - call it once.
 - `MapLatticeTenantAdminApiGrpc(this IEndpointRouteBuilder endpoints)` - maps the gRPC
   endpoint. The host must have called `AddLatticeTenantAdminApiGrpc` and must expose
   `ILatticeTenantAdmin` (via `AddLatticeTenantAdminApi`) in the same service

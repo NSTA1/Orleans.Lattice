@@ -2,8 +2,8 @@ namespace Orleans.Lattice.Explorer.Core.Data;
 
 /// <summary>
 /// A display-ready element-level member of a CRDT's current folded state for the
-/// Data tab, projected from a decoded <see cref="CrdtMemberValue"/>: the element
-/// bytes are rendered through the Data tab's value renderer so a textual element
+/// Data area, projected from a decoded <see cref="CrdtMemberValue"/>: the element
+/// bytes are rendered through the Data area's value renderer so a textual element
 /// shows as text and an opaque element falls back to a hex dump.
 /// <para>
 /// These rows are a point-in-time snapshot of the current materialised state and

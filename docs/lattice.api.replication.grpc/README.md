@@ -10,7 +10,7 @@ It provides:
 
 - **A code-first gRPC service.** One unary RPC per facade operation, bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeReplicationApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
-- **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
+- **Shared Orleans marshalling.** Every message is a `[GenerateSerializer]` record - one of the package's wire records, or, for peer status, the facade's own query and page records - serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
 - **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every operation RPC at the edge and defaults to deny. The facade's own access gate then re-authorizes the resolved caller; it denies by default once an authorization add-on such as `Orleans.Lattice.Auth` supplies it (with only the core no-op gate registered it allows every call).
 
 Enabling and disabling replication reconfigures cross-cluster data flow, so the binding fails closed: with no authorizer registered, every operation RPC is rejected with `PermissionDenied`.

@@ -91,9 +91,9 @@ await tree.EnableManyAsync(keys, "cluster-A", cancellationToken);
 ```
 
 The batch is **not atomic**: a partial failure leaves it half-applied. When the
-marks must land all-or-nothing, stage them instead and hand the tokens to the
-cross-tree atomic builder, which mints every delta the same way from the same
-single batched read:
+marks must land all-or-nothing, stage them instead with `StageEnableManyAsync`,
+which mints every delta the same way from one batched read, and hand the tokens
+to the cross-tree atomic builder:
 
 ```csharp verify
 IReadOnlyList<LatticeStagedCrdtWrite> staged =

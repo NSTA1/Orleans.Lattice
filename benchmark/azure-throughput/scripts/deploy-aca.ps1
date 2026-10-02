@@ -18,7 +18,7 @@
 	                                   clustering table + grain storage
 	    log-<prefix>                   Log Analytics (required by ACA)
 	    env-<prefix>                   Container Apps environment, Consumption
-	    silo-<prefix>                  the silo app, scaled to exactly N
+	    silo-<prefix>                  the silo app, cohort runner scales it to N
 	    prod-<prefix>                  the producer, an ACA Job
 
 	Why no VNet. A live two-app spike in this subscription proved that a
@@ -47,7 +47,9 @@
 	the resource group is tagged with it.
 
 .PARAMETER SiloCount
-	Number of silo replicas to run (exactly; min = max, no autoscaling).
+	Default silo count recorded in the run context. The app is created
+	with a 0..30 replica range; run-cohort-aca.ps1 pins each cohort's
+	count when it runs.
 
 .PARAMETER Location
 	Azure region. Defaults to westus3, the region the spike was proven in.
@@ -64,7 +66,8 @@
 	rather than hiding it.
 
 .PARAMETER SkipImageBuild
-	Reuse images already in the registry. Only valid with -ReuseRg.
+	Reuse images already in the registry. Intended for -ReuseRg; the
+	script does not require that switch, but the images must already exist.
 
 .PARAMETER ReuseRg
 	Provision into an existing resource group from a previous run of this

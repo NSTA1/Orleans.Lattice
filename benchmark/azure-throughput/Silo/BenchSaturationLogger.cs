@@ -51,9 +51,10 @@ internal sealed class BenchSaturationLogger : IWalSaturationObserver
     /// Returns the wall-clock UTC at which the named tree most recently
     /// transitioned into <see cref="WalSaturationState.Saturated"/>, or
     /// <c>null</c> if the tree has never been observed saturated.
-    /// Consulted by <c>TcpIngestService.DrainAsync</c> at the
-    /// producer-stop boundary to decide whether to dispatch the
-    /// residual batch or abandon it (FX-029).
+    /// Consulted by the shared ingest engine through
+    /// <see cref="SiloBenchSaturationGate"/> at the producer-stop
+    /// boundary to decide whether to dispatch the residual batch or
+    /// abandon it (FX-029).
     /// </summary>
     public DateTimeOffset? LastSaturatedUtc(string treeId)
     {

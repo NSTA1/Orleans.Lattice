@@ -20,12 +20,12 @@ namespace Orleans.Lattice;
 ///   retry costs one more admission test against a queue that may since have
 ///   drained.</description></item>
 ///   <item><description><see cref="WalAdmission"/>,
-///   <see cref="AtomicWriteSaga"/> and <see cref="SetManyFanOut"/> refuse
-///   <b>after</b> a wait budget has already elapsed - against a tree that has
-///   just reported it is saturated or, for <see cref="SetManyFanOut"/>,
-///   against branches that have not settled - so a retry re-offers the same
-///   work into the regime that refused it and the feedback is
-///   positive.</description></item>
+///   <see cref="AtomicWriteSaga"/>, <see cref="SetManyFanOut"/> and
+///   <see cref="SetManyEnvelope"/> refuse <b>after</b> a wait budget has
+///   already elapsed - against a tree that has just reported it is saturated
+///   or, for the SetMany seams, against branches or an envelope that have not
+///   settled - so a retry re-offers the same work into the regime that refused
+///   it and the feedback is positive.</description></item>
 ///   <item><description><see cref="SnapshotCursorOpen"/> refuses before any
 ///   work too, but as deliberate load shedding of an expensive capture on a
 ///   saturated tree, so an automatic retry defeats the shed rather than costing
@@ -66,8 +66,8 @@ public enum LatticeSaturationSource
     /// take no source - including the framework-contract parameterless
     /// overload - and by any exception deserialised from a host that predates
     /// source attribution. Treat as <b>not</b> automatically retryable: it is
-    /// the conservative reading, because four of the six known seams are
-    /// amplifying to retry and an unattributed refusal could be any of them.
+    /// the conservative reading, because six of the seven known seams are not
+    /// automatically retryable and an unattributed refusal could be any of them.
     /// </summary>
     Unspecified = 0,
 

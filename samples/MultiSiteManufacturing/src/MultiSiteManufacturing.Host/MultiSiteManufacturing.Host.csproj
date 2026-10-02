@@ -39,8 +39,8 @@
          (Azurite locally) instead of the in-memory baseline, so the WAL
          survives silo restarts alongside grain state and clustering. -->
     <ProjectReference Include="..\..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
-    <!-- Migration step 1: package-shipped replication wired in alongside the
-         host-rolled pipeline (see ../../migration.md). The package observes
+    <!-- Package-shipped replication is wired in alongside the remaining
+         sample-specific visualization seams. The package observes
          only trees declared in LatticeReplicationOptions.ReplicatedTrees -
          currently `mfg-facts-v2` only - so it is disjoint from the existing
          host-rolled ReplicationTopology. -->

@@ -25,8 +25,9 @@ record is readable through the ordinary scan / change-feed surface and every
 mutation is durably auditable through an auto-enabled per-key history view.
 Resolution is served from a per-silo cache bounded by the minimum of the
 configured lifetime and the inbound token's own expiry, and flushed on any
-`sys-membership-*` mutation, so a membership change is reflected without a
-process restart.
+`sys-membership-*` mutation the silo commits, so a membership change is reflected
+without a process restart (another silo keeps its pre-change entry until that
+entry expires).
 
 - **Opt-in and zero-cost when absent.** Core ships only an allow-nothing
   default membership context that always resolves `Anonymous`; nothing runs

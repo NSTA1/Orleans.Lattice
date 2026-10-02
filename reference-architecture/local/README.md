@@ -219,7 +219,7 @@ used instead), so it can never weaken a real estate. The username you enter **mu
 match** the silo's bootstrap admin (and the MCP head's `Mcp__DevSubjectId`); the
 password is ignored.
 
-### The Access tab is display-only here
+### The Access area is display-only here
 
 The Explorer's **Access** area (membership and access-control administration) opens
 and renders, but managing grants or policies through it has **no practical effect

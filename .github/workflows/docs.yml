@@ -11,8 +11,8 @@ name: Docs
 #   push (lattice-v*) Deploy. Packages ship in coordinated waves anchored on the
 #                     core package, so the core tag fires once per wave, from the
 #                     released commit. Hanging this off every per-package tag
-#                     would rebuild and redeploy the whole site up to 39 times
-#                     for a single wave, and would still publish the other
+#                     would rebuild and redeploy the whole site once per package
+#                     tag in a single wave, and would still publish the other
 #                     packages' unreleased docs, since every tag in a wave points
 #                     at the same release-line commit (see docs/RELEASING.md).
 #                     The glob also matches a core hotfix on an OLDER line, so a

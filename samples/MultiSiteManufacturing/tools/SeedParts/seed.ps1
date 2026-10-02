@@ -9,7 +9,7 @@
   Orleans gateways and Azurite (which the client needs for clustering) are
   internal to msmfg_<cluster>-net.
 
-  This file is a local dev aid and is intentionally NOT committed.
+  This tracked helper is a local dev aid, not part of the sample app build.
 
 .EXAMPLE
   ./seed.ps1                 # 500 parts into the US cluster's mfg-facts tree

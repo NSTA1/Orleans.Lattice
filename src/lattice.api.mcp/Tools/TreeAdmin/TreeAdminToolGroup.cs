@@ -149,8 +149,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             Read(services, TreeAdminDiagnosticsToolHandlers.GetStorageUsageAsync, "lattice_treeadmin_storage_usage",
                 "Read cluster-wide storage accounting",
                 "Reads a cluster-wide storage accounting summary across every tree, split by surface (write-ahead "
-                + "log, snapshots, leaf state) with per-tree breakdowns. The default returns the cheap cached "
-                + "WAL-poll aggregate; the deep flag forces an expensive fresh leaf-walk that re-measures every "
+                + "log, snapshots, leaf state) with per-tree breakdowns. The default returns each tree's cheap "
+                + "cached figures, refilled from shard-root byte totals and WAL partitions without walking leaves; "
+                + "the deep flag forces an expensive fresh leaf-walk that re-measures every "
                 + "shard. Requires cluster telemetry authority. Read-only."),
 
             // ----- Tree lifecycle and registry config (read-only) -----

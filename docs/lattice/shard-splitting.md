@@ -180,8 +180,8 @@ cursor, not appended. Bounded by `LatticeOptions.MaxScanRetries`.
 #### Snapshot scans - pinned-map slot ownership in the snapshot leaf
 
 A snapshot-isolated scan (`OpenSnapshotEntryCursorAsync` /
-`OpenSnapshotKeyCursorAsync`, the read-only state API, and the Explorer
-Data tab) cannot use the live in-line reconciliation above, because it
+`OpenSnapshotKeyCursorAsync`, the read-only state API, and the Explorer's
+Data area) cannot use the live in-line reconciliation above, because it
 must read a single, internally-consistent point in time. Instead the
 snapshot coordinate pins the registry's `ShardMap` at open
 (`LatticeSnapshotCoordinate.PinnedShardMap`, alongside the pinned

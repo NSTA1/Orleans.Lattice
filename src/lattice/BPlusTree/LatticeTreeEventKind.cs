@@ -39,7 +39,7 @@ public enum LatticeTreeEventKind
     /// <summary>An online resize completed and the tree alias was swapped.</summary>
     ResizeCompleted = 9,
 
-    /// <summary>An online reshard grew the tree to the requested physical shard count.</summary>
+    /// <summary>An online reshard reached the requested physical shard count (grow or shrink).</summary>
     ReshardCompleted = 10,
 
     /// <summary>A <c>SetManyAtomicAsync</c> saga reached its terminal <c>Completed</c> phase.</summary>

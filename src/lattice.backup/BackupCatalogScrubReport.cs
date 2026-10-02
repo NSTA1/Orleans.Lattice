@@ -48,7 +48,11 @@ public sealed record BackupCatalogScrubReport
     /// <summary>How many orphan rows were removed from the catalog (zero on a non-destructive pass).</summary>
     [Id(2)] public long RemovedCount { get; init; }
 
-    /// <summary>Whether destructive pruning was requested and applied.</summary>
+    /// <summary>
+    /// Whether destructive pruning was requested for this pass. It is
+    /// <see langword="true"/> on a pruning pass even when no orphan was found;
+    /// read <see cref="RemovedCount"/> for what was actually removed.
+    /// </summary>
     [Id(3)] public bool Pruned { get; init; }
 
     /// <summary>The ids of the orphan rows found, whether or not they were removed.</summary>

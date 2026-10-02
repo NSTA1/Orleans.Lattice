@@ -72,9 +72,10 @@ public static partial class LatticeScalingServiceCollectionExtensions
         // Axis collectors and probes. The compute collector is #1186; the storage
         // collector (#1187) reads the WAL storage state through its own source
         // seam; the split probe (#1224) reads cluster split activity through the
-        // core admin surface. All use TryAdd so a host may substitute richer
-        // implementations - or register NoOpSplitActivityProbe first to keep the
-        // split axis inert.
+        // core admin surface. All use TryAdd so an earlier registration wins; the
+        // split probe interface is internal, so a host keeps the split axis inert
+        // by setting LatticeScalingSignalOptions.SplitAwareScaleIn to false, which
+        // selects the no-op probe below.
         services.TryAddSingleton<IComputePressureCollector, ComputePressureCollector>();
         services.TryAddSingleton<IWalStorageStateSource, LatticeWalStorageStateSource>();
         services.TryAddSingleton<IStoragePressureCollector, StoragePressureCollector>();

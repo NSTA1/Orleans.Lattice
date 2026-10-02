@@ -194,7 +194,7 @@ function Measure-RigScenario {
 			$readySeconds = Wait-RigHttpOk -Uri $readyUri -ZeroUtc $zero -TimeoutSec $Config.ReadyTimeoutSec -IntervalMs $Config.ProbeIntervalMs
 		}
 
-		# Records the first instant readiness returned 200, when the first query
+		# Records the latest instant readiness returned 200, when the first query
 		# was not gated on it. Called from every polling loop below so readiness
 		# is still observed even if it lands long after the first answer.
 		$readyProbe = {

@@ -12,7 +12,7 @@ namespace Orleans.Lattice;
 /// </summary>
 public readonly record struct GCounterAccessor
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;
@@ -56,11 +56,14 @@ public readonly record struct GCounterAccessor
     /// non-negative - a grow-only counter never decreases.
     /// </summary>
     /// <remarks>
-    /// When the caller has entered an ambient
-    /// <see cref="LatticeIdempotencyContext"/> scope the leaf grain adds a
-    /// pre-apply dedup guard, so a retry of the same logical operation under
-    /// the same key collapses to a no-op. Without the scope the counter
-    /// advances on every call.
+    /// The call reads the counter once and applies a delta carrying this replica's
+    /// resulting total, which the leaf folds by a per-replica maximum, so
+    /// re-applying the same delta (for example a grain-side retry of the apply)
+    /// cannot double-count. A second call reads the updated counter and advances
+    /// it again, with or without an ambient <see cref="LatticeIdempotencyContext"/>
+    /// scope: the scope only lets a configured <see cref="LatticeOptions.RetryPolicy"/>
+    /// re-run the underlying delta apply. <paramref name="maxAttempts"/> is kept
+    /// for binary compatibility and no longer drives a retry loop.
     /// </remarks>
     public Task IncrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {

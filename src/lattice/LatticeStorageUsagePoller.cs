@@ -14,10 +14,12 @@ namespace Orleans.Lattice;
 /// <see cref="ILatticeAdmin.PollWalUsageAsync"/>, which fans out to every
 /// registered tree's <i>WAL-only</i> aggregator. Each WAL-only aggregator
 /// is a single cluster-wide activation, so its publish lands on
-/// <i>its own host silo's</i> <see cref="LatticeStorageUsageMetrics"/> sink -
-/// which means each tree contributes its series on exactly one silo and a
-/// cross-silo <c>sum by (tree)</c> counts it once, regardless of how many
-/// silos run this poller.
+/// <i>its own host silo's</i> <see cref="LatticeStorageUsageMetrics"/> sink
+/// however many silos run this poller. The tree's deep aggregator publishes
+/// the same WAL-bytes series on its own host silo and is placed
+/// independently, so more than one silo can export a series for one tree;
+/// aggregate the storage gauges across silos with <c>max by (tree)</c>, not
+/// <c>sum by (tree)</c>.
 /// <para>
 /// The WAL poll path is intentionally activation-free for leaves, internal
 /// nodes, snapshot storage grains, and shard roots: it touches only WAL
@@ -44,8 +46,8 @@ namespace Orleans.Lattice;
 /// the gauges fresh with no leader election. Migration is handled by the
 /// sink's <see cref="LatticeStorageUsageMetrics.StalenessHorizon"/>: when
 /// a tree's aggregator moves to another silo the old silo stops refreshing
-/// that series and it expires there, so the tree does not appear on two
-/// scrape targets at once.
+/// that series and it expires there once the horizon passes, so a migration
+/// does not leave a duplicate series behind for good.
 /// </para>
 /// <para>
 /// The poller sets the sink's staleness horizon to a small multiple of its

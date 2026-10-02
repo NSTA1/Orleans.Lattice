@@ -459,8 +459,10 @@ Key lines in the silo log:
   that kept completing work stays `HEALTHY`, its failures carried as data rather than as `FAILED`.
 - `[silo] wal-placement treeId=.. accounts=N partitions=M version=.. -> 0:default,1:acct1,...` - emitted when
   `BENCH_WAL_ACCOUNTS > 1`; confirms which account each WAL partition landed on. Its
-  absence (with accounts >1) or an `ERROR wal-placement-spread` means the arm ran
-  single-account.
+  absence (with accounts >1) means the arm ran single-account, unless a
+  `WARN wal-placement read` line says the spread landed but could not be read back. An
+  `ERROR wal-placement-spread` means the spread failed and the silo stopped before opening
+  its listener, so the arm did not run.
 
 The CPU, RSS, and diagnostics lines appear only in the printed summary, not in the log:
 `Silo CPU : avg ..% / peak ..%` (of one vCPU) and `Silo RSS peak` come from the per-second

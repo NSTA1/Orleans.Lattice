@@ -33,7 +33,7 @@
     The estate is deployed with the public network option and Entra sign-in ON.
     The deploying user is seeded as the sole security administrator - every other
     caller is denied until that admin grants them access through the Explorer
-    Access tab. For a private-network estate or a different topology, drive
+    Access area. For a private-network estate or a different topology, drive
     Deploy-ReferenceArchitecture.ps1 directly.
 
     Because Entra sign-in is on, an authenticated 'az' session is required even

@@ -63,8 +63,11 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     /// after the last <see cref="Publish"/> / <see cref="PublishOverThreshold"/>
     /// that touched it. A series not refreshed within this window stops being
     /// observed, so when a tree's storage-usage aggregator migrates to another
-    /// silo the <i>old</i> silo's sink stops emitting that tree's now-stale
-    /// value and a cross-silo <c>sum by (tree)</c> does not double-count it.
+    /// silo and nothing else refreshes the series on the <i>old</i> silo, that
+    /// sink stops emitting the tree's now-stale value once the horizon passes
+    /// rather than indefinitely. It does not make a cross-silo
+    /// <c>sum by (tree)</c> safe: a tree's WAL-only and deep aggregators are
+    /// placed independently, so more than one silo can export the same tree.
     /// Set by the background poller to a small multiple of its poll interval;
     /// defaults to <see cref="DefaultStalenessHorizon"/>. Must be positive.
     /// </summary>
@@ -156,16 +159,17 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     }
 
     /// <summary>
-    /// Unions the per-addressed-tree-id byte measurements of every live sink
-    /// instance. A tree's aggregator is a single cluster-wide activation for one
-    /// addressed id, so within one process a given id is published through at
-    /// most one instance; co-hosted silos each contribute the ids they host.
-    /// An aliased tree contributes a single series under its logical id: the
-    /// pollers and roll-ups still walk every registered id, including the
+    /// Unions the per-tree byte measurements of every live sink instance;
+    /// co-hosted silos each contribute the trees their aggregators published.
+    /// A tree's WAL-only and deep aggregators are separate, independently
+    /// placed activations, so two sinks - in one process or across silos - can
+    /// both hold an entry for one tree, and each yields its own measurement.
+    /// An aliased tree publishes under its logical id only: the pollers and
+    /// roll-ups still walk every registered id, including the
     /// <c>{treeId}/resized/{operationId}</c> copy a resize registers, but both
     /// aggregators publish under the logical tree the copy was derived from, so
-    /// the duplicate publish is an idempotent overwrite of one series rather
-    /// than a second series keyed by the physical copy (issue #4152).
+    /// the copy adds no series keyed by its physical id, and where both publish
+    /// into one sink the second is an idempotent overwrite (issue #4152).
     /// </summary>
     /// <param name="selector">Selects the byte surface to observe from a report.</param>
     /// <param name="requireDeep">
@@ -208,9 +212,10 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     /// Preferring <see langword="true"/> is the answer to the question the
     /// gauge actually asks - <i>has a deep measurement landed for this tree?</i>
     /// - and one sink holding only the cheap WAL-only entry is no evidence that
-    /// another has not measured it. The byte gauges need no equivalent fold:
-    /// the deep surfaces skip an entry that is not deeply measured, so the sink
-    /// that took the measurement is the only one that contributes.
+    /// another has not measured it. The deep byte surfaces are not folded: they
+    /// skip an entry that is not deeply measured, so only a sink that has taken
+    /// a deep measurement contributes, while the WAL-bytes gauge yields one
+    /// measurement from every sink holding a live entry for the tree.
     /// </para>
     /// </summary>
     private static IEnumerable<Measurement<long>> ObserveAllDeepPublished()
@@ -367,8 +372,8 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             {
                 // Series not refreshed within the horizon: the aggregator
                 // for this tree has migrated away (or the host stopped
-                // polling). Drop it so a migrated tree is reported by
-                // exactly one silo and a cross-silo sum is not doubled.
+                // polling). Drop it so the old silo stops exporting a
+                // series nothing refreshes any more.
                 _reports.TryRemove(kv.Key, out _);
                 continue;
             }

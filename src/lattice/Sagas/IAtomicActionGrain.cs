@@ -25,8 +25,8 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// <b>Atomicity, precisely.</b> A built-in tree-write step inherits the tree's
-/// verified atomic-write guarantee (a single-tree write is atomic; a cross-tree
-/// write routes through the cross-tree two-phase-commit coordinator), so it either
+/// verified atomic-write guarantee. Each tree-write step targets one tree and is
+/// delegated to that tree's atomic-write coordinator, so it either
 /// fully applies or fully rolls back to its captured pre-image. A custom step
 /// provides best-effort, eventually-consistent saga compensation whose correctness
 /// depends on the caller's compensating effect honouring its contract. The saga

@@ -57,8 +57,7 @@ internal sealed partial class BPlusLeafGrain
     /// the DI-registered instance because
     /// <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// registers it unconditionally; this fallback only covers the
-    /// closed-shape modes (OrSet, PnCounter, VersionVector,
-    /// MvRegister) because OR-Map requires per-tree generic
+    /// global closed-shape modes because OR-Map requires per-tree generic
     /// registration that has no sensible default.
     /// </summary>
     private static readonly CrdtShapeRegistry FallbackCrdtShapeRegistry = new();

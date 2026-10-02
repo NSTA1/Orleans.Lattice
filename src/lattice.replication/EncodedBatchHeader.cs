@@ -166,11 +166,12 @@ public readonly record struct EncodedBatchHeader
     /// entry segments). The fixed header is always plaintext so
     /// receivers can read this field before deciding whether to
     /// allocate an inflate buffer. The canonical encoder writes
-    /// <see cref="LatticeCompression.None"/> when
-    /// <c>LatticeReplicationOptions.FramingCompression</c> is left at
-    /// its default or when the uncompressed tail is shorter than
+    /// <see cref="LatticeCompression.None"/> when the resolved framing
+    /// compression is <see cref="LatticeCompression.None"/>, when
+    /// per-peer down-stamping has disabled compression, or when the
+    /// uncompressed tail is shorter than
     /// <c>LatticeReplicationOptions.FramingCompressionMinBatchBytes</c>;
-    /// otherwise it writes the configured algorithm. An unrecognised
+    /// otherwise it writes the resolved algorithm. An unrecognised
     /// value at the receiver surfaces as
     /// <see cref="NotSupportedException"/> from the framing decoder.
     /// </summary>

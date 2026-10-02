@@ -6,7 +6,7 @@ Durable Azure Table Storage-backed WAL provider for [Orleans.Lattice](../../READ
 
 `Orleans.Lattice.Storage.AzureTable` is the optional production WAL backend for the core lattice and replication packages:
 
-- **Durable WAL storage.** `AzureTableWalStorageProvider` stores per-tree, per-shard WAL batches in Azure Table Storage and implements the public `IWalStorageProvider` contract.
+- **Durable WAL storage.** `AzureTableWalStorageProvider` stores per-tree, per-partition WAL batches in Azure Table Storage and implements the public `IWalStorageProvider` contract.
 - **Atomic batch append.** Each append batch is made visible all-or-nothing, and its caller-assigned offsets must be dense within the batch.
 - **Restart recovery.** Activation-time reconciliation completes an interrupted batch that contiguously extends the stored tail and removes any other, so a crash never leaves a half-committed batch behind and never lowers the tail.
 - **Azure SDK integration.** `AzureTableWalStorageOptions` controls authentication, table selection, retry tuning, stored-payload compression, phase-two commit behaviour, and WAL saturation-aware retries.

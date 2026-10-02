@@ -1,7 +1,7 @@
 # Schema enforcement and versioning (`Orleans.Lattice.Schema`)
 
-Orleans.Lattice stores every value as an opaque `byte[]`: the silo never looks
-inside a value, and typed access is a client-side convenience. That keeps the
+Orleans.Lattice stores every value as an opaque `byte[]`: the silo attaches no
+schema to a value, and typed access is a client-side convenience. That keeps the
 core fast and format-agnostic, but it also means the cluster cannot, on its own,
 stop a caller writing a malformed value or tell a v1 value from a v2 one.
 

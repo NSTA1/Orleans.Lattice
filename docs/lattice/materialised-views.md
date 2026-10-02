@@ -1034,9 +1034,11 @@ cost. See [Durable per-key history views](history-views.md).
   one filter / re-project or aggregation projection.
 - **Atomic apply does not carry TTL.** A committed atomic batch's view entries
   are written without a TTL even when the source prepared entries had one.
-- **Cross-batch ordering between a concurrent non-atomic write and an atomic
-  batch to the same key resolves by apply order**, not source HLC: within a drain
-  pass a committed atomic batch is applied after the ordinary survivors.
+- **An atomic batch and a concurrent non-atomic write to the same source key
+  resolve by source HLC.** Within a drain pass a committed atomic batch is applied
+  after the ordinary survivors, but a staged entry whose source key took a
+  higher-HLC ordinary write while its batch was staged is skipped when the batch
+  flushes, so the view keeps the source's last-writer-wins outcome.
 - **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
   `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
   HyperLogLog estimator is a later phase.

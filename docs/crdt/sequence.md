@@ -41,12 +41,14 @@ graph TD
 // A collaboratively edited ordered list (e.g. a shared board's cards).
 var cards = tree.Sequence<string>("board:1:cards");
 
-// Two replicas insert at the same position concurrently.
+// Two writers each insert at the head. The second insert has already seen
+// the first, so it lands at index 0 exactly as asked: Research, Design.
 await cards.InsertAtAsync(0, "cluster-A", "Design", cancellationToken);
 await cards.InsertAtAsync(0, "cluster-B", "Research", cancellationToken);
 
-// Concurrent inserts at the same slot converge on a deterministic order via
-// the RGA (Counter, ReplicaId) tie-break - every replica sees the same list.
+// Every replica sees the same list. Inserts that truly race - made on two
+// clusters before either has seen the other - are put in one deterministic
+// order by the RGA (Counter, ReplicaId) tie-break.
 IReadOnlyList<string> ordered = await cards.ToListAsync(cancellationToken);
 
 // A delete tombstones the node, so a later insert positioned near it still

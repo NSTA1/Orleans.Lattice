@@ -46,7 +46,7 @@ public sealed record NodeStateSummary
     /// <summary>Tombstoned / expired entries held in this node's subtree.</summary>
     [Id(8)] public long SubtreeTombstoneCount { get; init; }
 
-    /// <summary>Whether this node is currently involved in a split.</summary>
+    /// <summary>Always false in this version; reserved for future split reporting.</summary>
     [Id(9)] public bool SplitInProgress { get; init; }
 
     /// <summary>

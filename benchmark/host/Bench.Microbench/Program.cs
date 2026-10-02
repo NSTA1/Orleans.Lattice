@@ -42,7 +42,7 @@ for (var i = 0; i < args.Length; i++)
             toleranceRaw = args[++i];
             break;
         default:
-            // Unknown args are rejected by this harness; add explicit parsing here
+            // Unknown args are ignored by this harness; add explicit parsing here
             // before using a new option.
             break;
     }

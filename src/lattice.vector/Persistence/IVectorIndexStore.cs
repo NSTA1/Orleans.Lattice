@@ -15,7 +15,9 @@ namespace Orleans.Lattice.Vector.Persistence;
 /// The index needs no multi-key atomicity from an implementation. Durability is
 /// established by ordering alone: content records are written first and a single
 /// commit record last, so a torn write leaves an uncommitted epoch that the
-/// loader ignores and the next flush sweeps.
+/// loader ignores. Nothing sweeps that epoch directly; its records are reclaimed
+/// only once a later commit names and then supersedes the same epoch, or when
+/// their generation is superseded or discarded.
 /// </para>
 /// </summary>
 public interface IVectorIndexStore

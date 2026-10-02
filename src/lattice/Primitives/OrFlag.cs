@@ -7,8 +7,9 @@ using System.Runtime.InteropServices;
 /// <see cref="Enable(string, long)"/> tags the flag with a unique
 /// <see cref="OrSetDot"/>; <see cref="Disable"/> drops only the dots
 /// currently observed as enabled. State-level <see cref="Merge(OrFlag, OrFlag)"/>
-/// is the union of every replica's enable dots minus the union of every
-/// replica's observed-remove dots, making the CRDT commutative,
+/// unions every replica's enable dots and every replica's observed-remove
+/// dots, and an enable dot counts only while no same-replica observed-remove
+/// dot at an equal or higher counter covers it, making the CRDT commutative,
 /// associative, and idempotent under arbitrary delivery order.
 /// <para>
 /// The flag is the single-element specialisation of <see cref="OrSet"/>:
@@ -34,14 +35,15 @@ public sealed class OrFlag : ICrdt<OrFlag>
 
     /// <summary>
     /// Live enable dots. The flag is enabled if and only if at least one
-    /// of these dots is not present in <see cref="Tombstones"/>.
+    /// of these dots is not covered by <see cref="Tombstones"/> - that is, no
+    /// tombstone dot from the same replica sits at an equal or higher counter.
     /// </summary>
     [Id(0)]
     public List<OrSetDot> Enables { get; set; }
 
     /// <summary>
-    /// Observed-remove (disable) dots. A dot in this list cancels the
-    /// matching dot in <see cref="Enables"/> on merge.
+    /// Observed-remove (disable) dots. A dot in this list cancels
+    /// same-replica enable dots at or below its counter.
     /// </summary>
     [Id(1)]
     public List<OrSetDot> Tombstones { get; set; }

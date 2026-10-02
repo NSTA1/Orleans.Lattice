@@ -198,7 +198,7 @@ param mcpPublicUrl string = ''
 @description('MCP OAUTH-DISCOVERY SEAM: the delegated silo scope a client should request so the token it obtains carries the audience the MCP head validates and forwards (for example api://{tenantId}/{baseName}-silo/user_impersonation - the same scope the Explorer console requests). Bound to the MCP head Mcp:Oauth:Scopes and emitted as the metadata document scopes_supported. Empty omits scopes_supported.')
 param mcpAuthScope string = ''
 
-@description('Comma-separated Entra object ids (oid claim) seeded as the estate administrators - the root of trust the deny-by-default access gate honours. The deployer sets this to the single security administrator (the deploying user by default); every other caller is refused until this administrator grants access at runtime through the Explorer Access tab. Bound to the host Auth:BootstrapAdministrators.')
+@description('Comma-separated Entra object ids (oid claim) seeded as the estate administrators - the root of trust the deny-by-default access gate honours. The deployer sets this to the single security administrator (the deploying user by default); every other caller is refused until this administrator grants access at runtime through the Explorer Access area. Bound to the host Auth:BootstrapAdministrators.')
 param bootstrapAdministrators string = ''
 
 @description('DEPLOYER SEAM: comma-separated clusterId=endpoint replication peers for THIS region (every OTHER region), applied symmetrically. Empty until the deployer resolves the peer FQDNs post-provision. Bound to the host Replication:Peers.')
@@ -592,7 +592,7 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Auth__DefaultEffect', value: authDefaultEffect }
             // Sole seeded administrator (root of trust) - the single security
             // admin the deployer supplies. Deny-by-default refuses everyone else
-            // until this admin grants access via the Explorer Access tab.
+            // until this admin grants access via the Explorer Access area.
             { name: 'Auth__BootstrapAdministrators', value: bootstrapAdministrators }
             { name: 'StateApi__RequireAuthorization', value: string(requireApiAuthorization) }
             // Read-write Data API surface, co-hosted on the silo gRPC endpoint.
