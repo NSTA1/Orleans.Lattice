@@ -5682,6 +5682,10 @@
         {
           "error_id": "invalid-operation",
           "condition": "A resize is in flight and the target needs a migration (an observably empty tree is re-pinned before the resize interlock is checked), or a different reshard target is already in progress."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The tree id has no registry row (it was never created, or it has been purged); the coordinator refuses rather than creating one."
         }
       ],
       "retry": {
@@ -5739,6 +5743,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The tree id has no registry row (it was never created, or it has been purged); the coordinator refuses rather than creating one."
         }
       ],
       "retry": {
@@ -5937,6 +5945,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The tree id has a completed purge record; read-side configuration does not recreate it."
         }
       ],
       "retry": {
@@ -6573,6 +6585,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The tree id has a completed purge record; read-side configuration does not recreate it."
         }
       ],
       "retry": {
@@ -7133,6 +7149,14 @@
       "retryable": "conditional",
       "meaning": "A saga state write kept losing its optimistic-concurrency check after bounded re-attach; Conflict is set and the saga resumes when the same batch is re-submitted under the same operationId.",
       "source": "src/lattice/LatticeStateWriteFailedException.cs#LatticeStateWriteFailedException"
+    },
+    {
+      "id": "tree-not-registered",
+      "type": "LatticeTreeNotRegisteredException",
+      "grpc_status": null,
+      "retryable": false,
+      "meaning": "A registry verb that only changes an existing tree row targeted a tree id that was never registered or has been purged; nothing is created.",
+      "source": "src/lattice/LatticeTreeNotRegisteredException.cs#LatticeTreeNotRegisteredException"
     },
     {
       "id": "wal-provider-missing",

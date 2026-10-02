@@ -103,6 +103,15 @@ internal sealed class TreeShardConsolidationGrain(
     /// <inheritdoc />
     protected override string MetricsTreeId => TreeId;
 
+    /// <inheritdoc />
+    protected override bool AbandonsSagaOnPurgedTree => true;
+
+    /// <inheritdoc />
+    protected override Task<bool> IsTreePurgedAsync() => PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId);
+
+    /// <inheritdoc />
+    protected override Task ClearSagaStateForPurgedTreeAsync() => state.ClearStateAsync();
+
     /// <summary>
     /// Clock used for progress timestamps. Defaults to
     /// <see cref="TimeProvider.System"/>; unit tests substitute a controllable
@@ -492,6 +501,8 @@ internal sealed class TreeShardConsolidationGrain(
         }
         catch (Exception ex)
         {
+            if (await TryAbandonSagaOnPurgedTreeAsync()) return;
+
             Logger.LogWarning(ex,
                 "Shard-consolidation phase {Phase} failed for {Context}", state.State.Phase, LogContext);
         }

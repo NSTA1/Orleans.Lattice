@@ -43,6 +43,21 @@ steps:
     expects: "Returns an operation handle immediately; poll status for the incremental backup id."
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartIncrementalBackupAsync"
   - n: 5
+    action: "For a backup set, start the tracked set capture."
+    api: "ILatticeBackupOperations.StartBackupSetAsync / StartBackupSet / lattice_backup_start_set"
+    expects: "Returns an operation handle immediately; poll status for the set id and member backup ids."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupSetAsync"
+  - n: 6
+    action: "When validating an existing artifact, start the tracked health check and poll the backup operation status."
+    api: "ILatticeBackupOperations.StartBackupHealthCheckAsync / StartBackupHealthCheck / lattice_backup_start_health_check"
+    expects: "Returns an operation handle; the result map carries healthStatus and artifact mismatch counts."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupHealthCheckAsync"
+  - n: 7
+    action: "For catalog maintenance, start the tracked rebuild or scrub and poll the backup operation status."
+    api: "ILatticeBackupOperations.StartCatalogRebuildAsync or StartCatalogScrubAsync"
+    expects: "Returns an operation handle; the result map carries rebuild or scrub counts."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogRebuildAsync"
+  - n: 8
     action: "Describe the backup before using it as a restore point."
     api: "ILatticeBackupControl.DescribeBackupAsync / DescribeBackup"
     expects: "Returns the manifest and base-first restore chain, or null when absent."

@@ -50,6 +50,8 @@ public sealed class LatticeOptionsValidatorTimerCeilingTests
         (nameof(LatticeOptions.MaxScanPageStallDuration), (o, v) => o.MaxScanPageStallDuration = v),
         (nameof(LatticeOptions.HotShardSampleInterval), (o, v) => o.HotShardSampleInterval = v),
         (nameof(LatticeOptions.ShardHealingInterval), (o, v) => o.ShardHealingInterval = v),
+        (nameof(LatticeOptions.CompactionShardTickInterval), (o, v) => o.CompactionShardTickInterval = v),
+        (nameof(LatticeOptions.StorageUsageRollupBudget), (o, v) => o.StorageUsageRollupBudget = v),
     ];
 
     private static ValidateOptionsResult Validate(Action<LatticeOptions> configure)
@@ -138,5 +140,30 @@ public sealed class LatticeOptionsValidatorTimerCeilingTests
         });
 
         Assert.That(result.Succeeded, Is.True, result.FailureMessage);
+    }
+
+    [Test]
+    public void A_non_positive_storage_usage_rollup_budget_still_disables_the_budget()
+    {
+        foreach (var disabled in new[] { TimeSpan.Zero, TimeSpan.FromSeconds(-1), Timeout.InfiniteTimeSpan })
+        {
+            var result = Validate(o => o.StorageUsageRollupBudget = disabled);
+
+            Assert.That(result.Succeeded, Is.True, $"{disabled}: {result.FailureMessage}");
+        }
+    }
+
+    [Test]
+    public void A_compaction_tick_above_the_timer_ceiling_is_one_a_grain_timer_period_refuses()
+    {
+        // The compaction pass arms CompactionShardTickInterval as a grain-timer
+        // period; Orleans validates a period against the same TimeProvider timer
+        // range, so the value the validator now rejects is one the timer itself
+        // would refuse each time a pass started.
+        var overLong = TimerCeiling + TimeSpan.FromMilliseconds(1);
+
+        Assert.That(
+            () => TimeProvider.System.CreateTimer(static _ => { }, null, TimeSpan.Zero, overLong).Dispose(),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
 }

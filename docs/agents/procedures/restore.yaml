@@ -41,11 +41,16 @@ steps:
     expects: "Returns per-member restore results this cluster applied."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
   - n: 4
-    action: "For backup-facade restore, start a tracked restore with the mode that matches the rollback objective."
+    action: "For catalogued backup-facade restore, start a tracked restore with the mode that matches the rollback objective."
     api: "ILatticeBackupOperations.StartRestoreAsync / StartRestore / lattice_backup_start_restore"
     expects: "Returns an operation handle; poll status for progress and the restore result. InPlace converges by HLC; ShadowCutover is a true point-in-time replacement."
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartRestoreAsync"
   - n: 5
+    action: "For catalog-free disaster recovery, start a tracked cold restore from the durable sink."
+    api: "ILatticeBackupOperations.StartColdRestoreAsync / StartColdRestore / lattice_backup_start_cold_restore"
+    expects: "Returns an operation handle; poll status for validation, apply, replay and cataloguing progress."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartColdRestoreAsync"
+  - n: 6
     action: "Revert a wrong shadow-cutover using the restore result fields."
     api: "ILatticeTreeAdmin.RevertTreeRestoreAsync or ILatticeBackupControl.RevertRestoreAsync"
     expects: "Idempotently swaps back the pre-restore physical tree."
@@ -55,6 +60,8 @@ postconditions:
     source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#Mode"
   - check: "Backup-facade InPlace mode repairs missing or stale entries but does not overwrite newer live data."
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+  - check: "ShadowCutover restore carries the shadow tree's shard map onto the logical tree before the alias swap and records the replaced map on the shadow so revert can carry it back."
+    source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.PrepareCutoverAsync"
 failure_modes:
   - id: inplace-not-rollback
     signal: "InPlace restore is chosen for a rollback objective."

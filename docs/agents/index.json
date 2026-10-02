@@ -41,6 +41,11 @@
       "node": "{id, check, on_true, on_false, source}; the first node is the root",
       "terminal": "{id, outcome}; every on_true/on_false target is a node id or a terminal id; terminals sorted by id"
     },
+    "deprecated": {
+      "shape": "{diagnostic, replacement, removal, migration}; diagnostic and migration optional",
+      "replacement": "an operation id in the same file, or 'api/<surface>.json#<operation-id>'",
+      "coverage": "every operation whose in_process member is [Obsolete] LATTICE0002 carries deprecated with diagnostic LATTICE0002, and every MCP tool whose facade_operation is deprecated is deprecated too"
+    },
     "mcp_tool": {
       "tool_annotations": "{read_only, destructive, source} mirror the ReadOnly and Destructive hints of the MCP tool registration",
       "facade_operation": "null, 'api/<surface>.json#<operation-id>', or a list when a request parameter selects between facade operations",

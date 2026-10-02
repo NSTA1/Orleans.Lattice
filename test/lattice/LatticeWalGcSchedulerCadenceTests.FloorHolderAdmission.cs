@@ -102,6 +102,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public int BlockedMeasurements { get; private set; }
 
+        public long Unreached { get; private set; }
+
+        public int UnreachedMeasurements { get; private set; }
+
         public void Dispose() => _listener.Dispose();
 
         private void Capture(long measurement, ReadOnlySpan<KeyValuePair<string, object?>> tags)
@@ -143,6 +147,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 {
                     Blocked += measurement;
                     BlockedMeasurements++;
+                }
+                else if (string.Equals(
+                    status,
+                    LatticeMetrics.FloorHolderAdmissionUnreached.Value as string,
+                    StringComparison.Ordinal))
+                {
+                    Unreached += measurement;
+                    UnreachedMeasurements++;
                 }
             }
         }
