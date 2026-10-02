@@ -71,10 +71,14 @@ internal static class AuthToolHandlers
         ILatticeAuthAdmin admin,
         int pageSize = 0,
         string? pageToken = null,
+        [Description("When true, the page also lists tenant-owned groups (ids under the reserved 't/' namespace) alongside the cluster groups. Defaults to false, which lists cluster groups only.")]
+        bool includeTenantGroups = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(admin);
-        return admin.ListGroupsAsync(new AuthPageRequest { PageSize = pageSize, PageToken = pageToken }, cancellationToken);
+        return admin.ListGroupsAsync(
+            new AuthPageRequest { PageSize = pageSize, PageToken = pageToken, IncludeTenantGroups = includeTenantGroups },
+            cancellationToken);
     }
 
     /// <summary>Returns the direct members (users and nested groups) of a group.</summary>

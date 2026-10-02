@@ -180,6 +180,7 @@ public sealed class TenantAdminToolGroupTests
                      {
                          "maxBytes", "maxKeys", "maxMemoryBytes",
                          "maxTreeCount", "maxOpsPerSecond", "burstPercent",
+                         "maxGroups", "maxMembershipEdges", "maxMemberSubjects", "maxTenantRules",
                      })
             {
                 Assert.That(properties.TryGetProperty(dimension, out _), Is.True,
@@ -256,7 +257,7 @@ public sealed class TenantAdminToolGroupTests
         var provider = new ServiceCollection().AddTenantAdminTools().BuildServiceProvider();
 
         var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
-        var group = (TenantAdminToolGroup)provider.GetRequiredService<ILatticeApiMcpToolGroup>();
+        var group = provider.GetServices<ILatticeApiMcpToolGroup>().OfType<TenantAdminToolGroup>().Single();
 
         Assert.Multiple(() =>
         {
@@ -273,7 +274,7 @@ public sealed class TenantAdminToolGroupTests
         var provider = new ServiceCollection().AddTenantAdminTools(enableControl: true).BuildServiceProvider();
 
         var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
-        var group = (TenantAdminToolGroup)provider.GetRequiredService<ILatticeApiMcpToolGroup>();
+        var group = provider.GetServices<ILatticeApiMcpToolGroup>().OfType<TenantAdminToolGroup>().Single();
 
         Assert.Multiple(() =>
         {

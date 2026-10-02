@@ -217,7 +217,11 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The maximum resident memory in bytes, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxMemoryBytes = null,
                 [Description("The maximum number of trees the tenant may own, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxTreeCount = null,
                 [Description("The maximum sustained operations per second, or null for unbounded on this dimension. Must be non-negative when supplied.")] long? maxOpsPerSecond = null,
-                [Description("The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative.")] int burstPercent = 0) =>
+                [Description("The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative.")] int burstPercent = 0,
+                [Description("The maximum number of tenant groups the tenant may own, or null for the default cap (500). Never unbounded.")] long? maxGroups = null,
+                [Description("The maximum number of tenant group membership edges, or null for the default cap (10000). Never unbounded.")] long? maxMembershipEdges = null,
+                [Description("The maximum number of entries in the tenant member set, or null for the default cap (5000). Never unbounded.")] long? maxMemberSubjects = null,
+                [Description("The maximum number of tenant-tier authorization rules, or null for the default cap (1000). Never unbounded.")] long? maxTenantRules = null) =>
             {
                 using var scope = StampCredential(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
@@ -229,6 +233,10 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                     MaxTreeCount = maxTreeCount,
                     MaxOpsPerSecond = maxOpsPerSecond,
                     BurstPercent = burstPercent,
+                    MaxGroups = maxGroups,
+                    MaxMembershipEdges = maxMembershipEdges,
+                    MaxMemberSubjects = maxMemberSubjects,
+                    MaxTenantRules = maxTenantRules,
                 };
                 return TenantAdminToolInvocations.SetTenantQuotasAsync(admin, tenantId, quotas, cancellationToken);
             },
@@ -243,7 +251,10 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                     + "maxOpsPerSecond) is null for unbounded on that dimension or non-negative when bounded; pass "
                     + "every dimension null to lift a tenant's caps again. burstPercent is the transient headroom "
                     + "above the bounded ceilings and must "
-                    + "be non-negative. The reserved default tenant can never be given quotas and fails closed. Fails "
+                    + "be non-negative. The four delegated-access caps (maxGroups, maxMembershipEdges, "
+                    + "maxMemberSubjects, maxTenantRules) protect the shared membership and policy trees: each is "
+                    + "null for its default cap, never unbounded, and lifting the resource ceilings does not lift "
+                    + "them. The reserved default tenant can never be given quotas and fails closed. Fails "
                     + "closed if the tenant is not registered. Subject to the fail-closed tenant-admin access gate. "
                     + "Requires tenant-admin control to be enabled on the server.",
                 ReadOnly = false,
