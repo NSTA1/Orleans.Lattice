@@ -225,18 +225,52 @@ public sealed class BackupPageTests : BackupsTestContext
         Assert.That(cut.Find("[role=alertdialog]").TextContent, Does.Contain("declares this tree rebuildable"));
     }
 
-    [Test]
-    public void Cold_restore_is_offered_only_where_the_connection_serves_it()
+    [TestCase(true, TestName = "Cold_restore_is_withdrawn_where_backup_operations_are_not_served(inventory served)")]
+    [TestCase(false, TestName = "Cold_restore_is_withdrawn_where_backup_operations_are_not_served(over grpc)")]
+    public void Cold_restore_is_withdrawn_where_backup_operations_are_not_served(bool inventoryServed)
     {
+        // The operations surface cold restore starts on is not served: withdrawn
+        // whatever the inventory says, since the inventory no longer decides it (#4218).
         Seed(FakeBackupControl.Manifest("b1", "nightly", "orders"));
-        var unserved = RenderAt<BackupPage>("backups/b1");
-        unserved.WaitUntil(() => Assert.That(RestoreButton(unserved), Is.Not.Null));
-        Assert.That(unserved.FindAll("input[type=checkbox]"), Is.Empty);
+        if (inventoryServed)
+        {
+            Backups.Inventory = () => Task.FromResult(new BackupInventoryReport(1, 1, 1, 0, null, null, 0, 0, 0));
+        }
+
+        Backups.ListFault = new NotSupportedException("not served");
+
+        var cut = RenderAt<BackupPage>("backups/b1");
+
+        cut.WaitUntil(() => Assert.That(RestoreButton(cut), Is.Not.Null));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("input[type=checkbox]"), Is.Empty);
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.ListOperationsAsync)), Is.EqualTo(1), "the operations surface was asked");
+        });
     }
 
     [Test]
-    public void A_served_cold_restore_runs_as_a_cold_restore()
+    public void Over_grpc_cold_restore_is_offered_where_backup_operations_are_served_and_runs_as_a_cold_restore()
     {
+        // The fake's inventory is not served, as over the gRPC binding; backup
+        // operations are, so cold restore - a tracked operation since #4122 - is offered.
+        Seed(FakeBackupControl.Manifest("b1", "nightly", "orders"));
+        var cut = RenderAt<BackupPage>("backups/b1");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("input[type=checkbox]"), Has.Count.EqualTo(1)));
+
+        cut.Find("input[type=checkbox]").Change(true);
+        cut.Find("form.lt-backups-form").Submit();
+        cut.Find("[role=alertdialog] input").Input("orders");
+        cut.Find("[role=alertdialog] form").Submit();
+
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartColdRestoreAsync)), Is.EqualTo(1)));
+        Assert.That(Operations.Find("1")!.Kind, Is.EqualTo(BackupOperationKind.ColdRestore));
+    }
+
+    [Test]
+    public void In_process_cold_restore_is_still_offered_and_runs_as_a_cold_restore()
+    {
+        // In process both the inventory and backup operations are served, as before #4218.
         Seed(FakeBackupControl.Manifest("b1", "nightly", "orders"));
         Backups.Inventory = () => Task.FromResult(new BackupInventoryReport(1, 1, 1, 0, null, null, 0, 0, 0));
         var cut = RenderAt<BackupPage>("backups/b1");

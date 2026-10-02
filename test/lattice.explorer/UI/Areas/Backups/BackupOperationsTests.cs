@@ -176,7 +176,7 @@ public sealed class BackupOperationsTests : BackupsTestContext
     }
 
     [Test]
-    public void A_cold_restore_refused_as_not_served_withdraws_the_extensions()
+    public void A_cold_restore_refused_as_not_served_fails_its_start_but_leaves_the_extensions_alone()
     {
         Backups.StartFault = new NotSupportedException("not served");
 
@@ -185,7 +185,7 @@ public sealed class BackupOperationsTests : BackupsTestContext
         Assert.Multiple(() =>
         {
             Assert.That(operation.Message, Is.EqualTo(BackupsFaults.NotServed));
-            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.False);
+            Assert.That(Services.GetRequiredService<BackupsAccess>().ExtensionsServed, Is.Null, "cold restore is a cluster operation, not an extension (#4218)");
         });
     }
 
