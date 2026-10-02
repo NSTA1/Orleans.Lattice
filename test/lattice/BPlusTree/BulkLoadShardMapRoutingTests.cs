@@ -37,8 +37,9 @@ public class BulkLoadShardMapRoutingTests
         // Exercises the full path: GetRoutingAsync resolves a custom
         // shard map persisted in the registry, and entries are routed accordingly.
         // IMPORTANT: must not touch the tree before writing the custom map,
-        // because LatticeGrain caches _shardMap on first access. SetShardMapAsync
-        // upserts the registry entry, so no bootstrap call is needed.
+        // because LatticeGrain caches _shardMap on first access. The tree is
+        // registered directly first: SetShardMapAsync refuses a tree with no
+        // registry row (issue #4230), and registering touches no tree grain.
         //
         // We pin every virtual slot onto physical shard 3 (not 0). Under the
         // fixture's default hashed map with 4 shards, 25 entries would spread
@@ -50,6 +51,7 @@ public class BulkLoadShardMapRoutingTests
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var pinnedSlots = new int[LatticeConstants.DefaultVirtualShardCount];
         Array.Fill(pinnedSlots, pinnedShard);
+        await registry.RegisterAsync(treeId);
         await registry.SetShardMapAsync(treeId, new ShardMap { Slots = pinnedSlots });
 
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);

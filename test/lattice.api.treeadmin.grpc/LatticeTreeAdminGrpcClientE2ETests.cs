@@ -629,6 +629,22 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
     }
 
     [Test]
+    public async Task set_config_over_the_client_reports_not_found_for_a_missing_tree_and_creates_nothing()
+    {
+        // Issue #4230: the registry's configuration verbs no longer create a row for
+        // a tree that does not exist; the refusal is a KeyNotFoundException, which
+        // the binding surfaces as NotFound.
+        var missingTree = "set-config-missing-" + Guid.NewGuid().ToString("N");
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await _host.Client.SetTreeConfigAsync(
+            missingTree,
+            new TreeConfigurationUpdate { ApplyPublishEvents = true, PublishEvents = true }));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        Assert.That((await _host.Client.CheckTreeExistsAsync(missingTree)).Exists, Is.False);
+    }
+
+    [Test]
     public void tag_index_status_over_the_client_throws_for_an_unknown_index()
     {
         // The index is authorized (permissive fixture authorizer) but does not exist,

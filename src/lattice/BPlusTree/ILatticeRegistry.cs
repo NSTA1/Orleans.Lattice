@@ -235,6 +235,13 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// must not itself be aliased. Throws <see cref="InvalidOperationException"/> if
     /// this constraint would be violated.
     /// </para>
+    /// <para>
+    /// Unlike the per-field mutators, this verb may create the logical tree's
+    /// row: pointing a new logical name at an existing physical tree is a
+    /// deliberate create. A purged logical id is still refused, because the
+    /// deletion grain's alias-writability check runs first and no row is
+    /// written (issue #4230).
+    /// </para>
     /// </summary>
     Task SetAliasAsync(string treeId, string physicalTreeId);
 
@@ -273,7 +280,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <summary>
     /// Persists a custom <see cref="ShardMap"/> for <paramref name="treeId"/>.
     /// Used by adaptive shard splits to retarget virtual slots to new physical
-    /// shards. Upserts the registry entry if the tree is not yet registered.
+    /// shards. Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// </summary>
     Task SetShardMapAsync(string treeId, ShardMap map);
 
@@ -305,6 +312,10 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <param name="fallbackMap">
     /// Map to apply the diff onto when the tree has no persisted map yet.
     /// </param>
+    /// <exception cref="LatticeTreeNotRegisteredException">
+    /// The tree has no registry row (never registered, or purged); nothing is
+    /// created (issue #4230).
+    /// </exception>
     Task<ShardMap> ReassignSlotsAsync(string treeId, int[] slots, int targetShardIndex, ShardMap fallbackMap);
 
     /// <summary>
@@ -322,6 +333,10 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <see cref="ShardMap"/>. Used as the floor when no allocation has yet
     /// been recorded.
     /// </param>
+    /// <exception cref="LatticeTreeNotRegisteredException">
+    /// The tree has no registry row (never registered, or purged); nothing is
+    /// created (issue #4230).
+    /// </exception>
     Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap);
 
     /// <summary>
@@ -329,7 +344,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// override for <paramref name="treeId"/>. Pass <c>true</c>/<c>false</c> to
     /// pin the setting for this tree, or <c>null</c> to remove the override and
     /// fall back to the silo-wide <see cref="LatticeOptions.PublishEvents"/>.
-    /// Upserts the registry entry if the tree is not yet registered.
+    /// Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// </summary>
     Task SetPublishEventsAsync(string treeId, bool? enabled);
 
@@ -343,8 +358,8 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// independently (mode falls back to
     /// <see cref="HistoryRetentionMode.MetadataOnly"/>; window falls back to no age
     /// bound). The <paramref name="window"/> must be strictly positive when
-    /// supplied. Upserts the registry entry if the tree is not yet registered;
-    /// propagation to other activations is best-effort.
+    /// supplied. Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
+    /// Propagation to other activations is best-effort.
     /// </summary>
     /// <param name="treeId">The tree whose history retention is being configured.</param>
     /// <param name="mode">The retention mode to pin, or <see langword="null"/> to clear it.</param>
@@ -358,7 +373,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// to pin the setting for this tree, or <c>null</c> to remove the
     /// override and fall back to the silo-wide
     /// <see cref="LatticeOptions.MaintainProjectionDigest"/>.
-    /// Upserts the registry entry if the tree is not yet registered.
+    /// Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// <para>
     /// Note: the
     /// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
@@ -380,8 +395,8 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <see cref="LatticeOptions.MaxCacheValueBytes"/>. The value, when
     /// supplied, must be greater than or equal to 1 (mirroring the silo-wide
     /// option's validation); a value below 1 throws
-    /// <see cref="ArgumentOutOfRangeException"/>. Upserts the registry entry if
-    /// the tree is not yet registered. Propagation to other activations is
+    /// <see cref="ArgumentOutOfRangeException"/>. Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
+    /// Propagation to other activations is
     /// best-effort: each <see cref="Grains.LeafCacheGrain"/> re-resolves the cap
     /// on its next cache refresh.
     /// </summary>
@@ -401,8 +416,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <see cref="LatticeOptions.WalMaxRetainedBytes"/>. The value, when
     /// supplied, must be greater than or equal to 1 (mirroring the silo-wide
     /// option's validation); a value below 1 throws
-    /// <see cref="ArgumentOutOfRangeException"/>. Upserts the registry entry if
-    /// the tree is not yet registered.
+    /// <see cref="ArgumentOutOfRangeException"/>. Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// <para>
     /// The new ceiling takes effect on the tree's next WAL garbage-collection
     /// pass, because that pass re-resolves the ceiling rather than capturing it
@@ -425,8 +439,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// the leaf trimmed mutation path the first time a write lands
     /// while the resolved
     /// <see cref="LatticeOptions.MaintainProjectionDigest"/> is
-    /// <c>false</c>. Upserts the registry entry if the tree is not yet
-    /// registered.
+    /// <c>false</c>. Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// </summary>
     Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId);
 
@@ -460,7 +473,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// + 1). Routing a partition back to
     /// <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/> removes its
     /// override, so a reversal restores the exact prior shape via the same call.
-    /// Upserts the registry entry if the tree is not yet registered.
+    /// Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// </para>
     /// </summary>
     /// <param name="treeId">The tree whose WAL placement is being changed.</param>
@@ -487,7 +500,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// batch un-applied. Throws <see cref="ArgumentException"/> when
     /// <paramref name="moves"/> is empty. Routing a partition back to
     /// <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/> removes its
-    /// override. Upserts the registry entry if the tree is not yet registered.
+    /// override. Throws <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when the tree has no registry row (never registered, or purged; issue #4230).
     /// </para>
     /// </summary>
     /// <param name="treeId">The tree whose WAL placement is being changed.</param>

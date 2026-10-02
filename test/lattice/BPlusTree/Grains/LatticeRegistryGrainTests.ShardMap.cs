@@ -41,7 +41,7 @@ public partial class LatticeRegistryGrainTests
 
         byte[]? captured = null;
         await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
 
         await grain.SetShardMapAsync("my-tree", map);
 
@@ -108,7 +108,7 @@ public partial class LatticeRegistryGrainTests
         var (grain, tree) = CreateGrain();
         byte[]? captured = null;
         await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
 
         await grain.SetShardMapAsync("my-tree", ShardMap.CreateDefault(8, 4));
 
@@ -127,7 +127,7 @@ public partial class LatticeRegistryGrainTests
         await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
 
         // 1st persist: empty → Version 1.
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
         await grain.SetShardMapAsync("my-tree", ShardMap.CreateDefault(8, 4));
 
         // 2nd persist: existing has Version 1 → Version 2.
@@ -150,7 +150,7 @@ public partial class LatticeRegistryGrainTests
         var (grain, tree) = CreateGrain();
         byte[]? captured = null;
         await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
-        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        SeedRegisteredRow(tree, "my-tree");
 
         // Caller supplies a stale/forged Version - registry must overwrite it.
         var map = ShardMap.CreateDefault(8, 4);
