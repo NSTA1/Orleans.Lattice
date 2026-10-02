@@ -24,4 +24,16 @@ public static class BackupOperationKinds
 
     /// <summary>A catalog-free disaster restore from the sink alone. Result: see <see cref="BackupOperationResults.TryReadRestoreResult"/>.</summary>
     public const string ColdRestore = "backup.cold-restore";
+
+    /// <summary>
+    /// A health verification of one backup against the durable sink. Result
+    /// reference: the backup id; see <see cref="BackupOperationResultKeys.HealthStatus"/>.
+    /// </summary>
+    public const string HealthCheck = "backup.health-check";
+
+    /// <summary>A rebuild of the backup catalog from the durable sink. Result: see <see cref="BackupOperationResults.TryReadCatalogRebuildReport"/>.</summary>
+    public const string CatalogRebuild = "backup.catalog-rebuild";
+
+    /// <summary>A scrub of the backup catalog against the durable sink. Result: see <see cref="BackupOperationResults.TryReadCatalogScrubReport"/>.</summary>
+    public const string CatalogScrub = "backup.catalog-scrub";
 }
