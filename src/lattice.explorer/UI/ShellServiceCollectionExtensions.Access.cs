@@ -25,6 +25,7 @@ internal static partial class ShellServiceCollectionExtensions
             provider.GetRequiredShellFacade<ILatticeAuthAdmin>(),
             provider.GetService<ShellAssertedTenant>(),
             ShellCaller.Of(provider)));
+        AddTenantAccess(services);
         services.AddExplorerArea<AccessArea>();
     }
 }

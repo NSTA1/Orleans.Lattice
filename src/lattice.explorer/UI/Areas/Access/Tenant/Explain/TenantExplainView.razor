@@ -1,0 +1,20 @@
+@inherits TenantAccessView
+
+@*
+    The layer-aware explanation of a decision on the tenant's own trees
+    (/t/{tenant}/access/explain): which layer, platform or tenant, decided, and by
+    which rule. The page shell: title, navigation, and the state before a
+    question is asked.
+*@
+
+<PageTitle>Explain access in tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Ask why a subject is allowed or denied an operation on one of tenant @Tenant's trees, and which layer decided: platform rules first, then the tenant's own.</p>
+<AccessNav Current="@AccessRoutes.ExplainSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="explain" aria-label="Explain access in tenant @Tenant">
+    <LtEmptyState Title="Nothing explained yet">
+        <ChildContent>Choose a subject, one of the tenant's trees and an operation to see the decision and the rule behind it.</ChildContent>
+    </LtEmptyState>
+</section>

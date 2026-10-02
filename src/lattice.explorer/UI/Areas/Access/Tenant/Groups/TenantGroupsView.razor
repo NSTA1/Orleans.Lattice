@@ -1,0 +1,38 @@
+@inherits TenantAccessView
+
+@*
+    The tenant's own groups (/t/{tenant}/access/groups), shown once the posture
+    probe reports the tenant's access administration delegated to the caller.
+    The page shell: title, navigation, and the loading, error and empty states
+    over the first page of the tenant directory's groups.
+*@
+
+<PageTitle>Groups of tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Tenant @Tenant's own groups collect users, cluster groups and its other groups, so a tenant rule can name them once.</p>
+<AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="groups" aria-label="Groups of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Groups could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_page is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading groups" />
+    }
+    else if (_page.Entries.Count == 0)
+    {
+        <LtEmptyState Title="No groups yet">
+            <ChildContent>Tenant @Tenant has no groups of its own yet.</ChildContent>
+        </LtEmptyState>
+    }
+    else
+    {
+        <p class="lt-access-count" role="status">@CountText</p>
+    }
+</section>

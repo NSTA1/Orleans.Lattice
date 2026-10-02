@@ -1,0 +1,38 @@
+@inherits TenantAccessView
+
+@*
+    The tenant's member set (/t/{tenant}/access/members): the users, the
+    tenant's own groups and the cluster groups whose subjects may act as the
+    tenant. The page shell: title, navigation, and the loading, error and empty
+    states over the first page of the set.
+*@
+
+<PageTitle>Members of tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Tenant @Tenant's members may act as the tenant; what each may then do is decided by rules. Its administrators are members already and are not repeated here.</p>
+<AccessNav Current="@AccessRoutes.MembersSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="members" aria-label="Members of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Members could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_page is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading members" />
+    }
+    else if (_page.Entries.Count == 0)
+    {
+        <LtEmptyState Title="No members yet">
+            <ChildContent>Tenant @Tenant has no members besides its administrators yet.</ChildContent>
+        </LtEmptyState>
+    }
+    else
+    {
+        <p class="lt-access-count" role="status">@CountText</p>
+    }
+</section>

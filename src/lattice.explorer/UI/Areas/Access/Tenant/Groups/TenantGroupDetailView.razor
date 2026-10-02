@@ -1,0 +1,37 @@
+@inherits TenantAccessView
+
+@*
+    One of the tenant's own groups (/t/{tenant}/access/groups/{name}), named by
+    its tenant-local name. The page shell: title, navigation, and the loading and
+    error states; a name the tenant has no group of is not found.
+*@
+
+<PageTitle>@Name - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@Name</h1>
+@if (_group?.DisplayName is { Length: > 0 } displayName)
+{
+    <p class="lt-shell-page-lede">@displayName</p>
+}
+<AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="group" aria-label="Group @Name of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The group could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_group is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading the group" />
+    }
+    else
+    {
+        <p class="lt-access-provenance" data-lt-provenance="tenant">
+            <span class="lt-access-provenance__source">@TenantGroupSuggestionSource.SourceLabel</span>
+            <span class="lt-access-provenance__id">@FullId</span>
+        </p>
+    }
+</section>

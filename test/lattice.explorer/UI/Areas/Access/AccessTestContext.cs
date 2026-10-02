@@ -4,7 +4,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Tests.Connection;
+using Orleans.Lattice.Explorer.Tests.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Areas.Access;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
@@ -33,9 +37,13 @@ public abstract class AccessTestContext : ShellChromeTestContext
     {
         Admin = new FakeAuthAdmin();
         Auth = new FakeAuthSession();
+        TenantFacades = new FakeTenantAccessFacades();
         Auth.SignIn("ops@example.com");
         Services.AddKeyedSingleton<ILatticeAuthAdmin>(ShellFacades.Key, Admin);
         Services.AddSingleton<IExplorerAuthSession>(Auth);
+
+        // The delegated tenant-access facades, switched off until a test turns them on.
+        Services.AddSingleton<ITenantAccessFacades>(TenantFacades);
 
         // The chrome context keeps only its own probe areas; the area under test is put back.
         Services.AddExplorerArea<AccessArea>();
@@ -46,6 +54,14 @@ public abstract class AccessTestContext : ShellChromeTestContext
 
     /// <summary>The Explorer's sign-in.</summary>
     internal FakeAuthSession Auth { get; }
+
+    /// <summary>The delegated tenant-access facades, with delegated administration off by default.</summary>
+    internal FakeTenantAccessFacades TenantFacades { get; }
+
+    /// <summary>Makes the circuit's calls assert <paramref name="tenant"/>, as a tenant-scoped sign-in does.</summary>
+    /// <param name="tenant">The tenant the circuit asserts.</param>
+    internal void AssertTenant(string tenant) =>
+        Services.AddSingleton<ILatticeActiveTenantProvider>(new FakeActiveTenantProvider(tenant));
 
     /// <summary>A rule governing <paramref name="tree"/> for a group.</summary>
     internal static LatticeAuthorizationRule Rule(

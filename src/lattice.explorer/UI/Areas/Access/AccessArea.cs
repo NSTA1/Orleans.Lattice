@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
@@ -20,7 +21,16 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// area stays in the directory as unavailable with a sign-in sentence, so an
 /// anonymous circuit reads as "sign in", never as an empty cluster. Any other
 /// outcome - a signed-in identity without the grant, a cluster that does not serve
-/// the facade, no connection - hides the area.
+/// the facade, no connection - hides the area, unless the second question below
+/// admits it.
+/// </para>
+/// <para>
+/// That second question is for a tenant administrator who is not a cluster one:
+/// the tenant posture probe for the circuit's asserted tenant. The area is visible
+/// only when it reports delegated tenant access administration enabled and the
+/// caller an admin of that tenant or a platform operator. Off, not permitted, the
+/// reserved default tenant, no asserted tenant, or no answer all keep it hidden,
+/// so nothing is widened for anyone else.
 /// </para>
 /// <para>
 /// The verdict is memoised per circuit for the caller it was reached for (the
@@ -37,6 +47,7 @@ internal sealed class AccessArea : IExplorerArea
 
     private readonly ILatticeAuthAdmin? _admin;
     private readonly AccessCatalog? _catalog;
+    private readonly TenantAccessCatalog _tenantAccess;
     private readonly ShellAssertedTenant _tenant;
     private readonly ShellCaller _caller;
     private (ShellCallerKey Caller, AreaAvailability Availability)? _verdict;
@@ -50,7 +61,9 @@ internal sealed class AccessArea : IExplorerArea
         _tenant = services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None;
         _caller = ShellCaller.Of(services);
         _catalog = _admin is null ? null : services.GetService<AccessCatalog>() ?? new AccessCatalog(_admin, _tenant, _caller);
-        Completions = _catalog is null ? null : new AccessCompletionSource(_catalog);
+        _tenantAccess = services.GetService<TenantAccessCatalog>()
+            ?? new TenantAccessCatalog(services.GetService<ITenantAccessFacades>() ?? new ShellTenantAccessFacades(services), _caller);
+        Completions = _catalog is null ? null : new AccessCompletionSource(_catalog, _tenantAccess);
         Commands =
         [
             new ExplorerCommand(ExplainCommandId, "Explain access...")
@@ -111,7 +124,7 @@ internal sealed class AccessArea : IExplorerArea
     /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
-        if (_admin is null)
+        if (_admin is null && !_tenantAccess.IsServed)
         {
             return AreaAvailability.Hidden;
         }
@@ -147,6 +160,20 @@ internal sealed class AccessArea : IExplorerArea
 
     private async Task<AreaAvailability> ProbeAsync(bool authenticated, CancellationToken cancellationToken)
     {
+        var cluster = _admin is null ? AreaAvailability.Hidden : await ProbeClusterAsync(authenticated, cancellationToken).ConfigureAwait(true);
+        if (cluster.Kind != AreaAvailabilityKind.Hidden)
+        {
+            return cluster;
+        }
+
+        // Not a cluster access administrator. A tenant admin of the active tenant
+        // still sees the area while the cluster has delegated tenant access
+        // administration on; nobody else is let in by this second question.
+        return await ProbeTenantAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    private async Task<AreaAvailability> ProbeClusterAsync(bool authenticated, CancellationToken cancellationToken)
+    {
         try
         {
             var page = await _admin!.ListGroupsAsync(ProbePage, cancellationToken).ConfigureAwait(true);
@@ -162,5 +189,17 @@ internal sealed class AccessArea : IExplorerArea
         {
             return AreaAvailability.Hidden;
         }
+    }
+
+    private async Task<AreaAvailability> ProbeTenantAsync(CancellationToken cancellationToken)
+    {
+        var tenant = _tenant.AssertedTenant;
+        if (!_tenantAccess.IsServed || !TenantAccessCatalog.Administers(tenant))
+        {
+            return AreaAvailability.Hidden;
+        }
+
+        var state = await _tenantAccess.GetStateAsync(tenant!, cancellationToken).ConfigureAwait(true);
+        return state.IsDelegated ? AreaAvailability.Visible : AreaAvailability.Hidden;
     }
 }

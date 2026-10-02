@@ -8,6 +8,12 @@
     answer as it arrives; the precedence order of matched rules is a reading aid.
 *@
 
+@if (_gate.DelegatedTenant is { } delegatedTenant)
+{
+    <TenantExplainView Tenant="@delegatedTenant" />
+}
+else
+{
 <PageTitle>Explain access - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Access</h1>
@@ -89,6 +95,8 @@ else if (_permissions is { } permissions)
             <p class="lt-access-caveat" data-lt-cluster-wide-rules="true">@OutOfScopeText <a href="@ClusterWidePermissionsHref">See them on the cluster-wide page</a>.</p>
         }
     </section>
+}
+
 }
 
 @code {

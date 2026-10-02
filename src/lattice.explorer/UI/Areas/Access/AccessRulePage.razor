@@ -8,6 +8,12 @@
     bindings it was compiled from are changed.
 *@
 
+@if (_gate.DelegatedTenant is { } delegatedTenant && RuleId is { } delegatedRuleId)
+{
+    <TenantRuleDetailView Tenant="@delegatedTenant" RuleId="@delegatedRuleId" />
+}
+else
+{
 <PageTitle>@(RuleId ?? "Rule") - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title lt-shell-mono">@RuleId</h1>
@@ -111,4 +117,5 @@ else
             @AccessRuleFormat.EffectLabel(rule.Effect) for @AccessRuleFormat.SubjectLabel(rule.Subject) on @AccessRuleFormat.ScopeLabel(rule.Scope) stops applying at once. This cannot be undone.
         </LtConfirmDestructive>
     }
+}
 }
