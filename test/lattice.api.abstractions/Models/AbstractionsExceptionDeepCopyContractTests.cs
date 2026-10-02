@@ -18,10 +18,13 @@ namespace Orleans.Lattice.Api.Abstractions.Tests;
 /// <para>
 /// The package's convention is that every contract exception derives directly from
 /// <see cref="Exception"/>, which satisfies the contract by construction whether or
-/// not the type is serializable today. The first test enforces that convention over
-/// the whole exception population, so it is never vacuous; the second runs the real
-/// copier over whichever of them carry <c>[GenerateSerializer]</c>, so it is armed
-/// the moment one does.
+/// not the type is serializable today; the one sanctioned exception is a type that
+/// must derive from a BCL exception subclass (for example an
+/// <see cref="ArgumentException"/>-derived validation failure) and registers a no-op
+/// <c>[RegisterCopier]</c> copier beside it. The first test enforces that convention
+/// over the whole exception population, so it is never vacuous; the last runs the
+/// real copier over every serializable or copier-covered type, so it is armed the
+/// moment one exists.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -41,12 +44,13 @@ public sealed class AbstractionsExceptionDeepCopyContractTests
     public void Every_exception_declared_in_the_package_derives_directly_from_system_exception()
     {
         var exceptions = ExceptionTypes();
+        var copied = RegisteredCopierTargets();
 
         Assert.That(exceptions, Is.Not.Empty,
             "No exception types were discovered in the abstractions assembly; the guard would be inert.");
 
         var offenders = exceptions
-            .Where(t => t.BaseType != typeof(Exception))
+            .Where(t => t.BaseType != typeof(Exception) && !copied.Contains(t))
             .Select(t => $"{t.FullName} derives from {t.BaseType?.FullName}")
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
@@ -59,11 +63,24 @@ public sealed class AbstractionsExceptionDeepCopyContractTests
     }
 
     [Test]
+    public void Every_bcl_subclass_exception_is_covered_by_a_registered_copier_that_is_exercised()
+    {
+        var bclSubclasses = ExceptionTypes().Where(t => t.BaseType != typeof(Exception)).ToList();
+
+        Assert.That(bclSubclasses, Is.SubsetOf(RegisteredCopierTargets()),
+            "A BCL-subclass exception must register a no-op copier.");
+        Assert.That(bclSubclasses, Is.Not.Empty,
+            "The package declares an ArgumentException-derived confinement exception; finding none means the "
+            + "discovery broke and the copier exemption above would go untested.");
+    }
+
+    [Test]
     public void Every_serializable_exception_deep_copies_on_a_same_silo_boundary()
     {
         var offenders = new List<string>();
+        var copied = RegisteredCopierTargets();
 
-        foreach (var type in ExceptionTypes().Where(HasGenerateSerializer))
+        foreach (var type in ExceptionTypes().Where(t => HasGenerateSerializer(t) || copied.Contains(t)))
         {
             var closedCopierType = typeof(DeepCopier<>).MakeGenericType(type);
             var copier = _services.GetService(closedCopierType);
@@ -109,6 +126,16 @@ public sealed class AbstractionsExceptionDeepCopyContractTests
     private static bool HasGenerateSerializer(Type type) =>
         type.GetCustomAttributes(inherit: false)
             .Any(a => a.GetType().Name == "GenerateSerializerAttribute");
+
+    // The exception types a [RegisterCopier] IDeepCopier<T> in the assembly covers.
+    private static HashSet<Type> RegisteredCopierTargets() =>
+        AbstractionsAssembly.GetTypes()
+            .Where(t => t.GetCustomAttributes(inherit: false).Any(a => a.GetType().Name == "RegisterCopierAttribute"))
+            .SelectMany(t => t.GetInterfaces())
+            .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDeepCopier<>))
+            .Select(i => i.GetGenericArguments()[0])
+            .Where(t => typeof(Exception).IsAssignableFrom(t))
+            .ToHashSet();
 
     private static IReadOnlyList<Type> ExceptionTypes() =>
         AbstractionsAssembly.GetTypes()
