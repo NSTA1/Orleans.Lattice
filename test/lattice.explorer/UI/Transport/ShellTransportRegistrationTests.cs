@@ -35,6 +35,7 @@ public sealed class ShellTransportRegistrationTests
         [typeof(Orleans.Lattice.Api.Telemetry.ILatticeTelemetry)] = typeof(ShellTelemetryTransport),
         [typeof(Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdmin)] = typeof(ShellTreeAdminTransport),
         [typeof(Orleans.Lattice.Api.TreeAdmin.ILatticeStorageUsageOperations)] = typeof(ShellStorageUsageOperationsTransport),
+        [typeof(Orleans.Lattice.Api.TreeAdmin.ILatticeWalReclamation)] = typeof(ShellWalReclamationTransport),
         [typeof(ILatticeReplicationControl)] = typeof(ShellReplicationControlTransport),
         [typeof(ILatticeReplicationStatus)] = typeof(ShellReplicationStatusTransport),
         [typeof(Orleans.Lattice.Api.Apps.ILatticeAppsControl)] = typeof(ShellAppsControlTransport),

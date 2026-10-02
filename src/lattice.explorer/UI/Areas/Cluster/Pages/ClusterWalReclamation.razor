@@ -1,0 +1,43 @@
+@if (Facades.WalReclamation is not null)
+{
+    <section class="lt-cluster-section" aria-labelledby="lt-cluster-wal-reclamation" data-lt-cluster="wal-reclamation">
+        <h2 class="lt-cluster-heading" id="lt-cluster-wal-reclamation">WAL reclamation</h2>
+        @if (_unserved)
+        {
+            <p class="lt-cluster-note">This cluster does not report which pin holds the WAL floor.</p>
+        }
+        else if (_error is not null)
+        {
+            <p class="lt-cluster-error" role="alert">@_error</p>
+        }
+        else if (_report is not { } report)
+        {
+            <LtSkeleton Lines="3" Label="Loading WAL reclamation" />
+        }
+        else
+        {
+            <div class="lt-cluster-stage" data-lt-cluster="wal-reclamation-verdict">
+                <LtStatusPill State="@VerdictState(report)" Text="@VerdictLabel(report)" />
+                @if (report.IsWedged)
+                {
+                    <p class="lt-cluster-note" role="alert">@Explanation(report)</p>
+                }
+                else
+                {
+                    <p class="lt-cluster-note">@Explanation(report)</p>
+                }
+            </div>
+            @if (report.FloorHolder is { } holder)
+            {
+                <LtDefinitionList>
+                    <LtDefinition Term="Floor holder" Mono="true">@LeafText(holder)</LtDefinition>
+                    <LtDefinition Term="Partition" Mono="true">@holder.Partition</LtDefinition>
+                    <LtDefinition Term="Pin offset" Mono="true">@holder.PinOffset.ToString(System.Globalization.CultureInfo.InvariantCulture)</LtDefinition>
+                    <LtDefinition Term="Persisted checkpoint" Mono="true">@CheckpointText(holder)</LtDefinition>
+                    <LtDefinition Term="Leaf state">@StateText(holder.State)</LtDefinition>
+                    <LtDefinition Term="Pins">@PinsText(report)</LtDefinition>
+                </LtDefinitionList>
+            }
+        }
+    </section>
+}

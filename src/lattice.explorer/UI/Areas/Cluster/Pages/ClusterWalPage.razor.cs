@@ -15,7 +15,8 @@ using Orleans.Lattice.Explorer.UI.Operations;
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
 /// <summary>
-/// <c>/cluster/wal</c>: a tree's WAL placement audit, then a staged move - plan
+/// <c>/cluster/wal</c>: a tree's WAL placement audit and which durable pin holds its
+/// WAL floor (#4195), then a staged move - plan
 /// (a read-only preview at its own address, <c>?tree=&amp;partition=&amp;target=</c>,
 /// so it resumes), execute and reclaim, each of the last two behind a typed
 /// confirmation and the TreeLifecycle grant. It owns the visible control of the

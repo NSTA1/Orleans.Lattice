@@ -817,6 +817,25 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Reads which durable pin holds the WAL floor of <paramref name="treeId"/> and
+    /// whether it has wedged reclamation, with no side effects. Requires whole-tree
+    /// read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's WAL reclamation report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalReclamationReport> GetWalReclamationAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetWalReclamation,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Audits <paramref name="treeId"/> for orphaned leaves - leaves spliced into a
     /// shard's sibling chain but unreachable by descent - with no side effects.
     /// Requires whole-tree read authority.

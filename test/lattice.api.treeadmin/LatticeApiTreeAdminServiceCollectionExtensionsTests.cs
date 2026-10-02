@@ -44,6 +44,23 @@ public sealed class LatticeApiTreeAdminServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeTreeAdminApi_serves_the_wal_reclamation_read_from_the_facade_singleton()
+    {
+        var builder = new FakeSiloBuilder();
+        builder.Services.AddSingleton(Substitute.For<ILatticeSchemaControl>());
+
+        builder.AddLatticeTreeAdminApi();
+        builder.AddLatticeTreeAdminApi();
+
+        var descriptor = builder.Services.Single(d => d.ServiceType == typeof(ILatticeWalReclamation));
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            Assert.That(descriptor.ImplementationFactory, Is.Not.Null, "resolved from the one LatticeTreeAdmin singleton");
+        });
+    }
+
+    [Test]
     public void AddLatticeTreeAdminApi_returns_the_same_builder_for_chaining()
     {
         var builder = new FakeSiloBuilder();
