@@ -61,6 +61,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `LatticeStatsGrain` | `{treeId}` | `"my-tree"` |
 | `LatticeStorageUsageGrain` | `{treeId}` | `"my-tree"` |
 | `LatticeWalUsageGrain` | `{treeId}` | `"my-tree"` |
+| `LatticeWalFloorHolderProbeGrain` | `{physicalTreeId}` (the alias target, since pins are published under it) | `"my-tree"` |
 | `LatticeAdminGrain` | Singleton (`_lattice_admin`) | `"_lattice_admin"` |
 | `LeafSnapshotSegmentGrain` | `{leafGuid}/{index}`, or `{leafGuid}/g{generation}/{index}` past generation 0 | - |
 | `SnapshotLeafGrain` | `{treeId}/{shardIndex}/{baselineToken:N}` via `BuildBaselineKey`, or `{treeId}/{shardIndex}/{coordinateHash}` for a legacy from-zero coordinate | - |

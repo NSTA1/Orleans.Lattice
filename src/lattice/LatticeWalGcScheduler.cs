@@ -6262,40 +6262,9 @@ internal sealed class LatticeWalGcScheduler(
     /// carrying no suffix is partition <c>0</c>, matching the legacy
     /// single-partition shape the unsuffixed form exists for.
     /// </remarks>
-    private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId, out int partition)
-    {
-        leafGrainId = default;
-        partition = 0;
-
-        var expectedStart = $"{BPlusTree.Grains.ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_";
-        if (!consumerId.StartsWith(expectedStart, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var remainder = consumerId[expectedStart.Length..];
-        if (remainder.Length == 0)
-        {
-            return false;
-        }
-
-        // A multi-partition leaf appends "_{partition}". Strip it only when the
-        // tree is actually partitioned, so a grain id that legitimately ends in
-        // "_<digits>" on a single-partition tree is not silently truncated.
-        if (optionsMonitor.Get(treeId).WalPartitions > 1)
-        {
-            var lastSeparator = remainder.LastIndexOf('_');
-            if (lastSeparator > 0
-                && remainder.AsSpan(lastSeparator + 1).Length > 0
-                && ulong.TryParse(remainder.AsSpan(lastSeparator + 1), out var parsedPartition))
-            {
-                remainder = remainder[..lastSeparator];
-                partition = parsedPartition > int.MaxValue ? int.MaxValue : (int)parsedPartition;
-            }
-        }
-
-        return GrainId.TryParse(remainder, out leafGrainId);
-    }
+    private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId, out int partition) =>
+        WalFloorHolderReader.TryParseConsumerId(
+            treeId, consumerId, optionsMonitor.Get(treeId).WalPartitions, out leafGrainId, out partition);
 
     /// <summary>
     /// Classifies which durable-pin state each blocking consumer is in, without
@@ -7168,37 +7137,14 @@ internal sealed class LatticeWalGcScheduler(
 
         try
         {
-            var grainState = new GrainState<LeafNodeState>(new LeafNodeState());
-            await leafStateStorage.ReadStateAsync(LeafStateName, leafGrainId, grainState)
+            // The read itself is shared with the on-demand floor-holder probe
+            // (issue #4195). It reads the tree id before the checkpoint, which is
+            // the whole of issue #3105's diagnostic half: a husk that lost its
+            // tree id classifies as Orphaned rather than as the repairable
+            // 'checkpointed_uncovered' a retained checkpoint would otherwise
+            // suggest. Both values derive from the same durable row, read once.
+            return await WalFloorHolderReader.ReadLeafCheckpointAsync(leafStateStorage, leafGrainId, partition)
                 .ConfigureAwait(false);
-
-            if (!grainState.RecordExists || grainState.State is null)
-            {
-                return (WalGcBlockingPinState.NoDurableState, null);
-            }
-
-            // The tree id is read before the checkpoint, and that order is the
-            // whole of issue #3105's diagnostic half. A leaf's pin registration
-            // is birth-gated on a persisted tree id, so a durable pin can only
-            // exist if the leaf carried one when the pin was written; finding
-            // none now proves the state was cleared afterwards and the pin has
-            // outlived its publisher. ClassifyCheckpoint cannot see that - it
-            // reads only the projection checkpoint, which a husk retains - so
-            // before this branch existed every orphan classified as
-            // 'checkpointed_uncovered', i.e. repairable by a snapshot. That is
-            // how a 9,468-pin orphan backlog on one tree presented as a
-            // coverage problem.
-            if (string.IsNullOrEmpty(grainState.State.TreeId))
-            {
-                return (WalGcBlockingPinState.Orphaned, null);
-            }
-
-            // Both derive from the same durable row, read once. The number is
-            // the one ClassifyCheckpoint itself consumes, so the two can never
-            // disagree about the partition they describe.
-            return (
-                ClassifyCheckpoint(grainState.State, partition),
-                ReadPersistedCheckpoint(grainState.State, partition));
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
@@ -7314,15 +7260,6 @@ internal sealed class LatticeWalGcScheduler(
 
         return byPartition[partition];
     }
-
-    /// <summary>
-    /// Durable state name of <c>BPlusLeafGrain</c>'s persisted
-    /// <see cref="LeafNodeState"/>, as declared by its
-    /// <c>[PersistentState("leaf", ...)]</c> injection. The classifier reads
-    /// the same slot the grain would, which is what makes a direct read
-    /// equivalent to asking the leaf.
-    /// </summary>
-    private const string LeafStateName = "leaf";
 
     /// <summary>
     /// One tree's adaptive cadence state.

@@ -34,6 +34,8 @@
         <p class="lt-cluster-error" role="alert">@_audit.Error</p>
     }
 
+    <ClusterWalReclamation TreeId="@TreeId" />
+
     @if (Partition is { } partition && Target is { } target)
     {
         <section class="lt-cluster-section lt-cluster-review" aria-labelledby="lt-cluster-wal-plan" aria-live="polite">

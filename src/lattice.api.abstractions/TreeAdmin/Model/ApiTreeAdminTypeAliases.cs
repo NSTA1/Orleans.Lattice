@@ -176,4 +176,13 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeSnapshotPhase"/>.</summary>
     public const string TreeSnapshotPhase = "oit.np";
+
+    /// <summary>Alias for <see cref="TreeWalReclamationReport"/>.</summary>
+    public const string TreeWalReclamationReport = "oit.wc";
+
+    /// <summary>Alias for <see cref="TreeWalFloorHolder"/>.</summary>
+    public const string TreeWalFloorHolder = "oit.wh";
+
+    /// <summary>Alias for <see cref="TreeWalFloorHolderState"/>.</summary>
+    public const string TreeWalFloorHolderState = "oit.wf";
 }

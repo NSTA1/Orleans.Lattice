@@ -75,6 +75,9 @@ public enum LatticeTreeAdminApiOperation
 
     /// <summary>The <c>CancelStorageUsageRefresh</c> RPC.</summary>
     CancelStorageUsageRefresh = 19,
+
+    /// <summary>The read-only <c>GetWalReclamation</c> WAL floor-holder RPC.</summary>
+    GetWalReclamation = 20,
 }
 
 /// <summary>
