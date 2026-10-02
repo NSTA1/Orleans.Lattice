@@ -29,8 +29,6 @@ internal static class TenantPolicyTestSupport
 
         public FakeMembershipDirectory Directory { get; } = new();
 
-        public FakeTenantPolicyEngine TenantPolicy { get; } = new();
-
         public ScriptedDecisionSource Decisions { get; } = new();
 
         public FixedMembershipUsage Usage { get; } = new();
@@ -68,6 +66,18 @@ internal static class TenantPolicyTestSupport
             return record;
         }
 
+        /// <summary>
+        /// Records <paramref name="subjectOrGroupId"/> in the tenant's member set, which
+        /// is what lets it act as the tenant.
+        /// </summary>
+        public Harness AdmitMember(string subjectOrGroupId)
+        {
+            Record.AddMemberSubject(subjectOrGroupId, new HybridLogicalClock { WallClockTicks = _memberTick++ }, "seed");
+            return this;
+        }
+
+        private long _memberTick = 100;
+
         public LatticeTenantPolicyAdmin Create(bool withUsage = true)
         {
             var membership = new CallerContext(this);
@@ -76,7 +86,6 @@ internal static class TenantPolicyTestSupport
                 new TenantRegionResidencyAuthorizer(gate, Registry, membership),
                 Store,
                 Directory,
-                TenantPolicy,
                 Decisions,
                 gate,
                 () => Enabled,
@@ -289,50 +298,6 @@ internal static class TenantPolicyTestSupport
         public Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<IReadOnlyCollection<string>> MembersOfAsync(string groupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-    }
-
-    /// <summary>
-    /// A tenancy policy engine whose active-tenant verdict admits a subject when it,
-    /// or one of its groups, was listed for the tenant. Both overloads are
-    /// implemented, so neither falls back to the interface default.
-    /// </summary>
-    internal sealed class FakeTenantPolicyEngine : ITenantPolicyEngine
-    {
-        private readonly HashSet<string> _admitted = new(StringComparer.Ordinal);
-
-        public List<(string SubjectId, int GroupCount)> Validations { get; } = [];
-
-        public long CurrentEpoch => 1;
-
-        public FakeTenantPolicyEngine Admit(string tenantId, string subjectOrGroupId)
-        {
-            _admitted.Add(tenantId + "|" + subjectOrGroupId);
-            return this;
-        }
-
-        public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId) => [];
-
-        public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId, IReadOnlyCollection<string> groupIds) => [];
-
-        public TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant) =>
-            ValidateActiveTenant(subjectId, [], activeTenant);
-
-        public TenantAccessDecision ValidateActiveTenant(
-            string subjectId, IReadOnlyCollection<string> groupIds, TenantId activeTenant)
-        {
-            Validations.Add((subjectId, groupIds.Count));
-            if (_admitted.Contains(activeTenant.Value + "|" + subjectId)
-                || groupIds.Any(g => _admitted.Contains(activeTenant.Value + "|" + g)))
-            {
-                return TenantAccessDecision.Allow();
-            }
-
-            return TenantAccessDecision.Deny("not a member of the tenant");
-        }
-
-        public TenantAccessDecision ResolveCrossTenantGrant(
-            TenantId sourceTenant, TenantId targetTenant, string scope, TenantGrantOperations operation) =>
-            TenantAccessDecision.Deny("no grants in this fake");
     }
 
     /// <summary>A decision source returning a scripted verdict and recording each evaluation.</summary>

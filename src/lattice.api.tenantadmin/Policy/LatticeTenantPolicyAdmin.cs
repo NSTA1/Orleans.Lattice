@@ -65,7 +65,6 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
     private readonly TenantRegionResidencyAuthorizer _authorizer;
     private readonly ILatticeAuthorizationPolicyStore _store;
     private readonly ILatticeMembershipDirectory _directory;
-    private readonly ITenantPolicyEngine _tenantPolicy;
     private readonly ITenantPolicyDecisionSource _decisions;
     private readonly ILatticeAccessGate _gate;
     private readonly Func<bool> _isEnabled;
@@ -76,7 +75,6 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
     /// <param name="authorizer">The tenant-tier fail-closed authorization seam. Must not be <see langword="null"/>.</param>
     /// <param name="store">The authorization policy store. Must not be <see langword="null"/>.</param>
     /// <param name="directory">The membership directory used to resolve a named subject's groups. Must not be <see langword="null"/>.</param>
-    /// <param name="tenantPolicy">The tenancy policy engine whose active-tenant verdict gates explain and effective permissions. Must not be <see langword="null"/>.</param>
     /// <param name="decisions">The two-layer policy decision source with its explain trace. Must not be <see langword="null"/>.</param>
     /// <param name="gate">The core access gate, used for the posture's platform-operator test. Must not be <see langword="null"/>.</param>
     /// <param name="isEnabled">Reads the live delegated tenant access administration flag. Must not be <see langword="null"/>.</param>
@@ -87,7 +85,6 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         TenantRegionResidencyAuthorizer authorizer,
         ILatticeAuthorizationPolicyStore store,
         ILatticeMembershipDirectory directory,
-        ITenantPolicyEngine tenantPolicy,
         ITenantPolicyDecisionSource decisions,
         ILatticeAccessGate gate,
         Func<bool> isEnabled,
@@ -97,7 +94,6 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(directory);
-        ArgumentNullException.ThrowIfNull(tenantPolicy);
         ArgumentNullException.ThrowIfNull(decisions);
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(isEnabled);
@@ -105,7 +101,6 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         _authorizer = authorizer;
         _store = store;
         _directory = directory;
-        _tenantPolicy = tenantPolicy;
         _decisions = decisions;
         _gate = gate;
         _isEnabled = isEnabled;
@@ -169,6 +164,25 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
             return await _membership!.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// The tenant-gate verdict for <paramref name="subject"/> acting as the tenant
+    /// <paramref name="record"/> describes: the single-home rule the gate itself
+    /// applies (<see cref="LatticeTenantPolicyEngine.ValidateActiveTenant(CompiledTenantPolicy, string, IReadOnlyCollection{string}, TenantId)"/>),
+    /// decided over the authoritative record the authorization step just read rather
+    /// than the asynchronously rebuilt compiled snapshot, so an explanation never
+    /// reports a tenant or membership the registry already holds as missing. Compiled
+    /// under the live delegated-access flag, as the gate's own registry confirmation is.
+    /// </summary>
+    /// <param name="record">The tenant's record, from authorization.</param>
+    /// <param name="subject">The subject, carrying its resolved group closure.</param>
+    /// <returns>The tenant-gate verdict.</returns>
+    private TenantAccessDecision ValidateActingAs(TenantRecord record, LatticeSubject subject) =>
+        LatticeTenantPolicyEngine.ValidateActiveTenant(
+            CompiledTenantPolicy.Compile([record], _isEnabled()),
+            subject.SubjectId,
+            subject.GroupIds,
+            record.Id);
 
     private static TenantId ParseTenant(string tenantId)
     {

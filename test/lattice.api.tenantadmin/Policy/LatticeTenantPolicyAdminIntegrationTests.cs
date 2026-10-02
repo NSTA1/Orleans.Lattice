@@ -143,6 +143,7 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
             {
                 Assert.That(explanation.Allowed, Is.False);
                 Assert.That(explanation.DecidingLayer, Is.Null, "no rule reaches the app tree; the default effect decides");
+                Assert.That(explanation.Reason, Does.Not.Contain("cannot act as tenant"), "the member passes the tenant gate; the rules decide");
             });
         }
     }
@@ -180,9 +181,11 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
                 LatticeEffect.Deny));
         }
 
+        // Wait for the policy snapshot to hold the operator rule: the gate's denial
+        // must name it, so a denial for any other reason does not end the wait.
         await TestPoll.UntilAsync(
-            async () => !await ReadAllowedAsync(tenant, Member, tree),
-            "the operator deny is final over the tenant allow",
+            async () => (await ReadDecisionAsync(tenant, Member, tree)).Reason?.Contains("'op-deny-orders'", StringComparison.Ordinal) == true,
+            "the operator deny is in the snapshot and final over the tenant allow",
             Deadline);
 
         using (As(Admin))
@@ -191,7 +194,7 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
             Assert.Multiple(() =>
             {
                 Assert.That(explanation.Allowed, Is.False);
-                Assert.That(explanation.DecidingLayer, Is.EqualTo(TenantRuleLayer.Platform));
+                Assert.That(explanation.DecidingLayer, Is.EqualTo(TenantRuleLayer.Platform), $"reason: {explanation.Reason}");
                 Assert.That(explanation.DecidingRuleId, Is.EqualTo("op-deny-orders"));
                 Assert.That(explanation.DecidingRule!.Origin, Is.EqualTo(TenantRuleOrigin.PlatformTree));
                 Assert.That(explanation.MatchedRules.Select(r => r.RuleId), Is.EqualTo(new[] { "op-deny-orders", "member-read" }));
@@ -391,6 +394,13 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
     /// </summary>
     private async Task<bool> ReadAllowedAsync(TenantId tenant, string subjectId, string treeId)
     {
+        var decision = await ReadDecisionAsync(tenant, subjectId, treeId);
+        return decision.Allowed && decision.KeyFilter is null;
+    }
+
+    /// <summary>The real gate's full decision on a point read, as for <see cref="ReadAllowedAsync"/>.</summary>
+    private async Task<LatticeAccessDecision> ReadDecisionAsync(TenantId tenant, string subjectId, string treeId)
+    {
         IReadOnlyCollection<string> groups;
         using (LatticeSystemOrigin.Enter())
         {
@@ -401,8 +411,7 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
         var request = new LatticeAccessRequest(treeId, LatticeOperation.Read, new LatticeSubject(subjectId, groups), "k1");
         using (LatticeActiveTenantContext.With(tenant))
         {
-            var decision = await gate.AuthorizeAsync(request);
-            return decision.Allowed && decision.KeyFilter is null;
+            return await gate.AuthorizeAsync(request);
         }
     }
 

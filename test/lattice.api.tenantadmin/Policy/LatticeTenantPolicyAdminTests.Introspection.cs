@@ -31,18 +31,20 @@ public sealed partial class LatticeTenantPolicyAdminTests
     }
 
     [Test]
-    public async Task Explain_passes_the_subjects_resolved_groups_to_the_tenant_gate_and_the_engine()
+    public async Task Explain_admits_a_subject_through_a_tenant_group_in_the_member_set_and_passes_its_groups_to_the_engine()
     {
+        // Only the group is in the member set, so the subject passes the tenant gate
+        // only when its resolved groups reach the check.
         var harness = new Harness();
         harness.Directory.WithGroups(Member, "t/acme/readers", "entra-staff");
-        harness.TenantPolicy.Admit(Tenant, "t/acme/readers");
+        harness.AdmitMember("t/acme/readers");
 
-        await harness.Create().ExplainAsync(Tenant, Member, "orders", "k", LatticeOperation.Read);
+        var explanation = await harness.Create().ExplainAsync(Tenant, Member, "orders", "k", LatticeOperation.Read);
 
         var evaluation = harness.Decisions.Evaluations.Single();
         Assert.Multiple(() =>
         {
-            Assert.That(harness.TenantPolicy.Validations.Single(), Is.EqualTo((Member, 2)));
+            Assert.That(explanation.Reason, Does.Not.Contain("cannot act as tenant"));
             Assert.That(evaluation.Subject.GroupIds, Is.EquivalentTo(new[] { "t/acme/readers", "entra-staff" }));
             Assert.That(evaluation.TreeId, Is.EqualTo("t/acme/orders"));
             Assert.That(evaluation.Key, Is.EqualTo("k"));
@@ -51,10 +53,41 @@ public sealed partial class LatticeTenantPolicyAdminTests
     }
 
     [Test]
+    public async Task Explain_decides_the_tenant_gate_from_the_registry_record_it_authorized_against()
+    {
+        // The compiled tenant snapshot rebuilds asynchronously after a registry
+        // write; the explanation reads the record itself, so a member recorded a
+        // moment ago is already admitted (the gate's own registry confirmation rule).
+        var harness = new Harness();
+        var facade = harness.Create();
+        var before = await facade.ExplainAsync(Tenant, Member, "orders", "k", LatticeOperation.Read);
+
+        harness.AdmitMember(Member);
+        var after = await facade.ExplainAsync(Tenant, Member, "orders", "k", LatticeOperation.Read);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Reason, Does.Contain("cannot act as tenant"));
+            Assert.That(after.Reason, Does.Not.Contain("cannot act as tenant"));
+            Assert.That(harness.Decisions.Evaluations, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Explain_admits_a_tenant_admin_without_a_member_entry()
+    {
+        var harness = new Harness();
+
+        await harness.Create().ExplainAsync(Tenant, Admin, "orders", "k", LatticeOperation.Read);
+
+        Assert.That(harness.Decisions.Evaluations, Has.Count.EqualTo(1), "admins are implicitly members");
+    }
+
+    [Test]
     public async Task Explain_reports_a_tenant_layer_decision_with_the_local_rule_in_full()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(TenantRule(Tenant, "grant", "orders"));
         harness.Decisions.Verdict = Decided(TenantRuleLayer.Tenant, "tenant:acme:grant");
 
@@ -75,7 +108,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_reports_a_tenant_wide_decision_read_from_the_sentinel_bucket()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(new LatticeAuthorizationRule(
             "tenant:acme:wide",
             LatticeSubjectSelector.User(Member),
@@ -98,7 +131,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_names_the_platform_layer_when_an_operator_deny_on_the_tree_decides()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(TenantRule(Tenant, "grant", "orders"));
         harness.Store.Seed(OperatorRule("guardrail", "t/acme/orders", effect: LatticeEffect.Deny));
         harness.Decisions.Verdict = Decided(TenantRuleLayer.Platform, "guardrail", LatticeEffect.Deny);
@@ -123,7 +156,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_withholds_the_subject_of_a_deciding_platform_wide_rule()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(OperatorRule("everywhere", LatticeScope.ClusterWideTreeId));
         harness.Decisions.Verdict = Decided(TenantRuleLayer.Platform, "everywhere", allTrees: true);
 
@@ -147,7 +180,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_withholds_the_subject_of_a_deciding_app_role_rule()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(OperatorRule("app:shop:reader:1", "t/acme/a/shop/items"));
         harness.Decisions.Verdict = Decided(TenantRuleLayer.Platform, "app:shop:reader:1");
 
@@ -165,7 +198,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_reports_no_deciding_rule_when_the_default_effect_decides()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Decisions.DefaultEffect = LatticeEffect.Deny;
 
         var explanation = await harness.Create().ExplainAsync(Tenant, Member, "orders", "k", LatticeOperation.Read);
@@ -184,7 +217,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_names_a_deciding_rule_the_store_no_longer_holds_by_id_and_effect()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Decisions.Verdict = Decided(TenantRuleLayer.Tenant, "tenant:acme:gone");
 
         var explanation = await harness.Create().ExplainAsync(Tenant, Member, "orders", "k", LatticeOperation.Read);
@@ -201,7 +234,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task Explain_matched_rules_honour_the_operation_the_subject_and_the_key()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(TenantRule(Tenant, "read", "orders"));
         harness.Store.Seed(TenantRule(Tenant, "write", "orders", operations: LatticeOperation.Write));
         harness.Store.Seed(TenantRule(Tenant, "other-user", "orders", LatticeSubjectSelector.User("carol")));
@@ -225,7 +258,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     {
         var harness = new Harness();
         harness.Directory.WithClosure("t/acme/readers", "entra-staff");
-        harness.TenantPolicy.Admit(Tenant, "t/acme/readers");
+        harness.AdmitMember("t/acme/readers");
 
         await harness.Create().ExplainAsync(
             Tenant, "readers", "orders", null, LatticeOperation.Read, TenantSubjectKind.TenantGroup);
@@ -253,7 +286,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public void Explain_on_a_tree_outside_the_tenant_is_refused_never_answered(string treeName)
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
 
         Assert.That(
             () => harness.Create().ExplainAsync(Tenant, Member, treeName, null, LatticeOperation.Read),
@@ -280,7 +313,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     {
         var harness = new Harness();
         harness.Directory.WithGroups(Member, "t/acme/readers");
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(TenantRule(Tenant, "via-group", "orders", LatticeSubjectSelector.Group("t/acme/readers")));
         harness.Store.Seed(OperatorRule("guardrail", "t/acme/orders", effect: LatticeEffect.Deny));
         harness.Store.Seed(OperatorRule("everywhere", LatticeScope.ClusterWideTreeId));
@@ -306,7 +339,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task EffectivePermissions_narrowed_to_a_tree_keeps_its_own_rules_tenant_wide_rules_and_platform_wide_rules()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(TenantRule(Tenant, "orders-rule", "orders"));
         harness.Store.Seed(TenantRule(Tenant, "invoices-rule", "invoices"));
         harness.Store.Seed(new LatticeAuthorizationRule(
@@ -326,7 +359,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public async Task EffectivePermissions_on_an_app_tree_omits_tenant_wide_rules_which_never_reach_it()
     {
         var harness = new Harness();
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         harness.Store.Seed(new LatticeAuthorizationRule(
             "tenant:acme:wide", LatticeSubjectSelector.User(Member), LatticeScope.TenantWide(TenantId.Parse(Tenant)), LatticeOperation.Read, LatticeEffect.Allow));
         harness.Store.Seed(OperatorRule("app:shop:reader:1", "t/acme/a/shop/items"));

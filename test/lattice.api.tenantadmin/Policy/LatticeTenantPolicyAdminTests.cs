@@ -126,7 +126,7 @@ public sealed partial class LatticeTenantPolicyAdminTests
     public void Operation_by_a_platform_operator_is_authorized(string operation)
     {
         var harness = new Harness { Caller = new LatticeSubject(Operator) };
-        harness.TenantPolicy.Admit(Tenant, Member);
+        harness.AdmitMember(Member);
         var facade = harness.Create();
 
         Assert.That(() => Call(operation)(facade, Tenant), Throws.Nothing);
@@ -149,13 +149,12 @@ public sealed partial class LatticeTenantPolicyAdminTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeTenantPolicyAdmin(null!, harness.Store, harness.Directory, harness.TenantPolicy, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, null!, harness.Directory, harness.TenantPolicy, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, null!, harness.TenantPolicy, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, null!, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, harness.TenantPolicy, null!, gate, () => true), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, harness.TenantPolicy, harness.Decisions, null!, () => true), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, harness.TenantPolicy, harness.Decisions, gate, null!), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantPolicyAdmin(null!, harness.Store, harness.Directory, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, null!, harness.Directory, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, null!, harness.Decisions, gate, () => true), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, null!, gate, () => true), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, harness.Decisions, null!, () => true), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantPolicyAdmin(authorizer, harness.Store, harness.Directory, harness.Decisions, gate, null!), Throws.ArgumentNullException);
         });
     }
 
@@ -168,7 +167,6 @@ public sealed partial class LatticeTenantPolicyAdminTests
             new TenantRegionResidencyAuthorizer(gate, harness.Registry),
             harness.Store,
             harness.Directory,
-            harness.TenantPolicy,
             harness.Decisions,
             gate,
             () => true);

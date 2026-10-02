@@ -24,7 +24,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
             throw new ArgumentException("A key must be non-empty, or null for a whole-tree request.", nameof(key));
         }
 
-        await AuthorizeAsync(tenant, nameof(ExplainAsync), answersWhileDisabled: false, cancellationToken)
+        var record = await AuthorizeAsync(tenant, nameof(ExplainAsync), answersWhileDisabled: false, cancellationToken)
             .ConfigureAwait(false);
         var scope = TenantPolicyScope.For(tenant);
 
@@ -50,7 +50,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
 
             // The tenant gate decides first: a subject that cannot act as the tenant is
             // refused on every one of its trees, whatever the rules say.
-            var tenantGate = _tenantPolicy.ValidateActiveTenantAs(subject.SubjectId, subject.GroupIds, tenant);
+            var tenantGate = ValidateActingAs(record, subject);
             if (!tenantGate.Allowed)
             {
                 return explanation with
@@ -100,7 +100,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
             throw new ArgumentException("A tree name must be non-empty, or null for every tree.", nameof(treeName));
         }
 
-        await AuthorizeAsync(tenant, nameof(EffectivePermissionsAsync), answersWhileDisabled: false, cancellationToken)
+        var record = await AuthorizeAsync(tenant, nameof(EffectivePermissionsAsync), answersWhileDisabled: false, cancellationToken)
             .ConfigureAwait(false);
         var scope = TenantPolicyScope.For(tenant);
         var treeId = treeName is null ? null : scope.ComposeTreeId(treeName, admitAppTrees: true, nameof(treeName));
@@ -120,7 +120,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
 
             // A subject that cannot act as the tenant holds no permission on its trees,
             // so no rule applies to it there.
-            if (!_tenantPolicy.ValidateActiveTenantAs(subject.SubjectId, subject.GroupIds, tenant).Allowed)
+            if (!ValidateActingAs(record, subject).Allowed)
             {
                 return result;
             }

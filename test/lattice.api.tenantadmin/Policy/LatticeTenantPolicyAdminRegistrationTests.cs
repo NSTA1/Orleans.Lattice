@@ -73,7 +73,6 @@ public sealed class LatticeTenantPolicyAdminRegistrationTests
         builder.Services.AddSingleton(Substitute.For<ILatticeAccessGate>());
         builder.Services.AddSingleton(Substitute.For<ILatticeAuthorizationPolicyStore>());
         builder.Services.AddSingleton(Substitute.For<ILatticeMembershipDirectory>());
-        builder.Services.AddSingleton(Substitute.For<ITenantPolicyEngine>());
         builder.Services.AddSingleton(Substitute.For<ILatticeDecisionEngine>());
         builder.Services.AddOptions<LatticeAuthOptions>();
         return builder;
