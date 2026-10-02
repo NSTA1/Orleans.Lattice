@@ -660,6 +660,21 @@ internal sealed partial class LatticeGrain(
                 TreeId,
                 $"Tree ID '{ClusterWideAuthSentinelTreeId}' is reserved as the all-trees authorization sentinel " +
                 "and cannot be created via the public ILattice surface. Choose a different tree name.");
+
+        // Reserve the tenant-wide authorization sentinel (t/{tenant}/*) the same
+        // way. A tenant-wide rule is keyed by that id and stands for every tree the
+        // tenant owns, so a real tenant tree whose id ends in "/*" must never
+        // exist. Only an active tenant's own composed id can reach here (the t/
+        // guard above refuses every other t/ id), so with tenancy off this is a
+        // no-op. The literal mirrors Orleans.Lattice.Auth LatticeScope.TenantWide.
+        if (TreeId.EndsWith(TenantWideAuthSentinelSuffix, StringComparison.Ordinal)
+            && LatticeTenantTrees.IsTenantScoped(TreeId)
+            && !LatticeAccessGateContext.IsSystemOrigin)
+            throw new LatticeReservedTreeNamespaceException(
+                TreeId,
+                $"Tree ID '{TreeId}' is reserved: a tenant tree id ending in '{TenantWideAuthSentinelSuffix}' is the " +
+                "tenant-wide authorization sentinel and cannot be created via the public ILattice surface. Choose a " +
+                "different tree name.");
     }
 
     /// <summary>
@@ -694,6 +709,14 @@ internal sealed partial class LatticeGrain(
     /// <c>Orleans.Lattice.Auth.LatticeScope.ClusterWideTreeId</c>.
     /// </summary>
     private const string ClusterWideAuthSentinelTreeId = "*";
+
+    /// <summary>
+    /// The suffix (<c>/*</c>) of the tenant-wide authorization sentinel tree id
+    /// <c>t/{tenant}/*</c>, reserved so no real tenant tree can carry it. Kept as a
+    /// local literal for the same reason as <see cref="ClusterWideAuthSentinelTreeId"/>;
+    /// mirrors <c>Orleans.Lattice.Auth.LatticeScope.TenantWide</c>.
+    /// </summary>
+    private const string TenantWideAuthSentinelSuffix = "/*";
 
     /// <summary>
     /// Resolves the declared replication <see cref="LatticeMergeMode"/> for
