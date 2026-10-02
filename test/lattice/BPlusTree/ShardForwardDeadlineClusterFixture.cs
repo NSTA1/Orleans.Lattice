@@ -3,6 +3,7 @@ using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -30,9 +31,11 @@ public sealed class ShardForwardDeadlineClusterFixture
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
     }
 
     /// <summary>Tears the cluster down.</summary>

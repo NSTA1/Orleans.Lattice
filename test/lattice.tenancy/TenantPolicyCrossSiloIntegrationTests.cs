@@ -5,6 +5,7 @@ using Orleans.Hosting;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.TestingHost;
 using static Orleans.Lattice.Tenancy.Tests.TestClocks;
 
@@ -38,9 +39,11 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
     public async Task SetUp()
     {
         var builder = new TestClusterBuilder(2);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]
