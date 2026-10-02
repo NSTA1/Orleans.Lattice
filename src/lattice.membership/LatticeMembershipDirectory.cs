@@ -13,9 +13,29 @@ namespace Orleans.Lattice.Membership;
 /// observed by the resolution-cache invalidator on the silo that commits it and
 /// captured by the per-key history view.
 /// </summary>
-internal sealed class LatticeMembershipDirectory(
+/// <remarks>
+/// <para>
+/// <see cref="AddMemberAsync"/> enforces the tenant group nesting invariant for
+/// every caller, operators included (see <see cref="TenantGroupNesting"/>): a
+/// tenant group (<c>t/{tenant}/{name}</c>) may contain users, groups of the same
+/// tenant and cluster groups, and may never become a member of a cluster group or
+/// of another tenant's group. It is a write-path check, so resolution pays nothing
+/// for it.
+/// </para>
+/// <para>
+/// Adding a cluster group (for example an identity-provider group) to a tenant
+/// group makes the tenant group a parent of the cluster group, so resolution
+/// includes the tenant group for every member of the cluster group. That is
+/// intended: it is how a tenant administrator grants an existing directory group
+/// access to the tenant. The reverse direction is what the invariant forbids.
+/// </para>
+/// <para>
+/// Also implements the internal <see cref="ITenantScopedMembershipStore"/>.
+/// </para>
+/// </remarks>
+internal sealed partial class LatticeMembershipDirectory(
     IGrainFactory grainFactory,
-    MembershipInitializer initializer) : ILatticeMembershipDirectory
+    MembershipInitializer initializer) : ILatticeMembershipDirectory, ITenantScopedMembershipStore
 {
     private static readonly byte[] UserMarker = "u"u8.ToArray();
     private static readonly byte[] GroupMarker = "g"u8.ToArray();
@@ -76,6 +96,11 @@ internal sealed class LatticeMembershipDirectory(
     {
         ArgumentNullException.ThrowIfNull(groupId);
         ArgumentNullException.ThrowIfNull(memberId);
+
+        // Before any I/O, so a refused edge writes nothing. Runs whatever the
+        // caller's origin: the invariant binds operators too.
+        TenantGroupNesting.EnsureAllowed(groupId, memberId);
+
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         var marker = memberKind == MembershipMemberKind.Group ? GroupMarker : UserMarker;
