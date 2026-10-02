@@ -11,13 +11,11 @@ using static Orleans.Lattice.Tenancy.Tests.TenantPolicyTestData;
 namespace Orleans.Lattice.Tenancy.Tests;
 
 /// <summary>
-/// Regression tests for the T1 review finding that flipping
-/// <see cref="LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"/> left
-/// membership's resolution cache serving subjects resolved under the old claim
-/// filter verdict (epic #4154, D2). With the flag off, an identity provider's
-/// asserted <c>t/</c> group is not stripped and the subject is cached with it;
-/// turning the flag on must flush that cache, so the next resolution strips the
-/// group and the subject can no longer act as the tenant whose admin set names it.
+/// Regression tests for the membership resolution cache across flips of
+/// <see cref="LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"/> (epic
+/// #4154, D2). Once tenancy is registered an identity provider's asserted
+/// <c>t/</c> group is stripped whatever the flag, so no subject is ever cached
+/// carrying one, and a flag change in either direction still flushes the cache.
 /// Wired through <c>AddLatticeMembership</c> and <c>AddLatticeTenancy</c>, so the
 /// test exercises the production registration rather than a hand-made subscription.
 /// </summary>
@@ -30,7 +28,7 @@ public sealed class DelegatedAccessMembershipCacheTests
     private static readonly TenantId Acme = TenantId.Parse("acme");
 
     [Test]
-    public async Task Turning_the_flag_on_flushes_a_subject_cached_with_an_unstripped_asserted_tenant_group()
+    public async Task With_the_flag_off_an_asserted_tenant_group_is_stripped_before_it_is_cached_and_a_flip_flushes_the_cache()
     {
         using var provider = BuildProvider();
         var flag = provider.GetRequiredService<DelegatedTenantAccessFlag>();
@@ -44,7 +42,8 @@ public sealed class DelegatedAccessMembershipCacheTests
         var cachedWhileOff = await ResolveAsync(membership);
         Assert.Multiple(() =>
         {
-            Assert.That(cachedWhileOff.GroupIds, Does.Contain(AssertedTenantGroup), "precondition: off, the asserted group is not stripped");
+            Assert.That(cachedWhileOff.GroupIds, Does.Not.Contain(AssertedTenantGroup), "off, the asserted tenant group is stripped all the same");
+            Assert.That(cachedWhileOff.GroupIds, Does.Contain("entra-sales"), "asserted cluster groups are kept");
             Assert.That(cache.Count, Is.EqualTo(1), "precondition: the subject is cached");
         });
 
@@ -62,7 +61,7 @@ public sealed class DelegatedAccessMembershipCacheTests
     }
 
     [Test]
-    public async Task Turning_the_flag_off_flushes_the_cache_too()
+    public async Task Turning_the_flag_off_flushes_the_cache_and_keeps_stripping()
     {
         using var provider = BuildProvider(enabled: true);
         var flag = provider.GetRequiredService<DelegatedTenantAccessFlag>();
@@ -76,7 +75,10 @@ public sealed class DelegatedAccessMembershipCacheTests
         flag.Set(false);
 
         Assert.That(cache.Count, Is.Zero);
-        Assert.That((await ResolveAsync(membership)).GroupIds, Does.Contain(AssertedTenantGroup), "off, resolution is as it was before the feature");
+        Assert.That(
+            (await ResolveAsync(membership)).GroupIds,
+            Does.Not.Contain(AssertedTenantGroup),
+            "off, the t/ namespace stays reserved: an operator rule or app role naming the group must not match a token");
     }
 
     [Test]

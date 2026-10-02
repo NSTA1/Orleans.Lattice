@@ -59,31 +59,36 @@ public sealed partial class LatticeTenantDirectoryAdminTests
             bool enabled,
             ILatticeIdentityDirectory? identityDirectory,
             bool validationRequired,
-            AsyncBarrier? registryBarrier = null)
+            AsyncBarrier? registryBarrier = null,
+            MergingTenantRegistry? registry = null,
+            ITenantAdminClock? clock = null,
+            Microsoft.Extensions.Logging.ILogger<LatticeTenantDirectoryAdmin>? logger = null)
         {
+            Registry = registry ?? new MergingTenantRegistry();
             Registry.Seed(Record(Tenant, Alice));
             Registry.Seed(Record(OtherTenant, Gina));
             Registry.Seed(Record(TenantId.DefaultId, Operator));
             Flag = new SettableFlag(enabled);
-            ITenantRegistry registry = registryBarrier is null ? Registry : new BarrierTenantRegistry(Registry, registryBarrier);
+            ITenantRegistry effective = registryBarrier is null ? Registry : new BarrierTenantRegistry(Registry, registryBarrier);
 
             var authorizer = new TenantRegionResidencyAuthorizer(
-                new AdminSubjectGate(Operator), registry, new FixedMembershipContext(caller), Flag.Read);
+                new AdminSubjectGate(Operator), effective, new FixedMembershipContext(caller), Flag.Read);
 
             Admin = new LatticeTenantDirectoryAdmin(
-                registry,
+                effective,
                 authorizer,
-                new LockedClock(),
+                clock ?? new LockedClock(),
                 Options.Create(new ClusterOptions { ClusterId = "region-a" }),
                 Store,
                 Rules,
                 Flag.Read,
                 identityDirectory,
                 new FixedOptionsMonitor<LatticeIdentityDirectoryOptions>(
-                    new LatticeIdentityDirectoryOptions { ValidationRequired = validationRequired }));
+                    new LatticeIdentityDirectoryOptions { ValidationRequired = validationRequired }),
+                logger);
         }
 
-        public MergingTenantRegistry Registry { get; } = new();
+        public MergingTenantRegistry Registry { get; }
 
         public FakeTenantDirectoryStore Store { get; } = new();
 

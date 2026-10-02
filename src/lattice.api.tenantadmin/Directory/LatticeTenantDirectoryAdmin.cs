@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice.Membership;
@@ -44,12 +46,26 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// the addition it made (a new group with its edges, the edge, or the member-set
 /// entry at a later stamp) and is refused with
 /// <see cref="LatticeQuotaExceededException"/>. Racers that interleave may all be
-/// refused, which is the fail-closed direction. The residual window is bounded and
+/// refused, which is the fail-closed direction. The withdrawal is a second write
+/// that can itself fail, so it is retried a bounded number of times
+/// (<see cref="TenantCapCompensation"/>); if it still fails the call is refused with
+/// a <see cref="LatticeQuotaExceededException"/> saying the cap may stay exceeded
+/// until the addition is removed, and a warning naming the tenant and dimension is
+/// logged. The residual window is bounded and
 /// transient: between a racer's write and its withdrawal a reader can observe the
 /// tenant briefly over its cap, and a call interrupted between the two (a silo
-/// crash, a cancelled call, a failed compensating write) leaves the extra item in
+/// crash, or a withdrawal that failed every attempt) leaves the extra item in
 /// place until it is removed; the cap is then still enforced on every later
 /// addition, so the overshoot can never grow beyond the calls in flight.
+/// </para>
+/// <para>
+/// <b>Last admin (D6).</b> Removing a group that is an admin entry never commits a
+/// record with an empty admin set: the guard is re-applied to the merged record
+/// inside the registry's compare-and-set loop (<see cref="TenantAdminSetCommit"/>),
+/// so a racing removal is refused with nothing written rather than written and
+/// repaired. Every removal, from either set, is stamped later than the slot it
+/// removes (<see cref="TenantRemovalStamp"/>), so a silo whose clock runs behind the
+/// one that wrote the slot still removes it.
 /// </para>
 /// <para>
 /// <b>Entry kinds.</b> The member set and group edges store plain ids, so a listing
@@ -72,6 +88,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
     private readonly Func<bool> _delegatedAccessEnabled;
     private readonly ILatticeIdentityDirectory? _identityDirectory;
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
+    private readonly ILogger _logger;
     private readonly string? _writerId;
 
     /// <summary>Initializes a new <see cref="LatticeTenantDirectoryAdmin"/>.</summary>
@@ -84,6 +101,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
     /// <param name="delegatedAccessEnabled">The live read of the delegated-access flag, consulted on every call. Must not be <c>null</c>.</param>
     /// <param name="identityDirectory">The upstream identity directory, or <c>null</c> when none is registered.</param>
     /// <param name="identityDirectoryOptions">The identity-directory options, or <c>null</c> when none is registered.</param>
+    /// <param name="logger">The logger for a cap withdrawal that could not land, or <c>null</c> for none.</param>
     /// <exception cref="ArgumentNullException">A required argument is <c>null</c>.</exception>
     public LatticeTenantDirectoryAdmin(
         ITenantRegistry registry,
@@ -94,7 +112,8 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
         ITenantGroupRuleCascade rules,
         Func<bool> delegatedAccessEnabled,
         ILatticeIdentityDirectory? identityDirectory = null,
-        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null)
+        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null,
+        ILogger<LatticeTenantDirectoryAdmin>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -112,6 +131,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
         _delegatedAccessEnabled = delegatedAccessEnabled;
         _identityDirectory = identityDirectory;
         _identityDirectoryOptions = identityDirectoryOptions;
+        _logger = (ILogger?)logger ?? NullLogger.Instance;
         _writerId = clusterOptions.Value.ClusterId;
     }
 
@@ -235,13 +255,6 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
                 $"Tenant '{tenant}' has no group named '{localName}'.", paramName);
         }
     }
-
-    /// <summary>
-    /// Refuses an addition that the post-write verification found over
-    /// <paramref name="cap"/>, through the same exception path as the pre-write check.
-    /// </summary>
-    private static void ThrowCapExceeded(TenantId tenant, string treeId, string dimension, long cap) =>
-        TenantAccessCaps.AdmitAddition(tenant, treeId, dimension, cap, cap);
 
     private static TenantId ParseTenant(string tenantId)
     {

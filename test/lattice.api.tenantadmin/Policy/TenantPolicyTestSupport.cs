@@ -78,7 +78,8 @@ internal static class TenantPolicyTestSupport
 
         private long _memberTick = 100;
 
-        public LatticeTenantPolicyAdmin Create(bool withUsage = true)
+        public LatticeTenantPolicyAdmin Create(
+            bool withUsage = true, Microsoft.Extensions.Logging.ILogger<LatticeTenantPolicyAdmin>? logger = null)
         {
             var membership = new CallerContext(this);
             var gate = new AdminSubjectGate(Operator);
@@ -90,7 +91,8 @@ internal static class TenantPolicyTestSupport
                 gate,
                 () => Enabled,
                 membership,
-                withUsage ? Usage : null);
+                withUsage ? Usage : null,
+                logger);
         }
 
         private sealed class CallerContext(Harness harness) : ILatticeMembershipContext
@@ -188,10 +190,23 @@ internal static class TenantPolicyTestSupport
             RecordOrigin(ruleId);
             lock (_rules)
             {
+                RemoveAttempts++;
+                if (RemoveRuleFailures > 0)
+                {
+                    RemoveRuleFailures--;
+                    throw new InvalidOperationException("transient store failure");
+                }
+
                 Writes++;
                 return Task.FromResult(_rules.Remove(Key(treeId, ruleId)));
             }
         }
+
+        /// <summary>How many upcoming <see cref="RemoveRuleAsync"/> calls fail (transiently) before one succeeds.</summary>
+        public int RemoveRuleFailures { get; set; }
+
+        /// <summary>The <see cref="RemoveRuleAsync"/> calls made, failed or not.</summary>
+        public int RemoveAttempts { get; private set; }
 
         public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesForTreeAsync(
             string treeId, [EnumeratorCancellation] CancellationToken cancellationToken = default)

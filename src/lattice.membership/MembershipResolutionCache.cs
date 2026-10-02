@@ -40,8 +40,8 @@ internal sealed class MembershipResolutionCache(
 
     // Bumped by every flush. A resolution captures it before resolving and stores
     // its result only if no flush happened meanwhile, so a subject resolved under
-    // the pre-flush rules (for example with the tenant group claim filter still
-    // inactive) is never cached after the flush that was meant to evict it.
+    // the pre-flush rules is never cached after the flush that was meant to
+    // evict it.
     private long _generation;
 
     /// <summary>The number of live cache entries. Exposed for tests.</summary>
@@ -163,9 +163,9 @@ internal sealed class MembershipResolutionCache(
 
     /// <summary>
     /// Drops every cached entry, and stops any resolution already in flight from
-    /// caching its result. Used by tests, and by the tenancy add-on when its
-    /// delegated tenant access administration flag changes, because the tenant
-    /// group claim filter's verdict is baked into every cached subject.
+    /// caching its result. Used by tests, by membership mutations, and by the
+    /// tenancy add-on when its delegated tenant access administration flag
+    /// changes, so no subject resolved before the flip outlives it.
     /// </summary>
     internal void Clear()
     {

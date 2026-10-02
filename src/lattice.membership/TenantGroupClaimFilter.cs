@@ -16,8 +16,9 @@ namespace Orleans.Lattice.Membership;
 /// <para>
 /// Membership does not reference tenancy, so <see cref="IsActive"/> reads a
 /// caller-supplied delegate. The tenancy add-on registers this filter with
-/// <c>Replace</c>, passing a delegate that reads its monitored delegated tenant
-/// access administration flag. The delegate is invoked on every read, so it must
+/// <c>Replace</c>, passing an always-<c>true</c> delegate: the namespace is
+/// reserved whenever tenancy is registered, whatever its delegated tenant access
+/// administration flag says. The delegate is invoked on every read, so it must
 /// answer from in-memory state without allocating.
 /// </para>
 /// </remarks>

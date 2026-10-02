@@ -17,11 +17,15 @@ namespace Orleans.Lattice.Membership;
 /// <see cref="IsActive"/> is <c>false</c>, registered by
 /// <c>AddLatticeMembership</c> via <c>TryAddSingleton</c>. The tenancy add-on
 /// displaces it with <c>Replace</c> and an implementation whose
-/// <see cref="IsActive"/> reads the delegated tenant access administration flag.
-/// Claim resolution reads <see cref="IsActive"/> first and calls
-/// <see cref="Filter"/> only when it is <c>true</c>, so a cluster without tenancy,
-/// or with the flag off, resolves claims exactly as it did before this seam
-/// existed and does no prefix work.
+/// <see cref="IsActive"/> is always <c>true</c>: once tenancy is registered the
+/// <c>t/</c> namespace is reserved to the tenant tier whatever its delegated
+/// tenant access administration flag says, because operator rules and app role
+/// bindings that name a tenant group are honoured whatever the flag. Claim
+/// resolution reads <see cref="IsActive"/> first, so a cluster without tenancy
+/// resolves claims exactly as it did before this seam existed and does no
+/// prefix work; with tenancy, the cold (cache-miss) resolution path pays one
+/// ordinal prefix test per claim-derived group and calls <see cref="Filter"/>
+/// only when one is a <c>t/</c> id.
 /// </para>
 /// </remarks>
 public interface ITenantGroupClaimFilter

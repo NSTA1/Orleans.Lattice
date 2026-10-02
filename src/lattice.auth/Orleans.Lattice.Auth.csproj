@@ -27,6 +27,7 @@
          layer-carrying explain trace (PolicyMatch.Layer) and the tenant rule
          confinement checks. -->
     <InternalsVisibleTo Include="Orleans.Lattice.Tenancy" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth" />
     <!-- The microbench host builds a real PolicyAccessGate (via the internal

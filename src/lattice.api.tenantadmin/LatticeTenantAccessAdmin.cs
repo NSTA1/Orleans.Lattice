@@ -38,7 +38,11 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <para>
 /// <b>Invariants.</b> The reserved default tenant's membership can never be
 /// mutated, and the last admin subject can never be removed. Both are enforced
-/// here, fail-closed.
+/// here, fail-closed; the last-subject guard is re-applied to the merged record
+/// inside the registry's compare-and-set loop (<see cref="TenantAdminSetCommit"/>),
+/// so a racing removal is refused before it commits. A removal is stamped later
+/// than the slot it removes (<see cref="TenantRemovalStamp"/>), so it wins the merge
+/// even against a slot written by a silo whose clock runs ahead.
 /// </para>
 /// </remarks>
 internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
@@ -221,30 +225,23 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
             throw new TenantLastAdminSubjectException(tenant.Value, subjectId);
         }
 
-        record.RemoveAdminSubject(subjectId, _clock.Next(), _writerId);
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        // Stamped later than the slot it removes as well as the local clock, so the
+        // removal wins the merge even when another silo's clock wrote the slot ahead
+        // of this one, and Changed=true means the subject really lost its authority.
+        record.RemoveAdminSubject(subjectId, TenantRemovalStamp.ForAdminEntry(_clock, record, subjectId), _writerId);
 
         // The guard above is a read-check-write over a CRDT store, so it alone is
         // not sufficient: two concurrent removals of *different* subjects can each
         // observe two live subjects, each pass the check, and land tombstones on
         // disjoint keys that both survive the per-subject merge - emptying the set
-        // and orphaning the tenant. The registry's returned join is the first point
-        // at which that is observable, so re-check it and self-heal: re-grant this
-        // call's own subject at a strictly later stamp (which supersedes the
-        // tombstone this call just wrote, and only that one) and refuse the removal.
-        // The registry commits with an optimistic compare-and-set, so the first
-        // racing caller to commit sees a join that still holds the other's subject
-        // and succeeds; only the caller whose merged result is empty re-grants its own
-        // subject and is refused, and the tenant is left with at least one admin
-        // subject rather than none - the fail-closed direction. A retry of the
-        // refused call now sees a single live subject and is refused by the guard
-        // above before it writes, so this terminates.
-        if (merged.AdminSubjectCount == 0)
-        {
-            merged.AddAdminSubject(subjectId, _clock.Next(), _writerId);
-            await _registry.PutAsync(merged, cancellationToken).ConfigureAwait(false);
-            throw new TenantLastAdminSubjectException(tenant.Value, subjectId);
-        }
+        // and orphaning the tenant. The guard is therefore re-applied to the merged
+        // record inside the registry's optimistic compare-and-set loop, before the
+        // conditional write: the first racer to commit succeeds, and the second
+        // re-reads that commit, re-merges, and is refused with nothing written. No
+        // remove-then-re-grant, so no second write can fail and strand the tenant.
+        var merged = await TenantAdminSetCommit
+            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken)
+            .ConfigureAwait(false);
 
         return new TenantAdminSubjectChangeResult
         {

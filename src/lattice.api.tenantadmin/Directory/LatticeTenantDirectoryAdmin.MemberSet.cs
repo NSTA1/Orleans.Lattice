@@ -90,9 +90,18 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         // Withdraw this entry at a later stamp, which supersedes only this call's add.
         if (merged.MemberSubjectCount > memberCap)
         {
-            merged.RemoveMemberSubject(storedId, _clock.Next(), _writerId);
-            await _registry.PutAsync(merged, cancellationToken).ConfigureAwait(false);
-            ThrowCapExceeded(tenant, TenantTreeNames.RegistryTree, TenantAccessCaps.MemberSubjectsDimension, memberCap);
+            await TenantCapCompensation.WithdrawAndRefuseAsync(
+                async ct =>
+                {
+                    merged.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, merged, storedId), _writerId);
+                    await _registry.PutAsync(merged, ct).ConfigureAwait(false);
+                },
+                _logger,
+                tenant,
+                TenantTreeNames.RegistryTree,
+                TenantAccessCaps.MemberSubjectsDimension,
+                memberCap,
+                merged.MemberSubjectCount).ConfigureAwait(false);
         }
 
         return MemberChange(tenant, subjectId, subjectKind, changed: true);
@@ -116,7 +125,10 @@ internal sealed partial class LatticeTenantDirectoryAdmin
             return MemberChange(tenant, subjectId, subjectKind, changed: false);
         }
 
-        record.RemoveMemberSubject(storedId, _clock.Next(), _writerId);
+        // Stamped later than the slot it removes as well as the local clock, so the
+        // removal wins the merge even when another silo's clock wrote the slot ahead
+        // of this one, and Changed=true means the entry is really gone.
+        record.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, record, storedId), _writerId);
         await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
 
         return MemberChange(tenant, subjectId, subjectKind, changed: true);

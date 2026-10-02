@@ -128,4 +128,85 @@ public sealed class LatticeTenantRegistryConcurrencyTests
         });
         await lattice.Received(1).SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task Guarded_put_validates_the_re_merged_record_and_refuses_a_racer_whose_change_would_empty_the_admin_set()
+    {
+        // Two admins; a competitor commits the removal of alice between this
+        // writer's read and write, and this writer removes bob. Each removal passes
+        // on its own, but the re-merged record would have no admin entry left.
+        var (registry, serializer) = Create();
+        var lattice = Substitute.For<ILattice>();
+
+        var read0 = Base();
+        read0.AddAdminSubject("alice", Clock(11), "seed");
+        read0.AddAdminSubject("bob", Clock(11), "seed");
+        var v0 = new VersionedValue { Value = serializer.Serialize(read0), Version = Clock(1) };
+
+        var read1 = read0.Clone();
+        read1.RemoveAdminSubject("alice", Clock(20), "competitor");
+        var v1 = new VersionedValue { Value = serializer.Serialize(read1), Version = Clock(2) };
+
+        lattice.GetWithVersionAsync(Acme.Value!, Arg.Any<CancellationToken>()).Returns(v0, v1);
+        lattice.SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(false, true);
+
+        var incoming = read0.Clone();
+        incoming.RemoveAdminSubject("bob", Clock(30), "me");
+        var validated = new List<int>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () => await registry.PutMergeAsync(
+            lattice,
+            Acme.Value!,
+            incoming,
+            CancellationToken.None,
+            merged =>
+            {
+                validated.Add(merged.AdminSubjectCount);
+                if (merged.AdminSubjectCount == 0)
+                {
+                    throw new InvalidOperationException("no admin left");
+                }
+            }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Is.EqualTo("no admin left"));
+            Assert.That(validated, Is.EqualTo(new[] { 1, 0 }), "validated on each attempt's merged record");
+        });
+        await lattice.Received(1).SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Guarded_put_commits_when_the_validation_passes()
+    {
+        var (registry, serializer) = Create();
+        var lattice = Substitute.For<ILattice>();
+        var stored = Base();
+        stored.AddAdminSubject("alice", Clock(11), "seed");
+        stored.AddAdminSubject("bob", Clock(11), "seed");
+        lattice.GetWithVersionAsync(Acme.Value!, Arg.Any<CancellationToken>())
+            .Returns(new VersionedValue { Value = serializer.Serialize(stored), Version = Clock(1) });
+        lattice.SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var incoming = stored.Clone();
+        incoming.RemoveAdminSubject("bob", Clock(30), "me");
+
+        var merged = await registry.PutMergeAsync(lattice, Acme.Value!, incoming, CancellationToken.None, static _ => { });
+
+        Assert.That(merged.AdminSubjects, Is.EqualTo(new[] { "alice" }));
+    }
+
+    [Test]
+    public void PutGuardedAsync_null_arguments_throw()
+    {
+        var (registry, _) = Create();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => registry.PutGuardedAsync(null!, static _ => { }), Throws.ArgumentNullException);
+            Assert.That(() => registry.PutGuardedAsync(Base(), null!), Throws.ArgumentNullException);
+        });
+    }
 }

@@ -14,6 +14,16 @@ namespace Orleans.Lattice.Tenancy;
 /// from any number of cluster replicas converge to the same record independent
 /// of the order they are applied.
 /// </summary>
+/// <remarks>
+/// The admin set and the member set store plain ids, and user ids and group ids
+/// share one namespace there: an entry matches a subject whose own id, or any of
+/// whose resolved group ids, equals it. That is deliberate and consistent with the
+/// membership directory's id-only model, which also keys users and groups in one
+/// id space; keeping user and group ids distinct is the identity provider's and
+/// the directory's responsibility. Tenant groups are the exception that cannot
+/// collide: they live in the reserved <c>t/</c> namespace, which a user id or a
+/// cluster group id may never use.
+/// </remarks>
 [GenerateSerializer]
 [Alias(TenantTypeAliases.TenantRecord)]
 public sealed class TenantRecord

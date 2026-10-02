@@ -13,8 +13,9 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// Unit tests for the delegated tenant access administration flag and the two
 /// active seams tenancy installs in place of V1's null defaults (epic #4154, T1):
 /// <see cref="DelegatedTenantAccessFlag"/>, <see cref="TenancyTenantRuleLayer"/>,
-/// membership's tenant group claim filter wired to the flag, their registration
-/// by <c>AddLatticeTenancy</c>, and the start-up
+/// membership's tenant group claim filter (always active once tenancy is
+/// registered; see <see cref="TenancyTenantGroupClaimReservationTests"/>), their
+/// registration by <c>AddLatticeTenancy</c>, and the start-up
 /// <see cref="TenancyPostureLogger"/>.
 /// Options changes are driven through a hand-rolled monitor, so every
 /// notification is synchronous and exact.
@@ -139,30 +140,6 @@ public sealed class TenancyDelegatedAccessSeamsTests
 
         using var provider = builder.Services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<ITenantRuleLayer>().IsActive, Is.False);
-    }
-
-    [Test]
-    public void AddLatticeTenancy_replaces_the_null_claim_filter_with_one_that_follows_the_flag()
-    {
-        var builder = NewBuilderWithDependencies();
-        builder.Services.AddSingleton(Substitute.For<ITenantGroupClaimFilter>());
-
-        builder.AddLatticeTenancy();
-
-        Assert.That(builder.Services.Count(d => d.ServiceType == typeof(ITenantGroupClaimFilter)), Is.EqualTo(1));
-
-        using var provider = builder.Services.BuildServiceProvider();
-        var filter = provider.GetRequiredService<ITenantGroupClaimFilter>();
-        var flag = provider.GetRequiredService<DelegatedTenantAccessFlag>();
-        Assert.Multiple(() =>
-        {
-            Assert.That(filter.GetType().Name, Is.EqualTo("TenantGroupClaimFilter"), "membership's active filter, not a tenancy copy");
-            Assert.That(filter.IsActive, Is.False, "off by default");
-        });
-
-        flag.Set(true);
-
-        Assert.That(filter.IsActive, Is.True, "the filter reads the live flag");
     }
 
     [Test]

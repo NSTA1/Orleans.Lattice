@@ -17,6 +17,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin.Tests" />
     <!-- The microbench host drives TenantRecord's internal slot maps directly so
          the "reshardfolds" suite can run the prior double-probe merge shape
          side-by-side with the shipped single-probe MergeFrom. -->

@@ -92,10 +92,17 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         // pass the check above, so re-count after the write and withdraw this
         // group if the tenant is now over its cap.
         if (isNew
-            && await _store.CountTenantGroupsAsync(tenant, cancellationToken).ConfigureAwait(false) > cap)
+            && await _store.CountTenantGroupsAsync(tenant, cancellationToken).ConfigureAwait(false) is var groups
+            && groups > cap)
         {
-            await _store.RemoveGroupCascadeAsync(groupId, cancellationToken).ConfigureAwait(false);
-            ThrowCapExceeded(tenant, MembershipConstants.GroupsTree, TenantAccessCaps.GroupsDimension, cap);
+            await TenantCapCompensation.WithdrawAndRefuseAsync(
+                ct => _store.RemoveGroupCascadeAsync(groupId, ct),
+                _logger,
+                tenant,
+                MembershipConstants.GroupsTree,
+                TenantAccessCaps.GroupsDimension,
+                cap,
+                groups).ConfigureAwait(false);
         }
 
         return new TenantGroupDescriptor { Name = group.Name, DisplayName = group.DisplayName };
@@ -131,7 +138,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         // still finds the group) rather than leaving dangling references behind.
         if (inAdminSet || inMemberSet)
         {
-            await RemoveRegistryEntriesAsync(tenant, record, groupId, inAdminSet, inMemberSet, cancellationToken)
+            await RemoveRegistryEntriesAsync(record, groupId, inAdminSet, inMemberSet, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -155,14 +162,13 @@ internal sealed partial class LatticeTenantDirectoryAdmin
 
     /// <summary>
     /// Removes a group's member-set and admin-set entries through the registry's
-    /// optimistic, CRDT-merging put, then re-checks the committed join: two
-    /// concurrent removals of different admin entries can each pass the guard and
-    /// together empty the admin set, so a caller that observes an empty set re-grants
-    /// its own entry at a later stamp and is refused, leaving the tenant with an admin
-    /// (the same self-heal the admin-subject facade applies).
+    /// optimistic, CRDT-merging put. Two concurrent removals of different admin
+    /// entries can each pass the guard above and together empty the admin set, so
+    /// the guard is re-applied to the merged record before it is committed
+    /// (<see cref="TenantAdminSetCommit"/>): a removal that would leave no admin
+    /// entry is refused with nothing written, never written and then repaired.
     /// </summary>
     private async Task RemoveRegistryEntriesAsync(
-        TenantId tenant,
         TenantRecord record,
         string groupId,
         bool inAdminSet,
@@ -171,21 +177,19 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     {
         if (inMemberSet)
         {
-            record.RemoveMemberSubject(groupId, _clock.Next(), _writerId);
+            record.RemoveMemberSubject(groupId, TenantRemovalStamp.ForMemberEntry(_clock, record, groupId), _writerId);
         }
 
-        if (inAdminSet)
+        if (!inAdminSet)
         {
-            record.RemoveAdminSubject(groupId, _clock.Next(), _writerId);
+            await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+            return;
         }
 
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
-        if (inAdminSet && merged.AdminSubjectCount == 0)
-        {
-            merged.AddAdminSubject(groupId, _clock.Next(), _writerId);
-            await _registry.PutAsync(merged, cancellationToken).ConfigureAwait(false);
-            throw new TenantLastAdminSubjectException(tenant.Value, groupId);
-        }
+        record.RemoveAdminSubject(groupId, TenantRemovalStamp.ForAdminEntry(_clock, record, groupId), _writerId);
+        await TenantAdminSetCommit
+            .CommitAsync(_registry, record, groupId, _clock, _writerId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static IReadOnlyList<string> ToLocalRuleIds(TenantId tenant, IReadOnlyList<string> ruleIds)

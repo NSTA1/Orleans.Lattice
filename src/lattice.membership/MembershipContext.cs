@@ -156,7 +156,8 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         var subject = _mapper.Map(principal, directoryGroups);
 
         // Strip claim-asserted t/ group ids before they are expanded (epic
-        // #4154, D2). Inactive (tenancy absent or its flag off): one bool read.
+        // #4154, D2). Inactive (tenancy absent): one bool read. Active (tenancy
+        // registered, whatever its flag): one prefix test per group.
         subject = ApplyTenantGroupClaimFilter(subject, directoryGroups);
 
         // The directory groups above are already transitively expanded, but the
@@ -182,12 +183,17 @@ internal sealed class MembershipContext : ILatticeMembershipContext
     /// <summary>
     /// Returns <paramref name="subject"/> unchanged (its group set is handed back,
     /// not copied, and nothing is allocated) unless the tenant group claim filter
-    /// is active. When active, the
+    /// is active and a claim-derived group is in the reserved <c>t/</c> namespace.
+    /// The filter is active whenever the tenancy add-on is registered, whatever
+    /// its delegated tenant access administration flag says. When active, the
     /// claim-derived groups (every group the mapper added beyond
     /// <paramref name="directoryGroups"/>: token-asserted, overage and
-    /// claim-projected ids) are run through the filter, and those it removes are
-    /// dropped from the subject. Directory-derived groups are never filtered: a
-    /// tenant group the directory records the subject in is a real membership.
+    /// claim-projected ids) are first scanned with one ordinal prefix test each,
+    /// allocating nothing; only when one is a <c>t/</c> id are they run through
+    /// the filter, and those it removes are dropped from the subject.
+    /// Directory-derived groups are never filtered: a tenant group the directory
+    /// records the subject in is a real membership. This runs on the cold
+    /// (cache-miss) resolution path only.
     /// </summary>
     /// <param name="subject">The mapped subject.</param>
     /// <param name="directoryGroups">The directory-derived groups the subject was mapped with.</param>
@@ -204,6 +210,15 @@ internal sealed class MembershipContext : ILatticeMembershipContext
 
     private LatticeSubject StripClaimDerivedTenantGroups(LatticeSubject subject, IReadOnlyCollection<string> directoryGroups)
     {
+        // The filter is active whenever the tenancy add-on is registered, so this
+        // runs on every cold resolution there. Find a claim-derived t/ id first
+        // (one ordinal prefix test per group, no allocation) and only build the
+        // claim-derived list when there is something to strip.
+        if (!HasClaimDerivedTenantTierGroup(subject.GroupIds, directoryGroups))
+        {
+            return subject;
+        }
+
         List<string>? claimDerived = null;
         foreach (var group in subject.GroupIds)
         {
@@ -237,4 +252,47 @@ internal sealed class MembershipContext : ILatticeMembershipContext
 
         return subject with { GroupIds = groups };
     }
+
+    private static bool HasClaimDerivedTenantTierGroup(IReadOnlyCollection<string> groups, IReadOnlyCollection<string> directoryGroups)
+    {
+        // The mapper hands back a HashSet; enumerate the concrete type so the
+        // struct enumerator is not boxed and the scan allocates nothing.
+        switch (groups)
+        {
+            case HashSet<string> set:
+                foreach (var group in set)
+                {
+                    if (IsClaimDerivedTenantTier(group, directoryGroups))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case string[] array:
+                foreach (var group in array)
+                {
+                    if (IsClaimDerivedTenantTier(group, directoryGroups))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+        }
+
+        foreach (var group in groups)
+        {
+            if (IsClaimDerivedTenantTier(group, directoryGroups))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The prefix test runs first, so the directory lookup is paid only for a t/ id.
+    private static bool IsClaimDerivedTenantTier(string group, IReadOnlyCollection<string> directoryGroups) =>
+        TenantGroupNesting.IsTenantTier(group) && !directoryGroups.Contains(group);
 }

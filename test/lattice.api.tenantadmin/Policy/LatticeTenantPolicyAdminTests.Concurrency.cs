@@ -87,6 +87,58 @@ public sealed partial class LatticeTenantPolicyAdminTests
         Assert.That(harness.Store.All.Select(r => r.RuleId), Is.EqualTo(new[] { "tenant:acme:racer" }));
     }
 
+    [Test]
+    public async Task A_rule_withdrawal_that_fails_transiently_is_retried_and_the_cap_holds()
+    {
+        var harness = new Harness(new TenantQuotas { MaxTenantRules = 1 });
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Store.WriteGate = release.Task;
+        harness.Store.RemoveRuleFailures = 2;
+        var facade = harness.Create();
+        var held = harness.Store.WaitForHeldWritesAsync(1);
+
+        var put = facade.PutRuleAsync(Tenant, Draft(ruleId: "late"));
+        await held;
+        harness.Store.Seed(TenantRule(Tenant, "racer", "invoices"));
+        release.SetResult();
+
+        var ex = Assert.ThrowsAsync<LatticeQuotaExceededException>(async () => await put);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Current, Is.EqualTo(ex.Limit), "the ordinary refusal: the withdrawal landed");
+            Assert.That(harness.Store.All.Select(r => r.RuleId), Is.EqualTo(new[] { "tenant:acme:racer" }));
+            Assert.That(harness.Store.RemoveAttempts, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task A_rule_withdrawal_that_never_lands_reports_the_overshoot_and_logs_a_warning_without_rule_ids()
+    {
+        var harness = new Harness(new TenantQuotas { MaxTenantRules = 1 });
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Store.WriteGate = release.Task;
+        harness.Store.RemoveRuleFailures = int.MaxValue;
+        var logger = new Orleans.Lattice.Api.TenantAdmin.Tests.Directory.LatticeTenantDirectoryAdminTests.CapturingLogger<LatticeTenantPolicyAdmin>();
+        var facade = harness.Create(logger: logger);
+        var held = harness.Store.WaitForHeldWritesAsync(1);
+
+        var put = facade.PutRuleAsync(Tenant, Draft(ruleId: "late"));
+        await held;
+        harness.Store.Seed(TenantRule(Tenant, "racer", "invoices"));
+        release.SetResult();
+
+        var ex = Assert.ThrowsAsync<LatticeQuotaExceededException>(async () => await put);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("may stay exceeded"));
+            Assert.That(ex.Current, Is.EqualTo(2));
+            Assert.That(ex.Dimension, Is.EqualTo(TenantAccessCaps.TenantRulesDimension));
+            Assert.That(harness.Store.RemoveAttempts, Is.EqualTo(TenantCapCompensation.MaxAttempts));
+            Assert.That(logger.Entries, Has.Count.EqualTo(1));
+            Assert.That(logger.Entries[0].Message, Does.Contain(Tenant).And.Not.Contain("late").And.Not.Contain("racer"));
+        });
+    }
+
     private static async Task<Exception?> Outcome(Task task)
     {
         try
