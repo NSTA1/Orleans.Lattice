@@ -13,26 +13,70 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
     public long CurrentEpoch => maintainer.CurrentEpoch;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// When the current snapshot was compiled with delegated access
+    /// administration enabled but the silo's live flag is now off (a flip whose
+    /// rebuild is still pending or failing), member entries in the snapshot are
+    /// not honoured: only the tenants the subject administers by exact id are
+    /// returned, exactly as with the flag off (D10).
+    /// </remarks>
     public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId)
     {
         ArgumentNullException.ThrowIfNull(subjectId);
-        return maintainer.Current.ResolveAllowedTenants(subjectId);
+        var policy = maintainer.Current;
+        return IsGroupAware(policy)
+            ? policy.ResolveAllowedTenants(subjectId)
+            : policy.ResolveAdminTenants(subjectId);
     }
 
     /// <inheritdoc />
-    public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId, IReadOnlyCollection<string> groupIds) =>
-        maintainer.Current.ResolveAllowedTenants(subjectId, groupIds);
+    /// <remarks>
+    /// Group-aware only while both the current snapshot and the silo's live flag
+    /// have delegated access administration enabled; otherwise the exact-id admin
+    /// answer of <see cref="ResolveAllowedTenants(string)"/>.
+    /// </remarks>
+    public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId, IReadOnlyCollection<string> groupIds)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        ArgumentNullException.ThrowIfNull(groupIds);
+        var policy = maintainer.Current;
+        return IsGroupAware(policy)
+            ? policy.ResolveAllowedTenants(subjectId, groupIds)
+            : policy.ResolveAdminTenants(subjectId);
+    }
 
     /// <inheritdoc />
-    public TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant) =>
-        ValidateActiveTenant(maintainer.Current, subjectId, activeTenant);
+    public TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant)
+    {
+        var policy = maintainer.Current;
+        return ValidateActiveTenant(policy, subjectId, Array.Empty<string>(), activeTenant, IsGroupAware(policy));
+    }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Group-aware only while both the current snapshot and the silo's live flag
+    /// have delegated access administration enabled, so a flip to off takes effect
+    /// at once - before the rebuild it schedules lands - and the exact-id admin
+    /// rule applies (D10).
+    /// </remarks>
     public TenantAccessDecision ValidateActiveTenant(
         string subjectId,
         IReadOnlyCollection<string> groupIds,
-        TenantId activeTenant) =>
-        ValidateActiveTenant(maintainer.Current, subjectId, groupIds, activeTenant);
+        TenantId activeTenant)
+    {
+        var policy = maintainer.Current;
+        return ValidateActiveTenant(policy, subjectId, groupIds, activeTenant, IsGroupAware(policy));
+    }
+
+    /// <summary>
+    /// <c>true</c> when member and group entries may be honoured against
+    /// <paramref name="policy"/>: it was compiled with delegated access
+    /// administration enabled and the silo's live flag is still on. A snapshot
+    /// compiled under the opposite value of the flag answers by the stricter of the
+    /// two, the exact-id admin rule.
+    /// </summary>
+    private bool IsGroupAware(CompiledTenantPolicy policy) =>
+        policy.IsDelegatedAccessEnabled && maintainer.IsDelegatedAccessEnabled;
 
     /// <summary>
     /// Validates that <paramref name="subjectId"/> may act as
@@ -78,6 +122,25 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
         TenantId activeTenant)
     {
         ArgumentNullException.ThrowIfNull(policy);
+        return ValidateActiveTenant(policy, subjectId, groupIds, activeTenant, policy.IsDelegatedAccessEnabled);
+    }
+
+    /// <summary>
+    /// The active-tenant rule itself. Member and group entries count only when
+    /// <paramref name="delegatedAccessEnabled"/> is <c>true</c> and the tenant was
+    /// compiled group-aware; otherwise the subject must be an admin by exact id. The
+    /// engine passes <c>false</c> when the silo's live flag is off, so a snapshot
+    /// compiled with the flag on cannot admit through members or groups after the
+    /// flag has been turned off.
+    /// </summary>
+    private static TenantAccessDecision ValidateActiveTenant(
+        CompiledTenantPolicy policy,
+        string subjectId,
+        IReadOnlyCollection<string> groupIds,
+        TenantId activeTenant,
+        bool delegatedAccessEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(subjectId);
         ArgumentNullException.ThrowIfNull(groupIds);
 
@@ -96,7 +159,7 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
             return TenantAccessDecision.Deny($"Tenant '{activeTenant}' is not active (status '{tenant.Status}').");
         }
 
-        if (!tenant.IsGroupAware)
+        if (!delegatedAccessEnabled || !tenant.IsGroupAware)
         {
             if (!tenant.IsAdmin(subjectId))
             {

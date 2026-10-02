@@ -129,7 +129,21 @@ public static class LatticeTenancyServiceCollectionExtensions
         // of order. The filter's delegate is a method group bound once at
         // registration, so each IsActive read is one field read and allocates
         // nothing.
-        builder.Services.TryAddSingleton<DelegatedTenantAccessFlag>();
+        // Every resolved subject in membership's resolution cache carries the claim
+        // filter's verdict from when it was resolved, so a flag change in either
+        // direction flushes that cache: turning the flag on must not keep serving
+        // a cached subject whose asserted t/ groups were never stripped, and
+        // turning it off returns asserted groups to how they resolved before.
+        builder.Services.TryAddSingleton(sp =>
+        {
+            var flag = new DelegatedTenantAccessFlag(sp.GetRequiredService<IOptionsMonitor<LatticeTenancyOptions>>());
+            if (sp.GetService<MembershipResolutionCache>() is { } membershipCache)
+            {
+                flag.Changed += membershipCache.Clear;
+            }
+
+            return flag;
+        });
         builder.Services.Replace(
             ServiceDescriptor.Singleton<ITenantRuleLayer, TenancyTenantRuleLayer>());
         builder.Services.Replace(

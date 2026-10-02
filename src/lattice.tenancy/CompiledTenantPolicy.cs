@@ -87,6 +87,64 @@ internal sealed class CompiledTenantPolicy
     }
 
     /// <summary>
+    /// The tenants <paramref name="subjectId"/> administers by exact id, in
+    /// ascending tenant-id order, ignoring member entries. On a snapshot compiled
+    /// with delegated access administration disabled - where the subject index
+    /// holds admin entries only - this is exactly
+    /// <see cref="ResolveAllowedTenants(string)"/> and returns the cached array.
+    /// On a group-aware snapshot it filters the subject's tenants to those it
+    /// administers, returning the cached array when nothing is filtered out.
+    /// </summary>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <returns>The tenants the subject administers by exact id.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> is <c>null</c>.</exception>
+    public IReadOnlyList<TenantId> ResolveAdminTenants(string subjectId)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        if (!_subjectToTenants.TryGetValue(subjectId, out var tenants))
+        {
+            return NoTenants;
+        }
+
+        if (!IsDelegatedAccessEnabled)
+        {
+            return tenants;
+        }
+
+        var admins = 0;
+        foreach (var tenant in tenants)
+        {
+            if (_tenants[tenant.Value].IsAdmin(subjectId))
+            {
+                admins++;
+            }
+        }
+
+        if (admins == tenants.Length)
+        {
+            return tenants;
+        }
+
+        if (admins == 0)
+        {
+            return NoTenants;
+        }
+
+        // Already in ascending tenant-id order; filtering preserves it.
+        var result = new TenantId[admins];
+        var next = 0;
+        foreach (var tenant in tenants)
+        {
+            if (_tenants[tenant.Value].IsAdmin(subjectId))
+            {
+                result[next++] = tenant;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// The tenants a subject may act as, considering its resolved transitive
     /// groups: the tenants for which its id or any of its groups is an admin or
     /// member entry, in ascending tenant-id order, without duplicates. When the
@@ -181,9 +239,13 @@ internal sealed class CompiledTenantPolicy
     /// member subjects are compiled into a per-tenant member set and join the
     /// subject index, and the tenants become group-aware. The reserved
     /// <see cref="TenantId.Default"/> tenant never does: it accepts no member
-    /// entries and stays exact-id. When it is <c>false</c>, no member set or group
-    /// index is built and the snapshot is exactly what it was before member sets
-    /// existed.
+    /// entries and stays exact-id. A group-aware tenant's admin and member entries
+    /// are also filtered through <see cref="TenantAccessEntries.IsAdmissible"/>, so
+    /// another tenant's group or a malformed <c>t/</c> entry - which a record can
+    /// carry if it arrived by replication or restore without facade validation -
+    /// never admits anyone (D4). When it is <c>false</c>, no member set or group
+    /// index is built, nothing is filtered, and the snapshot is exactly what it was
+    /// before member sets existed.
     /// </remarks>
     /// <param name="records">The tenant records. Must not be <c>null</c>.</param>
     /// <param name="delegatedAccessEnabled">Whether delegated tenant access administration is enabled.</param>
@@ -211,17 +273,20 @@ internal sealed class CompiledTenantPolicy
             }
 
             var id = record.Id;
+            var groupAware = delegatedAccessEnabled && !id.Equals(TenantId.Default);
             var admins = record.AdminSubjects;
             var adminSet = admins.Count == 0
                 ? FrozenSet<string>.Empty
-                : admins.ToFrozenSet(StringComparer.Ordinal);
+                : groupAware
+                    ? Admissible(admins, id)
+                    : admins.ToFrozenSet(StringComparer.Ordinal);
 
             tenants[id.Value] = new CompiledTenant(
                 id,
                 record.Status,
                 adminSet,
                 CompileTenantGrants(record.Grants),
-                delegatedAccessEnabled && !id.Equals(TenantId.Default) ? CompileMembers(record) : null);
+                groupAware ? CompileMembers(record) : null);
         }
 
         if (tenants.Count == 0)
@@ -239,7 +304,7 @@ internal sealed class CompiledTenantPolicy
     private static CompiledTenantPolicy EmptyDelegated { get; } =
         new(FrozenDictionary<string, TenantId[]>.Empty, FrozenDictionary<string, CompiledTenant>.Empty, true);
 
-    /// <summary>Compiles a record's live member subjects into a frozen set.</summary>
+    /// <summary>Compiles a record's live, admissible member subjects into a frozen set.</summary>
     private static FrozenSet<string> CompileMembers(TenantRecord record)
     {
         if (record.MemberSubjectCount == 0)
@@ -247,7 +312,28 @@ internal sealed class CompiledTenantPolicy
             return FrozenSet<string>.Empty;
         }
 
-        return record.MemberSubjects.ToFrozenSet(StringComparer.Ordinal);
+        return Admissible(record.MemberSubjects, record.Id);
+    }
+
+    /// <summary>
+    /// Freezes the entries of <paramref name="entries"/> that may count for
+    /// <paramref name="tenant"/> (<see cref="TenantAccessEntries.IsAdmissible"/>):
+    /// another tenant's group and any malformed <c>t/</c> entry are dropped, so a
+    /// record that arrived by replication or restore without facade validation can
+    /// never admit through one. Runs only on the rebuild path.
+    /// </summary>
+    private static FrozenSet<string> Admissible(IReadOnlyList<string> entries, TenantId tenant)
+    {
+        var kept = new List<string>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (TenantAccessEntries.IsAdmissible(entry, tenant))
+            {
+                kept.Add(entry);
+            }
+        }
+
+        return kept.Count == 0 ? FrozenSet<string>.Empty : kept.ToFrozenSet(StringComparer.Ordinal);
     }
 
     /// <summary>

@@ -268,7 +268,7 @@ public sealed class TenantRecord
             return true;
         }
 
-        return !Id.Equals(TenantId.Default) && AnyGroupPresent(Subjects, groupIds);
+        return !Id.Equals(TenantId.Default) && AnyGroupPresent(Subjects, groupIds, Id);
     }
 
     /// <summary>
@@ -300,7 +300,7 @@ public sealed class TenantRecord
         }
 
         return (MemberSlots.TryGetValue(subjectId, out var slot) && slot.Present)
-            || AnyGroupPresent(MemberSlots, groupIds);
+            || AnyGroupPresent(MemberSlots, groupIds, Id);
     }
 
     /// <summary>Issues or updates a cross-tenant grant (keyed by <see cref="CrossTenantGrant.GrantId"/>).</summary>
@@ -1021,11 +1021,14 @@ public sealed class TenantRecord
 
     /// <summary>
     /// <c>true</c> when any id in <paramref name="groupIds"/> is a live entry of
-    /// <paramref name="slots"/>. Allocation-free for the shapes a resolved subject
-    /// carries (a <see cref="HashSet{T}"/>, an array or a list); any other
-    /// collection is enumerated through its interface.
+    /// <paramref name="slots"/> that may count for <paramref name="tenant"/>
+    /// (<see cref="TenantAccessEntries.IsAdmissible"/>: another tenant's group, or a
+    /// malformed <c>t/</c> entry that arrived by replication or restore, never
+    /// counts). Allocation-free for the shapes a resolved subject carries (a
+    /// <see cref="HashSet{T}"/>, an array or a list); any other collection is
+    /// enumerated through its interface.
     /// </summary>
-    private static bool AnyGroupPresent(Dictionary<string, TenantSubjectSlot> slots, IReadOnlyCollection<string> groupIds)
+    private static bool AnyGroupPresent(Dictionary<string, TenantSubjectSlot> slots, IReadOnlyCollection<string> groupIds, TenantId tenant)
     {
         if (slots.Count == 0 || groupIds.Count == 0)
         {
@@ -1037,7 +1040,7 @@ public sealed class TenantRecord
             case HashSet<string> set:
                 foreach (var group in set)
                 {
-                    if (slots.TryGetValue(group, out var slot) && slot.Present)
+                    if (IsLiveAdmissible(slots, group, tenant))
                     {
                         return true;
                     }
@@ -1047,7 +1050,7 @@ public sealed class TenantRecord
             case IReadOnlyList<string> list:
                 for (var i = 0; i < list.Count; i++)
                 {
-                    if (list[i] is { } group && slots.TryGetValue(group, out var slot) && slot.Present)
+                    if (IsLiveAdmissible(slots, list[i], tenant))
                     {
                         return true;
                     }
@@ -1057,7 +1060,7 @@ public sealed class TenantRecord
             default:
                 foreach (var group in groupIds)
                 {
-                    if (group is not null && slots.TryGetValue(group, out var slot) && slot.Present)
+                    if (IsLiveAdmissible(slots, group, tenant))
                     {
                         return true;
                     }
@@ -1066,6 +1069,12 @@ public sealed class TenantRecord
                 return false;
         }
     }
+
+    private static bool IsLiveAdmissible(Dictionary<string, TenantSubjectSlot> slots, string? group, TenantId tenant) =>
+        group is not null
+        && slots.TryGetValue(group, out var slot)
+        && slot.Present
+        && TenantAccessEntries.IsAdmissible(group, tenant);
 
     private void ApplyGrant(
         string grantId,
