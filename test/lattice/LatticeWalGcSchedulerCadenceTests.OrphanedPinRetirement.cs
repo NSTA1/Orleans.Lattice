@@ -39,6 +39,7 @@ public partial class LatticeWalGcSchedulerCadenceTests
             treeId: TreeId,
             cursorReporter: reporter);
 
+        using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         using (recorder)
         {
             await StartAndRunFirstPassAsync(scheduler, time);
@@ -50,6 +51,15 @@ public partial class LatticeWalGcSchedulerCadenceTests
             TreeId,
             consumerId,
             Arg.Any<CancellationToken>());
+
+        // Issue #4246: the drive's removal is counted, with its cause.
+        Assert.Multiple(() =>
+        {
+            Assert.That(DriveDecisions(decisions, "retired", "not_driven"), Is.GreaterThan(0));
+            Assert.That(DriveDecisions(decisions, "retire_failed"), Is.Zero);
+            Assert.That(DriveDecisions(decisions, "refused_malformed_id"), Is.Zero);
+            Assert.That(DriveDecisions(decisions, "refused_ambiguous_partition"), Is.Zero);
+        });
     }
 
     [Test]
@@ -91,12 +101,21 @@ public partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromException(new InvalidOperationException("registry unavailable")));
 
         var time = new VirtualTimeProvider();
+
+        // Suffixed as a leaf of the default (partitioned) tree publishes it, so
+        // the gate admits it and the reporter's refusal is actually reached.
+        // Before issue #4246 this fixture used the unsuffixed id, which the
+        // #4238 gate refuses, so the throwing reporter was never called and
+        // nothing said so.
+        var consumerId = BlockedConsumerId(TreeId) + "_0";
         var (scheduler, recorder) = BlockedTreeProbing(
             time,
             () => Task.FromResult<string?>(null),
+            consumerId: consumerId,
             treeId: TreeId,
             cursorReporter: reporter);
 
+        using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         using (recorder)
         {
             await StartAndRunFirstPassAsync(scheduler, time);
@@ -109,7 +128,22 @@ public partial class LatticeWalGcSchedulerCadenceTests
                     "the sweep must keep running, or the assertion below is vacuous.");
                 Assert.That(Outcomes(recorder, "orphaned"), Is.GreaterThan(0),
                     "a failed retirement must still be classified as orphaned, or the touch reverts to counting as a success.");
+                Assert.That(DriveDecisions(decisions, "retire_failed", "not_driven"), Is.GreaterThan(0),
+                    "issue #4246: a removal that threw is its own counted branch.");
+                Assert.That(DriveDecisions(decisions, "retired"), Is.Zero,
+                    "a removal that threw must not be counted as a retirement.");
             });
         }
     }
+
+    /// <summary>
+    /// Sums the non-priming measurements of one arm of
+    /// <see cref="LatticeMetrics.WalGcDriveOrphanPinRetirements"/>, optionally
+    /// restricted to one cause.
+    /// </summary>
+    private static long DriveDecisions(InstrumentRecorder recorder, string status, string? cause = null) =>
+        (long)recorder.Counted
+            .Where(m => (m.Tag(LatticeMetrics.TagStatus) as string) == status)
+            .Where(m => cause is null || (m.Tag(LatticeMetrics.TagPinRetirementCause) as string) == cause)
+            .Sum(m => m.Value);
 }
