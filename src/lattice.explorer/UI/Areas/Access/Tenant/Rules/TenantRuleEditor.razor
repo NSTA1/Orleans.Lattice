@@ -1,0 +1,84 @@
+@*
+    The tenant rule editor: id (with a suggested one), effect, subject from the
+    tenant-aware picker, a scope over this tenant's own trees or every tree in
+    it, and the data-plane operations only. Before it saves it says when a
+    platform rule already decides the rule's scope for its subject, and a
+    confinement refusal is shown beside the field that caused it.
+*@
+<form class="lt-access-form" @onsubmit="SaveAsync" novalidate data-lt-tenant-rule-editor="@Tenant">
+    <LtNameInput @ref="_ruleIdBox" Label="Rule id" Value="@_form.RuleId" ValueChanged="@(value => _form.RuleId = value)"
+                 Existing="@(_form.IsExisting ? null : _ruleIds)" Noun="rule"
+                 ExistingMessage="@($"Tenant {Tenant} already has a rule with this id.")"
+                 ReadOnly="_form.IsExisting" Error="@_errors.RuleId"
+                 Hint="@(_form.IsExisting ? "A rule's id and scope are fixed once it exists." : $"A short id, unique among tenant {Tenant}'s own rules.")" />
+    @if (SuggestedId is { } suggested)
+    {
+        <p class="lt-access-fieldset__hint" data-lt-suggested-rule-id="@suggested">
+            Suggested id <span class="lt-access-mono">@suggested</span>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="UseSuggestedId">Use suggested id</LtButton>
+        </p>
+    }
+    <LtSelect Label="Effect" Options="EffectOptions" Value="@(_form.Effect == LatticeEffect.Deny ? "deny" : "allow")"
+              ValueChanged="@(value => _form.Effect = value == "deny" ? LatticeEffect.Deny : LatticeEffect.Allow)"
+              Hint="Where two of the tenant's rules of equal standing disagree, Deny wins." />
+    <AccessSubjectPicker @ref="_subjectPicker"
+                         Label="Subject"
+                         Tenant="@Tenant"
+                         SubjectKind="_form.SubjectKind"
+                         SubjectKindChanged="@(kind => _form.SubjectKind = kind)"
+                         Id="@_form.SubjectId"
+                         IdChanged="@(value => _form.SubjectId = value)"
+                         Error="@_errors.Subject"
+                         DirectoryAvailable="DirectoryAvailable"
+                         DirectoryExplanation="@DirectoryExplanation" />
+    <LtSelect Label="Scope" Options="ScopeOptions" Value="@_form.ScopeValue" ValueChanged="OnScopeChanged" Disabled="_form.IsExisting" Hint="@ScopeHint" />
+    @if (_form.NeedsTree)
+    {
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_form.TreeName" ValueChanged="OnTreeChanged" ReadOnly="_form.IsExisting"
+                    Error="@_errors.Tree" Source="@Trees" Noun="tree"
+                    Hint="@($"One of tenant {Tenant}'s own trees. App-owned, system and other tenants' trees are never offered.")" />
+    }
+    @if (_form.NeedsKeyOrPrefix)
+    {
+        <LtTextInput Label="@(_form.ScopeKind == TenantRuleScopeKind.Key ? "Key" : "Key prefix")" Mono="true" Value="@_form.KeyOrPrefix" ValueChanged="@(value => _form.KeyOrPrefix = value)" ReadOnly="_form.IsExisting" Error="@_errors.KeyOrPrefix" />
+    }
+    @foreach (var group in OperationGroups)
+    {
+        <fieldset class="lt-access-fieldset" @key="group.Key">
+            <legend class="lt-access-fieldset__legend">@(group.Key == AccessOperationGroup.Data ? "Data operations" : "Administration")</legend>
+            <div class="lt-access-fieldset__options">
+                @foreach (var option in group)
+                {
+                    <LtCheckbox @key="option.Value"
+                                Label="@option.Label"
+                                Checked="_form.HasOperation(option.Flag)"
+                                CheckedChanged="@(value => _form.SetOperation(option.Flag, value))"
+                                data-lt-operation="@option.Value" />
+                }
+            </div>
+        </fieldset>
+    }
+    <p class="lt-access-fieldset__hint">A tenant rule governs data-plane operations on the tenant's own trees, never cluster-wide capabilities, replication or tree lifecycle.</p>
+    @if (_errors.Operations is not null)
+    {
+        <p class="lt-access-form__error" role="alert" data-lt-field="operations">@_errors.Operations</p>
+    }
+    @if (Shadows.Count > 0)
+    {
+        <div class="lt-access-notice" role="status" data-lt-shadowed="true">
+            @foreach (var hit in Shadows)
+            {
+                <p class="lt-access-caveat" @key="hit" data-lt-shadowed-by="@hit.Rule.RuleId">@TenantRuleShadow.Message(hit, _form)</p>
+            }
+            <p class="lt-access-caveat">Platform rules are evaluated first and are final where they match, so the tenant's own rules decide only where none does.</p>
+        </div>
+    }
+    @if (_errors.Form is not null)
+    {
+        <p class="lt-access-form__error" role="alert" data-lt-field="form">@_errors.Form</p>
+    }
+    <div class="lt-access-form__actions">
+        <LtButton Type="LtButtonType.Submit" Disabled="_saving">Save rule</LtButton>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync" Disabled="_saving">Cancel</LtButton>
+    </div>
+</form>

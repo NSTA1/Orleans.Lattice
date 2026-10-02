@@ -22,6 +22,7 @@ public partial class AccessRulesPage
     private const string AppFilter = "app";
 
     private List<LatticeAuthorizationRule>? _rules;
+    private Dictionary<LatticeAuthorizationRule, string>? _tenantRules;
     private IReadOnlyList<LatticeAuthorizationRule>? _visible;
     private List<LatticeAuthorizationRule>? _visibleSource;
     private string? _visibleFilter;
@@ -172,6 +173,8 @@ public partial class AccessRulesPage
             }
 
             _rules = [.. page.Entries];
+            _tenantRules = null;
+            RememberTenantRules(page);
             _next = page.NextPageToken;
             if (scope is not null)
             {
@@ -199,6 +202,7 @@ public partial class AccessRulesPage
             if (string.Equals(scope, Scope, StringComparison.Ordinal))
             {
                 _rules = [.. _rules, .. page.Entries];
+                RememberTenantRules(page);
                 _next = page.NextPageToken;
             }
         }
@@ -213,6 +217,23 @@ public partial class AccessRulesPage
     }
 
     private Task ReloadAsync() => LoadFirstPageAsync();
+
+    /// <summary>
+    /// Files the owning tenant of each tenant-tier rule on <paramref name="page"/>,
+    /// which the cluster reports index-aligned with its entries, so the table can
+    /// badge it. A page with no tenant-tier rule reports none.
+    /// </summary>
+    private void RememberTenantRules(AuthRulePage page)
+    {
+        var tenants = page.TenantRuleTenants;
+        for (var i = 0; i < tenants.Count && i < page.Entries.Count; i++)
+        {
+            if (tenants[i] is { } tenant)
+            {
+                (_tenantRules ??= [])[page.Entries[i]] = tenant;
+            }
+        }
+    }
 
     private void OpenEditor() => _editorOpen = true;
 

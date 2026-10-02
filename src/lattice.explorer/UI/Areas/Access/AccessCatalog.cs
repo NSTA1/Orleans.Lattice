@@ -136,7 +136,9 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// only the rules governing that tenant's own trees: the cluster narrows it
     /// (<see cref="AuthPageRequest.ActiveTenantOnly"/>), and every rule is checked
     /// again here, so a cluster that predates the narrowing still shows nothing of
-    /// another tenant's - its pages are then read on until this one is full.
+    /// another tenant's - its pages are then read on until this one is full. Each
+    /// tenant-tier rule kept carries its owning tenant in
+    /// <see cref="AuthRulePage.TenantRuleTenants"/>, index-aligned with the entries.
     /// </summary>
     /// <param name="scope">The tenant a tenant-rooted address names, or <see langword="null"/> for the cluster-wide listing.</param>
     /// <param name="request">The page asked for.</param>
@@ -159,20 +161,36 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
         var size = request.EffectivePageSize;
         var next = request with { ActiveTenantOnly = true };
         var entries = new List<LatticeAuthorizationRule>();
+
+        // The owning tenant of each kept tenant-tier rule, kept index-aligned with
+        // the entries; reported only when one of them is tenant-tier, as the cluster does.
+        var tenants = new List<string?>();
+        var anyTenantTier = false;
         for (var reads = 0; ; reads++)
         {
             var page = await Admin.ListRulesAsync(next, cancellationToken).ConfigureAwait(true);
-            foreach (var rule in page.Entries)
+            var pageTenants = page.TenantRuleTenants;
+            for (var i = 0; i < page.Entries.Count; i++)
             {
+                var rule = page.Entries[i];
                 if (IsOwnedBy(rule, owner))
                 {
                     entries.Add(rule);
+                    var tenant = i < pageTenants.Count ? pageTenants[i] : null;
+                    tenants.Add(tenant);
+                    anyTenantTier |= tenant is not null;
                 }
             }
 
             if (page.NextPageToken is null || entries.Count >= size || reads >= MaximumFillReads)
             {
-                return new AuthRulePage { Entries = entries, NextPageToken = page.NextPageToken, Tenant = scope };
+                return new AuthRulePage
+                {
+                    Entries = entries,
+                    NextPageToken = page.NextPageToken,
+                    Tenant = scope,
+                    TenantRuleTenants = anyTenantTier ? tenants : [],
+                };
             }
 
             next = next with { PageToken = page.NextPageToken };

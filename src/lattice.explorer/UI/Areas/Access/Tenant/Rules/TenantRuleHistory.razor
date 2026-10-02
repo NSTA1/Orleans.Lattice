@@ -1,0 +1,47 @@
+@using Orleans.Lattice.Explorer.Core.History
+@using Orleans.Lattice.Explorer.UI.Areas.Data
+
+@*
+    A tenant rule's history (D19): its revisions in the cluster's policy store,
+    read through the state API with the Explorer's existing history reader and
+    timeline, newest first, each a node on the timeline with its time and what
+    changed. Nothing new is audited: the policy store keeps the history already.
+*@
+<section class="lt-access-section" aria-labelledby="@_headingId" data-lt-rule-history="@State">
+    <h2 id="@_headingId" class="lt-access-section__title">History</h2>
+    @if (_unavailable is { } reason)
+    {
+        <p class="lt-access-caveat">@reason</p>
+    }
+    else if (_timeline is null)
+    {
+        <LtSkeleton Lines="3" Label="Loading the rule's history" />
+    }
+    else if (!_timeline.HasRows)
+    {
+        <p class="lt-access-caveat">No revision of this rule is retained.</p>
+    }
+    else
+    {
+        <ol class="lt-access-history" aria-label="Revisions of the rule, newest first">
+            @foreach (var row in _timeline.Rows)
+            {
+                <li class="lt-access-history__rev" @key="row">
+                    <LtNode Kind="@(row.Kind == HistoryRowKind.Delete ? LtNodeKind.Hollow : LtNodeKind.Filled)" />
+                    <span class="lt-access-history__time">@DataFormat.Time(row.Hlc)</span>
+                    <span>@(row.Kind == HistoryRowKind.Delete ? "Removed" : "Saved")</span>
+                    @if (row.OriginClusterId is { } origin)
+                    {
+                        <span>from <span class="lt-access-mono">@origin</span></span>
+                    }
+                </li>
+            }
+        </ol>
+        @if (_continuation is not null)
+        {
+            <div class="lt-access-actions">
+                <LtButton Variant="LtButtonVariant.Quiet" Disabled="_loading" OnClick="LoadMoreAsync">Load more revisions</LtButton>
+            </div>
+        }
+    }
+</section>

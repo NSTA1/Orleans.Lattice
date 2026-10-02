@@ -1,10 +1,10 @@
 @inherits TenantAccessView
 
 @*
-    The rules governing the tenant (/t/{tenant}/access/rules): its own
-    tenant-tier rules, which its administrators edit, and the platform rules
-    scoped to its trees, which are read-only and final. The page shell: title,
-    navigation, and the loading, error and empty states over the first page.
+    The rules governing the tenant (/t/{tenant}/access/rules), in two booktabs
+    groups: the Platform rules on the tenant's trees, read-only and decided
+    first, then the tenant's own rules, which its administrators edit. Filtered
+    by tree and by subject, with the tenant's rule cap and its usage.
 *@
 
 <PageTitle>Rules of tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
@@ -12,6 +12,19 @@
 <h1 class="lt-shell-page-title">Access</h1>
 <p class="lt-shell-page-lede">Who may do what on tenant @Tenant's trees. Platform rules are evaluated first and are final; the tenant's own rules decide only where no platform rule does.</p>
 <AccessNav Current="@AccessRoutes.RulesSegment" Tenant="@Tenant" Delegated="true" />
+
+@if (_failure is null)
+{
+    <div class="lt-toolbar">
+        <LtSelect Label="Filter by tree" Options="TreeOptions" Value="@_treeFilter" ValueChanged="@(value => _treeFilter = value)" />
+        <LtSearchInput Label="Filter by subject" Placeholder="Subject id" Value="@_subjectFilter" ValueChanged="@(value => _subjectFilter = value)" />
+        <LtButton OnClick="OpenEditor" data-lt-command="@AccessArea.CreateRuleCommandId">New rule</LtButton>
+        @if (_rules is not null)
+        {
+            <span class="lt-access-count" role="status">@CountText</span>
+        }
+    </div>
+}
 
 <section class="lt-access-tenant" data-lt-tenant-view="rules" aria-label="Rules of tenant @Tenant">
     @if (_failure is { } failure)
@@ -21,18 +34,49 @@
             <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
         </LtEmptyState>
     }
-    else if (_page is null)
+    else if (_rules is null)
     {
         <LtSkeleton Lines="6" Label="Loading rules" />
     }
-    else if (_page.Entries.Count == 0)
-    {
-        <LtEmptyState Title="No rules yet">
-            <ChildContent>No rules govern tenant @Tenant's trees yet, so every request is decided by the default.</ChildContent>
-        </LtEmptyState>
-    }
     else
     {
-        <p class="lt-access-count" role="status">@CountText</p>
+        @if (CapText is { } cap)
+        {
+            <p class="lt-access-caveat" data-lt-rule-cap="@(AtCap ? "reached" : "within")">@cap</p>
+        }
+        @if (_rules.Count == 0)
+        {
+            <LtEmptyState Title="No rules yet">
+                <ChildContent>No rules govern tenant @Tenant's trees yet, so every request is decided by the default.</ChildContent>
+            </LtEmptyState>
+        }
+        else
+        {
+            <section class="lt-access-section" data-lt-rule-layer="platform" aria-labelledby="lt-tenant-rules-platform">
+                <h2 id="lt-tenant-rules-platform" class="lt-access-section__title">
+                    <svg class="lt-access-lock" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="3" y="7" width="10" height="7" rx="1" /><path d="M5.5 7 V5 a2.5 2.5 0 0 1 5 0 V7" /></svg>Platform
+                </h2>
+                <p class="lt-access-caveat">Read-only, decided first; your rules apply only where none of these match.</p>
+                <TenantRuleTable Tenant="@Tenant" Rules="PlatformRules" Editable="false" Caption="Platform rules on the tenant's trees" CaptionHidden="true" EmptyText="@PlatformEmptyText" />
+            </section>
+            <section class="lt-access-section" data-lt-rule-layer="tenant" aria-labelledby="lt-tenant-rules-tenant">
+                <h2 id="lt-tenant-rules-tenant" class="lt-access-section__title">Tenant</h2>
+                <p class="lt-access-caveat">Tenant @Tenant's own rules. They decide where no platform rule matches.</p>
+                <TenantRuleTable Tenant="@Tenant" Rules="TenantRules" Editable="true" Caption="The tenant's own rules" CaptionHidden="true" EmptyText="@TenantEmptyText" />
+            </section>
+        }
+        @if (_next is not null)
+        {
+            <div class="lt-access-actions">
+                <LtButton OnClick="LoadMoreAsync" Disabled="_loadingMore">Load more rules</LtButton>
+            </div>
+        }
     }
 </section>
+
+<LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="New rule" Placement="DialogPlacement">
+    @if (_editorOpen)
+    {
+        <TenantRuleEditor Tenant="@Tenant" Rules="@(_rules ?? [])" DirectoryAvailable="@(_model?.DirectoryAvailable == true)" DirectoryExplanation="@_model?.DirectoryExplanation" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
+    }
+</LtDialog>

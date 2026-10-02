@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
@@ -116,6 +117,28 @@ public partial class AccessExplainPage
         {
             _scopeKind = AccessRuleDraft.ClusterScope;
         }
+    }
+
+    /// <summary>
+    /// Which layer, and which rule, decided <paramref name="explanation"/>, as the
+    /// cluster reports it: a platform (operator) rule, a tenant's rule, or the
+    /// default when a rule-level decision was made and none matched. <see langword="null"/>
+    /// when the cluster reports no deciding layer, as one that predates the tenant
+    /// tier, or a per-key collection verdict, does.
+    /// </summary>
+    /// <param name="explanation">The explanation.</param>
+    /// <returns>The sentence, or <see langword="null"/>.</returns>
+    internal static string? DecidedBy(AuthExplanation explanation)
+    {
+        ArgumentNullException.ThrowIfNull(explanation);
+        return (explanation.DecidingLayer, explanation.DecidingRuleId) switch
+        {
+            (TenantRuleLayer.Platform, { } rule) => $"Platform rule {rule}",
+            (TenantRuleLayer.Tenant, { } rule) => $"Tenant rule {rule}, because no platform rule matched",
+            (TenantRuleLayer.Platform, null) => "The platform layer",
+            (TenantRuleLayer.Tenant, null) => "The tenant layer, because no platform rule matched",
+            _ => null,
+        };
     }
 
     private Task ExplainAsync() => RunExplainAsync(updateAddress: true);
