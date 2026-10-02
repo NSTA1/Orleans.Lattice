@@ -6,6 +6,10 @@ using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Serialization;
 
+// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
+// they stay supported until the next major version.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
 /// <summary>

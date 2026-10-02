@@ -4,6 +4,7 @@ using System.IO.Hashing;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Operations;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Views;
@@ -51,6 +52,61 @@ internal sealed partial class ViewMaintainerGrain
 {
     /// <summary>The captured per-partition resume floor and highest HLC of a completed shadow build.</summary>
     private readonly record struct ShadowBuildResult(Dictionary<int, long> Offsets, HybridLogicalClock Highest);
+
+    /// <inheritdoc />
+    public async Task RebuildTrackedAsync(LatticeOperationTicket ticket, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        using var relay = LatticeOperationRelay.Open(grainFactory, ticket, cancellationToken);
+        try
+        {
+            await RebuildAsync(relay.Token);
+            await relay.FlushAsync();
+        }
+        catch
+        {
+            await BankRelayedProgressAsync(relay);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ReconcileTrackedAsync(LatticeOperationTicket ticket, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        using var relay = LatticeOperationRelay.Open(grainFactory, ticket, cancellationToken);
+        try
+        {
+            var repaired = await ReconcileAsync(relay.Token);
+            await relay.FlushAsync();
+            return repaired;
+        }
+        catch
+        {
+            await BankRelayedProgressAsync(relay);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Banks a tracked call's coalesced progress on its fault and cancellation
+    /// path, so the keys projected before the fault stay recorded (#2545).
+    /// </summary>
+    private static Task BankRelayedProgressAsync(LatticeOperationRelay relay) => relay.BankProgressAsync();
+
+    /// <summary>
+    /// Reports progress to the coordinated operation running this call, if any; a
+    /// single null check otherwise. Throws <see cref="OperationCanceledException"/>
+    /// once that operation's cancellation has been requested.
+    /// </summary>
+    private static ValueTask ReportMaintenanceProgressAsync(
+        string phase, long completedUnits = 0, long? totalUnits = null, string? unitName = null)
+    {
+        var progress = LatticeOperationProgress.Current;
+        return progress is null
+            ? ValueTask.CompletedTask
+            : progress.ReportAsync(phase, completedUnits, totalUnits, unitName);
+    }
 
     /// <summary>
     /// Resolves a generation number to its view tree id. Generation <c>0</c> maps
@@ -191,11 +247,13 @@ internal sealed partial class ViewMaintainerGrain
         // Digest the live active view before touching anything. The shadow build
         // writes only into the shadow generation, so the active tree (and this
         // digest) stays valid across it.
+        await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Digesting);
         var activeTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         var liveDigest = await ComputeTreeDigestAsync(activeTree, registration.IsAggregation, cancellationToken);
 
         // Build the expected view from current source state into the shadow.
         var built = await BuildShadowAsync(registration, cancellationToken);
+        await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Comparing);
         var shadowTree = grainFactory.GetGrain<ILattice>(GenerationTreeId(state.State.ActiveGeneration + 1));
         var shadowDigest = await ComputeTreeDigestAsync(shadowTree, registration.IsAggregation, cancellationToken);
 
@@ -217,6 +275,7 @@ internal sealed partial class ViewMaintainerGrain
         }
 
         // DeriveLocally drift: the freshly-built shadow is the repaired view.
+        await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Swapping);
         await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
         return true;
     }
@@ -292,9 +351,12 @@ internal sealed partial class ViewMaintainerGrain
         // proportion to concurrent load on the source tree rather than to how
         // long this scan is held open.
         var sourceKeys = new List<string>();
+        await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Scanning, 0, null, LatticeMaintenanceProgress.Keys);
         await foreach (var key in sourceTree.ScanKeysAsync(cancellationToken: cancellationToken))
         {
             sourceKeys.Add(key);
+            await ReportMaintenanceProgressAsync(
+                LatticeMaintenanceProgress.Scanning, sourceKeys.Count, null, LatticeMaintenanceProgress.Keys);
         }
 
         // Bounded ordered read-ahead. The source reads are pure, independent of
@@ -304,6 +366,8 @@ internal sealed partial class ViewMaintainerGrain
         // strictly in sourceKeys order, so the projection sees exactly the
         // sequence the serial form did.
         var index = 0;
+        await ReportMaintenanceProgressAsync(
+            LatticeMaintenanceProgress.Projecting, 0, sourceKeys.Count, LatticeMaintenanceProgress.Keys);
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
@@ -311,6 +375,8 @@ internal sealed partial class ViewMaintainerGrain
             cancellationToken))
         {
             var key = sourceKeys[index++];
+            await ReportMaintenanceProgressAsync(
+                LatticeMaintenanceProgress.Projecting, index, sourceKeys.Count, LatticeMaintenanceProgress.Keys);
             if (versioned.Value is null)
             {
                 continue;
@@ -449,9 +515,12 @@ internal sealed partial class ViewMaintainerGrain
         // As there, the drain uses ScanKeysAsync: a short-lived enumerator is
         // still fully exposed to per-message stateless-worker mis-routing.
         var sourceKeys = new List<string>();
+        await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Scanning, 0, null, LatticeMaintenanceProgress.Keys);
         await foreach (var key in sourceTree.ScanKeysAsync(cancellationToken: cancellationToken))
         {
             sourceKeys.Add(key);
+            await ReportMaintenanceProgressAsync(
+                LatticeMaintenanceProgress.Scanning, sourceKeys.Count, null, LatticeMaintenanceProgress.Keys);
         }
 
         // Bounded ordered read-ahead, exactly as in InPlaceRebuildAsync: source
@@ -459,6 +528,8 @@ internal sealed partial class ViewMaintainerGrain
         // RebuildFanOutWidth of them changes only when each key is read, never
         // which value the projection sees or in what order it sees it.
         var index = 0;
+        await ReportMaintenanceProgressAsync(
+            LatticeMaintenanceProgress.Projecting, 0, sourceKeys.Count, LatticeMaintenanceProgress.Keys);
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
@@ -466,6 +537,8 @@ internal sealed partial class ViewMaintainerGrain
             cancellationToken))
         {
             var key = sourceKeys[index++];
+            await ReportMaintenanceProgressAsync(
+                LatticeMaintenanceProgress.Projecting, index, sourceKeys.Count, LatticeMaintenanceProgress.Keys);
             if (versioned.Value is null)
             {
                 continue;

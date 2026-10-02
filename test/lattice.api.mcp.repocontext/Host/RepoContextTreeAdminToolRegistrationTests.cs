@@ -36,9 +36,9 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// <remarks>
     /// <para>
     /// The point of naming them is that the opt-in is <b>not</b> a switch for the
-    /// orphaned-leaf repair. It contributes 26 mutating verbs, of which the repair is
-    /// one; the other 25 include tree deletion, purge, restore, reshard, resize, and
-    /// WAL placement moves. Accepting that surface is a decision about this
+    /// orphaned-leaf repair. It contributes 33 mutating verbs, of which the repair is
+    /// one; the others include tree deletion, purge, restore, reshard, resize, WAL
+    /// placement moves, and the accept-then-poll starts and cancel of #4124. Accepting that surface is a decision about this
     /// container - single-user, one trusted local caller, every verb still
     /// re-authorized per tree by the facade's fail-closed gate and still refused for
     /// the reserved <c>_lattice_</c> namespace - and this list is what makes it a
@@ -56,9 +56,13 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_bulk_load_begin",
         "lattice_treeadmin_bulk_load_commit",
         "lattice_treeadmin_compaction_trigger",
+        "lattice_treeadmin_operation_cancel",
+        "lattice_treeadmin_orphaned_leaves_audit_start",
         "lattice_treeadmin_orphaned_leaves_repair",
+        "lattice_treeadmin_orphaned_leaves_repair_start",
         "lattice_treeadmin_retention_set",
         "lattice_treeadmin_tag_index_reconcile",
+        "lattice_treeadmin_tag_index_reconcile_start",
         "lattice_treeadmin_tree_create",
         "lattice_treeadmin_tree_delete",
         "lattice_treeadmin_tree_purge",
@@ -75,9 +79,12 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_view_create",
         "lattice_treeadmin_view_drop",
         "lattice_treeadmin_view_rebuild",
+        "lattice_treeadmin_view_rebuild_start",
         "lattice_treeadmin_view_reconcile",
+        "lattice_treeadmin_view_reconcile_start",
         "lattice_treeadmin_wal_move_execute",
         "lattice_treeadmin_wal_move_reclaim",
+        "lattice_treeadmin_wal_move_start",
     ];
 
     /// <summary>The accept-then-poll operation tools (#4126), each backed by a facade the host registers.</summary>
@@ -91,6 +98,16 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_storage_usage_refresh_list",
         "lattice_treeadmin_storage_usage_refresh_start",
         "lattice_treeadmin_storage_usage_refresh_status",
+    ];
+
+    /// <summary>
+    /// The tree-maintenance operation tools (#4124) every host advertises: the status
+    /// and listing reads. Their starts and cancel are in <see cref="LifecycleOptInTools"/>.
+    /// </summary>
+    private static readonly string[] MaintenanceOperationReadTools =
+    [
+        "lattice_treeadmin_operation_list",
+        "lattice_treeadmin_operation_status",
     ];
 
     private string _root = null!;
@@ -163,6 +180,12 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// tools named in <see cref="OperationTools"/>: read and cluster-telemetry verbs,
     /// not lifecycle ones, so the opt-in's set is unchanged and the total is 87.
     /// </para>
+    /// <para>
+    /// The accept-then-poll tree maintenance (#4124) adds 9 more: the two reads in
+    /// <see cref="MaintenanceOperationReadTools"/>, and six starts plus the cancel,
+    /// which the lifecycle opt-in contributes (its set grows from 26 to 33). The
+    /// total is 96.
+    /// </para>
     /// </remarks>
     [Test]
     public void The_advertised_surface_is_the_measured_size()
@@ -181,9 +204,9 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(admitted, Is.Unique, "A duplicate tool name would make the count meaningless.");
             Assert.That(
-                admitted, Has.Count.EqualTo(87),
-                "53 before the lifecycle opt-in plus the 26 verbs it contributes, plus the 8 #4126 operation tools. "
-                + "Add the two meta tools for the 89 a client sees, against 55 before.");
+                admitted, Has.Count.EqualTo(96),
+                "53 before the lifecycle opt-in plus the 33 verbs it contributes, plus the 8 #4126 operation tools "
+                + "and the 2 #4124 operation reads. Add the two meta tools for the 98 a client sees, against 55 before.");
         });
     }
 
@@ -193,6 +216,10 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         Assert.Multiple(() =>
         {
             Assert.That(TreeAdminToolNames(), Is.SupersetOf(OperationTools));
+            Assert.That(TreeAdminToolNames(), Is.SupersetOf(MaintenanceOperationReadTools));
+            Assert.That(
+                _app.Services.GetService<Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdminOperations>(), Is.Not.Null,
+                "An advertised tree-maintenance operation tool needs the facade it invokes.");
             Assert.That(
                 _app.Services.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaComplianceOperations>(), Is.Not.Null,
                 "An advertised compliance-scan tool needs the facade it invokes.");

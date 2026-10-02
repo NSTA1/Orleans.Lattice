@@ -19,6 +19,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Backup - Health checks and catalogue rebuild and scrub run as operations.** Start a backup health check, a catalogue rebuild or a scrub and poll it for the artifacts or manifests checked; the work outlives a caller timeout or a closed tab. ([#4125](https://github.com/NSTA1/Orleans.Lattice/issues/4125)) (`Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 - **Core - Shared long-running operation contract.** `Orleans.Lattice.Api.Operations` gives every facade one handle, status, list and cancel shape with an open operation kind, backed by one coordinator; backup is its first adopter. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`)
+- **Tree admin - Accept-then-poll maintenance.** View rebuild and reconcile, tag-index reconcile, WAL moves and orphaned-leaf audit and repair return a handle at once and report phase and unit progress; they survive a closed tab and can be cancelled. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
 
 - **Explorer - Reshard can shrink a tree.** The Reshard page folds shards together as well as splitting them, from 2 up to the tree's virtual slot count, and a shrink's review states its throughput trade-off. The Shards tab and the compaction and digest tools follow the live shard map. ([#4076](https://github.com/NSTA1/Orleans.Lattice/issues/4076)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
@@ -131,6 +132,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 ### Deprecated
 
 - **Backup - Blocking backup verbs.** The blocking capture, restore, health-check and catalogue rebuild and scrub verbs, their gRPC RPCs and old MCP tool names raise `LATTICE0002` and will be removed in the next major version. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122), [#4125](https://github.com/NSTA1/Orleans.Lattice/issues/4125)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`)
+- **Tree admin - Blocking maintenance verbs.** `RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` and their gRPC client methods raise `LATTICE0002` and will be removed in the next major version. ([#4124](https://github.com/NSTA1/Orleans.Lattice/issues/4124)) (`Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 ### Fixed
 

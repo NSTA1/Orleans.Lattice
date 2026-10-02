@@ -219,8 +219,14 @@ internal sealed class LatticeOperationRunner(
         catch (Exception ex)
         {
             await BankProgressAsync(sink).ConfigureAwait(false);
-            await RecordAsync(grain, LatticeOperationCompletion.Failed($"{ex.GetType().Name}: {ex.Message}"))
-                .ConfigureAwait(false);
+
+            // A tracked grain call observes a cancel request through its own relay
+            // and stops before this runner's heartbeat has seen it, so its
+            // cancellation surfaces here with this runner's token still live.
+            var completion = ex is OperationCanceledException && await IsCancelRequestedAsync(grain).ConfigureAwait(false)
+                ? LatticeOperationCompletion.Cancelled("Cancellation was requested.")
+                : LatticeOperationCompletion.Failed($"{ex.GetType().Name}: {ex.Message}");
+            await RecordAsync(grain, completion).ConfigureAwait(false);
             throw;
         }
         finally
@@ -237,6 +243,19 @@ internal sealed class LatticeOperationRunner(
     /// operation's own fault: the caller rethrows after it returns.
     /// </summary>
     private static Task BankProgressAsync(LatticeOperationProgressSink sink) => sink.BankProgressAsync();
+
+    private async Task<bool> IsCancelRequestedAsync(ILatticeOperationGrain grain)
+    {
+        try
+        {
+            return await grain.GetAsync().ConfigureAwait(false) is { CancelRequested: true };
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not read whether a coordinated operation was cancelled; recording it as failed.");
+            return false;
+        }
+    }
 
     private async Task RecordAsync(ILatticeOperationGrain grain, LatticeOperationCompletion completion)
     {

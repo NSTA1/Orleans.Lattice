@@ -26,4 +26,10 @@ public sealed record TreeAdminOrphanedLeafRequest
 
     /// <summary>Opt-in full key census on the read-only audit RPC. Ignored by repair.</summary>
     [Id(2)] public bool Survey { get; init; }
+
+    /// <summary>
+    /// The idempotency id of the tracked operation an accept-then-poll start RPC
+    /// creates, or <see langword="null"/> to generate one. Ignored by the blocking RPCs.
+    /// </summary>
+    [Id(3)] public string? TrackingOperationId { get; init; }
 }

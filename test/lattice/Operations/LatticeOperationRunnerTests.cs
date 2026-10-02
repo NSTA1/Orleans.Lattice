@@ -220,6 +220,43 @@ public sealed class LatticeOperationRunnerTests
     }
 
     [Test]
+    public async Task A_cancellation_a_tracked_call_observed_first_is_recorded_as_cancelled()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launch = await _runner.StartAsync<int>(
+            Start(),
+            async (_, _) =>
+            {
+                started.SetResult();
+                await release.Task;
+
+                // A tracked grain call that saw the cancel through its own relay
+                // fails with its own cancellation while this runner's token is live.
+                throw new OperationCanceledException("stopped by the relay");
+            },
+            static _ => LatticeOperationCompletion.Succeeded());
+        await started.Task;
+        await GrainFor("op-1").RequestCancelAsync();
+        release.SetResult();
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await launch.Completion!);
+        Assert.That(GrainFor("op-1").Completion!.State, Is.EqualTo(LatticeOperationState.Cancelled));
+    }
+
+    [Test]
+    public async Task A_cancellation_exception_without_a_cancel_request_is_recorded_as_failed()
+    {
+        var launch = await _runner.StartAsync<int>(
+            Start(),
+            static (_, _) => Task.FromException<int>(new OperationCanceledException("a dependency timed out")),
+            static _ => LatticeOperationCompletion.Succeeded());
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await launch.Completion!);
+        Assert.That(GrainFor("op-1").Completion!.State, Is.EqualTo(LatticeOperationState.Failed));
+    }
+
+    [Test]
     public void Start_validates_its_arguments()
     {
         Func<ILatticeOperationProgress, CancellationToken, Task<int>> work = static (_, _) => Task.FromResult(0);
