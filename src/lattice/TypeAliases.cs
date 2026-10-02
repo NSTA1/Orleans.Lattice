@@ -763,5 +763,8 @@ internal static class TypeAliases
 
     /// <summary>Alias for the admin grain's tracked (operation-relayed) surface.</summary>
     internal const string ILatticeAdminTrackedGrain = "ol.atg";
+
+    // Grain-storage fencing probe
+    internal const string GrainStorageFencingProbeState = "ol.gfp";
 }
 

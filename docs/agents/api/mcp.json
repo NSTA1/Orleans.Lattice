@@ -6786,7 +6786,7 @@
           "type": "string[]?",
           "required": false,
           "default": "null",
-          "notes": "The tenant-admin subject ids to seed onto the new tenant, deciding who can subsequently see it. Omit or leave empty to seed the calling subject."
+          "notes": "The tenant-admin subject ids to seed onto the new tenant, deciding who can subsequently see it. Omit or leave empty to seed the calling subject; a non-empty list is used instead and the caller is not added. Null, empty, or whitespace entries are rejected, duplicates collapse, and, when an identity directory is registered with validation required, unresolved ids are refused."
         },
         {
           "name": "region",
@@ -7187,35 +7187,35 @@
           "type": "long?",
           "required": false,
           "default": "null",
-          "notes": "The maximum total stored value bytes, or null for unbounded on this dimension."
+          "notes": "The maximum total stored value bytes, or null for unbounded on this dimension. Must be non-negative when supplied."
         },
         {
           "name": "maxKeys",
           "type": "long?",
           "required": false,
           "default": "null",
-          "notes": "The maximum total live key count, or null for unbounded on this dimension."
+          "notes": "The maximum total live key count, or null for unbounded on this dimension. Must be non-negative when supplied."
         },
         {
           "name": "maxMemoryBytes",
           "type": "long?",
           "required": false,
           "default": "null",
-          "notes": "The maximum resident memory in bytes, or null for unbounded on this dimension."
+          "notes": "The maximum resident memory in bytes, or null for unbounded on this dimension. Must be non-negative when supplied."
         },
         {
           "name": "maxTreeCount",
           "type": "long?",
           "required": false,
           "default": "null",
-          "notes": "The maximum number of trees the tenant may own, or null for unbounded on this dimension."
+          "notes": "The maximum number of trees the tenant may own, or null for unbounded on this dimension. Must be non-negative when supplied."
         },
         {
           "name": "maxOpsPerSecond",
           "type": "long?",
           "required": false,
           "default": "null",
-          "notes": "The maximum sustained operations per second, or null for unbounded on this dimension."
+          "notes": "The maximum sustained operations per second, or null for unbounded on this dimension. Must be non-negative when supplied."
         },
         {
           "name": "burstPercent",
@@ -9098,7 +9098,7 @@
           "type": "bool",
           "required": false,
           "default": "false",
-          "notes": "When true, strict-mode ingest dead-letters a replicated / restored item whose version cannot be upcast to the target instead of applying it. Defaults to false (trusted ingest)."
+          "notes": "When true (and strict ingest is also enabled host-wide), a replicated entry that reaches the core write path - a typed-CRDT delta or an atomic-batch entry - whose version is newer than the target or cannot be upcast to it is dead-lettered instead of applied. Local writes are never dead-lettered; a plain last-writer-wins replication apply, a backup restore and a tree merge never reach this check. Defaults to false (trusted ingest)."
         },
         {
           "name": "region",
@@ -10343,7 +10343,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {
-        "rule": "A reshard with different target, or a resize, is rejected.",
+        "rule": "A reshard with a different target is rejected; a resize is rejected only when the requested reshard target requires a migration, because the empty-tree re-pin fast path runs before the resize interlock.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "sources": [

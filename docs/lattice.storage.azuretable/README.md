@@ -69,7 +69,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 });
 ```
 
-The WAL is only half of a durable tree: each leaf's state row and its snapshots live in the grain storage provider `AddLattice` registers, and the WAL garbage collector trims entries once a snapshot there covers them, so a production deployment pairs this provider with a durable grain storage provider too.
+The WAL is only half of a durable tree: each leaf's state row and its snapshots live in the grain storage provider `AddLattice` registers, and the WAL garbage collector trims entries once a snapshot there covers them, so a production deployment pairs this provider with a durable grain storage provider too. That grain storage provider must enforce ETags on write, as Orleans' Azure Table grain storage does; see [The grain storage provider must enforce ETags](../lattice/configuration.md#the-grain-storage-provider-must-enforce-etags).
 
 ## Reference
 
