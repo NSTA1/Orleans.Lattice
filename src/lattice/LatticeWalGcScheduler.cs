@@ -4883,6 +4883,65 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Records one floor-holder candidate classified
+    /// <see cref="WalGcBlockingPinState.NeverCheckpointed"/> against
+    /// <see cref="LatticeMetrics.WalGcNeverCheckpointedPinOffset"/>, under the
+    /// arm naming whether it carried a usable durable offset (issue #4198).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="offsetUsable"/> is the same <c>offset &lt; 0</c> test the
+    /// sweep already applied when it routed this candidate into one of the two
+    /// sample lists. Nothing is re-derived and no storage is read; the bit was
+    /// computed and then discarded, and this records it. Exactly the shape of
+    /// <see cref="RecordCoverageUnknownPinOffset"/>, deliberately, because the
+    /// two instruments answer the same question about neighbouring states and a
+    /// reader should need no second idiom.
+    /// </para>
+    /// </remarks>
+    private static void RecordNeverCheckpointedPinOffset(
+        bool offsetUsable,
+        string partition,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag,
+        long delta = 1) =>
+        LatticeMetrics.WalGcNeverCheckpointedPinOffset.Add(
+            delta,
+            treeTag,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+            offsetUsable
+                ? LatticeMetrics.NeverCheckpointedOffsetUsable
+                : LatticeMetrics.NeverCheckpointedOffsetAbsent,
+            tenantTag);
+
+    /// <summary>
+    /// Zero-primes both
+    /// <see cref="LatticeMetrics.WalGcNeverCheckpointedPinOffset"/> arms for one
+    /// <c>(tree, partition)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called on every floor-holder classification, not only the ones that
+    /// resolve to <see cref="WalGcBlockingPinState.NeverCheckpointed"/>. The
+    /// instrument exists to answer whether the <c>offset_usable</c> slice is
+    /// empty (issue #4198) - that slice being the permanent-wedge shape - and an
+    /// unprimed zero cannot distinguish "no candidate carried an offset" from
+    /// "nothing was ever classified here". The polarity differs from
+    /// <see cref="PrimeCoverageUnknownPinOffsets"/>, whose question is about its
+    /// <c>offset_absent</c> slice, but the requirement is identical and so is
+    /// the remedy.
+    /// </para>
+    /// </remarks>
+    private static void PrimeNeverCheckpointedPinOffsets(
+        string partition,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        RecordNeverCheckpointedPinOffset(true, partition, treeTag, tenantTag, 0);
+        RecordNeverCheckpointedPinOffset(false, partition, treeTag, tenantTag, 0);
+    }
+
+    /// <summary>
     /// Maps a leaf's starvation-drive verdict onto the
     /// <see cref="LatticeMetrics.WalGcBlockedLeafReactivations"/> outcome arm
     /// that names it (issue #2692 Half B).
@@ -6661,18 +6720,55 @@ internal sealed class LatticeWalGcScheduler(
                     candidate.Offset >= 0, partitionTag, treeTag, tenantTag);
             }
 
+            // Issue #4198. The same split, for the state that actually wedges a
+            // tree. NeverCheckpointed is derived from the persisted checkpoint
+            // alone and says nothing about the published offset, so this one arm
+            // of blocking_pin_state covers two populations with opposite
+            // meanings: the benign sentinel at offset -1, which constrains no
+            // offset floor and clears as soon as the leaf checkpoints, and an
+            // offset-BEARING candidate, which can hold the floor and whose
+            // refusal there is terminal for the whole tree (issue #3258).
+            // Primed on every classification rather than only on the recorded
+            // arm, so an empty offset_usable slice - the wedge-free reading - is
+            // a measured absence rather than silence.
+            PrimeNeverCheckpointedPinOffsets(partitionTag, treeTag, tenantTag);
+            if (state == WalGcBlockingPinState.NeverCheckpointed)
+            {
+                RecordNeverCheckpointedPinOffset(
+                    candidate.Offset >= 0, partitionTag, treeTag, tenantTag);
+            }
+
             classified++;
 
             // Collect the states a reactivation can repair (issue #3164), plus
             // the one it can advance (issue #3178). Both are exact equalities
             // and deliberately not a set: every other state either has nothing
             // to repair or must not be repaired. NeverCheckpointed is the
-            // dangerous one - its leaf has applied nothing, so its Zero pin is a
-            // correct block rather than a coverage hole, and driving it toward
-            // coverage would convert that block into a trim entitlement the leaf
-            // never earned. Orphaned has no leaf left to activate and is the
-            // bulk sweep's business, NoDurableState has no checkpoint to make a
-            // snapshot from, and Unreadable is an unknown that must fail closed.
+            // dangerous one - its leaf has no proven durable checkpoint, so
+            // driving it toward coverage would convert a correct block into a
+            // trim entitlement the leaf never earned. Orphaned has no leaf left
+            // to activate and is the bulk sweep's business, NoDurableState has
+            // no checkpoint to make a snapshot from, and Unreadable is an
+            // unknown that must fail closed.
+            //
+            // Do NOT read "NeverCheckpointed" as "its pin is at the blocking
+            // sentinel" (issue #3258). The state comes from the PERSISTED
+            // checkpoint alone and says nothing about the published offset, so
+            // a candidate in this state can and does sit in offsetHolders
+            // carrying a real non-negative offset - the leaf applied and
+            // published from max(persisted, pending) while activated, then
+            // deactivated without persisting, and the durable pin store kept
+            // what it published. When such a candidate HOLDS the offset floor
+            // the refusal here is still correct, and it is also terminal for
+            // the whole tree: every other candidate is strictly above the
+            // floor, the issue #3310 prefetch is gated on the floor's own
+            // holder having been admitted, and the pin store merges
+            // monotonic-max so nothing the leaf later does can lower it. That
+            // tree's WAL is then permanently unreclaimable, which reads here as
+            // floor_holder_admission{status="blocked"} climbing for ever. The
+            // remedy is upstream, in what a leaf may publish durably; widening
+            // this gate to admit it is the silent-data-loss change the
+            // floor-holder fixtures exist to redden.
             if (state == WalGcBlockingPinState.CheckpointedUncovered)
             {
                 repairable.Add(consumerId);
@@ -6806,10 +6902,14 @@ internal sealed class LatticeWalGcScheduler(
                 // on floor equality at all - the offset test in that branch sets
                 // only the floorAdmitted diagnostic bit. This branch is the one
                 // asserting there is NO coverage hole, and the states that must
-                // never be driven - NeverCheckpointed above all, whose Zero pin
-                // is a correct block rather than a coverage hole - are excluded
-                // by the state classification above and are untouched by any of
-                // this.
+                // never be driven - NeverCheckpointed above all, whose leaf has
+                // no proven durable checkpoint, so its block is correct rather
+                // than a coverage hole - are excluded by the state
+                // classification above and are untouched by any of this. Note
+                // that exclusion is by STATE and not by offset: a
+                // NeverCheckpointed candidate carrying a real offset is refused
+                // here too, and when it holds the floor that refusal wedges the
+                // tree permanently (issue #3258).
                 //
                 // The bound is the remedy candidate budget, scaled off the same
                 // measured population that sized the sample (issue #3279), so no

@@ -231,12 +231,12 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
             }
         }
 
-        added?.Sort(StringComparer.Ordinal);
+        added?.Sort(OrdinalStringOrder.Comparison);
 
         // The prior statuses are positional, so sorting the region ids in place
         // would desynchronise them - but the heal has already run by this point
         // and the pairing is dead, so the sort is safe here and nowhere earlier.
-        removed?.Sort(StringComparer.Ordinal);
+        removed?.Sort(OrdinalStringOrder.Comparison);
 
         return new TenantResidencyChangeResult
         {

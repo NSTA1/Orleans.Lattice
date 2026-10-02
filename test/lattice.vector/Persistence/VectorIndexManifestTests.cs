@@ -79,6 +79,21 @@ public sealed class VectorIndexManifestTests
     }
 
     [Test]
+    public void A_manifest_whose_header_declares_more_centroid_chunks_than_chunks_is_refused()
+    {
+        // The durable load sizes its centroid bookkeeping from CentroidChunkCount
+        // and treats every sequence below it as a chunk to wait for, so a
+        // contradictory header must be a rebuild branch rather than a manifest
+        // the load acts on.
+        var manifest = Manifest() with
+        {
+            Header = Header() with { ChunkCount = 1, CentroidChunkCount = int.MaxValue },
+        };
+
+        Assert.That(VectorIndexManifest.TryReadRecord(manifest.ToRecord(), out _), Is.False);
+    }
+
+    [Test]
     public void A_manifest_whose_two_partition_counts_disagree_is_refused()
     {
         // The partition count is written twice: once by the manifest and once

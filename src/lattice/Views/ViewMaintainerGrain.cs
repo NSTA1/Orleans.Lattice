@@ -775,6 +775,7 @@ internal sealed partial class ViewMaintainerGrain(
         // atomically swap it in (see ViewMaintainerGrain.ShadowSwap). Readers never
         // observe a half-built view.
         var built = await BuildShadowAsync(registration, cancellationToken);
+        await ReportMaintenanceProgressAsync(Operations.LatticeMaintenanceProgress.Swapping);
         await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
     }
 

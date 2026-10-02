@@ -42,6 +42,9 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | Views | `ListViewsAsync`, `CreateViewAsync`, `GetViewStatusAsync`, `RebuildViewAsync`, `ReconcileViewAsync`, `DropViewAsync` |
 | Tag indexes | `ListTagIndexesAsync`, `GetTagIndexStatusAsync`, `ReconcileTagIndexAsync` |
 | Compaction and retention | `TriggerShardCompactionAsync`, `GetHistoryRetentionAsync`, `SetHistoryRetentionAsync` |
+| Accept-then-poll operations | `StartViewRebuildAsync`, `StartViewReconcileAsync`, `StartTagIndexReconcileAsync`, `StartWalMoveAsync`, `StartOrphanedLeavesAuditAsync`, `StartOrphanedLeavesRepairAsync`, `GetTreeAdminOperationStatusAsync`, `ListTreeAdminOperationsAsync`, `CancelTreeAdminOperationAsync` |
+
+The operation RPCs (`StartViewRebuild`, `StartViewReconcile`, `StartTagIndexReconcile`, `StartWalMove`, `StartOrphanedLeavesAudit`, `StartOrphanedLeavesRepair`, `GetTreeAdminOperationStatus`, `ListTreeAdminOperations`, `CancelTreeAdminOperation`) serve `ILatticeTreeAdminOperations`; a start returns a `LatticeOperationHandle` and the status reads return a `TreeAdminOperationStatusResponse` whose `Status` is `null` when the operation is not visible. A host that registers no operations facade answers them `Unimplemented`. The start RPCs reuse the existing request records, which gained an optional `TrackingOperationId` for the idempotency id. The blocking `RebuildView`, `ReconcileView`, `ReconcileTagIndex` and `ExecuteWalMove` RPCs, and their client methods, are deprecated (`LATTICE0002`) and will be removed in the next major version; see [Tree-administration operations](../lattice.api.treeadmin/operations.md).
 
 The reshard, resize and snapshot RPCs return the facade's status records unchanged, so their [operation progress](../lattice.api.treeadmin/README.md#operation-progress) members travel over the wire as well: `TreeResizeStatus.Phase`, `CompletedUnits` and `TotalUnits`; `TreeSnapshotStatus.Phase`, `CopiedShardCount` and `ShardCount`; and `TreeReshardStatus.TargetShardCount` and `StartPhysicalShardCount`, with the `TreeResizePhase` and `TreeSnapshotPhase` enums. They are appended `[Id]` members, so a client built before them reads the same records and ignores them, and a server built before them leaves them null (0 for `CompletedUnits` and `CopiedShardCount`).
 
@@ -105,6 +108,15 @@ The reshard, resize and snapshot RPCs return the facade's status records unchang
 | `TriggerShardCompactionAsync` | `Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)` |
 | `GetHistoryRetentionAsync` | `Task<TreeHistoryRetention> GetHistoryRetentionAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `SetHistoryRetentionAsync` | `Task<TreeHistoryRetention> SetHistoryRetentionAsync(string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)` |
+| `StartViewRebuildAsync` | `Task<LatticeOperationHandle> StartViewRebuildAsync(string viewName, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartViewReconcileAsync` | `Task<LatticeOperationHandle> StartViewReconcileAsync(string viewName, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartTagIndexReconcileAsync` | `Task<LatticeOperationHandle> StartTagIndexReconcileAsync(string indexName, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartWalMoveAsync` | `Task<LatticeOperationHandle> StartWalMoveAsync(string treeId, int partition, string targetProviderKey, TreeWalMoveOptions? options = null, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartOrphanedLeavesAuditAsync` | `Task<LatticeOperationHandle> StartOrphanedLeavesAuditAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartOrphanedLeavesRepairAsync` | `Task<LatticeOperationHandle> StartOrphanedLeavesRepairAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `GetTreeAdminOperationStatusAsync` | `Task<LatticeOperationStatus?> GetTreeAdminOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)` |
+| `ListTreeAdminOperationsAsync` | `Task<LatticeOperationPage> ListTreeAdminOperationsAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
+| `CancelTreeAdminOperationAsync` | `Task<LatticeOperationStatus?> CancelTreeAdminOperationAsync(string operationId, CancellationToken cancellationToken = default)` |
 
 `DropViewAsync` and `RevertTreeRestoreAsync` return a bare `Task`; `GetAuthSchemeAsync` is the one unauthenticated call and returns the endpoint's advertised auth schemes. Every other method returns the facade result record.
 

@@ -2,6 +2,10 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 
+// Still calls the deprecated blocking tree-administration verbs (LATTICE0002); the Explorer moves to
+// ILatticeTreeAdminOperations in the second #4124 change, which removes this suppression.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
 /// <summary>
@@ -12,7 +16,7 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// <see cref="KeyNotFoundException"/> the facade throws.
 /// </summary>
 /// <param name="channel">The circuit's transport channel.</param>
-internal sealed class ShellTreeAdminTransport(ShellTransportChannel channel)
+internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel channel)
     : ShellTransportAdapter<LatticeTreeAdminApiGrpcClient>(channel, LatticeTreeAdminApiGrpcClient.Create), ILatticeTreeAdmin
 {
     /// <inheritdoc />
@@ -437,7 +441,9 @@ internal sealed class ShellTreeAdminTransport(ShellTransportChannel channel)
         ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
         return CallAsync(
             (TreeId: treeId, Partition: partition, TargetProviderKey: targetProviderKey, Options: options),
+#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
             static (client, state, ct) => client.ExecuteWalMoveAsync(state.TreeId, state.Partition, state.TargetProviderKey, state.Options, ct),
+#pragma warning restore LATTICE0002
             null,
             cancellationToken);
     }
@@ -495,7 +501,9 @@ internal sealed class ShellTreeAdminTransport(ShellTransportChannel channel)
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         return CallAsync(
             viewName,
+#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
             static (client, state, ct) => client.RebuildViewAsync(state, ct),
+#pragma warning restore LATTICE0002
             null,
             cancellationToken);
     }
@@ -506,7 +514,9 @@ internal sealed class ShellTreeAdminTransport(ShellTransportChannel channel)
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         return CallAsync(
             viewName,
+#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
             static (client, state, ct) => client.ReconcileViewAsync(state, ct),
+#pragma warning restore LATTICE0002
             null,
             cancellationToken);
     }
@@ -549,7 +559,9 @@ internal sealed class ShellTreeAdminTransport(ShellTransportChannel channel)
         ArgumentException.ThrowIfNullOrEmpty(indexName);
         return CallAsync(
             indexName,
+#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
             static (client, state, ct) => client.ReconcileTagIndexAsync(state, ct),
+#pragma warning restore LATTICE0002
             null,
             cancellationToken);
     }

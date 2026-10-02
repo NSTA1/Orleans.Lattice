@@ -179,6 +179,32 @@ internal sealed class LatticeTreeAdminGrpcMethods
 
     /// <summary>The unary durable-history retention set RPC method name.</summary>
     public const string SetHistoryRetentionMethodName = "SetHistoryRetention";
+    /// <summary>The unary accept-then-poll view-rebuild start RPC method name.</summary>
+    public const string StartViewRebuildMethodName = "StartViewRebuild";
+
+    /// <summary>The unary accept-then-poll view-reconcile start RPC method name.</summary>
+    public const string StartViewReconcileMethodName = "StartViewReconcile";
+
+    /// <summary>The unary accept-then-poll tag-index reconcile start RPC method name.</summary>
+    public const string StartTagIndexReconcileMethodName = "StartTagIndexReconcile";
+
+    /// <summary>The unary accept-then-poll WAL move start RPC method name.</summary>
+    public const string StartWalMoveMethodName = "StartWalMove";
+
+    /// <summary>The unary accept-then-poll orphaned-leaf audit start RPC method name.</summary>
+    public const string StartOrphanedLeavesAuditMethodName = "StartOrphanedLeavesAudit";
+
+    /// <summary>The unary accept-then-poll orphaned-leaf repair start RPC method name.</summary>
+    public const string StartOrphanedLeavesRepairMethodName = "StartOrphanedLeavesRepair";
+
+    /// <summary>The unary tree-administration operation status RPC method name.</summary>
+    public const string GetTreeAdminOperationStatusMethodName = "GetTreeAdminOperationStatus";
+
+    /// <summary>The unary tree-administration operation listing RPC method name.</summary>
+    public const string ListTreeAdminOperationsMethodName = "ListTreeAdminOperations";
+
+    /// <summary>The unary tree-administration operation cancellation RPC method name.</summary>
+    public const string CancelTreeAdminOperationMethodName = "CancelTreeAdminOperation";
 
     /// <summary>The unary accept-then-poll storage-usage refresh start RPC method name.</summary>
     public const string StartStorageUsageRefreshMethodName = "StartStorageUsageRefresh";
@@ -259,6 +285,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<LatticeOperationHandle> operationHandleSerializer,
         Serializer<TreeAdminStorageUsageOperationRequest> storageUsageOperationRequestSerializer,
         Serializer<TreeAdminStorageUsageOperationStatusResponse> storageUsageOperationStatusResponseSerializer,
+        Serializer<TreeAdminOperationRequest> operationRequestSerializer,
+        Serializer<TreeAdminOperationStatusResponse> operationStatusResponseSerializer,
         Serializer<LatticeOperationListRequest> operationListRequestSerializer,
         Serializer<LatticeOperationPage> operationPageSerializer)
     {
@@ -686,6 +714,11 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: SetHistoryRetentionMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(setRetentionRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(historyRetentionSerializer));
+        ArgumentNullException.ThrowIfNull(operationHandleSerializer);
+        ArgumentNullException.ThrowIfNull(operationRequestSerializer);
+        ArgumentNullException.ThrowIfNull(operationStatusResponseSerializer);
+        ArgumentNullException.ThrowIfNull(operationListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(operationPageSerializer);
 
         var storageUsageOperationRequestMarshaller = LatticeTreeAdminGrpcMarshallers.Create(storageUsageOperationRequestSerializer);
         var storageUsageOperationStatusMarshaller = LatticeTreeAdminGrpcMarshallers.Create(storageUsageOperationStatusResponseSerializer);
@@ -707,8 +740,48 @@ internal sealed class LatticeTreeAdminGrpcMethods
         CancelStorageUsageRefresh = new Method<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(
             MethodType.Unary, ServiceName, CancelStorageUsageRefreshMethodName,
             storageUsageOperationRequestMarshaller, storageUsageOperationStatusMarshaller);
-    }
 
+        var handleMarshaller = LatticeTreeAdminGrpcMarshallers.Create(operationHandleSerializer);
+        var operationRequestMarshaller = LatticeTreeAdminGrpcMarshallers.Create(operationRequestSerializer);
+        var operationStatusMarshaller = LatticeTreeAdminGrpcMarshallers.Create(operationStatusResponseSerializer);
+
+        StartViewRebuild = new Method<TreeAdminViewRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartViewRebuildMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer), handleMarshaller);
+
+        StartViewReconcile = new Method<TreeAdminViewRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartViewReconcileMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer), handleMarshaller);
+
+        StartTagIndexReconcile = new Method<TreeAdminTagIndexRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartTagIndexReconcileMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(tagIndexRequestSerializer), handleMarshaller);
+
+        StartWalMove = new Method<TreeAdminWalMoveExecuteRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartWalMoveMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(walMoveExecuteRequestSerializer), handleMarshaller);
+
+        StartOrphanedLeavesAudit = new Method<TreeAdminOrphanedLeafRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartOrphanedLeavesAuditMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(orphanedLeafRequestSerializer), handleMarshaller);
+
+        StartOrphanedLeavesRepair = new Method<TreeAdminOrphanedLeafRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartOrphanedLeavesRepairMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(orphanedLeafRequestSerializer), handleMarshaller);
+
+        GetTreeAdminOperationStatus = new Method<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(
+            MethodType.Unary, ServiceName, GetTreeAdminOperationStatusMethodName,
+            operationRequestMarshaller, operationStatusMarshaller);
+
+        ListTreeAdminOperations = new Method<LatticeOperationListRequest, LatticeOperationPage>(
+            MethodType.Unary, ServiceName, ListTreeAdminOperationsMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(operationListRequestSerializer),
+            LatticeTreeAdminGrpcMarshallers.Create(operationPageSerializer));
+
+        CancelTreeAdminOperation = new Method<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(
+            MethodType.Unary, ServiceName, CancelTreeAdminOperationMethodName,
+            operationRequestMarshaller, operationStatusMarshaller);
+    }
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     public Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities> ProbeCapabilities { get; }
 
@@ -861,6 +934,32 @@ internal sealed class LatticeTreeAdminGrpcMethods
 
     /// <summary>The unary <c>SetHistoryRetention</c> retention set RPC.</summary>
     public Method<TreeAdminSetRetentionRequest, TreeHistoryRetention> SetHistoryRetention { get; }
+    /// <summary>The unary <c>StartViewRebuild</c> accept-then-poll view-rebuild RPC.</summary>
+    public Method<TreeAdminViewRequest, LatticeOperationHandle> StartViewRebuild { get; }
+
+    /// <summary>The unary <c>StartViewReconcile</c> accept-then-poll view-reconcile RPC.</summary>
+    public Method<TreeAdminViewRequest, LatticeOperationHandle> StartViewReconcile { get; }
+
+    /// <summary>The unary <c>StartTagIndexReconcile</c> accept-then-poll tag-index reconcile RPC.</summary>
+    public Method<TreeAdminTagIndexRequest, LatticeOperationHandle> StartTagIndexReconcile { get; }
+
+    /// <summary>The unary <c>StartWalMove</c> accept-then-poll WAL move RPC.</summary>
+    public Method<TreeAdminWalMoveExecuteRequest, LatticeOperationHandle> StartWalMove { get; }
+
+    /// <summary>The unary <c>StartOrphanedLeavesAudit</c> accept-then-poll orphaned-leaf audit RPC.</summary>
+    public Method<TreeAdminOrphanedLeafRequest, LatticeOperationHandle> StartOrphanedLeavesAudit { get; }
+
+    /// <summary>The unary <c>StartOrphanedLeavesRepair</c> accept-then-poll orphaned-leaf repair RPC.</summary>
+    public Method<TreeAdminOrphanedLeafRequest, LatticeOperationHandle> StartOrphanedLeavesRepair { get; }
+
+    /// <summary>The unary <c>GetTreeAdminOperationStatus</c> RPC.</summary>
+    public Method<TreeAdminOperationRequest, TreeAdminOperationStatusResponse> GetTreeAdminOperationStatus { get; }
+
+    /// <summary>The unary <c>ListTreeAdminOperations</c> RPC.</summary>
+    public Method<LatticeOperationListRequest, LatticeOperationPage> ListTreeAdminOperations { get; }
+
+    /// <summary>The unary <c>CancelTreeAdminOperation</c> RPC.</summary>
+    public Method<TreeAdminOperationRequest, TreeAdminOperationStatusResponse> CancelTreeAdminOperation { get; }
 
     /// <summary>The unary <c>StartStorageUsageRefresh</c> accept-then-poll cluster-storage RPC.</summary>
     public Method<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle> StartStorageUsageRefresh { get; }
@@ -949,6 +1048,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<LatticeOperationHandle>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageOperationRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageOperationStatusResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminOperationRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminOperationStatusResponse>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>());
     }

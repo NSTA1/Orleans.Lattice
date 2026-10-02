@@ -75,6 +75,8 @@ public class FaultPathBankingContractTests
         ("BankFaultedSliceAsync", "#2538", "DurableVectorIndex ANN ingest slice"),
         ("BankAppliedPrefixAfterApplyFailureAsync", "#2541", "BPlusLeafGrain apply fault"),
         ("BankSliceProgressAsync", "#4123", "LatticeSchemaRemediationGrain remediation slice"),
+        ("BankProgressAsync", "#4122", "LatticeOperationRunner coordinated-operation fault and cancel paths"),
+        ("BankRelayedProgressAsync", "#4124", "Tracked grain calls: view rebuild/reconcile, tag-index sweep, WAL move"),
     };
 
     /// <summary>A banking helper declared somewhere under <c>src/</c>.</summary>
@@ -251,7 +253,7 @@ public class FaultPathBankingContractTests
 
         Assert.That(faultPathSites, Is.Not.Empty,
             "Found no banking helper invoked from inside a catch clause anywhere under src/. "
-            + "Five such sites are known to exist (see KnownFaultPathBankers), so the scan has "
+            + "Seven such sites are known to exist (see KnownFaultPathBankers), so the scan has "
             + "drifted from the source and this guard is silently vacuous.");
 
         var violations = faultPathSites

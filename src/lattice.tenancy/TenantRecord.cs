@@ -374,7 +374,7 @@ public sealed class TenantRecord
                 }
             }
 
-            result.Sort(StringComparer.Ordinal);
+            result.Sort(OrdinalStringOrder.Comparison);
             return result;
         }
     }
@@ -669,7 +669,7 @@ public sealed class TenantRecord
                 }
             }
 
-            result.Sort(StringComparer.Ordinal);
+            result.Sort(OrdinalStringOrder.Comparison);
             return result;
         }
     }

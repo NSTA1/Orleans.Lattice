@@ -74,6 +74,8 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tag_index_list",
         "lattice_treeadmin_tag_index_status",
         "lattice_treeadmin_retention_get",
+        "lattice_treeadmin_operation_status",
+        "lattice_treeadmin_operation_list",
     };
 
     private static readonly string[] LifecycleWriteToolNames =
@@ -102,6 +104,11 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_drop",
         "lattice_treeadmin_tag_index_reconcile",
+        "lattice_treeadmin_view_rebuild_start",
+        "lattice_treeadmin_view_reconcile_start",
+        "lattice_treeadmin_tag_index_reconcile_start",
+        "lattice_treeadmin_wal_move_start",
+        "lattice_treeadmin_orphaned_leaves_repair_start",
     };
 
     /// <summary>
@@ -114,6 +121,8 @@ public sealed class TreeAdminToolGroupTests
     {
         "lattice_treeadmin_compaction_trigger",
         "lattice_treeadmin_retention_set",
+        "lattice_treeadmin_orphaned_leaves_audit_start",
+        "lattice_treeadmin_operation_cancel",
     };
 
     /// <summary>The read-only accept-then-poll status and list tools (#4126), always contributed.</summary>

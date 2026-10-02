@@ -436,7 +436,7 @@ public class AntiEntropyRemediationGuardChaosTests
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Tree).Returns(lattice);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
 
         var shardRoot = Substitute.For<IShardRootGrain>();

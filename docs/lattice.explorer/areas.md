@@ -89,6 +89,16 @@ expected view with the live one and swaps it only when they differ; Rebuild
 builds a new generation and swaps it in. Both actions are behind destructive
 confirmations and both read every source key.
 
+A tag-index reconcile and a view reconcile or rebuild run on the cluster as
+tracked operations (see [Tracked operations](../lattice.api.treeadmin/operations.md)).
+The tab shows the shared operation progress - its step, the phase and the
+cluster's own count of keys or shards - with a **Stop** button, and when it is
+reopened, after a reload or in another tab, it finds the operation still running
+for one of its views or indexes and follows it again. A finished operation is
+announced once; a failed or stopped one stays on the tab with the phase it
+reached and why. The actions are drawn only when the Explorer's tree-administration
+facade runs tracked operations.
+
 App-owned trees use logical ids shaped like `a/{slug}/...`. Data links their
 owner badge to `/apps/{slug}`, and tag and view member rows preserve those
 logical links. Physical state ids, tenant-composed ids, restore shadows and view
@@ -360,7 +370,11 @@ system trees, ... stored.").
 The overview reads cluster identity and shallow storage usage in parallel. The
 storage card can refresh the shallow summary or open a destructive confirmation
 for a deep re-measure. Deep re-measure walks every leaf of every shard of every
-tree, changes nothing, and is described as expensive. The region diagram rolls
+tree, changes nothing, and is described as expensive. It runs on the cluster as a
+[tracked operation](../lattice.api.treeadmin/operations.md) of kind
+`treeadmin.storage-usage-refresh`: the card shows its progress in trees measured,
+offers **Stop re-measuring**, and reads the refreshed shallow summary once it
+succeeds. A re-measure still running is picked up again when the overview opens. The region diagram rolls
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 
@@ -475,16 +489,22 @@ to the link resumes the same preview. Planning changes nothing. Executing a
 move quiesces the partition briefly, copies the tail, flips placement and
 retains the source; reclaiming discards that retained source and removes the
 ability to revert. Execute and Reclaim both require destructive confirmations
-and the TreeLifecycle grant.
+and the TreeLifecycle grant. A move runs on the cluster as a tracked operation:
+the plan shows its copy (entries copied of the tail), verification and flip, and
+reopening the plan's address follows a move still running for that partition.
+**Stop** is honoured only before the flip, leaving the partition on its source.
 
 The Orphaned leaves page audits a named tree for leaves that are in a shard's
-sibling chain but unreachable from the root. It can run a read-only survey of
-every orphan key, stop a running pass, and drive a pass batch by batch up to
-1000 batches. It distinguishes clean, partial and not-judged verdicts. Repair
-is shown only with TreeLifecycle authority and repairable findings, is behind a
-destructive confirmation, unsplices only leaves whose keys were shown readable
-elsewhere, and always audits again when repair completes.
-
+sibling chain but unreachable from the root. An audit or repair runs on the
+cluster as a tracked whole-tree operation: the page shows the shards walked,
+can stop it, and when reopened follows the one still running for the tree. Its
+verdict comes from the pass's totals and distinguishes clean, found and
+not-judged; **Show each leaf** then reads the per-leaf findings batch by batch.
+The read-only survey of every orphan key is driven batch by batch from the page
+(up to 1000 batches) and can be stopped. Repair is shown only with TreeLifecycle
+authority and repairable leaves, is behind a destructive confirmation, unsplices
+only leaves whose keys were shown readable elsewhere, and always audits again
+when repair completes.
 The Cluster palette commands are:
 
 | Command id | Label | Effect |

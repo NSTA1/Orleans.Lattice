@@ -3,16 +3,40 @@
     the view itself. Each shows its kind, projection version and apply lag, and
     - when the caller holds administrative authority over the source tree - the
     reconcile and rebuild actions the tree-administration facade offers, each
-    behind the destructive-action confirmation. A view's physical generation
-    tree is never shown.
+    behind the destructive-action confirmation. A reconcile or rebuild runs on
+    the cluster as a tracked operation whose progress the tab follows and picks
+    up again when it is reopened. A view's physical generation tree is never shown.
 *@
+@using Orleans.Lattice.Explorer.UI.Operations
 
 @if (Workspace is not null)
 {
     <div class="lt-toolbar">
-        <LtButton OnClick="RefreshStatusesAsync" Disabled="@(_busy is not null)">Refresh</LtButton>
+        <LtButton OnClick="RefreshStatusesAsync" Disabled="@(Busy is not null)">Refresh</LtButton>
         <span class="lt-data-toolbar__status" role="status">@DataArea.Plural(_views.Count, "view")</span>
     </div>
+
+    @if (_watch.Status is { } operation)
+    {
+        <section class="lt-data-entry" aria-live="polite" data-lt-data-operation="@operation.Kind">
+            <div class="lt-data-heading">
+                <h2 class="lt-data-section-title">@OperationTitle(operation)</h2>
+                @if (!operation.IsTerminal)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_cancelling || operation.CancelRequested)" OnClick="CancelAsync">Stop</LtButton>
+                }
+            </div>
+            <LtOperationProgress Status="@operation" Label="@(operation.Kind == Orleans.Lattice.Api.TreeAdmin.TreeAdminOperationKinds.ViewRebuild ? "View rebuild progress" : "View reconcile progress")" />
+            @if (_watch.LastError is not null)
+            {
+                <p class="lt-data-note" role="alert">The progress could not be read just now; trying again. The operation keeps running on the cluster.</p>
+            }
+            else if (!operation.IsTerminal)
+            {
+                <p class="lt-data-note">It runs on the cluster: you can leave this page and come back to it.</p>
+            }
+        </section>
+    }
 
     @if (_views.Count == 0)
     {
@@ -66,7 +90,7 @@
                               OnConfirm="RunPendingAsync">
             @if (pending.Rebuild)
             {
-                <span>Rebuilding builds a complete new generation of the view from its source and swaps it in at once. The source keeps serving throughout, but the rebuild reads every source key.</span>
+                <span>Rebuilding builds a complete new generation of the view from its source and swaps it in at once. The source keeps serving throughout, but the rebuild reads every source key. It runs on the cluster, so you can leave this page while it does.</span>
             }
             else
             {
@@ -82,11 +106,11 @@
         @if (CanAdminister(view))
         {
             <span class="lt-data-actions">
-                <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_busy is not null)" OnClick="() => Ask(view, rebuild: false)">
-                    @(_busy == view.StateId && !_busyRebuild ? "Reconciling" : "Reconcile")
+                <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(Busy is not null)" OnClick="() => Ask(view, rebuild: false)">
+                    @(Busy == view.StateId && !BusyRebuild ? "Reconciling" : "Reconcile")
                 </LtButton>
-                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(_busy is not null)" OnClick="() => Ask(view, rebuild: true)">
-                    @(_busy == view.StateId && _busyRebuild ? "Rebuilding" : "Rebuild")
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(Busy is not null)" OnClick="() => Ask(view, rebuild: true)">
+                    @(Busy == view.StateId && BusyRebuild ? "Rebuilding" : "Rebuild")
                 </LtButton>
             </span>
         }

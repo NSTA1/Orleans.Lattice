@@ -103,7 +103,7 @@ public partial class ReplicationDigestProbeGrainTests
                 DigestAvailable = true,
                 Digest = Digest(new byte[] { 9, 9, 9 }),
             }));
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(
                 Task.FromException<RoutingInfo>(new InvalidOperationException("routing unavailable"))));
 

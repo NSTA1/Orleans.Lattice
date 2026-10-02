@@ -304,7 +304,9 @@ internal sealed class LatticeStateQuery(
 
         // Routing carries the physical shard map, so this is one grain call with
         // no per-shard fan-out - safe against a saturated tree's contended roots.
-        var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+        // Forced: a count routes no key, so the tree's stateless worker would
+        // otherwise answer from a map it cached before a reshard (issue #4180).
+        var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
         return routing.Map.GetPhysicalShardIndices().Count;
     }
 
@@ -532,7 +534,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            buffered!.Sort(StringComparer.Ordinal);
+            buffered!.Sort(OrdinalStringOrder.Comparison);
             ordered = buffered;
         }
 
@@ -864,7 +866,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            buffered!.Sort(StringComparer.Ordinal);
+            buffered!.Sort(OrdinalStringOrder.Comparison);
             ordered = buffered;
         }
 
@@ -1099,7 +1101,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            buffered!.Sort(StringComparer.Ordinal);
+            buffered!.Sort(OrdinalStringOrder.Comparison);
             ordered = buffered;
         }
 
@@ -1439,7 +1441,8 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            // Forced for the same reason as GetPhysicalShardCountAsync (#4180).
+            var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
             shardIndices = routing.Map.GetPhysicalShardIndices();
         }
 

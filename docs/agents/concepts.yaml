@@ -205,6 +205,8 @@ concepts:
       in_scope:
         - statement: "Exposes an advisory per-operation capability probe."
           source: "PACKAGES.md"
+        - statement: "Runs view rebuild and reconcile, tag-index reconcile, WAL moves and orphaned-leaf passes as accept-then-poll operations with progress."
+          source: "docs/lattice.api.treeadmin/operations.md"
       out_of_scope:
         - statement: "The server still authorizes each real operation fail-closed."
           source: "FEATURES.md"
@@ -212,6 +214,7 @@ concepts:
       limits: []
     sources:
       - "docs/lattice.api.treeadmin/README.md"
+      - "docs/lattice.api.treeadmin/operations.md"
   - id: app-bridge
     name: "App bridge"
     category: apps

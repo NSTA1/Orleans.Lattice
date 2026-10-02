@@ -597,17 +597,20 @@ internal sealed partial class BPlusLeafGrain
             var writer = ResolveCommitLogWriter();
             if (writer is not null)
             {
-                // ToArray is one copy per BATCH (not per key), and it is
-                // deliberate: AppendManyAsync takes an ArraySegment, and the
-                // obvious way to avoid the copy - a reusable WalRecord[] field on
-                // the grain, as _crdtSerializeBuffer does for bytes - is NOT safe
-                // here. This grain carries [AlwaysInterleave] methods, so a second
-                // turn can interleave at any await inside the fill loop above and
-                // would share that buffer. Per-call state is the correctness
-                // requirement; the copy is what it costs. It is dwarfed by the
-                // N-1 commit-log round trips the batch removes.
-                await writer.AppendManyAsync(
-                    new ArraySegment<WalRecord>(walEntries.ToArray(), 0, walEntries.Count));
+                // Passed straight through as IReadOnlyList<WalRecord>, which
+                // is what AppendManyAsync actually takes and which
+                // List<WalRecord> already implements. The previous shape
+                // wrapped walEntries.ToArray() in an ArraySegment on the
+                // stated grounds that "AppendManyAsync takes an ArraySegment"
+                // - it does not, so that full-size copy of a ~160-byte struct
+                // (tens of kilobytes on a wide batch) bought nothing. The
+                // accompanying argument against a reusable WalRecord[] field
+                // on the grain remains correct and unaffected: this grain
+                // carries [AlwaysInterleave] methods, so a second turn can
+                // interleave at any await inside the fill loop above and
+                // would share such a field. The list is per-call state, so it
+                // is safe; it is only the copy that was unnecessary.
+                await writer.AppendManyAsync(walEntries);
             }
         }
 

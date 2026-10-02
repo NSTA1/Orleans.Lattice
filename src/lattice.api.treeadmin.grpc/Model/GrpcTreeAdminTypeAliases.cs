@@ -105,6 +105,12 @@ public static class GrpcTreeAdminTypeAliases
     /// <summary>Alias for <see cref="TreeAdminSetRetentionRequest"/>.</summary>
     public const string TreeAdminSetRetentionRequest = "oitg.retreq";
 
+    /// <summary>Alias for <see cref="TreeAdminOperationRequest"/>.</summary>
+    public const string TreeAdminOperationRequest = "oitg.opreq";
+
+    /// <summary>Alias for <see cref="TreeAdminOperationStatusResponse"/>.</summary>
+    public const string TreeAdminOperationStatusResponse = "oitg.opstat";
+
     /// <summary>Alias for <see cref="TreeAdminStorageUsageRefreshRequest"/>.</summary>
     public const string TreeAdminStorageUsageRefreshRequest = "oitg.surreq";
 

@@ -89,7 +89,7 @@ public partial class ReplicationDigestProbeGrainTests
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Tree).Returns(lattice);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
 
         // Every shard's local digest mismatches the peer, so each shard localises

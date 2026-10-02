@@ -150,6 +150,38 @@ public class AzureTableWalStorageProviderArgumentValidationTests
     }
 
     [Test]
+    public async Task AppendBatchAsync_rejects_a_batch_whose_offsets_run_past_long_MaxValue()
+    {
+        await using var sut = CreateProvider();
+
+        // firstOffset + 1 wraps to long.MinValue, so without the bound the
+        // second entry would match the "expected" offset and pass the density
+        // check. Rejected before any I/O, as no emulator is reachable here.
+        var thrown = Assert.ThrowsAsync<ArgumentException>(() => sut.AppendBatchAsync(
+            TreeId,
+            ShardIndex,
+            new[] { Entry(long.MaxValue), Entry(long.MinValue) },
+            CancellationToken.None));
+
+        Assert.That(thrown!.Message, Does.Contain("would run past"));
+    }
+
+    [Test]
+    public async Task AppendEncodedBatchAsync_rejects_offsets_that_run_past_long_MaxValue()
+    {
+        await using var sut = CreateProvider();
+        var encoder = Substitute.For<IWalRecordEncoder>();
+
+        var segments = new[] { new ArraySegment<byte>(new byte[] { 1 }), new ArraySegment<byte>(new byte[] { 2 }) };
+        var offsets = new long[] { long.MaxValue, long.MinValue };
+
+        var thrown = Assert.ThrowsAsync<ArgumentException>(
+            () => sut.AppendEncodedBatchAsync(TreeId, ShardIndex, segments, offsets, encoder, CancellationToken.None));
+
+        Assert.That(thrown!.Message, Does.Contain("would run past"));
+    }
+
+    [Test]
     public async Task ReadAsync_rejects_a_max_entries_below_one()
     {
         await using var sut = CreateProvider();

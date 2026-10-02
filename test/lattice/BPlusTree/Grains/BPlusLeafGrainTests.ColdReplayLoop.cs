@@ -155,12 +155,20 @@ public partial class BPlusLeafGrainTests
                 "The warning must state the consecutive count, so a reader can tell a leaf that "
                 + "just crossed the threshold from one that is far past it.");
             Assert.That(warning, Does.Contain("no snapshot is banked"),
-                "The warning must state the MECHANISM - a cancelled cold replay latches neither "
-                + "signal the snapshot capture gate requires - or it names a symptom rather than a "
-                + "pathology and the operator is back to reading source.");
+                "The warning must state the MECHANISM, or it names a symptom rather than a pathology "
+                + "and the operator is back to reading source. The mechanism is now CONDITIONAL and "
+                + "the line must keep it that way: since cold-replay progress banking landed, a "
+                + "mid-replay cancellation DOES bank the prefix it re-read and the next activation "
+                + "resumes above it, so the unconditional 'no snapshot is banked, the next activation "
+                + "finds no anchor' this assertion originally pinned became false while the assertion "
+                + "kept passing on the substring. It is retained because the clause is still exactly "
+                + "right for a streak that reaches the threshold anyway - that is what being here "
+                + "MEANS - not because the old unconditional reading survives.");
             Assert.That(warning, Does.Contain("REPRODUCED BY"),
                 "It must say the condition is reproduced by the cancellation. That self-reinforcement "
-                + "is the whole finding: without it this reads as an ordinary retry.");
+                + "is the whole finding: without it this reads as an ordinary retry. It now qualifies "
+                + "the banking-failed case specifically, which is the only case that still reaches "
+                + "this line.");
             Assert.That(warning, Does.Contain("CONSECUTIVE"),
                 "It must say the count is consecutive, so a reader does not mistake it for a "
                 + "since-startup total and discount it as an artefact of uptime.");
