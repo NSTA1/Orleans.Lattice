@@ -156,6 +156,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Observability - Series-ceiling saturation was silent.** The repository-context metrics collector reported drops as a level with no onset, so no historical absence could be trusted. Each ceiling now logs one `MetricsCeilingReached` warning the moment it first refuses a series. ([#2519](https://github.com/NSTA1/Orleans.Lattice/issues/2519)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **Observability - WAL GC trees blocked before classification were invisible.** `floor_holder_admission` and `never_checkpointed_pin_offset` are now zero-primed for every evaluated tree, and an `unreached` arm counts passes blocked before classification. ([#4227](https://github.com/NSTA1/Orleans.Lattice/issues/4227)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
 - **Indexing - Gitignore escapes matched a literal backslash.** A `\` escape in a `.gitignore` pattern was read as a backslash, so `\#*\#` and `.\#*` from GitHub's Emacs template never matched and `\*` or an escaped trailing space misfired. The escaped character is now matched literally. ([#3466](https://github.com/NSTA1/Orleans.Lattice/issues/3466)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Indexing - Saturation and degradation signals.** The ingestor inferred WAL saturation from three consecutive failures and misread a Throttled tree as Saturated; it now defers only when the saturation signal reports Saturated. The hydration-drift `index_degraded` outcome now logs at Warning. ([#2683](https://github.com/NSTA1/Orleans.Lattice/issues/2683), [#2688](https://github.com/NSTA1/Orleans.Lattice/issues/2688)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

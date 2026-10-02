@@ -6392,7 +6392,9 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Reserved <see cref="TagPartition"/> value used by the per-tree
-    /// reachability priming of <see cref="WalGcBlockingPinStates"/>.
+    /// reachability priming of <see cref="WalGcBlockingPinStates"/> and, since
+    /// issue #4227, of <see cref="WalGcNeverCheckpointedPinOffset"/>. It only
+    /// ever carries zero.
     /// <para>
     /// A real classification always carries the numeric partition it resolved.
     /// This value is minted once per tree per process - on the first pass that
@@ -6898,11 +6900,17 @@ public static class LatticeMetrics
     /// exactly, since a candidate's durable offset is either negative or it is
     /// not, so <c>sum by (tree)</c> here equals
     /// <see cref="WalGcBlockingPinStates"/><c>{status="never_checkpointed"}</c>
-    /// on the same tree and a divergence is a defect in one of the two rather
-    /// than a reading about the estate. Do not write that comparison naively:
-    /// <see cref="WalGcBlockingPinStates"/> is also primed per collected tree at
-    /// <c>partition="none"</c>, a label this instrument never mints, so sum over
-    /// <c>partition</c> on both sides. A sustained non-zero <c>offset_usable</c>
+    /// on the same tree while every such observation came from the floor-holder
+    /// classifier, and a divergence then is a defect in one of the two rather
+    /// than a reading about the estate. The floor-blocked heal arm also records
+    /// that state - for a report-named blocker - and charges nothing here,
+    /// because it never reads the blocker's offset, so on a tree whose
+    /// <see cref="WalGcFloorHolderAdmission"/><c>{status="unreached"}</c> arm
+    /// has advanced the <see cref="WalGcBlockingPinStates"/> side is larger by
+    /// exactly those classifications (issue #4227). Sum over <c>partition</c>
+    /// on both sides: both instruments are primed per evaluated tree at
+    /// <c>partition="none"</c>, and that label only ever carries zero.
+    /// A sustained non-zero <c>offset_usable</c>
     /// is the wedge shape and should be read beside
     /// <see cref="WalGcFloorHolderAdmission"/>: the two together separate a
     /// latent holder sitting harmlessly above the floor from one that is
@@ -6916,10 +6924,11 @@ public static class LatticeMetrics
     /// <c>offset_absent</c> is a measured absence rather than silence. That is
     /// the entire value of the instrument: the question is whether the
     /// <c>offset_usable</c> slice is empty, and an unprimed zero could not
-    /// answer it in either direction. It carries no per-tree reachability
-    /// priming of its own, because whether the floor-holder classifier is wired
-    /// on this silo is already answered by
-    /// <see cref="WalGcFloorHolderClassification"/>.
+    /// answer it in either direction. Both are also primed once per evaluated
+    /// tree at <see cref="PartitionNone"/>, so a tree whose passes never reach
+    /// the floor-holder classifier publishes a measured zero rather than no
+    /// series at all (issue #4227); a non-<c>none</c> partition still proves a
+    /// classification happened.
     /// </para>
     /// <para>
     /// <b>Diagnostic only.</b> It never changes what a pass is allowed to trim
@@ -6932,7 +6941,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcNeverCheckpointedPinOffset =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.never_checkpointed_pin_offset", unit: "{pin}",
-            description: "Whether a floor-holding pin classified 'never_checkpointed' carried a usable durable offset (issue #4198), tagged by tree, partition, status and tenant. That state is derived from the leaf's PERSISTED checkpoint alone and constrains the published pin offset not at all, so one arm of blocking_pin_state covers two populations with opposite meanings. 'offset_absent' is the blocking sentinel at offset -1: benign, ubiquitous, routed into the floor-holder sweep's unusable sample where it constrains no offset floor, and cleared as soon as the leaf checkpoints. 'offset_usable' carries a non-negative published offset, so it sits in the offset-bearing sample and CAN HOLD the tree's offset floor - where it is refused admission to the issue #3178 liveness drive, and that refusal is terminal for the whole tree, because the floor is defined by its own holder, every other candidate is strictly above it, and issue #3310's prefetch is gated on the floor's holder having been admitted first. That is the permanent-wedge shape diagnosed in issue #3258. blocking_pin_state cannot answer this and no aggregation of it can: it records the classifier's verdict and nothing about the candidate that produced it, and both floor-holder sample lists are recorded through the same call, so the two readings are byte-identical there. The bit is not derived here either - the sweep already computes it when it routes a candidate into one of those two lists, and until this instrument existed it was computed and then discarded. This mirrors exactly what issue #3199 did for the neighbouring state on coverage_unknown_pin_offset, and deliberately reuses its offset_usable/offset_absent vocabulary so a reader who knows one needs nothing new to read the other. The arms partition this instrument's population exactly, since a candidate's durable offset is either negative or it is not, so sum by (tree) here equals blocking_pin_state{status='never_checkpointed'} on the same tree and a divergence is a defect in one of the two. That equality is an assertion about the recording sites rather than a query that can be written naively: blocking_pin_state is also primed per collected tree at partition='none', a label this instrument never mints, so a comparison must sum over partition on both sides or it mismatches on every collected tree; and a tree that never reaches the floor-holder classifier has no series here at all rather than a zero, so the absent side needs an explicit guard. Read a sustained non-zero offset_usable beside floor_holder_admission: the two together separate a latent holder sitting harmlessly above the floor from one actually holding it and blocking the tree. Both arms are zero-primed per classified (tree, partition), alongside the blocking_pin_state priming and independently of which state resolved, so offset_usable reading zero against a large offset_absent is a measured absence rather than silence - which is the entire value of the instrument, because the question is whether that slice is empty and an unprimed zero could not answer it in either direction. It carries no per-tree reachability priming of its own: whether the floor-holder classifier is wired on this silo is already answered by floor_holder_classification. Diagnostic only: it never changes what a pass is allowed to trim, and never changes admission. The refusal it makes visible is correct - driving a leaf with no proven durable checkpoint toward a durable claim is silent data loss - so this is a way to see the population, never a licence to drive it.");
+            description: "Whether a floor-holding pin classified 'never_checkpointed' carried a usable durable offset (issue #4198), tagged by tree, partition, status and tenant. That state is derived from the leaf's PERSISTED checkpoint alone and constrains the published pin offset not at all, so one arm of blocking_pin_state covers two populations with opposite meanings. 'offset_absent' is the blocking sentinel at offset -1: benign, ubiquitous, routed into the floor-holder sweep's unusable sample where it constrains no offset floor, and cleared as soon as the leaf checkpoints. 'offset_usable' carries a non-negative published offset, so it sits in the offset-bearing sample and CAN HOLD the tree's offset floor - where it is refused admission to the issue #3178 liveness drive, and that refusal is terminal for the whole tree, because the floor is defined by its own holder, every other candidate is strictly above it, and issue #3310's prefetch is gated on the floor's holder having been admitted first. That is the permanent-wedge shape diagnosed in issue #3258. blocking_pin_state cannot answer this and no aggregation of it can: it records the classifier's verdict and nothing about the candidate that produced it, and both floor-holder sample lists are recorded through the same call, so the two readings are byte-identical there. The bit is not derived here either - the sweep already computes it when it routes a candidate into one of those two lists, and until this instrument existed it was computed and then discarded. This mirrors exactly what issue #3199 did for the neighbouring state on coverage_unknown_pin_offset, and deliberately reuses its offset_usable/offset_absent vocabulary so a reader who knows one needs nothing new to read the other. The arms partition this instrument's population exactly, since a candidate's durable offset is either negative or it is not, so sum by (tree) here equals blocking_pin_state{status='never_checkpointed'} on the same tree while every such observation came from the floor-holder classifier, and a divergence then is a defect in one of the two. The floor-blocked heal arm also records that state for a report-named blocker and charges nothing here, because it never reads the blocker's offset, so on a tree whose floor_holder_admission{status='unreached'} arm has advanced blocking_pin_state is larger by exactly those classifications (issue #4227). Sum over partition on both sides: both instruments are primed once per evaluated tree at partition='none', which only ever carries zero. Read a sustained non-zero offset_usable beside floor_holder_admission: the two together separate a latent holder sitting harmlessly above the floor from one actually holding it and blocking the tree. Both arms are zero-primed per classified (tree, partition), alongside the blocking_pin_state priming and independently of which state resolved, so offset_usable reading zero against a large offset_absent is a measured absence rather than silence - which is the entire value of the instrument, because the question is whether that slice is empty and an unprimed zero could not answer it in either direction. Both arms are also primed per evaluated tree at partition='none', so a tree whose passes never reach the floor-holder classifier publishes a measured zero rather than no series at all (issue #4227); a non-'none' partition still proves a classification happened. Diagnostic only: it never changes what a pass is allowed to trim, and never changes admission. The refusal it makes visible is correct - driving a leaf with no proven durable checkpoint toward a durable claim is silent data loss - so this is a way to see the population, never a licence to drive it.");
 
     /// <summary>Canonical name of <see cref="WalGcNeverCheckpointedPinOffset"/>.</summary>
     public const string WalGcNeverCheckpointedPinOffsetName =
@@ -6995,13 +7004,20 @@ public static class LatticeMetrics
     /// exactly like a tree that never needed one.
     /// </para>
     /// <para>
-    /// <b>Three readings, which is the point.</b> An absent series means the
-    /// floor-holder classifier is not wired on this silo. Both arms present and
-    /// static at zero means the classifier ran and the tree constrained no
-    /// offset floor, so there was nothing to admit or block - a legitimate
-    /// healthy state, not a wedge. A climbing <c>blocked</c> arm means the tree
+    /// <b>Four readings, which is the point.</b> An absent series means the
+    /// GC scheduler has never evaluated this tree on this silo, because every
+    /// arm is zero-primed per evaluated tree (issue #4227). A climbing
+    /// <c>unreached</c> arm means the tree's passes take the floor-blocked heal
+    /// arm, which never runs the floor-holder classifier, so no verdict about
+    /// the floor's holder exists - read
+    /// <see cref="WalGcBlockingPinStates"/> for the blockers that arm names
+    /// instead. All arms static at zero means no floor wedge was observed: the
+    /// classifier either ran and the tree constrained no offset floor, so there
+    /// was nothing to admit or block - a legitimate healthy state, not a wedge
+    /// - or has not yet been owed a run on this tree. A climbing
+    /// <c>blocked</c> arm means the tree
     /// has an offset floor, it is held by a candidate the gate cannot admit,
-    /// and the floor therefore cannot advance by this path. That third reading
+    /// and the floor therefore cannot advance by this path. That last reading
     /// is what issue #3258 exists to expose: on
     /// <c>repo-context-vector-payload</c> every reactivation counter sat at
     /// zero beside siblings in the tens, and a zero attempt count is equally
@@ -7033,7 +7049,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcFloorHolderAdmission =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.floor_holder_admission", unit: "{sweep}",
-            description: "Whether the candidate defining a tree's durable materialiser offset floor was admitted to the issue #3178 blocked-leaf liveness drive, recorded once per classifying sweep and tagged by tree, tenant and status (issue #3258). 'admitted' means the floor-defining candidate cleared the admission gate and the drive was entered. 'blocked' means it did not, which is terminal rather than transient: the offset floor is the head of the ascending offset sample, so it is defined by one of the classified candidates and every other candidate is strictly above it, and the gate admits a 'checkpointed_uncovered' candidate unconditionally, and a 'checkpointed_coverage_unknown' one at the floor or - since issue #3310 - above it, but only once a candidate AT the floor has already been admitted. So if the floor's own holder is inadmissible then nothing can be admitted, the repair set is dropped, and the pin store's monotonic-max merge means nothing the leaf later does can lower the offset that holds it. That property is why issue #3310's widening is gated on the floor having been admitted first: without that precondition a wedged tree would begin driving candidates above a floor that can never drain, and this instrument would decay from a wedge detector into a sweep counter. No existing instrument answers this. floor_holder_classification counts how many candidates were examined but not which holds the floor; blocking_pin_state records verdicts without attributing one to the floor; and the reactivation counters record only attempts that occurred, so a tree that can never attempt one is byte-identical to a tree that never needed one. That was the whole of issue #3258: repo-context-vector-payload sat at zero on every reactivation arm beside siblings in the tens, with zero lifetime trimming and therefore a WAL that is permanently unreleasable, and no series in the process could distinguish 'no repair needed' from 'no repair possible'. Do not use growth, byte count, or growth stopping to tell a wedged tree from an idle one: the wedged tree measured flat for 5.5 minutes of an 8-minute window, so each of those reads benign at exactly the moment it should not. Read three ways. An absent series means the floor-holder classifier is not wired on this silo. Both arms present and static at zero means the classifier ran and the tree constrained no offset floor at all, so there was nothing to admit or block - the offset axis is inert, which is healthy. A climbing 'blocked' arm means the tree has an offset floor, it is held by a candidate the gate cannot admit, and the floor cannot advance by this path. Both arms are zero-primed on every sweep that reaches the classifier, independently of which arm resolves and independently of whether an offset floor exists, so 'blocked' reading zero is a measured absence rather than silence - which is the entire value of the instrument, because a wedge that reads as an unprimed zero is exactly the failure it was built to end. It deliberately says nothing about whether the drive healed anything: the reactivation instruments carry that, and folding outcome in here would merge 'never admitted' with 'admitted but unhealed' into one arm when it is the former that has no other witness. Recorded once per sweep rather than once per candidate, because a tree has one floor per sweep however many pins sit at it, and counting per candidate would scale the arms with sample size rather than with sweeps. Diagnostic only: it never changes what a pass is allowed to trim.");
+            description: "Whether the candidate defining a tree's durable materialiser offset floor was admitted to the issue #3178 blocked-leaf liveness drive, recorded once per classifying sweep and tagged by tree, tenant and status (issue #3258). 'admitted' means the floor-defining candidate cleared the admission gate and the drive was entered. 'blocked' means it did not, which is terminal rather than transient: the offset floor is the head of the ascending offset sample, so it is defined by one of the classified candidates and every other candidate is strictly above it, and the gate admits a 'checkpointed_uncovered' candidate unconditionally, and a 'checkpointed_coverage_unknown' one at the floor or - since issue #3310 - above it, but only once a candidate AT the floor has already been admitted. So if the floor's own holder is inadmissible then nothing can be admitted, the repair set is dropped, and the pin store's monotonic-max merge means nothing the leaf later does can lower the offset that holds it. That property is why issue #3310's widening is gated on the floor having been admitted first: without that precondition a wedged tree would begin driving candidates above a floor that can never drain, and this instrument would decay from a wedge detector into a sweep counter. No existing instrument answers this. floor_holder_classification counts how many candidates were examined but not which holds the floor; blocking_pin_state records verdicts without attributing one to the floor; and the reactivation counters record only attempts that occurred, so a tree that can never attempt one is byte-identical to a tree that never needed one. That was the whole of issue #3258: repo-context-vector-payload sat at zero on every reactivation arm beside siblings in the tens, with zero lifetime trimming and therefore a WAL that is permanently unreleasable, and no series in the process could distinguish 'no repair needed' from 'no repair possible'. Do not use growth, byte count, or growth stopping to tell a wedged tree from an idle one: the wedged tree measured flat for 5.5 minutes of an 8-minute window, so each of those reads benign at exactly the moment it should not. Read four ways. An absent series means the GC scheduler has never evaluated this tree on this silo, because every arm is zero-primed per evaluated tree (issue #4227). A climbing 'unreached' arm means the tree's passes take the floor-blocked heal arm, which never runs the floor-holder classifier, so no verdict about the floor's holder exists at all - read blocking_pin_state for the blockers that arm names instead; it is charged once per such pass rather than per sweep, so compare it with wal.gc.passes{outcome='blocked'}, never with the two verdict arms. All arms static at zero means no floor wedge was observed: the classifier either ran and the tree constrained no offset floor at all, so there was nothing to admit or block - the offset axis is inert, which is healthy - or has not yet been owed a run on this tree. A climbing 'blocked' arm means the tree has an offset floor, it is held by a candidate the gate cannot admit, and the floor cannot advance by this path. Both verdict arms are also zero-primed on every sweep that reaches the classifier, independently of which arm resolves and independently of whether an offset floor exists, so 'blocked' reading zero is a measured absence rather than silence - which is the entire value of the instrument, because a wedge that reads as an unprimed zero is exactly the failure it was built to end. It deliberately says nothing about whether the drive healed anything: the reactivation instruments carry that, and folding outcome in here would merge 'never admitted' with 'admitted but unhealed' into one arm when it is the former that has no other witness. Recorded once per sweep rather than once per candidate, because a tree has one floor per sweep however many pins sit at it, and counting per candidate would scale the arms with sample size rather than with sweeps. Diagnostic only: it never changes what a pass is allowed to trim.");
 
     /// <summary>Canonical name of <see cref="WalGcFloorHolderAdmission"/>.</summary>
     public const string WalGcFloorHolderAdmissionName =
@@ -7056,6 +7072,23 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> FloorHolderAdmissionBlocked =
         new(TagStatus, "blocked");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcFloorHolderAdmission"/>
+    /// for a pass that took the floor-blocked heal arm, on which the
+    /// floor-holder classifier is never run, so no verdict about the floor's
+    /// holder was reached at all (issue #4227).
+    /// <para>
+    /// Charged once per such <i>pass</i> rather than per classifying sweep, so
+    /// read it against <c>orleans.lattice.wal.gc.passes{outcome="blocked"}</c>,
+    /// not against the two verdict arms. It is never charged on a pass that
+    /// reaches the classifier, so it names the pre-classifier exit as itself
+    /// where it used to read as the absent series of a tree that was never
+    /// registered.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> FloorHolderAdmissionUnreached =
+        new(TagStatus, "unreached");
 
     /// <summary>
     /// How WIDE a tree's floor-holder admission was on the offset axis, split at
