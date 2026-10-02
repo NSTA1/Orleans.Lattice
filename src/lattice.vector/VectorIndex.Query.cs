@@ -272,13 +272,9 @@ public sealed partial class VectorIndex
     private static void Offer(Span<VectorSearchResult> results, ref int found, long key, float score)
     {
         var k = results.Length;
-        if (found == k)
+        if (found == k && !IsBetter(score, key, results[k - 1]))
         {
-            var worst = results[k - 1];
-            if (score < worst.Score || (score == worst.Score && key > worst.Key))
-            {
-                return;
-            }
+            return;
         }
 
         var i = found < k ? found : k - 1;
@@ -295,7 +291,16 @@ public sealed partial class VectorIndex
         }
     }
 
+    // The result order: descending score, ascending key on a tie. A NaN score - a
+    // vector or query with a non-finite component, or one whose dot product
+    // overflows - compares false against everything, so it is ordered explicitly
+    // below every number (and by key among NaNs). Without that it neither yields
+    // to a valid hit nor is rejected by one, so where it lands depends on the
+    // order the vectors were scanned: offered early it pins rank 0 above every
+    // real match, offered late it evicts the k-th one.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsBetter(float score, long key, in VectorSearchResult other) =>
-        score > other.Score || (score == other.Score && key < other.Key);
+        score > other.Score
+        || (score == other.Score && key < other.Key)
+        || (float.IsNaN(other.Score) && (!float.IsNaN(score) || key < other.Key));
 }

@@ -35,7 +35,9 @@ namespace Orleans.Lattice.Vector;
 /// <para>
 /// <b>Determinism.</b> A result set is totally ordered by descending score with
 /// ascending key breaking ties, and training samples the corpus in key order from
-/// an explicitly seeded generator. The same set of key / vector pairs with the
+/// an explicitly seeded generator. A score that is not a number (a vector or
+/// query with a non-finite component) ranks below every numeric score, so it can
+/// never displace a real match. The same set of key / vector pairs with the
 /// same options therefore produces byte-identical results irrespective of the
 /// order in which they were inserted or deleted.
 /// </para>
