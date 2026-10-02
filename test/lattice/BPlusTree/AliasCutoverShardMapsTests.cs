@@ -7,7 +7,8 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// Issue #4250: the shard-map carry a shadow-cutover restore and a schema
-/// remediation cutover make across their alias swap, and the carry back on a revert.
+/// remediation cutover make across their alias swap, and the carry back on a revert;
+/// and (issue #4263) the carry an explicit alias set makes.
 /// The end-to-end loss is proven in the backup and schema suites; these pin the
 /// registry effects and the resume behaviour each step depends on.
 /// </summary>
@@ -148,6 +149,69 @@ public sealed class AliasCutoverShardMapsTests
     }
 
     [Test]
+    public async Task CarryAcrossExplicitAliasAsync_carries_the_target_map_and_stamps_the_replaced_tree()
+    {
+        var (logical, target) = await RegisterAsync();
+        var physical = $"{logical}-physical";
+        await Registry.RegisterAsync(physical, new TreeRegistryEntry { ShardCount = 2 });
+        await SetAliasAsync(logical, physical);
+        var before = (await Registry.GetShardMapAsync(logical))!;
+
+        await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(Grains, logical, target, () => SetAliasAsync(logical, target));
+
+        var after = (await Registry.GetShardMapAsync(logical))!;
+        var replaced = (await Registry.GetShardMapAsync(physical))!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(after.Slots, Is.EqualTo(DefaultSlots(DestinationShards)),
+                "a target with no persisted map is routed by the default map for its own pin");
+            Assert.That(after.Version, Is.GreaterThan(before.Version), "a cached router must see the change");
+            Assert.That(replaced.Slots, Is.EqualTo(before.Slots),
+                "the replaced tree was routed by the logical map, so that is what describes its shards");
+        });
+    }
+
+    [Test]
+    public async Task CarryAcrossExplicitAliasAsync_re_set_of_the_current_alias_leaves_the_logical_map_alone()
+    {
+        var (logical, target) = await RegisterAsync();
+        await SetAliasAsync(logical, target);
+        var before = (await Registry.GetShardMapAsync(logical))!;
+        var swapped = false;
+
+        await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(Grains, logical, target, () =>
+        {
+            swapped = true;
+            return SetAliasAsync(logical, target);
+        });
+
+        var after = (await Registry.GetShardMapAsync(logical))!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(swapped, Is.True, "the swap still runs");
+            Assert.That(after.Slots, Is.EqualTo(before.Slots), "the logical map already describes the target");
+            Assert.That(after.Version, Is.EqualTo(before.Version));
+        });
+    }
+
+    [Test]
+    public async Task CarryAcrossExplicitAliasAsync_refused_swap_changes_nothing()
+    {
+        var (logical, target) = await RegisterAsync();
+        var before = (await Registry.GetShardMapAsync(logical))!;
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(
+            Grains, logical, target, () => Task.FromException(new InvalidOperationException("refused"))));
+
+        var after = (await Registry.GetShardMapAsync(logical))!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(after.Slots, Is.EqualTo(before.Slots));
+            Assert.That(after.Version, Is.EqualTo(before.Version));
+        });
+    }
+
+    [Test]
     public void Helpers_reject_null_arguments()
     {
         Assert.Multiple(() =>
@@ -155,6 +219,7 @@ public sealed class AliasCutoverShardMapsTests
             Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.PrepareCutoverAsync(Grains, null!, "d"));
             Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.PrepareRevertAsync(Grains, "l", null!, "p"));
             Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.CompleteRevertAsync(null!, "s"));
+            Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(Grains, "l", "t", null!));
         });
     }
 
