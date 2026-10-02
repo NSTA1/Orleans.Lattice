@@ -82,6 +82,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Admin - Aliasing a tree onto a resharded tree keeps its keys readable.** Setting an alias now gives the tree the target's shard map, as a restore cutover does. Before, the tree kept its own map, so most of the target's keys read as absent. ([#4263](https://github.com/NSTA1/Orleans.Lattice/issues/4263)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
 
+- **Core - A purge whose registry removal failed now finishes.** The removal is retried by the purge's keepalive or the next purge call, so the id no longer reads as a live tree that kept the purged tree's settings. ([#4265](https://github.com/NSTA1/Orleans.Lattice/issues/4265)) (`Orleans.Lattice`)
+
 - **Explorer - An app's installer is told when they will hold no role in it.** Binding roles, the install's confirmation, Your apps and the app's page say whether you are in each bound group, and offer to join it or re-bind instead of a missing Open. ([#4150](https://github.com/NSTA1/Orleans.Lattice/issues/4150)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Core - Key history shows each write once.** Copies made by resize, reshard and replication no longer repeat a revision, and the Explorer says "Set - value not kept". ([#4149](https://github.com/NSTA1/Orleans.Lattice/issues/4149)) (`Orleans.Lattice.Explorer`)

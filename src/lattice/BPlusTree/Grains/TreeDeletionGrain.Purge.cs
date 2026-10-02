@@ -51,7 +51,8 @@ internal sealed partial class TreeDeletionGrain
         string? LogicalPhysicalTreeId,
         DateTimeOffset? LogicalDeletedAtUtc,
         bool LogicalPurgeInProgress,
-        bool LogicalPurgeComplete);
+        bool LogicalPurgeComplete,
+        bool RegistryUnregisterPending);
 
     private DurableDeletion Durable => _durable ??= CaptureDurable();
 
@@ -61,7 +62,7 @@ internal sealed partial class TreeDeletionGrain
         return new DurableDeletion(
             s.IsDeleted, s.DeletedAtUtc, s.RetainsRegistryEntry, s.PurgeInProgress, s.PurgeComplete,
             s.NextShardIndex, s.PurgeShardCount, s.LogicalPhysicalTreeId, s.LogicalDeletedAtUtc,
-            s.LogicalPurgeInProgress, s.LogicalPurgeComplete);
+            s.LogicalPurgeInProgress, s.LogicalPurgeComplete, s.RegistryUnregisterPending);
     }
 
     /// <inheritdoc />
@@ -127,8 +128,10 @@ internal sealed partial class TreeDeletionGrain
         // A purge that has recorded its completion but not yet removed the
         // tree's registry entry is still running (issue #4252): reporting it
         // complete here let PurgeTreeAsync return while TreeExistsAsync still
-        // found the tree. The walk is done, so every shard reads as purged.
-        var finalising = _finalisingPurge && !retired && d.PurgeComplete;
+        // found the tree. The walk is done, so every shard reads as purged. The
+        // owed removal is durable, so this holds across a reactivation until a
+        // removal that threw is re-driven (issue #4265).
+        var finalising = !retired && d.PurgeComplete && d.RegistryUnregisterPending;
         return new TreeDeletionSnapshot
         {
             IsDeleted = !retired && d.IsDeleted,
@@ -185,11 +188,16 @@ internal sealed partial class TreeDeletionGrain
         if (state.State.PurgeComplete)
         {
             // A retry after the purge finished reports that success. A delegated
-            // copy re-drives its registry cleanup, as PurgePhysicalAsync does.
+            // copy re-drives its registry cleanup, as PurgePhysicalAsync does,
+            // and so does a purge whose registry removal threw (issue #4265).
             if (state.State.Delegated)
             {
-                await UnregisterPurgedTreeAsync();
+                await SettleRegistryEntryAsync();
                 await DeregisterLeafCursorsAsync();
+            }
+            else if (state.State.RegistryUnregisterPending)
+            {
+                await FinishCompletedPurgeAsync();
             }
             return;
         }

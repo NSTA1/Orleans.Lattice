@@ -30,26 +30,21 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class TreeDeletionGrain
 {
     /// <summary>
-    /// Set while an unaliased purge has persisted its completion but not yet
-    /// removed the tree's registry entry. In that window the record and a
-    /// registered id together look like a reused id, so interleaved reads must
-    /// not report it live. Left set if the unregister throws, which keeps this
-    /// activation fail-closed until it deactivates.
-    /// </summary>
-    private bool _finalisingPurge;
-
-    /// <summary>
     /// Whether this grain holds the terminal record of a completed purge and
-    /// nothing else: no deletion, purge, alias reservation or delegated work that
-    /// is still in flight. An in-memory predicate, so reads can test it before
-    /// paying for a registry round trip.
+    /// nothing else: no deletion, purge, alias reservation, delegated work, or
+    /// owed registry removal that is still in flight. A purge whose registry
+    /// removal is still owed (persisted with its completion, so it survives a
+    /// reactivation - issue #4265) holds the purged tree's own entry, which with
+    /// the record would otherwise look like a reused id. An in-memory predicate,
+    /// so reads can test it before paying for a registry round trip.
     /// </summary>
     private bool HoldsTerminalPurgeRecord
     {
         get
         {
             var s = state.State;
-            if (s.Delegated || s.Discarded || s.DeletePending || s.AliasOperationId is not null)
+            if (s.Delegated || s.Discarded || s.DeletePending || s.AliasOperationId is not null
+                || s.RegistryUnregisterPending)
                 return false;
 
             // The physical side must be either untouched or a finished purge -
@@ -79,7 +74,7 @@ internal sealed partial class TreeDeletionGrain
     /// </summary>
     private async ValueTask<bool> IsReusedAfterPurgeAsync()
     {
-        if (_finalisingPurge || !HoldsTerminalPurgeRecord)
+        if (!HoldsTerminalPurgeRecord)
             return false;
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             return false;
