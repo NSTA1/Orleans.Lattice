@@ -32,6 +32,10 @@
         <LtDefinitionList>
             <LtDefinition Term="Enforced">@TenancyFormat.EnforcementLabel(report.EnforcementScope)</LtDefinition>
             <LtDefinition Term="Burst allowance">@(report.BurstPercent > 0 ? $"{report.BurstPercent}% above each ceiling" : "None")</LtDefinition>
+            @if (!report.IsDefault)
+            {
+                <LtDefinition Term="Access caps">@AccessCapsText(report.Quotas)</LtDefinition>
+            }
         </LtDefinitionList>
         @if (report.IsDefault)
         {
@@ -72,7 +76,7 @@
 </section>
 
 <LtDialog Open="_editing" OpenChanged="@(open => _editing = open)" Title="@($"Quotas of tenant {TenantId}")" Placement="DialogPlacement"
-          Description="Blank means no ceiling. Zero is a real ceiling that permits nothing.">
+          Description="Blank means no ceiling. Zero is a real ceiling that permits nothing. A blank delegated access cap applies its default.">
     @if (_editing && _draft is { } draft)
     {
         <form class="lt-tenancy-form" @onsubmit="SaveAsync" novalidate>
@@ -87,6 +91,18 @@
                              Hint="@HintFor(field)" />
             }
             <LtTextInput Label="Burst allowance (percent)" Mono="true" Value="@draft.BurstPercent" ValueChanged="@(value => draft.BurstPercent = value)" Error="@draft.BurstError" />
+            <h3 class="lt-tenancy-subtitle">Delegated access caps</h3>
+            <p class="lt-tenancy-note">These bound what the tenant's admins can create in the cluster's shared membership and policy trees. Blank applies the default cap; a cap is never unbounded.</p>
+            @foreach (var accessCap in TenancyAccessCaps.All)
+            {
+                var cap = accessCap;
+                <LtTextInput Label="@TenancyAccessCaps.Label(cap)"
+                             Mono="true"
+                             Value="@draft[cap]"
+                             ValueChanged="@(value => draft[cap] = value)"
+                             Error="@draft.CapErrors.GetValueOrDefault(cap)"
+                             Hint="@TenancyAccessCaps.Hint(cap)" />
+            }
             @if (_formError is not null)
             {
                 <p class="lt-tenancy-form__error" role="alert">@_formError</p>

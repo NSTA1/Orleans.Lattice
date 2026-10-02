@@ -87,6 +87,18 @@ public partial class TenancyQuota
 
     private string? ErrorFor(TenancyQuotaDimension dimension) => _errors.TryGetValue(dimension, out var error) ? error : null;
 
+    private static string AccessCapsText(TenantQuotasDescriptor quotas)
+    {
+        var parts = new string[TenancyAccessCaps.All.Count];
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var cap = TenancyAccessCaps.All[i];
+            parts[i] = $"{TenancyAccessCaps.Label(cap)} {TenancyAccessCaps.EffectiveText(quotas, cap)}";
+        }
+
+        return string.Join(", ", parts);
+    }
+
     private static string? HintFor(TenancyQuotaDimension dimension) =>
         dimension is TenancyQuotaDimension.Bytes or TenancyQuotaDimension.MemoryBytes ? "Bytes, or a number with KiB, MiB, GiB or TiB." : null;
 
