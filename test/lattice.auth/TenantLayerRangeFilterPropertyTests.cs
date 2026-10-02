@@ -17,7 +17,9 @@ namespace Orleans.Lattice.Auth.Tests;
 /// </description></item>
 /// </list>
 /// The generator is seeded, so every run explores the same cases and a failure
-/// reproduces exactly.
+/// reproduces exactly. A second property covers bounded ranges and the
+/// uniform-range plain-allow shortcut (#4278) on both the operator-only and the
+/// layered path.
 /// </summary>
 [TestFixture]
 public sealed class TenantLayerRangeFilterPropertyTests
@@ -68,6 +70,148 @@ public sealed class TenantLayerRangeFilterPropertyTests
             }
         }
     }
+
+    /// <summary>
+    /// The bounded-range form of the property, covering the uniform-range shortcut
+    /// (#4278): a collection request whose range every operator rule governs
+    /// uniformly is answered as a plain allow when that shared operator verdict
+    /// allows. Every case is evaluated on both paths - with the tenant layer off
+    /// (the operator-only shortcut, where an unmatched range falls to the default
+    /// effect) and on (the layered shortcut, where only a matched operator allow is
+    /// final) - against the same compiled snapshot. For every key inside the range
+    /// it asserts filter == point decision == oracle, and that a plain (unfiltered)
+    /// allow is returned only when the oracle allows every key in the range. Half
+    /// the cases are seeded with an operator prefix grant exactly covering a prefix
+    /// range, and with tenant denies inside it, so the shortcut demonstrably fires
+    /// on both paths; the firing counts are asserted so the coverage cannot go
+    /// silently vacuous.
+    /// </summary>
+    [Test]
+    public void Bounded_range_filter_equals_point_and_oracle_on_both_paths_with_the_uniform_range_shortcut()
+    {
+        var random = new Random(4278);
+        var subject = Subject("alice", GroupA, ClusterGroup);
+        var operatorOnlyShortcuts = 0;
+        var layeredShortcuts = 0;
+
+        for (var c = 0; c < Cases; c++)
+        {
+            var (rangeStart, rangeEnd, rangePrefix) = GenerateRange(random);
+            var rules = GenerateRules(random);
+            if (rangePrefix is not null && random.Next(2) == 0)
+            {
+                SeedUniformOperatorGrant(rules, rangePrefix, random);
+            }
+
+            var options = new LatticeAuthOptions
+            {
+                DefaultEffect = random.Next(2) == 0 ? LatticeEffect.Deny : LatticeEffect.Allow,
+                UserRuleBeatsGroupRuleAtEqualScope = random.Next(2) == 0,
+                AllTreesGrantsEnabled = random.Next(3) != 0,
+            };
+            var policy = CompiledPolicy.Compile(rules, includeTenantLayer: true);
+            var operatorHasPerKeyRules = policy.TryGetTree(TenantTree, out var operatorTree) && operatorTree!.HasPerKeyRules;
+            var tenantBucket = policy.Tenant?.TryGetBuckets(TenantTree, out _, out _) == true;
+            var operatorRules = rules.Where(r => !LatticeTenantRuleIds.IsTenantOwned(r.RuleId)).ToList();
+            var inRange = KeyUniverse.Where(k => InRange(k, rangeStart, rangeEnd)).ToArray();
+
+            foreach (var active in new[] { false, true })
+            {
+                var oracleRules = active ? rules : operatorRules;
+                var collection = PolicyEvaluator.Evaluate(
+                    policy, options, subject, TenantTree, LatticeOperation.RangeRead, null, rangeStart, rangeEnd, active, out _);
+                var plainAllow = collection.Allowed && collection.KeyFilter is null;
+
+                foreach (var key in inRange)
+                {
+                    var admitted = collection.KeyFilter is { } filter ? collection.Allowed && filter(key) : collection.Allowed;
+                    var point = PolicyEvaluator.Evaluate(
+                        policy, options, subject, TenantTree, LatticeOperation.RangeRead, key, null, null, active, out _);
+                    var oracle = Oracle(oracleRules, options, subject, key);
+
+                    if (admitted != point.Allowed || point.Allowed != oracle || (plainAllow && !oracle))
+                    {
+                        Assert.Fail(
+                            $"Case {c} (layer {(active ? "active" : "inactive")}), range [{rangeStart ?? "(start)"}, {rangeEnd ?? "(end)"}), "
+                            + $"key '{key}': filter={admitted}, point={point.Allowed}, oracle={oracle}, plainAllow={plainAllow}; "
+                            + $"default={options.DefaultEffect}, userBeatsGroup={options.UserRuleBeatsGroupRuleAtEqualScope}, "
+                            + $"allTrees={options.AllTreesGrantsEnabled}; rules:{Environment.NewLine}"
+                            + string.Join(Environment.NewLine, rules.Select(Describe)));
+                    }
+                }
+
+                // With per-key operator rules the only plain-allow exit is the
+                // uniform-range shortcut, so these count its firings per path.
+                if (plainAllow && operatorHasPerKeyRules)
+                {
+                    if (active && tenantBucket)
+                    {
+                        layeredShortcuts++;
+                    }
+                    else if (!active)
+                    {
+                        operatorOnlyShortcuts++;
+                    }
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(operatorOnlyShortcuts, Is.GreaterThan(25), "the operator-only uniform-range shortcut must be exercised");
+            Assert.That(layeredShortcuts, Is.GreaterThan(25), "the layered uniform-range shortcut must be exercised");
+        });
+    }
+
+    /// <summary>
+    /// Generates a collection range: the whole keyspace, a prefix range
+    /// <c>[p, PrefixUpperBound(p))</c> (returned with its prefix so a case can seed
+    /// a grant that covers it exactly), or an arbitrary - possibly open-ended or
+    /// empty - range over the key universe.
+    /// </summary>
+    private static (string? Start, string? End, string? Prefix) GenerateRange(Random random)
+    {
+        switch (random.Next(6))
+        {
+            case 0:
+                return (null, null, null);
+            case 1:
+            case 2:
+            case 3:
+                var prefix = random.Next(2) == 0
+                    ? Prefixes[random.Next(Prefixes.Length)]
+                    : KeyUniverse[random.Next(KeyUniverse.Length)];
+                return (prefix, LatticeKeyRange.PrefixUpperBound(prefix), prefix);
+            default:
+                var start = random.Next(5) == 0 ? null : KeyUniverse[random.Next(KeyUniverse.Length)];
+                var end = random.Next(5) == 0 ? null : KeyUniverse[random.Next(KeyUniverse.Length)];
+                return (start, end, null);
+        }
+    }
+
+    /// <summary>
+    /// Adds an operator prefix allow exactly covering the prefix range, plus tenant
+    /// denies inside it (a key deny, a prefix deny and a tenant-wide deny) that a
+    /// matched operator allow must override, so the layered shortcut has a tenant
+    /// bucket to ignore.
+    /// </summary>
+    private static void SeedUniformOperatorGrant(List<LatticeAuthorizationRule> rules, string prefix, Random random)
+    {
+        var subject = random.Next(2) == 0 ? LatticeSubjectSelector.User("alice") : LatticeSubjectSelector.Group(ClusterGroup);
+        rules.Add(Operator("seed-grant", subject, LatticeScope.Prefix(TenantTree, prefix), LatticeOperation.RangeRead, LatticeEffect.Allow));
+
+        var alice = LatticeSubjectSelector.User("alice");
+        rules.Add(Tenant(Contoso, "seed-key-deny", alice, LatticeScope.Key(TenantTree, prefix), LatticeOperation.RangeRead, LatticeEffect.Deny));
+        rules.Add(Tenant(Contoso, "seed-prefix-deny", alice, LatticeScope.Prefix(TenantTree, prefix), LatticeOperation.RangeRead, LatticeEffect.Deny));
+        if (random.Next(2) == 0)
+        {
+            rules.Add(Tenant(Contoso, "seed-wide-deny", alice, LatticeScope.TenantWide(Contoso), LatticeOperation.RangeRead, LatticeEffect.Deny));
+        }
+    }
+
+    private static bool InRange(string key, string? start, string? end) =>
+        (start is null || string.CompareOrdinal(key, start) >= 0)
+        && (end is null || string.CompareOrdinal(key, end) < 0);
 
     private static List<LatticeAuthorizationRule> GenerateRules(Random random)
     {
