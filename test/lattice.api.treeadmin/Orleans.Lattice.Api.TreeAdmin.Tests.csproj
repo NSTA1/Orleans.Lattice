@@ -29,4 +29,10 @@
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The atomic-visibility probe and topology drivers the core chaos suite uses. -->
+    <Compile Include="..\lattice\BPlusTree\AtomicRoundProbe.cs" Link="Shared\AtomicRoundProbe.cs" />
+    <Compile Include="..\lattice\BPlusTree\TopologyDrivers.cs" Link="Shared\TopologyDrivers.cs" />
+  </ItemGroup>
+
 </Project>
