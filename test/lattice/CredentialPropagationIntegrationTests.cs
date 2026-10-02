@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Testing;
 using Orleans.Runtime;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests;
 
@@ -124,9 +125,11 @@ public sealed class CredentialProbeClusterFixture
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
     }
 
     public async Task DisposeAsync()
