@@ -45,13 +45,13 @@ steps:
 postconditions:
   - check: "Soft-delete is reversible until the recovery window elapses or purge runs."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
-  - check: "Soft-delete, recover, and purge walk shard indexes from 0 through the greatest registry-recorded pinned count, shard-map index, or split-allocation high-water mark; an empty-tree reshard that re-pins downward without raising the high-water mark leaves prior shards above the new count outside later delete, recovery, and purge walks."
+  - check: "Soft-delete, recover, and purge walk shard indexes from 0 through the greatest registry-recorded pinned count, shard-map index, or split-allocation high-water mark; an empty-tree reshard that re-pins downward raises the high-water mark to the highest prior shard index, so prior shards above the new count stay inside later delete, recovery, and purge walks."
     source: "docs/lattice/tree-deletion.md"
   - check: "Purge is irreversible."
     source: "docs/lattice.api.treeadmin/README.md"
   - check: "On an aliased tree, delete, recover and purge act on the live backing copy the delete pinned, and purge unregisters both that copy and the logical tree."
     source: "docs/lattice/tree-registry.md"
-  - check: "On an aliased tree, a shard that a split adds to the live copy after the alias is set is recorded against the logical tree, so delete, recover and purge do not reach it: its keys stay readable and writable after DeleteTreeAsync and its state stays in storage after purge."
+  - check: "On an aliased tree, a shard that a split adds to the live copy after the alias is set is recorded against the logical tree, and delete, recover and purge read that record as well as the copy's, so they reach the shard with the rest of the copy."
     source: "docs/lattice/tree-deletion.md"
 failure_modes:
   - id: not-deleted
