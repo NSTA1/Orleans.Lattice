@@ -282,6 +282,51 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Assert.That(arm, Is.EqualTo("unclassified"));
     }
 
+    [Test]
+    public async Task A_breaching_tree_with_a_blocked_floor_reports_blocked_not_over_ceiling()
+    {
+        // The precedence that makes `over_ceiling` mean something narrower than
+        // "this tree is over its ceiling" (issue #3204).
+        // BytePressureOverThreshold is occupancy against the ceiling and nothing
+        // else, so it is equally true of a tree held by an unusable pin and of
+        // one merely waiting on compaction. Only the floor state separates them,
+        // and the classifier consults it FIRST - so a pinned tree lands on
+        // `blocked`, the arm whose remedy addresses the pin, and `over_ceiling`
+        // is left naming the population with a fully usable floor and nothing
+        // pinning it at all.
+        //
+        // That is what the field's documentation now asserts, and it is the half
+        // that was wrong: the old text glossed the flag as "a lagging consumer or
+        // a causal-stable pin is holding bytes the policy would otherwise
+        // reclaim", which is precisely the population this arm hands to
+        // `blocked`. A regression that reordered the ternary would make that
+        // gloss true again by turning `over_ceiling` back into the catch-all,
+        // and would do it silently - both arms stay live and neither disappears,
+        // so only the arm a breaching pinned tree lands on changes.
+        //
+        // Synthetic for the same reason the two structural tests above are: the
+        // subject is the classifier's precedence between two independent report
+        // fields, and establishing it from a real collector would assert the
+        // floor derivation this test is deliberately not about.
+        const string Tree = "walgc-outcome-blocked-over-ceiling";
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Report(
+                entriesTrimmed: 0,
+                retainedBytesAfter: 8192,
+                byteCeiling: 4096,
+                cursorFloorState: WalGcCursorFloorState.BlockedByUnusablePin,
+                bytePressureOverThreshold: true)));
+
+        var (arm, passes) = await OutcomeOfOnePassAsync(Tree, gc);
+        using var _ = passes;
+
+        Assert.That(arm, Is.EqualTo("blocked"),
+            "a tree over its ceiling because an unusable pin holds the floor must report the arm "
+            + "that names the pin. Reporting over_ceiling would merge it into the population whose "
+            + "floor is Available, which is the misattribution issue #3204 records.");
+    }
+
     /// <summary>
     /// The arm a given floor state must produce on a pass that reclaimed
     /// nothing.

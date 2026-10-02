@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **WAL GC - Tell a harmless never-checkpointed pin from one that can wedge a tree.** A new metric splits never-checkpointed WAL floor holders by whether the pin carries a real offset, so a benign sentinel population is no longer indistinguishable from one that can block a tree's WAL reclaim. ([#4198](https://github.com/NSTA1/Orleans.Lattice/issues/4198)) (`Orleans.Lattice`)
+
 - **Explorer - Reshard can shrink a tree.** The Reshard page folds shards together as well as splitting them, from 2 up to the tree's virtual slot count, and a shrink's review states its throughput trade-off. The Shards tab and the compaction and digest tools follow the live shard map. ([#4076](https://github.com/NSTA1/Orleans.Lattice/issues/4076)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A rewritten console with Lattice Apps built in.** Native areas replace plugins, every page has one address, and it adapts from phone to desktop and targets WCAG 2.2 AA. Apps are browsed, reviewed and run in place, their UI in a sandboxed frame whose data access the cluster enforces. ([#1716](https://github.com/NSTA1/Orleans.Lattice/issues/1716), [#1845](https://github.com/NSTA1/Orleans.Lattice/issues/1845), [#3807](https://github.com/NSTA1/Orleans.Lattice/issues/3807)) (`Orleans.Lattice.Explorer.Web`, `Orleans.Lattice.Explorer.UI`, `Orleans.Lattice.Explorer.AppKit`, `Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.Entra.Web`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Replication`, `Orleans.Lattice.Api.Replication.Grpc`)
@@ -120,11 +122,19 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **WAL - A GC report field blamed a cause its own predicate excludes.** `LatticeWalGcReport.BytePressureOverThreshold` documented itself as a lagging consumer or pin holding bytes back. It is occupancy against the ceiling and nothing else, and the pass arm it drives reports only when the trim floor is clear. ([#3204](https://github.com/NSTA1/Orleans.Lattice/issues/3204)) (`Orleans.Lattice`)
+
+- **WAL - A failed durable pin write is retried rather than recorded as done.** A batched materialiser pin write recorded its debounce state before writing, so a faulted shard left those pins looking durable and the next report was coalesced away. Each shard is now recorded once its write lands. ([#3319](https://github.com/NSTA1/Orleans.Lattice/issues/3319)) (`Orleans.Lattice`)
+
 - **Core - A range read no longer comes up short during a leaf division.** A donor mid-split hid rows it still held, so a scan, count or stats call returned successfully while missing keys a point or batched read still answered. The gap lasted until that leaf's next write, so it could outlive the division indefinitely on a range that had gone quiet. ([#3918](https://github.com/NSTA1/Orleans.Lattice/issues/3918)) (`Orleans.Lattice`)
 
 - **Batch writes can be bounded by a whole-call budget, not just a fan-out one.** `SetManyEnvelopeBudget` bounds `SetManyAsync` end to end, so stages that each stay inside the deadline cannot sum past it unseen. The refusal names the per-stage breakdown, and unlike the fan-out budget it also covers single-shard batches. Opt-in; unbounded by default. ([#2685](https://github.com/NSTA1/Orleans.Lattice/issues/2685)) (`Orleans.Lattice`)
 
 - **Core - Tombstone compaction no longer times out on a tombstone-heavy leaf.** A leaf's reap yields on a work budget and resumes, reaping strictly less each pass until it drains, and a partial pass keeps the leaf queued instead of dropping it. ([#4135](https://github.com/NSTA1/Orleans.Lattice/issues/4135)) (`Orleans.Lattice`)
+
+- **Core - The cold-replay loop warning now describes what actually happens.** It told operators no snapshot is banked and the leaf cannot escape on its own, which stopped being true once a cancelled cold replay began banking its progress. It now names the three cases that still reach the threshold. ([#2280](https://github.com/NSTA1/Orleans.Lattice/issues/2280)) (`Orleans.Lattice`)
+
+- **Core - A cancelled leaf activation now reports how far its WAL replay got.** The applied-entry count was added to the per-activation total only after a partition's slice loop, so a cancellation inside that loop discarded it, and the total was reported only from the deactivation hook, which Orleans does not run when activation throws. The count is now kept as each entry is applied and reported on the failure path, so the distance a cancelled replay travels is measurable rather than structurally zero. ([#2411](https://github.com/NSTA1/Orleans.Lattice/issues/2411)) (`Orleans.Lattice`)
 
 - **Explorer - New group takes a name, and creating one works.** New group, rule and tenant ids, a snapshot destination and a rename target are name boxes that refuse or flag a taken name; a group id the identity directory lacks is refused with the directory named, and a refusal keeps the dialog open. ([#4077](https://github.com/NSTA1/Orleans.Lattice/issues/4077)) (`Orleans.Lattice.Explorer.UI`)
 
