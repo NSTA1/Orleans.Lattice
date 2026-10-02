@@ -189,6 +189,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Security - A password containing `?` or `#` was logged in full.** The secret redactor stopped its userinfo scan at those two characters, found no `@` in the truncated prefix, and read the URL as carrying no credential, so the whole authority reached the log verbatim. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **MCP - Rejected calls logged and echoed raw caller text.** Three repo-context and region-routing rejection paths composed a fault from an unvalidated argument and reached the log or the caller beneath, or outside, the sanitize-and-cap seam, so a value carrying newlines forged log records. ([#4277](https://github.com/NSTA1/Orleans.Lattice/issues/4277)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.Mcp`)
 
 - **Apps - An install consented to a manifest nobody reviewed.** The commit re-read the manifest, so a source could add a bridge operation after review. A description now reports `ManifestDigest`; an install sending it as `ExpectedManifestDigest` is refused if it changed. The Explorer sends it. ([#4021](https://github.com/NSTA1/Orleans.Lattice/issues/4021)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.UI`)
