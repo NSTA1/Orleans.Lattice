@@ -28,7 +28,11 @@ internal sealed partial class LatticeGrain
             effectiveEntries = await InterceptEntriesAsync(
                 LatticeOperation.BulkLoad, list, atomic: false, cancellationToken);
         }
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced, once per call (#4206): a shard root's bulk-load path checks no slot
+        // ownership, so a map cached before a reshard would graft keys onto a shard
+        // the live map no longer routes them to, and a cached alias onto a retired
+        // physical tree; nothing on this path would ever invalidate either.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
         var operationId = Guid.NewGuid().ToString("N");
@@ -110,7 +114,9 @@ internal sealed partial class LatticeGrain
         if (effectiveEntries.Count == 0)
             return 0;
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        // Forced, once per chunk call rather than per entry (#4206), for the reason
+        // BulkLoadAsync gives: the shard-side graft checks no slot ownership.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Partition this chunk across physical shards. Only shards that actually

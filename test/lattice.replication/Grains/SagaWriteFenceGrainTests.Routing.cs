@@ -46,8 +46,8 @@ public partial class SagaWriteFenceGrainTests
 
         // The pinned count stays 2 throughout: the defect was trusting it.
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(ShardCount));
+        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, ShardCount).ToArray()));
 
         var shards = new ConcurrentDictionary<string, IShardRootGrain>(StringComparer.Ordinal);
         var factory = Substitute.For<IGrainFactory>();

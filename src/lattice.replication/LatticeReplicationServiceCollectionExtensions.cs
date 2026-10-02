@@ -341,8 +341,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable
         // pin via IReplicationHighWaterMarkGrain.PinSnapshotAsync).
-        // IShardCountProvider is the testability seam wrapping the
-        // core LatticeOptionsResolver shard-count component.
+        // IShardCountProvider is the testability seam over the tree's
+        // live routing (its physical shard indices and shard-root keys).
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
         builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
 

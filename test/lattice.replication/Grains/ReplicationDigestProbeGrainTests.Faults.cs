@@ -18,11 +18,11 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 public partial class ReplicationDigestProbeGrainTests
 {
     [Test]
-    public async Task ProcessNextPhaseAsync_does_not_advance_cadence_when_the_shard_count_cannot_be_resolved()
+    public async Task ProcessNextPhaseAsync_does_not_advance_cadence_when_the_shard_map_cannot_be_resolved()
     {
         var (grain, state, lattice, _, shardCounts) = CreateProbeGrain();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<int>(new InvalidOperationException("shard count unavailable")));
+        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<int>>(new InvalidOperationException("shard map unavailable")));
 
         await grain.ProcessNextPhaseAsync();
 
