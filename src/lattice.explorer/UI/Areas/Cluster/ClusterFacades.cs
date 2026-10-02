@@ -15,6 +15,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 internal sealed class ClusterFacades(IServiceProvider services)
 {
     private readonly Lazy<ILatticeTreeAdmin?> _treeAdmin = new(services.GetShellFacade<ILatticeTreeAdmin>);
+    private readonly Lazy<ILatticeStorageUsageOperations?> _storageUsage = new(services.GetShellFacade<ILatticeStorageUsageOperations>);
     private readonly Lazy<ILatticeReplicationStatus?> _replicationStatus = new(services.GetShellFacade<ILatticeReplicationStatus>);
     private readonly Lazy<IExplorerSession?> _session = new(services.GetService<IExplorerSession>);
     private readonly Lazy<ShellAssertedTenant> _tenant = new(() => services.GetService<ShellAssertedTenant>() ?? ShellAssertedTenant.None);
@@ -39,6 +40,9 @@ internal sealed class ClusterFacades(IServiceProvider services)
 
     /// <summary>Tree administration (T1's adapter), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeTreeAdmin? TreeAdmin => _treeAdmin.Value;
+
+    /// <summary>The accept-then-poll fresh storage usage (#4126), or <see langword="null"/> when the head serves none.</summary>
+    public ILatticeStorageUsageOperations? StorageUsage => _storageUsage.Value;
 
     /// <summary>The replication peer report (R1), or <see langword="null"/> when the head serves none.</summary>
     public ILatticeReplicationStatus? ReplicationStatus => _replicationStatus.Value;

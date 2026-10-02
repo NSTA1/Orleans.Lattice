@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -41,6 +42,8 @@ public sealed class ClusterOverviewTests : ClusterTestContext
     [Test]
     public void Re_measuring_every_shard_is_expensive_so_it_asks_for_the_cluster_id()
     {
+        // A head that serves no storage-usage operations (#4126) re-measures with the blocking deep read.
+        Services.AddKeyedSingleton<ILatticeStorageUsageOperations>(ShellFacades.Key, (_, _) => null!);
         Admin.GetStorageUsageAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(call => new ClusterStorageUsageSummary { TreeCount = 12, Deep = call.Arg<bool>() });
         var cut = RenderAt("/cluster");

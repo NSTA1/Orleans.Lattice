@@ -5,6 +5,10 @@ using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Operations;
 
+// Still calls the deprecated blocking tree-administration verbs (LATTICE0002); the Explorer moves to
+// ILatticeTreeAdminOperations in the second #4124 change, which removes this suppression.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
 /// <summary>

@@ -1,3 +1,4 @@
+@using Orleans.Lattice.Explorer.UI.Operations
 <PageTitle>Cluster - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Cluster</h1>
@@ -34,13 +35,37 @@
             <LtDefinition Term="Leaf state">@ClusterFormat.Bytes(figures.LeafState)</LtDefinition>
             <LtDefinition Term="Snapshots">@ClusterFormat.Bytes(figures.Snapshots)</LtDefinition>
             <LtDefinition Term="Retained WAL">@ClusterFormat.Bytes(figures.Wal)</LtDefinition>
-            <LtDefinition Term="Measured">@(usage.Deep ? "Re-measured by a leaf walk" : "From the cached WAL poll") at @ClusterFormat.Instant(usage.SampledAt)@(usage.Partial ? ", partial" : string.Empty)</LtDefinition>
+            @if (_remeasuredAt is { } remeasured)
+            {
+                <LtDefinition Term="Measured">Re-measured by a leaf walk at @ClusterFormat.Instant(remeasured)@(usage.Partial ? ", partial" : string.Empty)</LtDefinition>
+            }
+            else
+            {
+                <LtDefinition Term="Measured">@(usage.Deep ? "Re-measured by a leaf walk" : "From the cached WAL poll") at @ClusterFormat.Instant(usage.SampledAt)@(usage.Partial ? ", partial" : string.Empty)</LtDefinition>
+            }
         </LtDefinitionList>
+        @if (RunningRefresh is { } refresh)
+        {
+            <div data-lt-cluster="remeasure-progress">
+                <LtOperationProgress Status="@refresh" Label="Storage re-measure progress" />
+            </div>
+        }
+        @if (_refreshError is { } refreshError)
+        {
+            <p class="lt-cluster-error" role="alert" data-lt-cluster="remeasure-error">@refreshError</p>
+        }
         <div class="lt-toolbar">
             <LtButton OnClick="RefreshUsageAsync">Refresh</LtButton>
             @if (Scope is null && _info.Value is { ClusterId.Length: > 0 })
             {
-                <LtButton data-lt-cluster="measure" OnClick="() => _confirmDeep = true">Re-measure every shard...</LtButton>
+                @if (IsRefreshing)
+                {
+                    <LtButton data-lt-cluster="stop-measure" Variant="LtButtonVariant.Quiet" Disabled="@(RunningRefresh is null)" OnClick="StopRefreshAsync">Stop re-measuring</LtButton>
+                }
+                else
+                {
+                    <LtButton data-lt-cluster="measure" OnClick="() => _confirmDeep = true">Re-measure every shard...</LtButton>
+                }
             }
         </div>
     }
@@ -88,6 +113,6 @@ else
                           ObjectName="@confirmed.ClusterId"
                           ConfirmText="Re-measure"
                           OnConfirm="MeasureDeeplyAsync">
-        <p>This walks every leaf of every shard of every tree to re-measure storage. It is expensive on a large estate and changes nothing.</p>
+        <p>This walks every leaf of every shard of every tree to re-measure storage. It is expensive on a large estate and changes nothing. It runs on the cluster with its progress shown here, so you can leave this page while it runs.</p>
     </LtConfirmDestructive>
 }

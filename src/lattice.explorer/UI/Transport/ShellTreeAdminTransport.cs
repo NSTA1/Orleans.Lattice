@@ -2,6 +2,10 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 
+// Still calls the deprecated blocking tree-administration verbs (LATTICE0002); the Explorer moves to
+// ILatticeTreeAdminOperations in the second #4124 change, which removes this suppression.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
 /// <summary>
