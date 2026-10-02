@@ -96,13 +96,17 @@ Tools contributed by [installable apps](../lattice.api.mcp.apps/README.md) are f
 
 Discovery reads the caller's grants through the auth facade (`ILatticeAuthAdmin`, registered on the silo by `AddLatticeAuthApi()`) as a trusted system-origin read; with no auth facade registered it grants no group, so an authenticated caller is offered no facade-group tool - only `lattice_capabilities`, plus any installable-app tools whose role it holds, which are gated by role binding rather than by that facade. A remote head reaches that facade over its `Auth` endpoint instead - see [Remote hosting](remote.md#discovery-requires-the-auth-endpoint).
 
+## Delegated tenant access tools
+
+The [delegated tenant access tools](tools.md#delegated-tenant-access-tools) add no authorization path: they stamp the caller credential and let `ILatticeTenantDirectoryAdmin` and `ILatticeTenantPolicyAdmin` decide, so a caller acts on a tenant only as a platform operator or an admin of that tenant, and the facades' confinement rules, caps and feature flag apply unchanged. A confinement refusal is answered with fixed text naming the rule, never with the facade's message, so a refusal cannot echo another tenant's identifiers. An authorization denial is not mapped and stays a denial.
+
 ## Rejected calls are sanitised
 
 A call the MCP host classifies as the caller's mistake (see [Tools](tools.md#client-errors-are-answered-not-logged-as-faults)) is answered with an error result and counted on `orleans.lattice.api.mcp.tool.client_errors` rather than thrown. Its message is sanitised once, before it is returned or logged: every control character and Unicode line or paragraph separator is replaced with `?`, and a message longer than 2,048 characters is cut there and ends in `...`, so a caller-chosen key, path or argument name cannot forge a record in a line-oriented log. The names of undeclared arguments are narrowed further: at most five are named, each cut to 64 characters, with any character other than an ASCII letter or digit, `_`, `-` or `.` replaced. A fault the host does not classify - an authorization denial included - is still thrown, never downgraded to a client error.
 
 ## Least privilege by default
 
-The server ships no tools. Each module is added explicitly, and within a module the destructive verbs (data writes, backup control, auth administration, replication control, schema management, tree lifecycle and control, and tenant lifecycle and residency) stay hidden unless the host enables them. A minimal deployment exposes only the read tools it needs; a control deployment opts each destructive verb in deliberately.
+The server ships no tools. Each module is added explicitly, and within a module the destructive verbs (data writes, backup control, auth administration, replication control, schema management, tree lifecycle and control, and tenant lifecycle, residency and delegated access administration) stay hidden unless the host enables them. A minimal deployment exposes only the read tools it needs; a control deployment opts each destructive verb in deliberately.
 
 ## OAuth discovery is anonymous by design
 
