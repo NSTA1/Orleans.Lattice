@@ -1,5 +1,12 @@
 using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Api.TreeAdmin.Grpc;
+using Orleans.Lattice.Explorer.UI.Operations;
+
+// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
+// they stay supported until the next major version.
+#pragma warning disable LATTICE0002
 
 // These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
 // they stay supported until the next major version.
@@ -7,7 +14,11 @@ using Orleans.Lattice.Api.TreeAdmin;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Transport;
 
-/// <summary>The Shell's <see cref="ILatticeTreeAdmin"/> transport adapter.</summary>
+/// <summary>
+/// The Shell's <see cref="ILatticeTreeAdmin"/> transport adapter, including its
+/// accept-then-poll <see cref="ILatticeTreeAdminOperations"/> verbs (#4124), which the
+/// areas reach through the same adapter instance.
+/// </summary>
 [TestFixture]
 public sealed class ShellTreeAdminTransportTests : ShellTransportAdapterContractTests<ILatticeTreeAdmin>
 {
@@ -76,8 +87,79 @@ public sealed class ShellTreeAdminTransportTests : ShellTransportAdapterContract
         new("TriggerShardCompactionAsync", Service + "TriggerShardCompaction", (f, ct) => f.TriggerShardCompactionAsync("orders", 1, ct)),
         new("GetHistoryRetentionAsync", Service + "GetHistoryRetention", (f, ct) => f.GetHistoryRetentionAsync("orders", ct)),
         new("SetHistoryRetentionAsync", Service + "SetHistoryRetention", (f, ct) => f.SetHistoryRetentionAsync("orders", TreeHistoryRetentionMode.FullValue, TimeSpan.FromDays(7), ct)),
+        new("StartViewRebuildAsync", Service + "StartViewRebuild", (f, ct) => Operations(f).StartViewRebuildAsync("by-customer", "op-1", ct)),
+        new("StartViewReconcileAsync", Service + "StartViewReconcile", (f, ct) => Operations(f).StartViewReconcileAsync("by-customer", null, ct)),
+        new("StartTagIndexReconcileAsync", Service + "StartTagIndexReconcile", (f, ct) => Operations(f).StartTagIndexReconcileAsync("colour", null, ct)),
+        new("StartWalMoveAsync", Service + "StartWalMove", (f, ct) => Operations(f).StartWalMoveAsync("orders", 0, "cold", null, "op-2", ct)),
+        new("StartOrphanedLeavesAuditAsync", Service + "StartOrphanedLeavesAudit", (f, ct) => Operations(f).StartOrphanedLeavesAuditAsync("orders", null, ct)),
+        new("StartOrphanedLeavesRepairAsync", Service + "StartOrphanedLeavesRepair", (f, ct) => Operations(f).StartOrphanedLeavesRepairAsync("orders", null, ct)),
+        new("GetOperationStatusAsync", Service + "GetTreeAdminOperationStatus", (f, ct) => Operations(f).GetOperationStatusAsync("op-1", ct)),
+        new("ListOperationsAsync", Service + "ListTreeAdminOperations", (f, ct) => Operations(f).ListOperationsAsync(new LatticeOperationListRequest(), ct)),
+        new("CancelOperationAsync", Service + "CancelTreeAdminOperation", (f, ct) => Operations(f).CancelOperationAsync("op-1", ct)),
     ];
 
+    private static readonly LatticeOperationHandle Handle = new()
+    {
+        OperationId = "op-1",
+        Kind = TreeAdminOperationKinds.ViewRebuild,
+        Scope = new LatticeOperationScope { TenantId = "default", TreeIds = ["orders"] },
+        Created = true,
+    };
+
+    internal override void ScriptSuccess(ShellTransportPeer peer)
+    {
+        foreach (var start in new[] { "StartViewRebuild", "StartViewReconcile", "StartTagIndexReconcile", "StartWalMove", "StartOrphanedLeavesAudit", "StartOrphanedLeavesRepair" })
+        {
+            peer.Respond(Service + start, Handle);
+        }
+
+        peer.Respond(Service + "GetTreeAdminOperationStatus", new TreeAdminOperationStatusResponse());
+        peer.Respond(Service + "CancelTreeAdminOperation", new TreeAdminOperationStatusResponse());
+        peer.Respond(Service + "ListTreeAdminOperations", new LatticeOperationPage());
+    }
+
+    [Test]
+    public async Task The_adapter_runs_tracked_operations_and_a_missing_status_reads_as_null()
+    {
+        using var circuit = new ShellTransportCircuit();
+        var admin = circuit.Resolve<ILatticeTreeAdmin>();
+        ScriptSuccess(circuit.Peer);
+        var operations = TreeAdminOperationsAccess.Of(admin);
+
+        Assert.That(operations, Is.SameAs(admin), "The areas reach the operations through the registered adapter.");
+        var handle = await operations!.StartViewRebuildAsync("by-customer", "op-1");
+        var status = await operations.GetOperationStatusAsync("op-1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handle.OperationId, Is.EqualTo("op-1"));
+            Assert.That(status, Is.Null);
+        });
+    }
+
+    [Test]
+    public void The_operation_verbs_validate_their_arguments_without_a_call()
+    {
+        using var circuit = new ShellTransportCircuit();
+        var operations = Operations(circuit.Resolve<ILatticeTreeAdmin>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => operations.StartViewRebuildAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.StartViewReconcileAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.StartTagIndexReconcileAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.StartWalMoveAsync("orders", 0, string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.StartOrphanedLeavesAuditAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.StartOrphanedLeavesRepairAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.GetOperationStatusAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => operations.ListOperationsAsync(null!), Throws.ArgumentNullException);
+            Assert.That(() => operations.CancelOperationAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(circuit.Peer.Requests, Is.Empty);
+        });
+    }
+
+    private static ILatticeTreeAdminOperations Operations(ILatticeTreeAdmin admin) =>
+        TreeAdminOperationsAccess.Of(admin) ?? throw new AssertionException("The Shell's tree-administration adapter must run tracked operations.");
     [Test]
     public void An_unknown_tree_maps_to_key_not_found()
     {

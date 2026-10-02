@@ -1,18 +1,23 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Suggestions;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Operations;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
 /// <summary>
-/// <c>/cluster/orphans</c>: a tree's orphaned-leaf survey, audit and repair. Each
-/// is driven batch by batch to completion (and can be stopped), and the verdict
-/// says plainly whether the pass rules the defect out, found leaves, or could not
-/// judge part of the tree. Repair needs the TreeLifecycle grant and a typed
-/// confirmation, and is always followed by a fresh audit.
+/// <c>/cluster/orphans</c>: a tree's orphaned-leaf audit, repair and survey. An audit
+/// or repair runs on the cluster as a tracked whole-tree operation (#4124) whose
+/// progress the page follows, picks up again when it is reopened, and can stop; its
+/// verdict says plainly whether the pass rules the defect out, found leaves, or could
+/// not judge part of the tree, and the per-leaf findings are read on request batch by
+/// batch. A survey (a read-only key census) is driven batch by batch from the page.
+/// Repair needs the TreeLifecycle grant and a typed confirmation, and is always
+/// followed by a fresh audit.
 /// </summary>
 public partial class ClusterOrphansPage : IDisposable
 {
@@ -31,6 +36,10 @@ public partial class ClusterOrphansPage : IDisposable
     private string? _error;
     private bool _survey;
     private bool _confirm;
+    private bool _starting;
+    private bool _cancelling;
+    private ClusterOrphanOperationResult? _totals;
+    private TreeAdminOperationWatch _watch = default!;
 
     /// <summary>The tree to audit, from the address's <c>tree</c> query.</summary>
     [Parameter]
@@ -52,7 +61,13 @@ public partial class ClusterOrphansPage : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
-    private bool Running => _run is not null;
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
+
+    private bool Running => _run is not null || _starting || _watch.IsRunning;
+
+    private bool CanRepair => _access.CanManageTreeLifecycle && !Running
+        && (_totals is { Repair: false, Repairable: > 0 } || _pass is { Complete: true, Repairable: > 0 });
 
     /// <inheritdoc />
     public void Dispose()
@@ -60,11 +75,15 @@ public partial class ClusterOrphansPage : IDisposable
         Stop();
         _runs.Leave();
         _lifetime.Leave();
+        _watch?.Dispose();
     }
 
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
+        _watch = new TreeAdminOperationWatch(Time);
+        _watch.Changed += OnWatchChanged;
+        _watch.Finished += OnWatchFinished;
         _tree = TreeId;
         _access = ClusterTreeAccess.None(TreeId ?? string.Empty);
         if (TreeId is { } tree)
@@ -73,6 +92,19 @@ public partial class ClusterOrphansPage : IDisposable
                 ct => ClusterTreeAccess.ProbeAsync(Facades.RequireTreeAdmin(), tree, ct),
                 _lifetime.Token);
             _access = _accessLoad.Value ?? _access;
+            if (_access.CanViewDiagnostics && TreeAdminOperationsAccess.Of(Facades.TreeAdmin) is { } operations)
+            {
+                try
+                {
+                    await _watch.ResumeAsync(
+                        operations,
+                        [(TreeAdminOperationKinds.OrphanedLeavesAudit, tree), (TreeAdminOperationKinds.OrphanedLeavesRepair, tree)],
+                        _lifetime.Token);
+                }
+                catch (OperationCanceledException) when (_lifetime.IsLeft)
+                {
+                }
+            }
         }
     }
 
@@ -100,31 +132,138 @@ public partial class ClusterOrphansPage : IDisposable
         _runs.Renew();
     }
 
-    private Task AuditAsync()
+    private Task StopAsync()
     {
-        var admin = Facades.RequireTreeAdmin();
-        var tree = TreeId!;
-        return _survey
-            ? DriveAsync("Survey", (resume, ct) => admin.SurveyOrphanedLeavesAsync(tree, resume, ct))
-            : DriveAsync("Audit", (resume, ct) => admin.AuditOrphanedLeavesAsync(tree, resume, ct));
+        if (_run is not null)
+        {
+            Stop();
+            return Task.CompletedTask;
+        }
+
+        return CancelOperationAsync();
     }
 
-    private async Task RepairAsync()
+    private Task AuditAsync()
+    {
+        if (_survey)
+        {
+            var admin = Facades.RequireTreeAdmin();
+            var tree = TreeId!;
+            _totals = null;
+            return DriveAsync("Survey", (resume, ct) => admin.SurveyOrphanedLeavesAsync(tree, resume, ct));
+        }
+
+        return StartOperationAsync(repair: false);
+    }
+
+    private Task FindingsAsync()
     {
         var admin = Facades.RequireTreeAdmin();
         var tree = TreeId!;
-        var repaired = await DriveAsync("Repair", (resume, ct) => admin.RepairOrphanedLeavesAsync(tree, resume, ct));
-        if (repaired is { Complete: true })
+        _totals = null;
+        return DriveAsync("Audit", (resume, ct) => admin.AuditOrphanedLeavesAsync(tree, resume, ct));
+    }
+
+    private Task RepairAsync() => StartOperationAsync(repair: true);
+
+    private async Task StartOperationAsync(bool repair)
+    {
+        _error = null;
+        if (TreeId is not { } tree || Running)
         {
-            var count = repaired.Findings.Count(finding => finding.Disposition == TreeOrphanedLeafDisposition.Repaired);
-            Toasts.Show($"Repair finished: {ClusterFormat.Plural(count, "leaf", "leaves")} unspliced. Auditing again.", LtToastTone.Success);
-            if (!_lifetime.IsLeft)
-            {
-                await AuditAsync();
-            }
+            return;
+        }
+
+        if (TreeAdminOperationsAccess.Of(Facades.TreeAdmin) is not { } operations)
+        {
+            _error = "This Explorer cannot run an orphaned-leaf pass as a tracked operation.";
+            return;
+        }
+
+        _starting = true;
+        _pass = null;
+        _totals = null;
+        try
+        {
+            await _watch.StartAsync(
+                operations,
+                repair ? TreeAdminOperationKinds.OrphanedLeavesRepair : TreeAdminOperationKinds.OrphanedLeavesAudit,
+                tree,
+                (operationId, ct) => repair
+                    ? operations.StartOrphanedLeavesRepairAsync(tree, operationId, ct)
+                    : operations.StartOrphanedLeavesAuditAsync(tree, operationId, ct),
+                _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            _error = repair
+                ? ClusterFaults.Describe(exception) + " A repair's reply is not proof of what happened: audit again to learn the tree's true state."
+                : ClusterFaults.Describe(exception);
+        }
+        finally
+        {
+            _starting = false;
         }
     }
 
+    private async Task CancelOperationAsync()
+    {
+        _cancelling = true;
+        try
+        {
+            await _watch.CancelAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            _error = ClusterFaults.Describe(exception);
+        }
+        finally
+        {
+            _cancelling = false;
+        }
+    }
+
+    private void OnWatchChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnWatchFinished(LatticeOperationStatus status) => _ = InvokeAsync(async () =>
+    {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
+        var repair = string.Equals(status.Kind, TreeAdminOperationKinds.OrphanedLeavesRepair, StringComparison.Ordinal);
+        switch (status.State)
+        {
+            case LatticeOperationState.Succeeded:
+                _totals = ClusterOrphanOperationResult.From(status);
+                _watch.Clear();
+                if (repair)
+                {
+                    Toasts.Show($"Repair finished: {ClusterFormat.Plural(_totals.Repaired, "leaf", "leaves")} unspliced. Auditing again.", LtToastTone.Success);
+                    StateHasChanged();
+                    await StartOperationAsync(repair: false);
+                }
+
+                break;
+            case LatticeOperationState.Cancelled:
+                _error = "Stopped. The pass described only the part of the tree it reached.";
+                break;
+            default:
+                _error = repair
+                    ? "The repair failed. A repair's outcome is not proof of what happened: audit again to learn the tree's true state."
+                    : "The audit failed.";
+                break;
+        }
+
+        StateHasChanged();
+    });
     private async Task<ClusterOrphanPass?> DriveAsync(string kind, Func<string?, CancellationToken, Task<TreeOrphanedLeafReport>> batch)
     {
         _error = null;
@@ -175,6 +314,27 @@ public partial class ClusterOrphansPage : IDisposable
         }
     }
 
+    private static LtStateRole TotalsState(ClusterOrphanOperationResult totals) => totals switch
+    {
+        { IsClean: true } => LtStateRole.Healthy,
+        { Orphaned: > 0 } => LtStateRole.Drift,
+        _ => LtStateRole.Unknown,
+    };
+
+    private static string TotalsLabel(ClusterOrphanOperationResult totals) => totals switch
+    {
+        { IsClean: true } => "Clean",
+        { Orphaned: > 0 } => "Orphans found",
+        _ => "Not judged",
+    };
+
+    private static string TotalsSentence(ClusterOrphanOperationResult totals) => totals switch
+    {
+        { IsClean: true } => "No orphaned leaves, and every region was judged: this rules them out as the cause of an unbounded WAL.",
+        { Repair: true, Orphaned: > 0 } => $"{ClusterFormat.Plural(totals.Orphaned, "orphaned leaf", "orphaned leaves")}: {ClusterFormat.Count(totals.Repaired)} unspliced, {ClusterFormat.Count(totals.Refused)} refused.",
+        { Orphaned: > 0 } => $"{ClusterFormat.Plural(totals.Orphaned, "orphaned leaf", "orphaned leaves")}, {ClusterFormat.Count(totals.Repairable)} repairable.",
+        _ => $"No orphan in what was judged, but {ClusterFormat.Plural(totals.Gaps, "region")} could not be judged: that is not a clean bill of health.",
+    };
     private static LtStateRole VerdictState(ClusterOrphanPass pass) => pass switch
     {
         { IsClean: true } => LtStateRole.Healthy,

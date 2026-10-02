@@ -496,6 +496,7 @@ internal sealed partial class LatticeTreeAdmin
             [TreeAdminOperationResultKeys.CopiedThroughOffset] = Invariant(receipt.CopiedThroughOffset),
             [TreeAdminOperationResultKeys.SourceHighestOffset] = Invariant(receipt.SourceHighestOffset),
             [TreeAdminOperationResultKeys.TargetHighestOffset] = Invariant(receipt.TargetHighestOffset),
+            [TreeAdminOperationResultKeys.SourceRetained] = receipt.SourceRetained ? "true" : "false",
         };
 
     private static string Invariant(long value) => value.ToString(CultureInfo.InvariantCulture);
