@@ -202,6 +202,11 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// <see cref="SchemaOperationReadTools"/>; everything else it adds is schema-control
     /// gated. The total is 98.
     /// </para>
+    /// <para>
+    /// The WAL reclamation read (#4237), <c>lattice_treeadmin_wal_reclamation</c>, is a
+    /// default-on read, not a lifecycle verb, so the opt-in's set is unchanged and the
+    /// total is 99.
+    /// </para>
     /// </remarks>
     [Test]
     public void The_advertised_surface_is_the_measured_size()
@@ -220,10 +225,10 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(admitted, Is.Unique, "A duplicate tool name would make the count meaningless.");
             Assert.That(
-                admitted, Has.Count.EqualTo(98),
+                admitted, Has.Count.EqualTo(99),
                 "53 before the lifecycle opt-in plus the 33 verbs it contributes, plus the 8 #4126 operation tools, "
-                + "the 2 #4124 operation reads and the 2 #4209 schema operation reads. Add the two meta tools for the "
-                + "100 a client sees, against 55 before.");
+                + "the 2 #4124 operation reads, the 2 #4209 schema operation reads and the #4237 WAL reclamation "
+                + "read. Add the two meta tools for the 101 a client sees, against 55 before.");
         });
     }
 
@@ -247,6 +252,10 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
             Assert.That(
                 _app.Services.GetService<Orleans.Lattice.Api.TreeAdmin.ILatticeStorageUsageOperations>(), Is.Not.Null,
                 "An advertised storage re-measure tool needs the facade it invokes.");
+            Assert.That(TreeAdminToolNames(), Does.Contain("lattice_treeadmin_wal_reclamation"));
+            Assert.That(
+                _app.Services.GetService<Orleans.Lattice.Api.TreeAdmin.ILatticeWalReclamation>(), Is.Not.Null,
+                "The advertised WAL reclamation read needs the facade it invokes.");
         });
     }
 

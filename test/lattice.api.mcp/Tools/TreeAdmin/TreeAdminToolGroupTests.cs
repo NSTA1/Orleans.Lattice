@@ -86,6 +86,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_snapshot_status",
         "lattice_treeadmin_wal_placement_inspect",
         "lattice_treeadmin_wal_placement_audit",
+        "lattice_treeadmin_wal_reclamation",
         "lattice_treeadmin_orphaned_leaves_audit",
         "lattice_treeadmin_wal_move_plan",
         "lattice_treeadmin_view_list",
