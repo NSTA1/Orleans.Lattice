@@ -16,13 +16,9 @@ public sealed partial class AgentDocsConsistencyTests
 
     // RPCs known to be on a gRPC service but missing from its agent spec, as
     // "<spec path> <rpc name>". The list only shrinks: an entry that is now
-    // documented fails the ratchet below, so it must be removed here too.
-    private static readonly string[] KnownUndocumentedRpcs =
-    {
-        "api/backup.json StartBackupHealthCheck",
-        "api/backup.json StartCatalogRebuild",
-        "api/backup.json StartCatalogScrub",
-    };
+    // documented fails the ratchet below, so it must be removed here too. Prefer
+    // documenting the RPC to adding an entry.
+    private static readonly string[] KnownUndocumentedRpcs = Array.Empty<string>();
 
     [Test]
     public void Every_grpc_rpc_in_the_methods_catalogue_has_an_agent_spec_operation()

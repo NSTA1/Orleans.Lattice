@@ -2330,6 +2330,196 @@
       ]
     },
     {
+      "id": "lattice_backup_start_health_check",
+      "in_process": "BackupToolInvocations.StartHealthCheckAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-backup-health-check",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartHealthCheckTool"
+      },
+      "request": [
+        {
+          "name": "backupId",
+          "type": "string",
+          "required": true,
+          "notes": "The content-addressed id of the backup to verify."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupHealthCheckAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported. On success the fresh report is persisted as the backup's latest health state.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartHealthCheckTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_catalog_rebuild",
+      "in_process": "BackupToolInvocations.StartCatalogRebuildAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-catalog-rebuild",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogRebuildTool"
+      },
+      "request": [
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogRebuildAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogRebuildTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
+      "id": "lattice_backup_start_catalog_scrub",
+      "in_process": "BackupToolInvocations.StartCatalogScrubAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#start-catalog-scrub",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogScrubTool"
+      },
+      "request": [
+        {
+          "name": "pruneOrphans",
+          "type": "bool",
+          "required": false,
+          "default": "false",
+          "notes": "When true, remove the orphan rows found; when false (the default), only flag them."
+        },
+        {
+          "name": "operationId",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Optional idempotency id for the tracked operation; null generates one."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupOperationHandle",
+        "shape": "Structured JSON projection returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogScrubAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported. PruneOrphans false only flags orphan rows; true removes them.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogScrubTool",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+      ]
+    },
+    {
       "id": "lattice_backup_start_incremental",
       "in_process": "BackupToolInvocations.StartIncrementalBackupAsync",
       "grpc_method": null,
