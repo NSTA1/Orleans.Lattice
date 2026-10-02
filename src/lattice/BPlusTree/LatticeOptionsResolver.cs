@@ -893,6 +893,13 @@ internal sealed class LatticeOptionsResolver(
         return BuildResolved(treeId, entry);
     }
 
+    /// <summary>
+    /// The configured, non-structural options for <paramref name="treeId"/>,
+    /// read without any registry call. For a caller that needs only a
+    /// configured value, such as a timeout, before the tree may be registered.
+    /// </summary>
+    internal LatticeOptions GetConfiguredOptions(string treeId) => optionsMonitor.Get(treeId);
+
     private ResolvedLatticeOptions BuildResolved(string treeId, State.TreeRegistryEntry? entry)
     {
         var baseOptions = optionsMonitor.Get(treeId);

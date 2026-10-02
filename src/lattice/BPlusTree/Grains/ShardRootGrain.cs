@@ -2651,7 +2651,7 @@ internal sealed partial class ShardRootGrain(
         return arr;
     }
 
-    private async Task EnsureRootAsync()
+    private async Task EnsureRootAsync(bool forWrite = false)
     {
         // Steady-state fast path: once a root exists, short-circuit with
         // zero storage I/O and no gate acquisition. This is the only path
@@ -2664,7 +2664,7 @@ internal sealed partial class ShardRootGrain(
         await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            await EnsureRootSlowWithDeadlineAsync();
+            await EnsureRootSlowWithDeadlineAsync(forWrite);
         }
         finally
         {
@@ -2711,19 +2711,24 @@ internal sealed partial class ShardRootGrain(
     /// the seed is awaited unbounded, restoring the historical behaviour.
     /// </para>
     /// </summary>
-    private async Task EnsureRootSlowWithDeadlineAsync()
+    private async Task EnsureRootSlowWithDeadlineAsync(bool forWrite)
     {
-        var timeout = (await GetOptionsAsync()).ActivationReadyTimeout;
+        // Read from configuration, not a registry resolve: the tree may not be
+        // registered until the seed below runs, and a resolve of a purged id
+        // refuses (issue #4219). The value is a non-structural option, so it is
+        // the one the resolved options carry.
+        var timeout = _cachedOptions?.ActivationReadyTimeout
+            ?? optionsResolver.GetConfiguredOptions(TreeId).ActivationReadyTimeout;
         if (timeout == Timeout.InfiniteTimeSpan)
         {
-            await EnsureRootSlowAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            await EnsureRootSlowAsync(forWrite).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             return;
         }
 
         using var deadline = new CancellationTokenSource(timeout);
         try
         {
-            await EnsureRootSlowAsync().WaitAsync(deadline.Token)
+            await EnsureRootSlowAsync(forWrite).WaitAsync(deadline.Token)
                 .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
@@ -2746,7 +2751,7 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    private async Task EnsureRootSlowAsync()
+    private async Task EnsureRootSlowAsync(bool forWrite)
     {
         // Re-check under the gate: a turn that lost the race to the gate
         // observes the winner's published RootNodeId and returns without
@@ -2793,10 +2798,11 @@ internal sealed partial class ShardRootGrain(
             var registry = grainFactory.GetLatticeRegistry();
             if (!await registry.ExistsAsync(TreeId))
             {
-                // Reached unregistered only on a read: a write registered the
-                // tree in PrepareForWriteAsync first. A read must not recreate
-                // a purged tree (issue #4219).
-                await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, TreeId);
+                // A write is the deliberate reuse of an id (issue #3940) and
+                // registers it; a read must not recreate a purged tree
+                // (issue #4219).
+                if (!forWrite)
+                    await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, TreeId);
                 await registry.RegisterAsync(TreeId);
             }
             state.State.IsRegistered = true;
@@ -2918,46 +2924,16 @@ internal sealed partial class ShardRootGrain(
     /// <summary>
     /// <see cref="PrepareForOperationAsync"/> for an entry point that writes
     /// data. A write is the deliberate reuse of an id that issue #3940 defines:
-    /// when this shard is unseeded and the tree has no registry row - a tree
-    /// never created, or one that was purged - the write registers it before the
-    /// seed, so the read-side seed guard in <see cref="EnsureRootSlowAsync"/>
-    /// (issue #4219) never refuses it. Costs nothing on a seeded shard.
+    /// when this shard seeds and the tree has no registry row - a tree never
+    /// created, or one that was purged - the seed registers it without the
+    /// read-side purge guard (issue #4219). Identical to
+    /// <see cref="PrepareForOperationAsync"/> on a seeded shard.
     /// </summary>
-    private Task PrepareForWriteAsync() =>
-        state.State.RootNodeId is null && !state.State.IsRegistered
-            ? PrepareForWriteSlowAsync()
-            : PrepareForOperationAsync();
+    private Task PrepareForWriteAsync() => PrepareForOperationAsync(forWrite: true);
 
-    private async Task PrepareForWriteSlowAsync()
-    {
-        // Same order as PrepareForOperationAsync: a deleted, retired or
-        // redirected shard refuses the write before anything is registered.
-        ThrowIfTreeRejecting();
-        ThrowIfRetainedRedirect();
-        ThrowIfDeleted();
-        ThrowIfRetired();
+    private Task PrepareForOperationAsync() => PrepareForOperationAsync(forWrite: false);
 
-        await RegisterForWriteAsync();
-        await PrepareForOperationAsync();
-    }
-
-    /// <summary>
-    /// Registers this shard's tree when it has no registry row, as a write
-    /// does. See <see cref="PrepareForWriteAsync"/>.
-    /// </summary>
-    private async Task RegisterForWriteAsync()
-    {
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-            return;
-
-        // The interleaved probe first, for the reason EnsureRootSlowAsync
-        // gives (issue 4128): RegisterAsync is only for a missing row.
-        var registry = grainFactory.GetLatticeRegistry();
-        if (!await registry.ExistsAsync(TreeId))
-            await registry.RegisterAsync(TreeId);
-    }
-
-    private Task PrepareForOperationAsync()
+    private Task PrepareForOperationAsync(bool forWrite)
     {
         // Order matters: a shard that participated as the *source* of an
         // online resize transitions Reject -> Cleanup, which sets BOTH
@@ -2994,10 +2970,10 @@ internal sealed partial class ShardRootGrain(
             return Task.CompletedTask;
         }
 
-        return PrepareForOperationSlowAsync();
+        return PrepareForOperationSlowAsync(forWrite);
     }
 
-    private async Task PrepareForOperationSlowAsync()
+    private async Task PrepareForOperationSlowAsync(bool forWrite)
     {
         // Bracketed as a routing mutation (issue #3474): the serial reads that
         // reach here are exempt from the call-filter bracket, yet this path can
@@ -3006,7 +2982,7 @@ internal sealed partial class ShardRootGrain(
         BeginRoutingMutation();
         try
         {
-            await EnsureRootAsync();
+            await EnsureRootAsync(forWrite);
             await ResumePendingPromotionAsync();
             await ResumePendingBulkGraftAsync();
             await ResumePendingChildLinksAsync();
