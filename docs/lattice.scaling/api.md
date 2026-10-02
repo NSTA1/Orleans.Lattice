@@ -62,7 +62,7 @@ All are immutable, serializable value types.
 | `WalRetainedBytes` | `long` | Retained WAL bytes against this key. |
 | `Saturation` | `WalSaturationState` | Worst-case saturation of the trees with partitions backed by this key, as the answering silo's WAL saturation signal reports them (tree-level, not per partition). |
 | `Classification` | `WalPressureClassification` | Throughput-bound, capacity-bound, or none. |
-| `OverThreshold` | `bool` | Retained bytes crossed the advisory fraction (the capacity-bound trigger). |
+| `OverThreshold` | `bool` | The retained bytes of the trees on this key that declare a `WalMaxRetainedBytes` ceiling crossed the advisory fraction of those trees' ceilings attributed to this key (the capacity-bound trigger); always `false` when no tree on the key declares a ceiling. |
 
 ### `WalRebalanceRecommendation`
 

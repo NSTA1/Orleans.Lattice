@@ -1,6 +1,6 @@
 # Leaf-Projection Rebuild & Digest
 
-Orleans.Lattice's per-shard write-ahead log (WAL) is, in a fully replicated
+Orleans.Lattice's partitioned write-ahead log (WAL) is, in a fully replicated
 deployment, the canonical durable record of every leaf mutation. Each leaf
 grain materialises that log into a per-activation in-memory projection
 (the entry cache - a sorted dictionary owned by the leaf grain for the
@@ -439,7 +439,7 @@ Three triggers classify an individual
 partition - but only the **first** indicates missing data, and only
 the first is fatal:
 
-1. **WAL trimmed past checkpoint.** Partition `p`'s per-shard WAL
+1. **WAL trimmed past checkpoint.** Partition `p`'s WAL
    has GC'd entries the leaf still considers unapplied. A tail
    replay would skip those entries and converge to the wrong state.
    Skipped unless the partition's checkpoint is positive: the -1

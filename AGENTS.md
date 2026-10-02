@@ -57,7 +57,8 @@ closes.
 
 - `src/lattice/` - the core `Orleans.Lattice` library. Grains are `internal`
   under `BPlusTree/Grains/`; persistent state POCOs under `BPlusTree/State/`
-  (the materialised-view grains and their states sit in `Views/`);
+  (the materialised-view grains and their states sit in `Views/`, and the WAL
+  materialiser pin grain keeps its state beside it in `BPlusTree/Grains/`);
   CRDT and low-level types under `Primitives/`.
 - The optional add-on packages (for example replication, the API facade family
   and their gRPC and MCP bindings, auth and membership, backup, storage
@@ -72,6 +73,10 @@ closes.
   `docs/crdt/` conceptual topic and the `docs/videos/` companion pages for the
   video series, neither with a `src/`/`test/` counterpart).
 - `samples/`, `benchmark/` - runnable samples and the throughput rig.
+- `apps/` (the container host apps), `reference-architecture/` (the standalone
+  deployment kit), `spec/` (the TLA+ specification of the atomic-commit
+  protocol), `docs-site/` (the documentation-site build), and `tools/`
+  (repository scripts, such as the repository-wide gate runner).
 - `videos/` - the educational video series: a HyperFrames (HTML-to-video)
   workspace with its own CI lane. See [videos/README.md](videos/README.md) and
   the **video-production** skill (`.github/skills/video-production/SKILL.md`).

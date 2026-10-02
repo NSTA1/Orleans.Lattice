@@ -8,7 +8,7 @@ tenant or key is a type-ahead [picker](navigation-model.md#pickers).
 
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
-| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | Reads one tree-catalogue page. No state reader, no served state API, or a permission denial makes the area Hidden. A disconnected first load is Unavailable with a sign-in or connect reason; other catalogue faults are Unavailable with a fixed retry sentence. |
+| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | Reads one tree-catalogue page. No state reader, no served state API, or a permission denial makes the area Hidden. A disconnected first load is Unavailable with a sign-in or connect reason; other catalogue faults are Unavailable with a fixed sentence. |
 | Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden. |
 | Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin` | Mixed: `/access` is cluster-wide; the tenant-rooted form lists only that tenant's rules | Reads the smallest group catalogue page. A successful page makes the area Visible. A missing facade hides it. An anonymous denial is Unavailable with "Sign in to administer access on this cluster."; a signed-in denial or any other fault hides it. |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or fault is Hidden. |
@@ -340,9 +340,9 @@ region diagram.
 
 The route under `/cluster` accepts at most eight path segments after `cluster`.
 The Trees segment itself counts, so a tree id that is too deep is still listed
-but has no Cluster address. If a tree id's last segment is a view word such as
-`tools`, the overview link adds a trailing `overview` segment so the route is
-unambiguous.
+but has no Cluster address. If a tree id of two or more segments ends in a view
+word such as `tools`, the overview link adds a trailing `overview` segment so the
+route is unambiguous.
 
 The directory badge counts the tree list, so the badge and the list agree. Home
 reads, for example, "12 trees, plus 5 system trees, 3.2 GiB stored.", or "4 trees of
@@ -481,11 +481,14 @@ The Cluster palette commands are:
 | `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. |
 | `cluster.plan-wal-move` | Plan WAL move... | Opens the WAL move planner on `/cluster/wal`, then navigates to the query-addressed plan. |
 
-Cluster faults are shown as fixed, short sentences. An authorisation denial is
-"You do not have permission to do this."; missing trees say the cluster does
-not know the tree; unserved operations say the cluster does not serve that
-operation; timeouts say the cluster did not answer in time. Pages show the
-fixed error sentence beside the surface that made the call, or keep the status
+Cluster faults are shown as short sentences, never a stack or a status code. An
+authorisation denial is always "You do not have permission to do this.". Any
+other fault shows the message it carries: over gRPC, the cluster's sanitised
+status detail, or a fixed sentence for the status when the cluster sent none. A
+fault with no message of its own falls back to a fixed sentence: missing trees
+say the cluster does not know the tree; unserved operations say the cluster does
+not serve that operation; timeouts say the cluster did not answer in time. Pages
+show the error sentence beside the surface that made the call, or keep the status
 that the cluster owns and let the caller return to the same address later.
 
 ## See also

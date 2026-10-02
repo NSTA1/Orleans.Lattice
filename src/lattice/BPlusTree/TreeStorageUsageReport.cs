@@ -3,9 +3,9 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Byte-accurate retained-storage snapshot for a single Lattice tree,
 /// returned by <see cref="ILattice.GetStorageUsageAsync"/>. Aggregates the
-/// three physical surfaces a tree occupies - write-ahead-log (WAL) rows,
-/// snapshot blobs, and leaf/shard-root grain state - as exact retained
-/// on-wire byte counts rather than entry-count estimates. Values are a
+/// tree's WAL occupancy plus the logical payload footprint cached for
+/// snapshots and leaf rows - UTF-8 key bytes plus value bytes, with a
+/// tombstone counting its key only - rather than entry-count estimates. Values are a
 /// point-in-time sample; the aggregator may serve repeat calls from a short
 /// in-memory cache (configured via <see cref="LatticeOptions.StorageUsageCacheTtl"/>).
 /// </summary>
@@ -52,14 +52,16 @@ public readonly record struct TreeStorageUsageReport
     [Id(8)] public long WalPhysicalBytes { get; init; }
 
     /// <summary>
-    /// Snapshot blob bytes, read from snapshot-store metadata (content
-    /// length) without a full blob read. <c>0</c> when no checkpoint exists.
+    /// Snapshot row payload bytes, computed with the same UTF-8 key plus value
+    /// formula as leaf state. A tombstone contributes its key bytes only.
+    /// <c>0</c> when no checkpoint exists.
     /// </summary>
     [Id(2)] public long SnapshotBytes { get; init; }
 
     /// <summary>
-    /// Summed serialized leaf and shard-root grain-state bytes, read from
-    /// each grain's cached last-persisted length (no extra I/O).
+    /// Summed leaf row payload bytes, read from each leaf's cached running
+    /// footprint: UTF-8 key bytes plus value bytes, with tombstones counting
+    /// their key bytes only.
     /// </summary>
     [Id(3)] public long LeafStateBytes { get; init; }
 

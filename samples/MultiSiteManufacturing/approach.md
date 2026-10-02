@@ -201,15 +201,17 @@ Four sample-specific seams sit alongside the package:
   strip; without it, a Blazor circuit pinned to one silo would only
   see that silo's slice of replication activity.
 
-> **Receiver catch-up after WAL GC.** When one cluster has been
-> running long enough to GC old WAL entries and the peer's cursor has
-> fallen behind that point, auto-bootstrap fires and drains a
-> point-in-time snapshot from the sender cluster over the gRPC
-> remote-snapshot transport (`AddLatticeReplicationGrpc` registers the
-> `IRemoteSnapshotTransport` binding, and `AddLatticeReplication`
-> auto-wires the receiver-side `RemoteSnapshotProvider`), so a
-> long-disconnected or freshly-wiped receiver catches up automatically.
-> See the [snapshot &amp; bootstrap](../../docs/lattice.replication/snapshot-bootstrap.md)
+> **Receiver catch-up after WAL GC.** When a fall-off probe has a sender
+> oldest-available HLC for an origin and the receiver's per-origin high-water
+> mark is behind it, `AutoBootstrapOnFallOffLog` (enabled by default) starts a
+> point-in-time bootstrap over the gRPC remote-snapshot transport
+> (`AddLatticeReplicationGrpc` registers the `IRemoteSnapshotTransport` binding,
+> and `AddLatticeReplication` auto-wires the receiver-side
+> `RemoteSnapshotProvider`). The maintenance probe only has evidence for origins
+> present in the local WAL, so a freshly added or empty-WAL cluster is not
+> automatically re-seeded until there is an entry or another caller supplies the
+> sender's oldest HLC. See the
+> [snapshot &amp; bootstrap](../../docs/lattice.replication/snapshot-bootstrap.md)
 > docs for the cross-cluster bootstrap pipeline.
 
 ## 7. UI design
@@ -273,7 +275,8 @@ active injections.
 
 ## 8. Testing philosophy
 
-All tests run in process with in-memory storage - single-silo Orleans
+All tests run in process with in-memory storage (the coordinated-restore
+test adds a shared temp-directory backup sink) - single-silo Orleans
 `TestingHost` clusters or, for the gRPC contract tests, the host itself
 started in its `Testing` environment - so there is no Azurite
 dependency in the test suite, keeping CI fast and hermetic. The cross-cluster replication path itself is covered by

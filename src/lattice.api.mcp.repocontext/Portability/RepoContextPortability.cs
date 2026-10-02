@@ -246,10 +246,12 @@ internal static class RepoContextPortability
     /// dropped with it, so no orphaned vector is left behind.
     /// </para>
     /// <para>
-    /// When the key already exists in the target, the two expiries are joined the
-    /// way the core value model joins them: a durable side wins (it is the weaker
-    /// claim about disappearance, so honouring it can never shed an entry someone
-    /// expects to keep), otherwise the later of the two instants wins. The
+    /// When the key already exists in the target, the two expiries are joined
+    /// durable-wins - deliberately unlike the core CRDT expiry join, where a
+    /// durable write is the bottom of the join and leaves an existing expiry in
+    /// place: here a durable side wins (it is the weaker claim about
+    /// disappearance, so honouring it can never shed an entry someone expects to
+    /// keep), otherwise the later of the two instants wins. The
     /// reinstated life is expressed as a remaining duration at write time, so it
     /// can drift by the import's own latency - bounded, and in the safe direction
     /// of a marginally longer life rather than a premature disappearance.

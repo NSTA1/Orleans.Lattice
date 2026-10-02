@@ -11,9 +11,9 @@ namespace Orleans.Lattice;
 /// <see cref="CrdtLatticeExtensions.OrMap{TKey, TValue}(ILattice, string)"/>
 /// and reuse it for any number of operations on the same key.
 /// <para>
-/// Mutating methods read-modify-write under optimistic concurrency,
-/// retrying on CAS failure up to a configurable budget. Concurrent
-/// writes from different replicas under the same map key converge by
+/// Mutating methods read the key once to mint a typed delta, then apply
+/// that delta through the tree's CRDT merge path. Concurrent writes from
+/// different replicas under the same map key converge by
 /// recursing into <typeparamref name="TValue"/>'s
 /// <see cref="ICrdt{TSelf}.MergeFrom(TSelf)"/>; concurrent
 /// <c>Set</c>/<c>Remove</c> on the same map key follow add-wins
@@ -32,7 +32,7 @@ public readonly record struct OrMapAccessor<TKey, TValue>
     where TKey : notnull
     where TValue : ICrdt<TValue>, new()
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;
@@ -210,8 +210,8 @@ public readonly record struct OrMapAccessor<TKey, TValue>
     }
 
     /// <summary>
-    /// Merges <paramref name="other"/> into the stored state under
-    /// CAS. Useful for replication consumers that have computed a
+    /// Merges <paramref name="other"/> into the stored state with one typed
+    /// delta apply. Useful for replication consumers that have computed a
     /// delta out-of-band and want to apply it without reading the
     /// full map twice.
     /// </summary>

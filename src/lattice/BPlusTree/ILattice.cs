@@ -608,7 +608,7 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
-    /// Prefer <c>LatticeExtensions.ScanEntriesWhereAsync</c>.
+    /// Prefer <c>TypedLatticeExtensions.ScanEntriesAsync&lt;T&gt;</c> with a predicate.
     /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
@@ -1075,17 +1075,17 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Returns a byte-accurate <see cref="TreeStorageUsageReport"/> for this
-    /// tree - the retained on-wire footprint across the three physical
-    /// surfaces a tree occupies: write-ahead-log (WAL) rows, persisted
-    /// snapshot blobs, and leaf/shard-root grain state. Unlike
+    /// tree - WAL physical occupancy plus the logical row-payload footprint cached
+    /// for snapshots and leaves. Snapshot and leaf bytes count UTF-8 key bytes
+    /// plus value bytes, with a tombstone counting its key only. Unlike
     /// <see cref="DiagnoseAsync"/> (which reports entry counts), this surface
-    /// reports exact retained bytes so operators can size storage and drive
-    /// retention policy.
+    /// reports retained bytes so operators can size storage and drive retention
+    /// policy.
     /// <para>
     /// Repeated calls are served from a short in-memory cache configured via
     /// <see cref="LatticeOptions.StorageUsageCacheTtl"/> (default 10 seconds).
-    /// A cache-miss fans out to every physical shard root (leaf-state and
-    /// snapshot bytes) and every WAL partition (retained WAL bytes).
+    /// A cache-miss fans out to every physical shard root (leaf and snapshot
+    /// row-payload bytes) and every WAL partition (retained WAL bytes).
     /// </para>
     /// <para>
     /// When the configured <see cref="IWalStorageProvider"/> does not support

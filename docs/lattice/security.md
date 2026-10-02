@@ -20,7 +20,7 @@ a deployment adopts only what it needs:
    operation, and a tree key or range, allow or deny.
 3. **Enforcement** consults that decision on the core data path for every
    user-originated operation, fail-closed: a denied write throws and a denied
-   read reports absent.
+   point read reports absent.
 4. **External surfaces** project the same gated data and control planes to
    non-.NET callers, operators, and the Explorer - all authorizing through the
    very same gate, never a bespoke bypass.
@@ -88,9 +88,14 @@ covered in the
 
 The core library exposes an access-gate seam that defaults to an allow-all null
 gate. Registering the authorization package replaces it with the enforcing gate,
-which every user-originated core operation consults. Enforcement is fail-closed
+which every user-originated core read and write consults; the routing lookup
+`GetRoutingAsync`, which resolves a tree's physical id and shard map for the
+library's own coordinators, is deliberately ungated. Enforcement is fail-closed
 throughout: writes and deletes throw on denial, point reads of a denied key
-report absent, and range scans prune to the authorized subset server-side. A
+report absent, and range scans prune to the authorized subset server-side, while
+a read that cannot be narrowed per key - `CountPerShardAsync`, a projection
+digest, or a whole-tree report such as `DiagnoseAsync` - throws
+`LatticeAuthorizationDeniedException` under a partial grant as well as a deny. A
 range delete under partial authorization is **hard-denied** rather than silently
 narrowed, so a caller never deletes a subset while believing it deleted a range.
 The State API honours the same read-access visibility when membership and

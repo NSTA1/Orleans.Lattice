@@ -523,10 +523,9 @@ for ($i = @($siloPerSec).Count - 1; $i -ge 0; $i--) {
 }
 
 # Exception lines in the silo journal during this cohort's window
-# include cross-cohort residual-grain noise: the silo runs for the
-# lifetime of performance-report.ps1 (not per cohort), so wedged WAL
-# grains from prior cohorts' trees continue to throw against their
-# saturation-residual storage rows under the current cohort's wall
+# include cross-cohort residual-grain noise: earlier cohorts' trees
+# stay registered in the shared tables, so each freshly started silo's
+# background work keeps touching them under the current cohort's wall
 # clock. Filtering by the current cohort's tree id before counting
 # yields an accurate per-cohort exception tally for the verdict.
 # The raw count is preserved as a diagnostic so the operator can still

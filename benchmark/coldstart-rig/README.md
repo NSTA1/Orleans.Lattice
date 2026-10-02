@@ -517,7 +517,7 @@ idle, rather than making it idle.
 
 Reads durable state with the stack **down**, so a state question needs no cold
 start and the measurement cannot perturb what it measures. It reports per-tree
-and per-shard WAL sizes, WAL data/commit/trim record counts (by walking the
+and per-partition WAL sizes, WAL data/commit/trim record counts (by walking the
 file-WAL framing described in `FileWalRecordFormat`), per-tree leaf counts,
 leaf-snapshot rows and bytes per key prefix, per-partition projection
 checkpoints, and grain-state size by grain type.

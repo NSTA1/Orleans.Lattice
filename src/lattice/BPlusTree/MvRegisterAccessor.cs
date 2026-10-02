@@ -10,9 +10,9 @@ namespace Orleans.Lattice;
 /// once via <see cref="CrdtLatticeExtensions.MvRegister{T}(ILattice, string, ILatticeSerializer{T}?)"/>
 /// and reuse it for any number of operations on the same key.
 /// <para>
-/// Mutating methods read-modify-write under optimistic concurrency
-/// control, retrying on CAS failure up to a configurable budget.
-/// Concurrent writes from different replicas converge to the union
+/// Mutating methods read the key once to mint a typed delta, then apply
+/// that delta through the tree's CRDT merge path. Concurrent writes from
+/// different replicas converge to the union
 /// of their dot-tagged values; <see cref="ValuesAsync(CancellationToken)"/>
 /// exposes the conflict set to callers so the application can resolve
 /// the merge itself (e.g. surface every candidate to a user) rather
@@ -23,7 +23,7 @@ namespace Orleans.Lattice;
 /// <typeparam name="T">The user-facing value type. Serialised to and from <see cref="byte"/>[] through <see cref="ILatticeSerializer{T}"/>.</typeparam>
 public readonly record struct MvRegisterAccessor<T>
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;
@@ -165,8 +165,8 @@ public readonly record struct MvRegisterAccessor<T>
     }
 
     /// <summary>
-    /// Merges <paramref name="other"/> into the stored state under
-    /// CAS. Useful for replication consumers that have computed a
+    /// Merges <paramref name="other"/> into the stored state with one typed
+    /// delta apply. Useful for replication consumers that have computed a
     /// delta out-of-band and want to apply it without reading the
     /// full register twice.
     /// </summary>

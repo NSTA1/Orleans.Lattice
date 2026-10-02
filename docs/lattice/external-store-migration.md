@@ -252,8 +252,10 @@ The facade-hosted paths run the write interceptor when interception is active, s
 an installed [schema policy](../lattice.schema/README.md) validates bulk-loaded
 values. A migration's chunks are local writes, so a value that fails the policy
 fails its whole chunk with `LatticeSchemaViolationException` before any of the
-chunk's entries is applied; the schema package reserves dead-lettering for
-ingested items such as a replication apply or a backup restore. The chunk
+chunk's entries is applied; the schema package dead-letters only a failing
+system-origin write that reaches the same check under strict ingest - a
+replicated typed-CRDT delta or an entry of a replicated atomic batch - and a
+backup restore writes below the check, so it is never validated. The chunk
 acknowledgement's accepted-entry count is the count *after* interception, so a
 count below the number of entries you sent means an interceptor diverted
 entries to a dead-letter store rather than writing them. The streaming

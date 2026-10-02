@@ -45,7 +45,7 @@ namespace Orleans.Lattice;
 /// <typeparam name="T">The user-facing value type. Serialised to and from <see cref="byte"/>[] through <see cref="ILatticeSerializer{T}"/>.</typeparam>
 public readonly record struct RgaAccessor<T>
 {
-    /// <summary>Default mutation retry budget (validated; the producer-side delta apply is CAS-free).</summary>
+    /// <summary>Default value for the retained <c>maxAttempts</c> parameters.</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;

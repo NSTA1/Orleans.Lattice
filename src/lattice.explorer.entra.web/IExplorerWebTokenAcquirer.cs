@@ -8,8 +8,10 @@ namespace Orleans.Lattice.Explorer.Entra.Web;
 /// re-challenge logic is verified without any network or Entra dependency.
 /// </summary>
 /// <remarks>
-/// Unlike the interactive desktop acquirer this seam has a single acquisition
-/// method: Microsoft.Identity.Web serves the first and every subsequent token
+/// Unlike the interactive MSAL provider
+/// (<c>Orleans.Lattice.Explorer.Entra</c>), which runs a browser flow from the
+/// host process, this seam has a single acquisition method:
+/// Microsoft.Identity.Web serves the first and every subsequent token
 /// silently from its token cache (the browser already holds the session cookie),
 /// so there is no separate interactive step. When the cache can no longer satisfy
 /// the request the implementation throws

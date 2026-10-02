@@ -3,10 +3,9 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Typed CRDT value-surface accessor extensions on <see cref="ILattice"/>.
 /// Each method returns a lightweight, allocation-free accessor that reads
-/// and writes a single key under optimistic concurrency, exposing the
+/// and writes a single key by applying typed CRDT deltas, exposing the
 /// primitive's natural mutation API (add / remove, increment / decrement,
-/// tick / merge) instead of forcing callers to hand-roll byte arrays and
-/// CAS retry loops.
+/// tick / merge) instead of forcing callers to hand-roll byte arrays.
 /// </summary>
 public static class CrdtLatticeExtensions
 {

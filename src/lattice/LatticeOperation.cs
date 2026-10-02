@@ -61,11 +61,10 @@ public enum LatticeOperation
     /// <summary>
     /// Administrative operation on a tree that is not an ordinary data read or
     /// write (for example snapshot, merge, compaction, a leaf-projection
-    /// rebuild, or reconfiguring per-tree settings). Destructive or structural
-    /// lifecycle verbs - dropping, recovering or purging a tree, reshard,
-    /// resize and its undo, orphaned-leaf repair, and WAL placement moves -
-    /// require <see cref="TreeLifecycle"/>
-    /// instead, which this capability does not confer.
+    /// rebuild, direct orphaned-leaf repair, or reconfiguring per-tree settings).
+    /// Destructive or structural lifecycle verbs - dropping, recovering or purging
+    /// a tree, reshard, resize and its undo, and WAL placement moves - require
+    /// <see cref="TreeLifecycle"/> instead, which this capability does not confer.
     /// </summary>
     Admin = 256,
 
@@ -141,8 +140,11 @@ public enum LatticeOperation
     /// Perform an <b>irreversible or structural whole-tree lifecycle</b>
     /// operation: dropping, recovering, or purging a tree, changing its shard
     /// count or topology (reshard), changing its B+ node capacity (resize) or
-    /// undoing that change, unsplicing orphaned leaves, or moving its
-    /// write-ahead-log placement and reclaiming the moved-away source. These
+    /// undoing that change, or moving its write-ahead-log placement and reclaiming
+    /// the moved-away source. The tree-administration facade also requires this
+    /// bit for orphaned-leaf repair, while the direct core entry point
+    /// <see cref="ILattice.RepairOrphanedLeavesAsync"/>
+    /// is <see cref="Admin"/>-gated. These
     /// are the highest-blast-radius verbs the
     /// tree-administration control plane exposes, so this capability is
     /// deliberately <b>distinct</b> from <see cref="Admin"/>: holding
@@ -161,15 +163,16 @@ public enum LatticeOperation
 
     /// <summary>
     /// Install, upgrade, enable, disable, or uninstall an <b>app</b> on the
-    /// cluster, including re-consenting an installed version's capability
-    /// ceiling and reconciling its grants: a
+    /// cluster, browse the configured app catalogue, rebind an installed app's
+    /// roles, or re-consent an installed version's capability ceiling and
+    /// reconcile its grants: a
     /// <b>cluster-wide, scopeless</b> capability, granted over
     /// <c>LatticeScope.ClusterWide()</c> exactly as <see cref="Telemetry"/>
     /// is. It does not attach to a tree, prefix, or key - it authorizes changing
     /// the cluster's installed apps and their lifecycle as a whole. The app
-    /// lifecycle control surface also requires it to list or describe apps and
-    /// read their consent, because an install record carries the app's consented
-    /// ceiling and role bindings. A scopeless capability is
+    /// lifecycle and catalogue control surfaces also require it to list or describe
+    /// apps, sources and icons and read their consent, because an install record
+    /// carries the app's consented ceiling and role bindings. A scopeless capability is
     /// evaluated against the cluster-wide scope, so a collision between that scope
     /// and a real tree id is harmless: scopeless capability bits never overlap the
     /// data-plane operation bits, so a data-plane grant over such a tree can never

@@ -51,11 +51,11 @@ public enum ChaosPreset
     ClusterSplit,
 
     /// <summary>
-    /// Pauses cross-cluster replication in both directions. Implemented
+    /// Pauses cross-cluster package replication in both directions. Implemented
     /// as an <see cref="Orleans.Lattice.Replication.IReplicationTransport"/>
-    /// decorator that wraps the gRPC push transport: outbound ships
-    /// become no-ops and inbound applies return "unavailable" so the
-    /// peer backs off. The local WAL keeps growing while disconnected;
+    /// decorator on outbound ship plus an applier decorator on inbound apply:
+    /// outbound ships become no-ops and inbound applies return "unavailable" so
+    /// the peer backs off. The local WAL keeps growing while disconnected;
     /// on <see cref="ClearAll"/> the flag clears and replication
     /// resumes from the current cursor, catching the peer up with the
     /// accumulated backlog. This is the app-level equivalent of the

@@ -5,8 +5,9 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <summary>
 /// A cluster-wide storage accounting summary: total persisted bytes across every
 /// tree, split by surface, plus a per-tree breakdown. The <see cref="Deep"/> flag
-/// records how the numbers were obtained - a cheap cached WAL-poll aggregate
-/// (default) or an expensive fresh leaf-walk that re-measures every shard.
+/// records how the numbers were obtained - by default, each tree's short-lived
+/// storage-usage cache refilled from shard-root byte totals and WAL partitions,
+/// or an expensive fresh leaf-walk that re-measures every shard.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiTreeAdminTypeAliases.ClusterStorageUsageSummary)]
@@ -40,8 +41,8 @@ public sealed record ClusterStorageUsageSummary
 
     /// <summary>
     /// <see langword="true"/> when the summary came from an expensive fresh leaf-walk
-    /// that re-measured every shard; <see langword="false"/> for the cheap cached
-    /// WAL-poll aggregate.
+    /// that re-measured every shard; <see langword="false"/> when each tree used
+    /// its short-lived storage-usage cache.
     /// </summary>
     [Id(6)] public bool Deep { get; init; }
 

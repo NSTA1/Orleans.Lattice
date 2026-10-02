@@ -86,10 +86,14 @@ high-water mark.
 Two consequences are worth stating plainly, because collapsing them is how
 "fenced" gets misread as "true":
 
-- The fence guarantees **authorship**: the resume block in an item's `body` was
-  written by the live claim holder and cannot have been overwritten by a
-  superseded one. That is what makes an LWW register safe here - not convention,
-  but enforcement, because the fence serialises the writers.
+- The fence guarantees **authorship against a stale writer**: a superseded holder
+  cannot overwrite the resume block in an item's `body`, and neither can a write
+  presenting no token while a claim is live. That is what makes an LWW register
+  safe here - not convention, but enforcement on the write path itself. It checks
+  the token, not the owner: the current token is readable through
+  `repocontext_claim_status`, and release readmits unfenced writes, so it excludes
+  a stale or tokenless writer, not one that presents the current token or writes
+  after the claim is released.
 - The fence guarantees nothing about **content**. A resume note is the last
   attempt's own account of itself. A resuming worker re-decides from it and never
   continues blindly.

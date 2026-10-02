@@ -68,7 +68,8 @@ a property proven of the core is a property of production.
 ## The Coyote concurrency tier
 
 The cores are model-checked with [Microsoft Coyote](https://github.com/microsoft/coyote)
-(the `Microsoft.Coyote.Test` package). Each model exercises one core (or a small
+(the `Microsoft.Coyote.Test` package), except `ShadowedMigrationReadGuard` and
+`TerminalArrivalTally`, which their own core unit-test suites cover instead. Each model exercises one core (or a small
 group of cooperating cores) under systematically explored orderings of the
 protocol's concurrent steps - the prepare fan-out, the registry decision, the
 per-leaf terminal broadcast, duplicate terminal re-deliveries, and interleaved
@@ -104,7 +105,7 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 | `ReshardMigrationModel` | `MigrationTerminalCore`, `AtomicVisibilityGate`, `TxRegistryDecisionCore` | Phase 3 |
 | `AtomicCommitLivenessModel` | The full saga under bounded fault injection | Phase 4 |
 | `AtomicCommitInvariantModel` | The full single-saga lifecycle: `SagaCoordinatorCore`, `TxRegistryDecisionCore`, `TerminalDecisionGuard`, `AtomicVisibilityGate` | Phase 6 |
-| `ReshardForwardWindowModel` | `AtomicVisibilityGate` - the reshard forward window, where a destination leaf holds a drain-migrated pre-saga value before it carries the concurrent saga's shadow marker | #3117 |
+| `ReshardForwardWindowModel` | `AtomicVisibilityGate`, `TxRegistryDecisionCore` - the reshard forward window, where a destination leaf holds a drain-migrated pre-saga value before it carries the concurrent saga's shadow marker | #3117 |
 | `SplitPivotAdmissionModel` | `SplitBoundary` - a leaf may only be divided at a key strictly inside its own declared range | #3117 |
 | `SpanAdmissionMigrationModel` | `SplitBoundary` - a cross-shard migration import is subject to the same declared-span admission as any other commit | #3117 |
 | `MovedAwaySealInheritanceModel` | `SplitBoundary` - a leaf divided from a sealed leaf is born carrying the donor's moved-away seal | #3121 |

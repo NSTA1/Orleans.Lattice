@@ -42,7 +42,7 @@ A receiver whose every delivery is dropped by the pinned floor or the identity c
 | Unit | `ms` |
 | Tags | `tree`, `peer`, `outcome` |
 
-The `peer` tag carries the same value as `apply.lag`'s `peer` tag - the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
+The `peer` tag carries the same value as `apply.lag`'s `peer` tag - the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path groups entries into contiguous same-`(treeId, originClusterId, mode)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
 
 The `outcome` tag partitions the histogram into ten mutually-exclusive buckets:
 
@@ -63,7 +63,7 @@ A receiver with a single overwhelmed subscriber surfaces as a rising `failure` b
 
 ## Parallel-apply degree (`apply.parallel_runs`)
 
-`orleans.lattice.replication.apply.parallel_runs` records the effective degree of parallelism the receiver-side batch-apply path used for a single inbound batch - the number of per-tree run groups (each tree's contiguous `(treeId, originClusterId)` runs, applied in order) it allowed to apply concurrently. One sample is recorded per multi-entry batch that takes the batch path; a batch the receiver applies entry by entry from the start, because one of its entries is already retrying after a failed apply, records none.
+`orleans.lattice.replication.apply.parallel_runs` records the effective degree of parallelism the receiver-side batch-apply path used for a single inbound batch - the number of per-tree run groups (each tree's contiguous `(treeId, originClusterId, mode)` runs, applied in order) it allowed to apply concurrently. One sample is recorded per multi-entry batch that takes the batch path; a batch the receiver applies entry by entry from the start, because one of its entries is already retrying after a failed apply, records none.
 
 | Property | Value |
 |---|---|
@@ -77,7 +77,7 @@ Operators use the distribution to confirm parallel apply is actually engaging un
 
 ## Ship-rate (`wal.entries_shipped`)
 
-The producer no longer emits a commit-time append counter: a commit reaches the per-shard write-ahead log exactly once, via the leaf commit-log writer, and the per-`(tree, peer)` shipper tails that log in the background. Ship progress is therefore observed directly through the ship counter and correlated against WAL retention / GC.
+The producer no longer emits a commit-time append counter: a commit reaches the tree's write-ahead log exactly once, via the leaf commit-log writer, and the per-`(tree, peer)` shipper tails that log in the background. Ship progress is therefore observed directly through the ship counter and correlated against WAL retention / GC.
 
 | Counter | Tags | Recorded |
 |---|---|---|
@@ -280,7 +280,7 @@ Genuine causal dependencies are not enforced through this counter: an entry that
 
 ## Fall-off-the-log detection (`peer.fell_off_log` / `peer.fell_off_log_suppressed`)
 
-The fall-off detector compares a peer's per-origin high-water-mark with an oldest-available HLC for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest retained entry the peer authored - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)).
+The fall-off detector compares a peer's per-origin high-water-mark with an oldest-available HLC for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest entry the peer authored within a bounded window at the head of each WAL partition - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)).
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|

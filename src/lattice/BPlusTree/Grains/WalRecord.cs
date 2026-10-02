@@ -202,7 +202,7 @@ public readonly record struct WalRecord
     /// <see langword="null"/> when the producer did not author a typed
     /// CRDT delta. Mirrored verbatim from
     /// <see cref="LatticeMutation.Delta"/>. When non-<see langword="null"/>,
-    /// the bytes are the Orleans-serialised form of the public typed
+    /// the bytes are the JSON-serialised form of the public typed
     /// delta DTO matching <see cref="Mode"/>; receivers dispatch on the
     /// mode to pick the deserialiser and call <c>MergeDelta</c> on the
     /// loaded primitive. Strictly additive on the wire; legacy peers

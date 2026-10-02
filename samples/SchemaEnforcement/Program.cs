@@ -9,13 +9,13 @@ using Orleans.Lattice.Schema;
 // ---------------------------------------------------------------------------
 // SchemaEnforcement - server-side validation and per-value versioning.
 //
-// The core lattice stores every value as an opaque byte[] and never looks
-// inside it. The companion Orleans.Lattice.Schema package adds two opt-in,
+// The core lattice stores every value as an opaque byte[] and attaches no
+// schema to it. The companion Orleans.Lattice.Schema package adds two opt-in,
 // composable capabilities:
 //
-//   1. Enforcement - a per-tree policy validates every write. A non-compliant
-//      local write fails fast with LatticeSchemaViolationException and is never
-//      persisted.
+//   1. Enforcement - a per-tree policy validates values written through the
+//      tree's write operations. A non-compliant local write fails fast with
+//      LatticeSchemaViolationException and is never persisted.
 //   2. Versioning  - each value is stamped with a schema version; stale values
 //      are upcast to the tree's current target version on read. Advancing the
 //      target version is an admin action; existing values migrate lazily.

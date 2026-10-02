@@ -14,14 +14,14 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// <para>
 /// Active-active is the default: registering the binding via
 /// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"/>
-/// wires the silo as both a sender (peer receivers can pull live
-/// push batches and bootstrap snapshots from it) and a receiver (the
-/// silo can dial peer endpoints listed in <see cref="Peers"/> to ship
-/// outbound batches and to bootstrap from a peer). Push-only or
-/// receiver-only deployments use the same helper - a silo that never
-/// expects to bootstrap from a peer simply leaves <see cref="Peers"/>
-/// empty, and a silo that never expects peers to dial it omits the
-/// endpoint-mapping call.
+/// wires the silo as both a sender (it dials the peer endpoints listed in
+/// <see cref="Peers"/> to push live batches, and serves snapshot pulls on its
+/// own mapped endpoint) and a receiver (peers push live batches to its mapped
+/// endpoint, and it dials a peer listed in <see cref="Peers"/> to bootstrap
+/// from it). Push-only or receiver-only deployments use the same helper - a
+/// silo that neither pushes to nor bootstraps from a peer leaves
+/// <see cref="Peers"/> empty, and a silo that never expects peers to dial it
+/// omits the endpoint-mapping call.
 /// </para>
 /// <para>
 /// The public options project into three per-transport clients, each with its

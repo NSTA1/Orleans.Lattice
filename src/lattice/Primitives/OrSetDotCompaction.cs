@@ -4,8 +4,8 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Shared dot-history compaction for the observed-remove primitives
-/// (<see cref="OrFlag"/>, <see cref="OrSet"/>, <see cref="RwFlag"/>,
-/// <see cref="RwSet"/>, and <see cref="OrMap{TKey, TValue}"/>), which all
+/// (<see cref="OrFlag"/>, <see cref="OrSet"/>, <see cref="RwFlag"/> and
+/// <see cref="RwSet"/>), which all
 /// represent a slot's causal history as a <see cref="List{T}"/> of
 /// <see cref="OrSetDot"/> and all shared the same unbounded-growth defect
 /// before this existed.

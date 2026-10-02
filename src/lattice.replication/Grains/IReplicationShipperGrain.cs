@@ -4,9 +4,10 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <summary>
 /// Per-(tree, peer) outbound replication shipper grain. Drains the
 /// per-tree change feed from the per-peer cursor, applies the
-/// configured key filter and the durable origin-based cycle-break
-/// (skip entries whose OriginClusterId matches the peer''s own
-/// cluster id), encodes the captured entries via the registered
+/// configured key filter and the outbound leg of the origin-based
+/// cycle-break (skip entries whose OriginClusterId matches the peer''s
+/// own cluster id; receivers also reject entries whose origin matches
+/// their local cluster id), encodes the captured entries via the registered
 /// IReplicationBatchEncoder, and ships them through
 /// IReplicationTransport.SendAsync. On a positive ReplicationAck
 /// the shipper advances the per-peer cursor through

@@ -37,8 +37,10 @@ collapsed to a single mutation under one idempotency key.
 
 - Wrapping writes that can hit transient backend faults (throttling, timeouts)
   where a bounded, backing-off retry turns a blip into a success.
-- Any retried mutation that must stay exactly-once: supply a caller-owned
-  idempotency key so a replay does not double-apply.
+- Any retried single-key mutation or range delete that must stay exactly-once:
+  supply a caller-owned idempotency key so a replay does not double-apply. The
+  batch, atomic, and bulk-load entry points (`SetManyAsync`,
+  `SetManyAtomicAsync`, `BulkLoadAsync`, ...) do not take the ambient key.
 
 ## When not to use
 

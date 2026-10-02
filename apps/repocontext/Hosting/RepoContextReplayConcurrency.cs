@@ -62,8 +62,9 @@ public static class RepoContextReplayConcurrency
 
     /// <summary>
     /// The value applied when <see cref="MaxConcurrentReplaysKey"/> is unset
-    /// (<c>0</c>): defer to the library, which resolves the ceiling to
-    /// <see cref="Environment.ProcessorCount"/>. Deferring keeps this wiring
+    /// (<c>0</c>): defer to the library, which resolves the ceiling to the
+    /// lesser of <see cref="Environment.ProcessorCount"/> and the enforced
+    /// container CPU grant. Deferring keeps this wiring
     /// inert for every deployment that has not opted in.
     /// </summary>
     public const int DefaultMaxConcurrentReplays = LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays;

@@ -14,9 +14,11 @@ namespace Orleans.Lattice.Membership;
 /// every entry is bounded by the
 /// minimum of the configured cache lifetime and the credential's own expiry (so
 /// a subject is never served past its token's <c>exp</c>), and the cache is
-/// flushed whenever a <c>sys-membership-*</c> tree mutates (observed through the
-/// core <see cref="IMutationObserver"/> seam), so a membership change is
-/// reflected without a process restart. Cache hits and misses are counted on the
+/// flushed whenever this silo observes a <c>sys-membership-*</c> mutation
+/// (through the core <see cref="IMutationObserver"/> seam), so a membership change
+/// is reflected without a process restart. The observer runs on the silo that
+/// commits the write, so in a multi-silo cluster another silo's cache keeps a
+/// pre-change entry until that entry expires. Cache hits and misses are counted on the
 /// membership-owned meter through <see cref="LatticeMembershipMetrics"/>.
 /// </summary>
 internal sealed class MembershipResolutionCache(

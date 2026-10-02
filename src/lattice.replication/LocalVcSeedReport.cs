@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="SeedApplied"/> is <see langword="false"/> (the tree is
 /// not replicated). The returned vector is a defensive copy: a
 /// caller that mutates it does not affect the per-tree
-/// HWM grain''s persistent state.
+/// HWM grain's persistent state.
 /// </param>
 /// <param name="EntriesScanned">
 /// Total number of live <see cref="BPlusTree.LwwEntry"/> rows

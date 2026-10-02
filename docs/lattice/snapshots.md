@@ -92,13 +92,20 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 - **No reserved namespace**: the destination tree ID must not start with the
   reserved `_lattice_` prefix - the umbrella namespace covering the registry
   tree itself and the `_lattice_replog_` prefix reserved for the
-  `Orleans.Lattice.Replication` package's internal write-ahead-log trees - or
+  `Orleans.Lattice.Replication` package's internal dead-letter queue trees - or
   the `sys-` system-data prefix, and must not name another tenant's
   `t/{tenant}/` namespace. `SnapshotAsync` rejects any of them with
   `LatticeReservedTreeNamespaceException` (an `InvalidOperationException`).
 - **One snapshot per source at a time**: while a snapshot of the source is in
   flight, a request with different parameters throws
   `InvalidOperationException`; repeating the same request is a no-op.
+- **An ordinary source tree**: the call is authorised as a whole-tree admin
+  operation on the source. A reserved `_lattice_` system tree cannot be
+  snapshotted (`LatticeReservedTreeNamespaceException`), nor can a
+  materialised-view tree (`InvalidOperationException`).
+- **Valid sizing overrides**: `maxLeafKeys`, when supplied, must be greater
+  than 1 and `maxInternalChildren` greater than 2
+  (`ArgumentOutOfRangeException` otherwise).
 
 ## Crash Safety
 
@@ -118,14 +125,15 @@ ID derived from the snapshot's unique operation ID, making retries idempotent.
 
 `ILattice.IsSnapshotCompleteAsync` returns `true` once no snapshot of the tree is
 in flight. The tree-admin snapshot status (`ILatticeTreeAdmin.GetSnapshotStatusAsync`,
-the `tree_snapshot_status` tool) also reports the step a running snapshot has
+the `lattice_treeadmin_tree_snapshot_status` tool) also reports the step a running snapshot has
 reached - `LockSource` (offline) or `BeginForwarding` (online) before the copy,
 then `Copy`, and `UnlockSource` while an offline copy returns a shard to
 service - and how many of the shards it covers have been copied.
 
 ## Sizing Overrides
 
-Only the shard count is taken from the source tree. The destination's leaf and
+Only the shard count - with the shard map and split allocation mark that
+[Requirements](#requirements) describes - is taken from the source tree. The destination's leaf and
 internal node sizes are **not** inherited: unless you pass the `maxLeafKeys` and
 `maxInternalChildren` parameters, the destination is registered with the library
 defaults (128 keys per leaf, 128 children per internal node), even when the

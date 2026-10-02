@@ -36,12 +36,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </description></item>
 /// </list>
 /// <para>
-/// <b>Durability boundary.</b> Neither seam deletes leaf state and neither
-/// releases a WAL materialiser pin. A consolidated donor is retired from the
-/// <em>routing map</em> only: its leaves, their projection checkpoints and
-/// their durable pins all stay in place, so the WAL GC's trim horizon - a
-/// minimum over live pins - can never move forward as a result of a
-/// consolidation. No prefix becomes trimmable that was not trimmable before.
+/// <b>Durability boundary.</b> These shard-root seams only reclaim survivor
+/// slots or abort a donor before the routing map flips. The terminal
+/// consolidation coordinator is responsible for retiring the donor's storage
+/// after the final drain; until that step succeeds, the routing-map change and
+/// the storage release remain separately recoverable.
 /// </para>
 /// </summary>
 internal sealed partial class ShardRootGrain

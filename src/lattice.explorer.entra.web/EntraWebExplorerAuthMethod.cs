@@ -6,9 +6,9 @@ namespace Orleans.Lattice.Explorer.Entra.Web;
 
 /// <summary>
 /// The hosted-web Entra ID <see cref="IExplorerAuthMethod"/> for the <c>entra</c>
-/// scheme. Where the desktop provider
-/// (<c>Orleans.Lattice.Explorer.Entra</c>) runs an interactive browser flow on
-/// the machine hosting the UI, this provider serves a remote Blazor Server
+/// scheme. Where the interactive MSAL provider
+/// (<c>Orleans.Lattice.Explorer.Entra</c>) runs a browser flow from the host
+/// process, this provider serves a remote Blazor Server
 /// circuit: the browser has already signed in through the ASP.NET OpenID Connect
 /// middleware, so the challenge simply exchanges that session for a downstream
 /// State API token via <see cref="IExplorerWebTokenAcquirer"/> and wires silent

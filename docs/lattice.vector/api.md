@@ -32,7 +32,7 @@ The index itself. Constructed from `VectorIndexOptions`.
 | `Remove(long)` | Retire a vector. Constant time in the corpus size (one backfill, whatever the corpus holds); never a tombstone. |
 | `Contains(long)`, `TryGetVector(long, Span<float>)` | Presence and retrieval. |
 | `Clear()` | Drop everything. |
-| `EnsureCapacity(int)` | Reserve ahead of a bulk load, which makes the insert run allocation-free. |
+| `EnsureCapacity(int)` | Reserve ahead of a bulk load. On an untrained index the whole reservation goes to its single cell, which makes the insert run allocation-free; on a trained one it is spread evenly over the cells, a hint rather than a guarantee. |
 | `Train()` | Partition the corpus. Synchronous and expensive; keep it off the request path. Returns `false`, and leaves the index unpartitioned and answering exhaustively, when the corpus is too small to partition usefully (below `MinimumTrainingCount`, or resolving to fewer than two partitions). |
 
 **Query**
@@ -58,7 +58,7 @@ The index itself. Constructed from `VectorIndexOptions`.
 | `VectorSearchResult(long Key, float Score)` | One hit. |
 | `VectorIndexStatus` | A snapshot of state, counts, partitioning and `BytesPerVector`. |
 | `VectorIndexSnapshot` | A snapshot plan: `Header`, `ChunkCount`, `Describe(i)`, `MeasureChunk(i)`, `WriteChunk(i, Span<byte>)`. |
-| `VectorIndexHeader` | The 56-byte durable header. `Write`, `Read`, and `TryRead` (which returns `false` rather than throwing on bytes this build cannot read: too short, the wrong marker, an unsupported version, an out-of-range field, or more centroid chunks than chunks in total). |
+| `VectorIndexHeader` | The 56-byte durable header (`Size`). `Write`, `Read`, and `TryRead` (which returns `false` rather than throwing on bytes this build cannot read: too short, the wrong marker, an unsupported version, an out-of-range field, or more centroid chunks than chunks in total). |
 | `VectorIndexChunkDescriptor` | Kind, partition, sequence, item count and byte count for one chunk, without rendering it. |
 | `VectorDistanceMetric` | `Cosine` or `DotProduct`. |
 | `VectorIndexState` | `Empty`, `Building`, `Ready`. |

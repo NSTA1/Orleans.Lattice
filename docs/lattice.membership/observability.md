@@ -28,7 +28,7 @@ Each instrument name is also a public constant on `LatticeMembershipMetrics` (`R
 
 ### What the hit / miss counters measure
 
-The per-silo cache turns the credential a caller presents into a resolved subject (id + transitive group closure). Resolution is memoised with a configurable TTL (`LatticeMembershipOptions.ResolutionCacheTtl`, default 5 minutes) and bounded by the inbound token's own expiry, and it is flushed whenever a `sys-membership-*` tree mutates. The counters are recorded at the cache itself:
+The per-silo cache turns the credential a caller presents into a resolved subject (id + transitive group closure). Resolution is memoised with a configurable TTL (`LatticeMembershipOptions.ResolutionCacheTtl`, default 5 minutes) and bounded by the inbound token's own expiry, and it is flushed whenever this silo observes a `sys-membership-*` mutation (the mutation observer runs on the silo that commits the write, so another silo's entries are bounded only by their expiry). The counters are recorded at the cache itself:
 
 - A **hit** is counted when the cache serves a warm subject without re-authenticating or reading the directory.
 - A **miss** is counted when there is no live entry (never cached, expired past the TTL, past the token's `exp`, or flushed by a membership change) and the cache resolves the subject afresh.

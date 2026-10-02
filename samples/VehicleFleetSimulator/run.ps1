@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Brings up Azurite + Silo + API + UI in containers, detached. The Azurite data volume
-    is ALWAYS wiped before starting so every run begins from a clean Orleans cluster,
-    grain storage and stream-queue state - appropriate for the demo (no durable state
-    across runs anyway, since grain storage is in-memory).
+    is ALWAYS wiped before starting so every run begins with clean clustering and
+    reminder tables. Grain state is in-memory and the sample does not configure
+    streams, so no durable grain or stream-queue state is preserved across runs.
 
 .PARAMETER Down
     Tear the stack down without bringing it back up. Always removes volumes.

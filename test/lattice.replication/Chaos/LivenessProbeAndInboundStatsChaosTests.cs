@@ -17,8 +17,8 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 ///   <see cref="LatticeReplicationOptions.LivenessProbeInterval"/>
 ///   periods, samples site A's outbound
 ///   <c>peer.last_contact_seconds</c> at intervals, then heals the
-///   partition. Once the partition heals the gauge must reset within
-///   one probe interval - proving the outbound liveness probe fires the
+///   partition. Once the partition heals the gauge must drop back below
+///   half a probe interval within ten probe intervals - proving the outbound liveness probe fires the
 ///   empty-tick refresh as soon as ack flow resumes. The "chaos" here
 ///   is the directed partition + heal cycle inside an actively-shipping
 ///   pipeline; without the probe the gauge would climb unbounded on

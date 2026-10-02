@@ -13,9 +13,9 @@ public sealed record AppTreeDeclaration
     /// <summary>
     /// Virtual slot count, pinned when the app pipeline first registers the tree; the
     /// pipeline never re-pins an existing tree, and a manifest upgrade must not change
-    /// this value. A later resize of the tree, or a reshard while it is still empty,
-    /// replaces its routing map, after which it routes over the default virtual slot
-    /// count (4096) rather than this one.
+    /// this value. A resize carries the pinned slot count over to the resized copy, a
+    /// reshard keeps it (including the empty-tree re-pin), and a reshard target can
+    /// never exceed it.
     /// </summary>
     [Id(2)] public int? VirtualShardCount { get; init; }
 

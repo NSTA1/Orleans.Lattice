@@ -1,7 +1,7 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Pluggable durability seam for the per-shard write-ahead log. Lets a
+/// Pluggable durability seam for the partitioned write-ahead log. Lets a
 /// host swap the WAL's underlying storage backend (Orleans grain
 /// persistence, Azure Table Storage, an in-memory test fake) without
 /// touching the rest of the commit-log pipeline. Registered at silo
@@ -24,7 +24,7 @@ namespace Orleans.Lattice;
 /// entry[i].Offset + 1). Across calls they are dense in aggregate under
 /// normal operation - the WAL grain assigns offsets monotonically under
 /// the grain turn - but with
-/// <see cref="LatticeOptions.WalMaxPendingBatches"/> > 1 a single shard
+/// <see cref="LatticeOptions.WalMaxPendingBatches"/> > 1 a single partition
 /// can issue multiple concurrent <see cref="AppendBatchAsync"/> calls
 /// whose batches may arrive at the provider out of order, and a failed
 /// flush may leave a permanent gap in the log (downstream consumers
@@ -49,8 +49,8 @@ public interface IWalStorageProvider
     /// observable to <see cref="ReadAsync"/> or
     /// <see cref="GetHighestOffsetAsync"/>.
     /// </summary>
-    /// <param name="treeId">Logical tree id; identifies the WAL the batch belongs to. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under, which differs from the logical id once the tree is aliased (for example after a resize); identifies the WAL the batch belongs to. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="entries">Entries to append, in ascending <see cref="WalEntry.Offset"/> order. Offsets must be dense and equal to <c>currentHighest + 1, +2, …</c>; the implementation is permitted (but not required) to validate that.</param>
     /// <param name="cancellationToken">Cancellation token observed before the durable write commences.</param>
     Task AppendBatchAsync(
@@ -89,8 +89,8 @@ public interface IWalStorageProvider
     /// zero-copy fast path.
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="encodedEntries">Pre-encoded payload bytes for each entry, in the same order as <paramref name="offsets"/>. Segment lengths are arbitrary; segments are owned by the caller and must not be retained past the returned task's completion.</param>
     /// <param name="offsets">Dense ascending offsets parallel to <paramref name="encodedEntries"/>. Length must match.</param>
     /// <param name="encoder">Encoder used to decode segments for the default fallback implementation. Providers that override this method may ignore it.</param>
@@ -147,8 +147,8 @@ public interface IWalStorageProvider
     /// enumeration completes when either the limit is reached or the
     /// underlying log is exhausted.
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="fromOffsetExclusive">Strict lower-bound offset; pass <c>-1</c> to read from the start of the log.</param>
     /// <param name="maxEntries">Maximum number of entries to yield; must be at least <c>1</c>.</param>
     /// <param name="cancellationToken">Cancellation token observed between every yielded entry.</param>
@@ -190,8 +190,8 @@ public interface IWalStorageProvider
     /// retain references past consumption.
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="fromOffsetExclusive">Strict lower-bound offset; pass <c>-1</c> to read from the start of the log.</param>
     /// <param name="maxEntries">Maximum number of entries to yield; must be at least <c>1</c>.</param>
     /// <param name="encoder">Encoder used by the default fallback to project each <see cref="WalEntry.Mutation"/> back to a <see cref="WalRecord"/> and serialise it. Providers that override this method may ignore the argument. Must not be <see langword="null"/>.</param>
@@ -293,8 +293,8 @@ public interface IWalStorageProvider
     /// result equals <see cref="ReadAsync"/> over the window.
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="fromOffsetExclusive">Strict lower-bound offset of the window; pass <c>-1</c> to read from the start of the log.</param>
     /// <param name="toOffsetInclusive">Inclusive upper-bound offset of the window. No entry above it is examined.</param>
     /// <param name="maxEntries">Maximum number of entries to examine; must be at least <c>1</c>. At most this many are yielded.</param>
@@ -370,8 +370,8 @@ public interface IWalStorageProvider
     /// grain uses that pair to expose a trim-aware live entry count
     /// to diagnostics, dashboards, and back-pressure consumers.
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="cancellationToken">Cancellation token observed before the read.</param>
     Task<long> GetLowestOffsetAsync(
         string treeId,
@@ -397,7 +397,7 @@ public interface IWalStorageProvider
     /// Asks the provider to evaluate whether
     /// <paramref name="treeId"/> / <paramref name="shardIndex"/> is due for
     /// physical reclamation, and to perform it if its own policy says so.
-    /// Called by the GC predicate (<see cref="ILatticeWalGc"/>) on a shard
+    /// Called by the GC predicate (<see cref="ILatticeWalGc"/>) on a partition
     /// whose scan released nothing, so <see cref="TrimAsync"/> is not invoked
     /// for it on that pass.
     /// <para>
@@ -431,8 +431,8 @@ public interface IWalStorageProvider
     /// to do here.
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="cancellationToken">Cancellation token observed before any I/O commences.</param>
     Task EvaluateCompactionAsync(
         string treeId,
@@ -472,8 +472,8 @@ public interface IWalStorageProvider
     /// finish the commit or revert it.
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="cancellationToken">Cancellation token observed before any I/O commences.</param>
     Task ReconcileAsync(
         string treeId,
@@ -527,8 +527,8 @@ public interface IWalStorageProvider
     /// non-negative total (<c>0</c> for an empty or fully-trimmed shard).
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="cancellationToken">Cancellation token observed before any read.</param>
     /// <returns>The retained payload byte total (>= 0), or <c>-1</c> when the provider does not support byte accounting.</returns>
     Task<long> GetRetainedByteSizeAsync(
@@ -573,8 +573,8 @@ public interface IWalStorageProvider
     /// Table providers) and therefore carries no dead bytes at all.
     /// </para>
     /// </summary>
-    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
-    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
     /// <param name="cancellationToken">Cancellation token observed before any read.</param>
     /// <returns>The physical byte total (&gt;= 0), or <c>-1</c> when the provider does not support physical accounting.</returns>
     Task<long> GetPhysicalByteSizeAsync(

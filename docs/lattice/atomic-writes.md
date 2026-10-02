@@ -738,9 +738,11 @@ the id of the write-ahead log the tree's writes land in, so on an aliased
 tree - after a resize, a shadow-cutover restore or a schema remediation,
 whose writes land in the physical copy's log - the gate does not see that
 log's saturation and the saga dispatches without waiting for it. If the
-budget elapses with the tree still `Saturated` - or the writer-side
-admission gate itself
-refuses the dispatch as saturated - the saga takes a saturation
+budget elapses with the tree still `Saturated` - or the batched dispatch
+itself is refused as saturated, by the writer-side admission gate or, when
+one is configured, by the batch write's
+[`SetManyFanOutBudget`](configuration.md#setmanyfanoutbudget) or
+[`SetManyEnvelopeBudget`](configuration.md#setmanyenvelopebudget) - the saga takes a saturation
 fast-path that mirrors the shutdown one: it skips the retry and the
 compensate pivot (either would re-enter the same throttled storage
 account), keeps its persisted progress in the execute phase, and throws
@@ -748,7 +750,8 @@ account), keeps its persisted progress in the execute phase, and throws
 `LatticeSaturationSource.AtomicWriteSaga`, counted on
 `orleans.lattice.saturation.refusals` with `source=atomic_write_saga`. An
 inner refusal it wraps was already counted by its own seam (the
-writer-side gate under `wal_admission`), and a refusal because the quiesce
+writer-side gate under `wal_admission`, the batch-write budgets under
+`set_many_fan_out` and `set_many_envelope`), and a refusal because the quiesce
 budget elapsed is counted twice under `atomic_write_saga`. Back off and
 retry with the
 same `operationId` once the signal returns to healthy (the keepalive
@@ -1224,9 +1227,13 @@ decision authority. The flow is:
    prepared writes into the per-leaf pending-tx buckets, registers a
    *delegation* mapping its local txid to the coordinator, then pauses
    without broadcasting any terminal. Each tree votes prepared,
-   precondition-failed (its guard missed), or failed (its staging failed
-   and it aborted itself). A tree that throws instead of voting - a
-   transient routing or storage fault, an admission refusal, a
+   precondition-failed (its guard missed), or failed. A failed vote
+   normally means its staging failed and it aborted itself, but a tree
+   whose batched dispatch is refused for saturation or shutdown, or whose
+   saga state write fails with a fault other than a conflict, also votes
+   failed and keeps its prepared writes staged rather than aborting. A
+   tree that throws instead of voting - a transient routing or storage
+   fault before its writes are staged, an admission refusal, a
    state-write conflict, or a retryable failure of the park step itself,
    with its prepared writes still staged - casts no vote: the coordinator stays in its preparing
    phase and the call surfaces the fault. The coordinator's keepalive
@@ -1238,8 +1245,10 @@ decision authority. The flow is:
    prepared, otherwise abort - to its own persistent state. This single
    write is the cross-tree linearization point.
 3. **Finalize.** The coordinator fans out a `Finalize` call to every
-   tree whose saga voted prepared (a tree whose guard missed or whose
-   staging failed has already terminated itself), which marks its
+   tree whose saga voted prepared (a tree whose guard missed, or whose
+   staging failed and it aborted itself, has already terminated; a tree
+   that voted failed with its writes still staged is not finalized
+   either), which marks its
    per-tree registry and broadcasts the per-shard terminals exactly as
    the single-tree saga does.
 

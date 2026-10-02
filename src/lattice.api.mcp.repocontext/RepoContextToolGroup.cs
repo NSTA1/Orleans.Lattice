@@ -344,15 +344,15 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Name = "repocontext_index_status",
                 Title = "Inspect a repository indexing job",
                 Description =
-                    "Reports the progress of a repository's asynchronous indexing job: its status (none, "
-                    + "running, completed, or failed), the phase it is executing (pending, walking, reconciling, "
-                    + "applying, vectorising, or done - or resetting while a repocontext_reset_index sweep tears "
+                    "Reports the progress of a repository's asynchronous indexing job: its status (None, "
+                    + "Running, Completed, or Failed), the phase it is executing (Pending, Walking, Reconciling, "
+                    + "Applying, Vectorising, or Done - or Resetting while a repocontext_reset_index sweep tears "
                     + "the index down), the running file and chunk counters, the cumulative "
                     + "index-run count (a run-start tally that rises on every reconcile and back-fill, not a "
                     + "retry counter), and "
                     + "timing. Because onboarding runs in the background and survives a client disconnect or a "
                     + "host restart, poll this tool with the repository id to follow a long onboarding pass to "
-                    + "completion. A repository that was never onboarded reports status 'none'. Read-only.",
+                    + "completion. A repository that was never onboarded reports status 'None'. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

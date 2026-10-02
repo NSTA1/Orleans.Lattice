@@ -23,7 +23,8 @@ public enum EntryHistoryBound
     /// best-effort fallback (no history view is enabled) and that window has
     /// already been trimmed by garbage collection, so older revisions are no
     /// longer readable. <see cref="EntryHistoryResult.EarliestAvailable"/>
-    /// reports the oldest still-readable revision.
+    /// reports the oldest entry still readable on the key's WAL partition -
+    /// the trim floor, which may not be a revision of this key.
     /// </summary>
     Truncated = 1,
 

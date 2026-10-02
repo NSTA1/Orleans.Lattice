@@ -84,7 +84,7 @@ public sealed class LatticeStateApiGrpcClient
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetTreeStructure, request, cancellationToken);
 
-    /// <summary>Scans a key-ordered page of entries under a snapshot-isolated cursor.</summary>
+    /// <summary>Scans a key-ordered page of entries; fresh scans are snapshot-isolated by default.</summary>
     public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.ScanEntries, request, cancellationToken);
 

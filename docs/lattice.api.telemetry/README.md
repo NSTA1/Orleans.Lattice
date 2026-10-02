@@ -188,17 +188,17 @@ meter; on a cluster without it they evaluate cleanly and return no series. Every
 `Range` entry accepts a time range, a step, and a tree filter;
 `tree.storage.bytes`, `tree.admission.utilization`, and
 `tree.wal.saturation_state` accept a tree filter; the `tenant.*` entries take no
-parameters. The tree filter matches the metrics' `tree` dimension. For most of
-the series these entries read that is the logical tree id, which stays the same
+parameters. The tree filter matches the metrics' `tree` dimension. For every
+series these entries read that is the logical tree id, which stays the same
 across a resize, a shadow-cutover restore or a schema remediation (see [The `tree`
 dimension across aliasing](../lattice/metrics.md#the-tree-dimension-across-aliasing)),
 so a query filtered on a tree keeps returning that tree's series after its data
-moves to a new physical copy. The storage-usage and admission gauges behind
-`tree.storage.bytes`, `tree.storage.bytes_trend` and `tree.admission.utilization`
-are the exception: they are keyed by the id their aggregator was addressed by, so
-while the logical id keeps reporting the live copy, a cluster storage roll-up (or
-the optional deep poll) also reports them under the physical copy's id, and an
-unfiltered answer can list that copy as a further tree. The filter is matched verbatim: the facade does not compose an
+moves to a new physical copy. That includes the storage-usage and admission gauges
+behind `tree.storage.bytes`, `tree.storage.bytes_trend` and
+`tree.admission.utilization`: the background poller and the cluster storage
+roll-up still walk the physical copy's registered id, but the copy's aggregator
+publishes under the logical id too, so an unfiltered answer never lists the copy
+as a further tree. The filter is matched verbatim: the facade does not compose an
 unqualified name into the caller's tenant namespace, so on a tenancy cluster a
 tenant's tree is filtered by its full `t/{tenant}/{name}` id, the value its `tree`
 label carries. Each entry also declares `TelemetryQueryBounds`: a requested step is

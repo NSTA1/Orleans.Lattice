@@ -468,8 +468,9 @@ Transient failures (drain throw, transport throw, ack rejected) feed an
 exponential backoff sized by:
 
 - `ShipBackoffInitial` (default 100 ms) - base delay on the first failure.
-- `ShipBackoffMax` (default 30 s) - upper bound regardless of consecutive
-  failure count.
+- `ShipBackoffMax` (default 30 s) - cap on the doubled delay regardless of
+  consecutive failure count. Jitter is applied after the cap, so a jittered
+  delay can exceed it by up to the jitter fraction (36 s at the defaults).
 - `ShipBackoffJitter` (default 0.2) - symmetric `[1 - jitter, 1 + jitter]`
   multiplier applied to the computed delay so a fleet of shippers sharing
   a transient outage does not resynchronise on retry.
@@ -521,7 +522,7 @@ shipper writes per tick.
 ### Partition resume cursor
 
 The ship loop never uses `IChangeFeed`: it reads each WAL
-partition directly via the per-shard WAL grain's sequence-ranged read (from a sequence lower bound)
+partition directly via the partition grain's sequence-ranged read (from a sequence lower bound)
 starting at a durable per-partition resume cursor stored on
 the shipper's persisted partition-cursor state. Per pump tick the shipper
 fetches up to `ShipPartitionPageSize` (default 256) entries from each
@@ -784,13 +785,14 @@ last-run timestamps in persistent state:
   and trims the WAL up to that frontier (or the `WalRetention` TTL
   ceiling, whichever is later).
 - **Fall-off-the-log probe** - every `MaintenanceFallOffCheckInterval`
-  (default 30 s) reads the oldest retained HLC per data origin from the
-  local WAL (`ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync`)
+  (default 30 s) reads a bounded window at the head of each local WAL
+  partition, takes the oldest entry each data origin authored in that
+  window (`ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync`)
   and, for each current topology peer that authored at least one
-  retained entry, calls
+  entry in the window, calls
   `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)`
-  with that peer's own oldest HLC. A peer with no retained authored
-  entries is skipped - probing it against another origin's entries was
+  with that peer's own oldest HLC. A peer with no authored entry in the
+  window is skipped - probing it against another origin's entries was
   the source of a false-positive re-bootstrap loop. On positive
   detection, the detector drives the bootstrap kickoff itself -
   the maintenance grain is a pure scheduler.
@@ -817,8 +819,9 @@ condition clears.
 |---|---|---|---|
 | `ShipBatchSize` | 256 | `>= 1` | Maximum entries per ship loop iteration. |
 | `ShipMaxInFlight` | 1 | `>= 1` | Shipped-but-unacknowledged batches per `(tree, peer)`; `1` is strictly serial. See [Bounded pipelining](#bounded-pipelining-shipmaxinflight). |
+| `AdaptiveBatchSizingEnabled` | `true` | - | Sender-side AIMD controller that lowers the per-batch cap below `ShipBatchSize` on rising ack latency or send errors, tuned by `AdaptiveBatchIncrement`, `AdaptiveBatchDecreaseFactor`, `AdaptiveBatchLatencyThreshold`, and `AdaptiveBatchWindowLength`. See [Sender-side adaptive batch sizing](receiver-flow-control.md#sender-side-adaptive-batch-sizing). |
 | `ShipBackoffInitial` | 100 ms | `> TimeSpan.Zero` | Base delay on first transient failure. |
-| `ShipBackoffMax` | 30 s | `>= ShipBackoffInitial` | Upper bound on backoff regardless of consecutive failure count. |
+| `ShipBackoffMax` | 30 s | `>= ShipBackoffInitial` | Cap on the doubled backoff delay regardless of consecutive failure count; jitter is applied after the cap. |
 | `ShipBackoffJitter` | 0.2 | `[0.0, 1.0]` | Symmetric jitter multiplier. |
 | `MaintenanceGcInterval` | 5 s | `> TimeSpan.Zero` | Cadence between WAL GC passes. |
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
@@ -871,7 +874,7 @@ emits; the table shows which driver is the source of each.
 | `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass, and the core library's per-silo WAL garbage-collection scheduler, which runs without the drivers | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
-| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest retained entry that peer authored in the local WAL. |
+| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
 | `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |

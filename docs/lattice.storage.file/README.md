@@ -6,7 +6,7 @@ Durable, cloud-free **local disk** WAL provider for [Orleans.Lattice](../../READ
 
 `Orleans.Lattice.Storage.File` is the optional on-disk WAL backend for the core lattice:
 
-- **Durable WAL storage.** `FileWalStorageProvider` stores each per-tree, per-shard write-ahead log as a segmented, append-only file on the local filesystem and implements the public `IWalStorageProvider` contract.
+- **Durable WAL storage.** `FileWalStorageProvider` stores each WAL partition of each tree as a segmented, append-only file on the local filesystem and implements the public `IWalStorageProvider` contract.
 - **All-or-nothing batch append.** Each batch is framed as a run of data records sealed by a single commit trailer and made durable with one write plus fsync; a crash before the trailer is durable rolls the whole batch back on recovery.
 - **Restart recovery.** Activation-time reconciliation rolls every committed batch forward, discards a torn tail, and reclaims trimmed space, so after a crash the log ends cleanly at its last committed batch; an honest offset gap left by a failed append is preserved, never renumbered.
 - **Drop-in registration.** `AddFileWalStorage` displaces the in-memory WAL backend installed by core lattice registration, and wires the durable-WAL garbage-collection stack alongside it.

@@ -204,17 +204,17 @@ flowchart TD
      (`repocontext_remember`, `repocontext_update` and `repocontext_forget` each
      take a fencing token and each enforce it), and it covers the record's body,
      not merely its edges. A superseded holder attempting to overwrite the resume
-     block is refused with a claim-conflict fault. So the resume block you are
-     reading was written by the live claim holder; nothing else could have written
+     block is refused with a claim-conflict fault, as is any write presenting no
+     token while the claim is live, so no superseded holder can have rewritten
      it. Do not describe this as "only the holder writes `body`", which reads as an
      agreed practice a reader may assume is merely honoured.
    - **It remains advisory as to content.** Enforcement guarantees the resume block
-     was written by the live holder, which is a different claim from the work it
+     was not rewritten by a superseded holder, a different claim from the work it
      describes being current or correct. Report it as the last attempt's own
      account of itself, and expect a resuming worker to re-decide from it rather
      than continue blindly.
 
-   Two bounds on the guarantee, so you do not overstate it: claims are supported on
+   Three bounds on the guarantee, so you do not overstate it: claims are supported on
    **memory records only** (a fencing token presented against another record family
    is rejected rather than ignored), which covers backlog items but is not a
    general property of the store; and a claim is **region-scoped**, so a write from
@@ -223,7 +223,10 @@ flowchart TD
    merely informational is a property of the deployment, not of the tag: on a
    single-region deployment every write is served from the one region and a
    geographic value is not enforced at all (see the `homeRegion:` row of the
-   protocol's tag table).
+   protocol's tag table). The third: the fence checks the token, not the owner -
+   the current token is readable through `repocontext_claim_status` - and release
+   readmits unfenced writes, so it excludes a stale or tokenless writer, not one
+   that presents the current token or writes after the claim is released.
 
 8. **Read live claims from the claim surface**, never from the item. Claims, leases
    and fencing tokens deliberately do not live on the item record; a `claims` edge

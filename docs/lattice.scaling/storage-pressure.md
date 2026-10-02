@@ -12,9 +12,10 @@ WAL-move surface yourself. Nothing on this axis ever changes the compute
 
 - `OverThreshold` - `true` when budgeted retained WAL bytes have crossed the
   configured threshold (the advisory fraction of the summed per-tree
-  `WalMaxRetainedBytes` ceilings). Each tree is measured against its own
-  resolved ceiling, so trees configured differently cross at different points;
-  a tree with no ceiling contributes neither bytes nor budget to the comparison.
+  `WalMaxRetainedBytes` ceilings). Each tree contributes its own resolved
+  ceiling to that sum rather than one silo-wide value, and the comparison is
+  made once over the summed bytes and ceilings, not tree by tree; a tree with
+  no ceiling contributes neither bytes nor budget to the comparison.
 - `WalRetainedBytes` - total retained WAL bytes across every catalogue key.
 - `Accounts` - a `WalAccountPressure` per `IWalStorageProviderCatalog` key that
   backs a WAL partition (never `null`; empty when nothing is tracked).
@@ -39,8 +40,9 @@ threshold is classified `ThroughputBound`; its `OverThreshold` flag still reads
 `WalAccountPressure.OverThreshold` is the capacity-bound trigger specifically -
 `true` when that account's budgeted retained bytes crossed the advisory fraction
 of its budget. The budget is the sum of the effective per-tree ceilings
-attributed to that account, so two trees configured with different ceilings are
-judged independently rather than against one silo-wide number.
+attributed to that account, so each tree's own ceiling counts rather than one
+silo-wide number: trees on different accounts cross at different points, while
+trees sharing an account are weighed together against their summed budget.
 
 ## The rebalance recommendation
 

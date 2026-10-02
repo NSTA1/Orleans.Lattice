@@ -20,6 +20,12 @@ An envelope is a 10-byte big-endian header followed by the plain value body:
 
 The relevant constants are `LatticeSchemaEnvelope.Magic`,
 `LatticeSchemaEnvelope.FormatVersion`, and `LatticeSchemaEnvelope.HeaderLength`.
+The same static class reads and writes the header: `IsEnveloped` reports whether a
+value is at least `HeaderLength` bytes long and starts with the magic and the
+recognised format version, `TryReadHeader` returns the schema id and version of
+an enveloped value, `Encode` prepends a header to a plain body, and `StripToBody`
+returns the bytes after the header (it checks only that the value is at least
+`HeaderLength` bytes long).
 
 ## Default omission
 

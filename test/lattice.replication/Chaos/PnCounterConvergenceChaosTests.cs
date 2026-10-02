@@ -55,11 +55,11 @@ public class PnCounterConvergenceChaosTests
                         pump.HealSite(0);
                     }
 
-                    // Micro-yield to let the per-edge pumps interleave their
-                    // foreign-origin SetIfVersionAsync writes between local
-                    // CAS attempts; without this, the local IncrementAsync's
-                    // 16-attempt CAS budget exhausts under sustained pump
-                    // contention on a single key.
+                    // Micro-yield so the per-edge pumps' foreign-origin writes
+                    // interleave with the local increments on the single
+                    // contended key. (IncrementAsync reads once and applies one
+                    // delta - it has no CAS loop or attempt budget - so this
+                    // only paces the interleaving.)
                     await Task.Delay(1);
                 }
 
@@ -85,11 +85,11 @@ public class PnCounterConvergenceChaosTests
 
     /// <summary>
     /// Wraps <see cref="PnCounterAccessor.IncrementAsync"/> in a bounded
-    /// retry loop. A single CAS-budget exhaustion under chaos contention
-    /// is not a correctness failure - the chaos pump is concurrently
-    /// merging foreign-origin states onto the same key, racing the local
-    /// CAS loop. Retry from the call site, mirroring what a real
-    /// application would do.
+    /// retry loop that backs off on an <see cref="InvalidOperationException"/>
+    /// reporting an exhausted CAS budget. The accessor no longer has a CAS
+    /// loop (it reads once and applies one delta), so on the current path the
+    /// filter is not expected to match; the wrapper is kept as a harmless
+    /// guard.
     /// </summary>
     private static async Task IncrementWithRetryAsync(ILattice lattice, string replicaId)
     {

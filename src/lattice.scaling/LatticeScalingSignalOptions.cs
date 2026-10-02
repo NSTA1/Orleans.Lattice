@@ -31,9 +31,9 @@ public sealed class LatticeScalingSignalOptions
     public string EndpointPath { get; set; } = DefaultEndpointPath;
 
     /// <summary>
-    /// Lower bound applied to <see cref="ScalingSignal.RecommendedReplicas"/>:
-    /// the recommendation is never reported below this floor. Defaults to
-    /// <see cref="DefaultMinReplicas"/>.
+    /// Lower bound applied to <see cref="ScalingSignal.ScaleValue"/> and
+    /// <see cref="ScalingSignal.RecommendedReplicas"/>: neither is reported below
+    /// this floor. Defaults to <see cref="DefaultMinReplicas"/>.
     /// </summary>
     public int MinReplicas { get; set; } = DefaultMinReplicas;
 

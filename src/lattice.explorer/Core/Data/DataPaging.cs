@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.Explorer.Core.Data;
 
 /// <summary>
-/// The Data tab's page-size choices: increments of 25 up to a maximum of 150,
+/// The Data area's page-size choices: increments of 25 up to a maximum of 150,
 /// with a default of 25.
 /// </summary>
 public static class DataPaging

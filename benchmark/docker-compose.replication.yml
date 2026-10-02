@@ -48,8 +48,8 @@ services:
       Orleans__ClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
       Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
       Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-replica:10000/devstoreaccount1;QueueEndpoint=http://azurite-replica:10001/devstoreaccount1;TableEndpoint=http://azurite-replica:10002/devstoreaccount1;"
-      # Replica cluster runs the same lattice sink so bidirectional-replication (bidirectional) can produce
-      # writes here too. For current-state-single-peer/replication-backpressure/receiver-crash the replica's sink is null - it only consumes
+      # Reverse writes for bidirectional-replication come from the WriteDriver block below.
+      # For current-state-single-peer/replication-backpressure/receiver-crash the replica's sink is null - it only consumes
       # replicated writes from the origin.
       Telemetry__Sink: ${BENCH_REPLICA_TELEMETRY_SINK:-null}
       Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
@@ -117,7 +117,7 @@ services:
       # symmetric saga load. Defaults off so non-atomic replication scenarios stay unaffected.
       # Per-worker key prefix already includes a w## suffix in the driver, so the replica
       # uses a distinct top-level prefix (atomic-replica-) to keep cross-cluster keysets
-      # disjoint and avoid LWW conflicts swamping the saga-throughput measurement.
+      # disjoint and avoid key conflicts swamping the saga-throughput measurement.
       AtomicSagaDriver__Enabled: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_ENABLED:-false}
       AtomicSagaDriver__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
       AtomicSagaDriver__RatePerSecond: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_RATE:-0}

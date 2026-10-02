@@ -89,7 +89,7 @@ replicated revoke would never land.
 
 The receiver apply path therefore runs under the **system-origin scope**. Both the
 per-entry (`ApplyAsync`) and batch (`ApplyBatchAsync`) apply paths wrap their
-whole body in `LatticeAccessGateContext.EnterSystemOrigin()`. That flag rides the
+whole body in the core library's internal system-origin scope. That flag rides the
 `RequestContext` to every outgoing grain call the applier makes, and the core access
 gate short-circuits to allow before it ever consults the auth engine when the ambient
 scope is system-origin or gate-bypassed. The result: a replicated policy write lands

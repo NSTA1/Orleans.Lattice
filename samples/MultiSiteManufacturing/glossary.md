@@ -48,7 +48,7 @@ Terms used throughout the sample. Split into the **domain** side
 | **Orleans** | Distributed actor framework ("virtual actors" called grains) used by the sample for single-writer-per-entity coordination, timers, reminders, and persistence. |
 | **Grain** | Virtual actor - a uniquely-keyed, single-threaded object managed by Orleans. Transparently activated on first use and deactivated when idle. |
 | **Grain interface** | The public API of a grain (`ISomethingGrain`). All grain calls go through this interface. |
-| **Grain key** | The identity of a grain instance. In this sample, enum values like `ProcessSite.OhioForge` and short strings like backend names (`"baseline"`, `"lattice"`). |
+| **Grain key** | The identity of a grain instance. In this sample, site names like `"OhioForge"` (the `ProcessSite` value as a string), short strings like backend names (`"baseline"`, `"lattice"`) and part serials, and the fixed integer key `0` for the singleton grains. |
 | **Silo** | An Orleans host process. This sample runs two silos per cluster. |
 | **Cluster** | A set of silos sharing a membership table. The sample runs two - `us` and `eu`. |
 | **Grain storage** | Orleans' persistent state facility. Here backed by Azure Table Storage; the sample's own grains use the `msmfgGrainState` provider. |
@@ -100,8 +100,8 @@ from the core write-ahead log) and `Orleans.Lattice.Replication.Grpc`
 | **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`; `ChaosReplicationApplier` (sample-side, Tier 4b inbound half) wraps it outermost and rejects every apply while the disconnect flag is set. |
 | **IReplicationTransport** | Single-method (`SendAsync`) seam between the shipper and the wire. `ChaosReplicationTransport` (sample-side, Tier 4b) decorates it; the package-side gRPC push transport is the concrete implementation. |
 | **Opt-in (tree level)** | `LatticeReplicationOptions.ReplicatedTrees` - a tree -> `LatticeMergeMode` map. The shipper observes only listed trees. |
-| **Traefik** | The HTTP reverse proxy fronting each cluster. Four routers per cluster: sticky-session for the UI, round-robin (no health check) for the `/orleans.lattice.replication.*` gRPC service path, and round-robin with active health check for both the `/orleans.lattice.api.state/*` read-only state API browsed by the explorer and the `/orleans.lattice.api.backup/*` backup control API. |
-| **Multi-homed container** | A container attached to more than one Docker network. In this sample, each Traefik is attached to both cluster networks and is the only cross-cluster bridge. |
+| **Traefik** | The HTTP reverse proxy fronting each cluster. Four routers per cluster: sticky-session (with an active health check) for the UI, round-robin (no health check) for the `/orleans.lattice.replication.*` gRPC service path, and round-robin with active health check for both the `/orleans.lattice.api.state/*` read-only state API browsed by the explorer and the `/orleans.lattice.api.backup/*` backup control API. |
+| **Multi-homed container** | A container attached to more than one Docker network. In this sample, each Traefik is attached to both cluster networks and is the only route between the two clusters' silos; the shared `azurite-backup` account and Prometheus are multi-homed onto both cluster networks too. |
 | **Tier-N chaos** | The sample's fault-injection taxonomy (tiers 1-5 + 4b). Each tier models a distinct failure class at a distinct seam. See [`approach.md`](./approach.md) §4. |
 
 ### Storage

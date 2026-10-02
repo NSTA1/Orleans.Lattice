@@ -61,8 +61,12 @@ at ~26%** when pinned, varying nothing else. Sizing the cpuset to the grant
 removes the throttling.
 
 Derive the values from your own grants rather than copying them - one range per
-service, sized to the ceiling of its `cpus`, and the ranges **must not overlap**
-or you trade throttling for contention. See
+service, sized to the ceiling of that service's *actual* `cpus` grant in your
+`.env` (an `EMBEDDER_CPUS` raised above what `scripts/New-TuningEnv.ps1` derives
+needs an `EMBEDDER_CPUSET` re-sized to match), the ranges **must not overlap**
+or you trade throttling for contention, and together they must fit the host's
+logical CPU count - grants whose ceilings sum past it cannot both be pinned, and
+pinning is not the fix for that. See
 [.env.example](.env.example) for the form and the runbook section
 "CPU scatter under a fractional quota" for the evidence, the limits of what it
 claims, and why you must not enable it in the middle of a measurement.
@@ -857,6 +861,19 @@ seven agree, printing every value it read either way:
    and, when you name them, it is the expected workspace root and a registered
    repository is indexed from the expected repository root (issue #2617).
 
+The parameters not discussed below steer what those checks read.
+`-ContainerName` names the container to interrogate; by default it is the one
+carrying the compose service label for `-ComposeServiceName` (default
+`repocontext`). `-ExpectedCheckout` (default: the checkout holding the script's
+compose files) is the directory check 1 compares against and the checkout whose
+`docker-compose.yml` check 4 reads its expectation from, and `-ExpectedCommit`
+(default: that checkout's HEAD) is the commit checks 2 and 6 compare against;
+`-ExpectedCommitDate` (default: that commit's date), `-CandidateTagPrefix`
+(default `candidate-`) and `-ClockSkewToleranceSeconds` (default `120`) feed
+check 6's tag fallback and chronology arm; and `-ArchiveDestination` (default
+`/memory-archive`) and `-WorkspaceDestination` (default `/workspace`) are the
+container paths checks 5 and 7 adjudicate.
+
 ### The count assertion, and why it is not a walk of tracked files
 
 The stack's real deployment is **two** compose files. The tracked
@@ -979,6 +996,14 @@ It scrapes the three `state` arms before and after, issues its queries over the
 MCP endpoint on 8080 (the container's only application listener), and reports
 the per-arm delta.
 
+With no `-RepoId` it probes every repository `repocontext_list_repos` reports.
+Its other parameters are `-BaseUri` (default `http://localhost:8080`; pass the
+published port if you moved it with `REPOCONTEXT_PORT`), `-Queries` (a built-in
+spread of natural-language queries when omitted, each issued against every
+selected repository), `-Repetitions` (default `1`), `-K` hits per query
+(default `5`), `-TimeoutSeconds` per request (default `60`), and
+`-JsonOutputPath`, which writes the full machine-readable result document.
+
 **It refuses to report rather than reporting a zero it cannot stand behind.** The
 refusal is the feature, and there are two of them, kept deliberately distinct
 because they have different owners:
@@ -1056,7 +1081,8 @@ pwsh -File ./scripts/Test-AnnQueryProbe.ps1
 ```
 
 Twelve scenarios against a real HTTP listener that the suite runs as a background
-job, invoking the probe as a separate `pwsh` process, covering both refusals,
+job (on `localhost`, port `18080` unless you pass `-Port`), invoking the probe as
+a separate `pwsh` process, covering both refusals,
 the absent-arm case, the contaminated delta, the suppressed-fallback state, and
 all three readiness shapes (ready, not-ready-with-a-diagnosis, and a readiness
 endpoint that cannot be read at all).
@@ -1080,8 +1106,9 @@ pwsh -File ./scripts/Invoke-AnnBuildProbe.ps1 -RepoPath /workspace/my-repo
 ```
 
 `-RepoPath` is the in-container path under the mounted workspace, `-RepoId`
-defaults to its final segment, as `repocontext_add_repo` itself derives it, and
-`-BaseUri` defaults to `http://localhost:8080`.
+defaults to its final segment, as `repocontext_add_repo` itself derives it,
+`-BaseUri` defaults to `http://localhost:8080`, and `-TimeoutSeconds` (default
+`240`) bounds each MCP request it makes.
 
 **Convergence is not the approximate plane reporting `Ready` on its own.** A build
 over a corpus that has not been embedded yet reaches `Ready` at once with nothing
@@ -1096,3 +1123,22 @@ It deliberately does not read `/health/ready`, which answers a different questio
 `repocontext.ann.build.stage.duration` histogram, because only the former is
 reported by every build an A/B might compare. Read the stage split afterwards to
 explain a difference, not to score one.
+
+## Scripts
+
+Every script in [`scripts/`](scripts), and every parameter it accepts. All
+parameters are optional except `-RepoPath` on `Invoke-AnnBuildProbe.ps1`.
+
+| Script | What it does | Parameters (default) | Described in |
+|---|---|---|---|
+| `New-TuningEnv.ps1` | Derives this host's resource knobs for `docker-compose.tuning.yml` and writes them to `.env`. | `-WorkspacePath` (the repository root), `-OutFile` (`.env` beside the compose files), `-DryRun`, `-CorpusOnly` (measure and print the corpus, then exit), `-IgnoreHostLoad`, `-ExpectedCorpusFiles`, `-CorpusTolerance` (`0.02`), `-Force`, and two seams for driving its refusals deterministically, `-HostMemoryBytes` and `-HostAvailableMemoryBytes` | [Runbook: before you start the stack](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#before-you-start-the-stack) |
+| `Assert-TuningEnv.ps1` | Refuses a tuning `.env` whose knobs are unset or carry a retired sentinel. | `-EnvFile` (`.env` beside the compose files), `-Reading` (a hashtable checked instead of a file), `-BuildCommit`, `-RepositoryPath` (the repository holding the script), `-Quiet` | [Runbook: before you start the stack](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#before-you-start-the-stack) |
+| `Test-TuningIntegrity.ps1` | Conformance suite for the tuning and attribution guards. | `-Quiet` (the summary line and any failures only) | [Runbook: before you start the stack](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#before-you-start-the-stack) |
+| `Assert-DeployManifest.ps1` | Records the deployment's attribution-relevant configuration and refuses a multi-variable step nobody acknowledged. | `-Label` (a timestamp), `-ComposeDirectory` (this directory), `-ManifestPath` (`.deploy/manifests/<label>.manifest` here), `-BaselinePath` (the newest manifest already there), `-AcceptMultipleDeltas` with `-Reason`, `-ContainerName` (`repocontextcontainer-repocontext-1`), `-EmbedContainerName` (`repocontextcontainer-embedder-1`), `-CgroupCpuQuota` (read from the container), `-Quiet`, and the test seams `-DeclaredReading`, `-EffectiveReading` and `-ComposeConfigFilesLabel` | [Runbook: restart, drain, and verification](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#restart-drain-and-verification) |
+| `Test-DeployManifest.ps1` | Shows the deploy manifest's declared-versus-effective check both firing and visibly not firing. | `-SkipAcquisition` (skip the real compose resolution) | [Runbook: restart, drain, and verification](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#restart-drain-and-verification) |
+| `Assert-ContainerProvenance.ps1` | The seven-check provenance guard over a running container. | See its section. | [Verifying what you actually deployed](#verifying-what-you-actually-deployed) |
+| `Test-ContainerProvenance.ps1`, `Test-ArchiveGitReading.ps1`, `Test-ProvenanceExitCode.ps1` | The provenance guard's own suites. | None. | [Verifying what you actually deployed](#verifying-what-you-actually-deployed) |
+| `Invoke-AnnQueryProbe.ps1`, `Test-AnnQueryProbe.ps1` | The retrieval-plane query probe and its suite. | See its section. | [Measuring approximate retrieval on a running container](#measuring-approximate-retrieval-on-a-running-container) |
+| `Invoke-AnnBuildProbe.ps1` | The approximate-index build probe. | See its section. | [Measuring an approximate-index build](#measuring-an-approximate-index-build) |
+| `Test-BackupSinkDurability.ps1` | Shows the backup sink's host directory surviving `docker compose down -v`. | `-ProjectName` (`repocontext-backup-durability-probe`), `-SinkPath` (a fresh directory under the system temp path), `-Force` (run even while another compose project's containers are up) | [Container quickstart](../../docs/lattice.api.mcp.repocontext/container.md#what-survives-and-what-does-not) |
+| `_deployManifest.ps1`, `_mcpClient.ps1`, `_provenance.ps1`, `_tuningKnobs.ps1` | Shared functions the scripts above dot-source; not run on their own. | None. | - |

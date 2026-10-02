@@ -172,7 +172,8 @@ while (continuation is not null);
 The top-level `Bound` on the response distinguishes a clean `BoundedByAge` read (from
 a durable history view) from a `Truncated` WAL window (with `EarliestAvailable`) or a
 `WalWindowFallback` read taken when no view is enabled. Set `Reverse` on the request to
-page newest-first.
+order the revisions within each page newest-first; paging still advances through the
+timeline from oldest to newest.
 
 ## The Explorer History timeline
 

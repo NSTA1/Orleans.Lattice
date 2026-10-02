@@ -175,11 +175,11 @@ public class MvRegisterConvergenceChaosTests
 
     /// <summary>
     /// Wraps <see cref="MvRegisterAccessor{T}.SetAsync"/> in a bounded
-    /// retry loop. A single CAS-budget exhaustion under chaos
-    /// contention is not a correctness failure - the chaos pump is
-    /// concurrently merging foreign-origin states onto the same key,
-    /// racing the local CAS loop. Retry from the call site, mirroring
-    /// what a real application would do.
+    /// retry loop that backs off on an <see cref="InvalidOperationException"/>
+    /// reporting an exhausted CAS budget. The accessor no longer has a CAS
+    /// loop (it reads once and applies one delta), so on the current path the
+    /// filter is not expected to match; the wrapper is kept as a harmless
+    /// guard.
     /// </summary>
     private static async Task SetWithRetryAsync(ILattice lattice, string replicaId, string value)
     {

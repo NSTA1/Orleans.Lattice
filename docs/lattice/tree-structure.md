@@ -70,19 +70,25 @@ sequenceDiagram
 
     rect rgb(240, 248, 255)
     Note over Leaf: Phase 1 - persist intent
-    Leaf->>Leaf: Pick an admissible median pivot and mint the sibling identity
-    Leaf->>Leaf: Persist split key, sibling id, old successor, successor = sibling, in-flight marker
+    Leaf->>Leaf: Pick an admissible median pivot, capture every WAL partition's head
+    Leaf->>Leaf: Mint the sibling identity, persist split key, sibling id, old successor, successor = sibling, in-flight marker
     end
 
     rect rgb(240, 255, 240)
     Note over Leaf: Phase 2 - cross-grain ops
     Leaf->>New: Seed range, sibling pointers and WAL heads in one call
+    Note over Leaf,New: In parallel, the old successor's previous-sibling pointer is repointed at the new sibling
     loop Bounded batches of keys at or above the split key
+        Leaf->>New: Carry any saga read-gate markers for the batch
         Leaf->>New: Merge the batch
         Leaf->>Leaf: Drop the batch from the local cache
     end
     Leaf->>New: Set per-partition checkpoint hints in one call
-    Leaf->>Leaf: Sweep stragglers, narrow the high bound, clear the marker, mark complete
+    loop Until a sweep at or above the split key finds nothing
+        Leaf->>New: Carry any saga markers for, then merge, rows written there while the batches moved
+    end
+    Leaf->>Leaf: Narrow the high bound, clear the marker, mark complete
+    Leaf->>Leaf: Advance own checkpoints to the captured WAL heads
     end
 
     Leaf-->>Root: Split result (promoted key, new sibling, any forwarded divisions)
@@ -93,11 +99,14 @@ sequenceDiagram
 
     alt Parent also overflows
         Parent-->>Root: Its own split result
-        Root->>Root: Record it, then link it one level up or promote a new root
+        Root->>Root: Retire the landed link and record the new division in one write
+        Root->>Root: Link it one level up, or promote a new root
+    else Parent accepts without dividing
+        Root->>Root: Retire the owed link
     end
 ```
 
-1. **Phase 1 (persist intent):** The leaf picks the **median key** as its pivot, read from the leaf's ordinal index without materialising any payload whenever its cached frame allows. Each half must own part of the leaf's declared range, so a pivot outside that range is replaced by another admissible key, and the split is declined (and counted) when there is none. The leaf allocates the new sibling's `GrainId`, captures the head of every WAL partition in parallel, and persists the split intent - the split key, the sibling's identity, its current successor, its successor pointer redirected to the sibling, and a durable in-flight marker - in a single state write. The donor's own key-range is *not* trimmed in Phase 1 - the right-half entries remain in the cache until Phase 2. The in-flight marker is what recovery keys on: the split lifecycle state only ever advances, so a leaf that has completed one split reports complete from then on and could not otherwise tell a later interrupted division from a finished one (issue [#3265](https://github.com/NSTA1/Orleans.Lattice/issues/3265)).
+1. **Phase 1 (persist intent):** The leaf picks the **median key** as its pivot, read from the leaf's ordinal index without materialising any payload whenever its cached frame allows. Each half must own part of the leaf's declared range, so a pivot outside that range is replaced by another admissible key, and the split is declined (and counted) when there is none. The leaf captures the head of every WAL partition in parallel, allocates the new sibling's `GrainId`, and persists the split intent - the split key, the sibling's identity, its current successor, its successor pointer redirected to the sibling, and a durable in-flight marker - in a single state write. The donor's own key-range is *not* trimmed in Phase 1 - the right-half entries remain in the cache until Phase 2. The in-flight marker is what recovery keys on: the split lifecycle state only ever advances, so a leaf that has completed one split reports complete from then on and could not otherwise tell a later interrupted division from a finished one (issue [#3265](https://github.com/NSTA1/Orleans.Lattice/issues/3265)).
 2. **Phase 2 (cross-grain ops):** The donor seeds every birth-time slot on the new sibling - tree id, shard index, the ownership range `[splitKey, donor's old high bound)`, the next/previous sibling pointers, any moved-away slot seal, and the WAL heads the sibling's materialiser pin starts from - in a single round-trip, while repointing its old successor's previous-sibling pointer at the sibling in parallel. It then moves every key `>= splitKey` across in bounded batches through an idempotent last-writer-wins merge, dropping each batch from its own cache before reading the next (a row that a concurrent write changed mid-transfer stays behind rather than being discarded), stamps the sibling's per-partition projection-checkpoint hints in a single round-trip, and sweeps again for rows written at or above the split key while the batches were moving. Only when that sweep finds nothing does it narrow its own high bound to the split key, clear the in-flight marker and mark the split complete, in one synchronous step, before advancing its own checkpoints to the captured WAL heads. The sibling's write-once slots (tree id, shard index, key-range low bound) are skipped when already seeded, so a crash-recovery re-run against a partially completed split is safe.
 3. The leaf returns a split result carrying the promoted key and the new sibling's `GrainId`. A write the leaf forwarded to a neighbour - because it arrived mid-split, or fell outside the leaf's declared span (see [Span Admission](#span-admission)) - can divide that neighbour too, and every such division is carried back in the same result rather than discarded, because only the shard root can link it (issue [#3523](https://github.com/NSTA1/Orleans.Lattice/issues/3523)).
 4. **The shard root links every division from a durable record.** Before it asks any parent to accept a separator, the shard root records the link it owes in its own persisted state, and it retires the record only once the separator has landed. A link interrupted part-way is replayed at the start of the shard root's next operation, and the parent's duplicate detection (below) makes the replay safe. Links are delivered one at a time per shard, each by a fresh descent from the current root that bypasses the routing cache, rather than along the path captured on the way down: a concurrent batch write can split a node on that path or promote the root in the meantime, and a separator delivered to a parent whose range no longer covers it would be accepted and routed to by nothing.
@@ -116,7 +125,7 @@ Internal nodes themselves use the same two-phase split pattern as leaves. If an 
 
 ## Span Admission
 
-Every leaf that has been split declares the keyspace it owns as a half-open span, `[LowKeyInclusive, HighKeyExclusive)`. Routing is what normally delivers a key to the leaf that declares it, but routing is a snapshot: a write or a merge batch can be resolved against the routing table just before a concurrent split or fold moves the boundary, and arrive at a leaf that no longer declares the key. **Span admission** is the leaf's own defence against that. Before committing a key, a leaf checks it against its declared span; a key outside the span is forwarded to the neighbouring leaf on the key's side (`NextSibling` for a key at or above the high bound, `PrevSibling` for one below the low bound), and that leaf applies the same check. Forwarding is per key, so a batch that straddles a boundary is split into per-leaf sub-batches rather than rejected.
+Every leaf that has been split declares the keyspace it owns as a half-open span, `[LowKeyInclusive, HighKeyExclusive)`. Routing is what normally delivers a key to the leaf that declares it, but routing is a snapshot: a write or a merge batch can be resolved against the routing table just before a concurrent split or fold moves the boundary, and arrive at a leaf that no longer declares the key. **Span admission** is the leaf's own defence against that. Before committing a key, a leaf checks it against its declared span; a key outside the span is forwarded to the neighbouring leaf on the key's side (`NextSibling` for a key at or above the high bound - or, while a division of the leaf is in flight, the successor it had before that division, since `NextSibling` already names the new sibling - and `PrevSibling` for one below the low bound), and that leaf applies the same check. Forwarding is per key, so a batch that straddles a boundary is split into per-leaf sub-batches rather than rejected.
 
 The shard root narrows how often a leaf has to forward at all. A `MergeManyAsync` batch is grouped by leaf once, up front, and each group is normally dispatched to the leaf its first key routed to. When the shard root's routing has moved since the batch was grouped - it bumps a local routing generation whenever it invalidates its cached routing table or promotes a new root - or when a group is being retried, the group is re-routed key by key and split into fresh per-leaf groups before it is merged, so a split that landed mid-batch does not turn the rest of the group into leaf-to-leaf forwards. The check is one local read on the normal path: a first attempt with unchanged routing takes no extra lookup and no extra allocation.
 
@@ -138,9 +147,9 @@ Splitting is the only direction the tree had for a long time. A leaf was allocat
 `ReclaimEmptyLeavesAsync` on the shard root walks the sibling chain and folds out leaves that hold no live rows. It is deliberately conservative:
 
 - It **moves no data.** The only leaf it ever touches is one with zero live rows, so there is no migration window in which a row exists in two places or in neither.
-- The **head leaf is never folded.** It owns everything below the tree's first separator and has no predecessor to inherit that range, so a fully emptied tree still retains exactly one leaf to route to.
-- A leaf is skipped when it carries state that must outlive its rows: an in-progress split, a moved-away seal (sticky until a shard consolidation lifts it), a prepared saga bucket, or a destination-side shadow marker.
-- Each pass is **bounded** by a caller-supplied leaf count and an internal walk ceiling, so it cannot hold an activation turn open on a degenerate chain, and it is re-driven rather than run to completion. A pass that stops on its budget records where it stopped and the next pass resumes from there, so a long chain is drained across passes instead of being re-walked from the head each time.
+- The **head leaf is never folded**, and neither is any other leaf that is its parent's leftmost child. Each owns everything below its parent's first separator, and nothing else in that parent can inherit the range; reclaim does not merge internal nodes, so a fully emptied tree still retains one leaf under every internal node whose children are leaves - exactly one only when the root routes to the leaves directly or is itself a leaf.
+- A leaf is skipped when it carries state that must outlive its rows: an in-progress split, a moved-away seal (sticky until a shard consolidation lifts it), a prepared saga bucket, or a destination-side shadow marker. It is also skipped while its predecessor is mid-division into it: a freshly seeded split sibling holds no rows and none of that state, yet is about to receive the division's rows, so the evidence is read from the predecessor (issue [#2160](https://github.com/NSTA1/Orleans.Lattice/issues/2160)).
+- Each pass is **bounded** by a caller-supplied leaf count, an internal walk ceiling and a wall-clock budget, so it cannot hold an activation turn open on a degenerate chain, and it is re-driven rather than run to completion. A pass that stops on its budget records where it stopped and the next pass resumes from there, so a long chain is drained across passes instead of being re-walked from the head each time.
 
 ### Fold ordering
 
@@ -148,25 +157,29 @@ The ordering is the whole of the safety argument. The WAL materialiser filters r
 
 ```mermaid
 sequenceDiagram
-    participant Root as ShardRootGrain
-    participant Parent as InternalGrain
+    participant Root as Shard root
+    participant Parent as Parent internal node
     participant Prev as Leaf P (predecessor)
     participant Leaf as Leaf L (empty)
     participant Next as Leaf N (successor)
 
+    Root->>Prev: GetReclaimProbeAsync()
     Root->>Leaf: GetReclaimProbeAsync()
     Note over Leaf: 0 live rows, no blocking state
+    Note over Root,Prev: decline here if P's probe shows P mid-division into L
+    Root->>Parent: Find L's routing parent by descending on L's low bound
+    Note over Root,Parent: decline here if L is the parent's leftmost child
 
     rect rgb(255, 240, 245)
     Note over Root,Leaf: 1 - latch L closed, or abandon
     Root->>Leaf: TryBeginRetirementAsync()
-    Note over Leaf: re-checks rows and in-flight mutations,<br/>then refuses every later write
+    Note over Leaf: latches against every later write, then re-checks in-flight<br/>mutations, blocking state and rows, unlatching if any says no
     end
 
     rect rgb(240, 255, 240)
     Note over Root,Prev: 2 - unlink and widen in ONE persist
     Root->>Prev: TryUnlinkSuccessorAsync(expectedNext: L, newNext: N, absorbHigh: L.High)
-    Note over Prev: compare-and-swap - declines if a split moved P underneath
+    Note over Prev: compare-and-swap - declines if a split moved P underneath,<br/>if P is mid-division into L, or if P carries a moved-away seal
     end
 
     rect rgb(255, 248, 240)
@@ -176,15 +189,16 @@ sequenceDiagram
     end
 
     Root->>Next: SetPrevSiblingAsync(P)
+    Root->>Root: Record L as owed a state clear, durably
     Root->>Leaf: ClearGrainStateAsync()
 ```
 
-1. **Latch `L` closed before anything else.** The probe in the first line of the diagram is several round trips old by now, and the leaf mutation surface interleaves, so a write could have been routed, logged and **acknowledged** in between. `TryBeginRetirementAsync` re-checks the row count and the in-flight mutation count and then latches the leaf so that every later write is refused. Retiring is decided here, before the fold is destructive, rather than at the clear: a leaf that is discovered non-empty only after being unlinked is unreachable, which loses the same rows by another route. The latch lives in the activation, not in persisted state, so an activation that dies mid-fold reopens the leaf rather than sealing it permanently.
+1. **Latch `L` closed before anything destructive.** Two checks that touch nothing run first and decline the fold: a predecessor whose probe shows it mid-division into `L`, and an `L` that is its routing parent's leftmost child. The probe of `L` is several round trips old by now, and the leaf mutation surface interleaves, so a write could have been routed, logged and **acknowledged** in between. `TryBeginRetirementAsync` latches the leaf so that every later write is refused, then re-checks the in-flight mutation count, the blocking state and the row count against the now-frozen leaf, and unlatches it again if any of them says no - checking before latching would let a write admitted during the count slip past both. Retiring is decided here, before the fold is destructive, rather than at the clear: a leaf that is discovered non-empty only after being unlinked is unreachable, which loses the same rows by another route. The latch lives in the activation, not in persisted state, so an activation that dies mid-fold reopens the leaf rather than sealing it permanently.
 2. **Unlink and widen together.** `P` takes over both the chain link and the vacated range in a single persist. Split into two writes there is a window in which `P` routes a range its own replay filter rejects, so a write landing in that window survives in cache and vanishes on the next rebuild.
 3. **Retire routing last.** `P` already declares the range before anything stops routing to `L`, so there is never a moment when a routed leaf does not declare the span being sent to it.
 4. **Clear last.** `L` is unreachable by routing and by the chain, and provably still empty, before any state is destroyed.
 
-Steps 1 and 2 are the only ones that can decline, and neither has mutated anything when it does, so **a fold that gives up has nothing to compensate**: it unlatches the leaf and returns, and the tree is exactly as the pass found it.
+Only the checks ahead of the latch and steps 1 and 2 can decline, and none of them has mutated anything when it does, so **a fold that gives up has nothing to compensate**: it unlatches the leaf if it latched it and returns, and the tree is exactly as the pass found it.
 
 #### Why routing is retired last
 
@@ -211,7 +225,7 @@ A crash after step 3 but before step 4 leaves the leaf unrouted, unlinked and em
 
 Reclaim is a multi-grain sequence while the split gate is per-grain, so reclaim and split are **not** serialised with respect to each other. A split of `P` can land between the shard root reading `P`'s sibling pointer and writing it. That split inserts a new leaf `S` between `P` and `L`, and moves live rows into it. An unconditional write of the pointer the reclaim had planned would set `P.NextSibling` past `S` entirely, unlinking a leaf that holds rows which were live throughout - silent data loss caused by the reclaim path, in the growth direction.
 
-`TryUnlinkSuccessorAsync` therefore verifies that `P` still points at the leaf being folded before writing anything, and declines otherwise. It also declines when `P` itself carries a moved-away seal: the seal is keyed by each key's hash rather than by range, so a sealed predecessor that absorbed the range would refuse to serve keys it now owns, and that declination lasts until a shard consolidation lifts the seal. A declined fold unlatches `L` and returns, so the leaf is routed, chained and writable again exactly as it was before the pass touched it - routing was never retired - and the next pass retries it once the topology has settled. Declining is safe where corrupting is not, and reclaim is background work that will be re-driven anyway.
+`TryUnlinkSuccessorAsync` therefore verifies that `P` still points at the leaf being folded before writing anything, and declines otherwise. It also declines the opposite ordering, which that comparison cannot see because the division itself set the pointer: `P` mid-division into the leaf being folded. The walk already declines that case before latching anything, from `P`'s probe, so this arm is a backstop (issue [#2160](https://github.com/NSTA1/Orleans.Lattice/issues/2160)). And it declines when `P` itself carries a moved-away seal: the seal is keyed by each key's hash rather than by range, so a sealed predecessor that absorbed the range would refuse to serve keys it now owns, and that declination lasts until a shard consolidation lifts the seal. A declined fold unlatches `L` and returns, so the leaf is routed, chained and writable again exactly as it was before the pass touched it - routing was never retired - and the next pass retries it once the topology has settled. Declining is safe where corrupting is not, and reclaim is background work that will be re-driven anyway.
 
 ### How fast a shard actually heals
 

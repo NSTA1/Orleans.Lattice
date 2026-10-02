@@ -24,8 +24,8 @@ namespace Orleans.Lattice.Vector.Persistence;
 /// </para>
 /// <para>
 /// <b>Stability.</b> A key is never recycled, and an identifier that is
-/// re-embedded keeps the key it already had, so re-embedding is an in-place
-/// update of one cell rather than a delete and an insert. Only the forward
+/// re-embedded keeps the key it already had, so re-embedding leaves this map
+/// untouched rather than retiring one key and minting another. Only the forward
 /// direction is persisted; the reverse map is rebuilt in memory from the same
 /// scan, so the two can never disagree on disk.
 /// </para>

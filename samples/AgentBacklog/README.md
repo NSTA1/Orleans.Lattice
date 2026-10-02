@@ -92,7 +92,8 @@ repocontext_update(key: "repo/lattice/mem/backlog/issue-2101",
 
 This is **refused** with `RepoContextClaimConflictException`. That refusal is the
 whole point: an item's `body` is a last-writer-wins register, and it is only safe
-to hold a resume block there because the fence guarantees a single writer.
+to hold a resume block there because, while the claim is live, the fence admits
+only a write that presents the claim's current token.
 
 Present the token and the same write succeeds:
 

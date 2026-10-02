@@ -92,7 +92,11 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   lost or double-applied entries.
 
 - [x] **bidirectional-replication: Two-cluster bidirectional replication.**
-  Split the fleet across two clusters, each replicating to the other.
+  Both clusters write, each replicating to the other. The fleet is not split:
+  the simulator API points only at the origin cluster, so the whole fleet
+  writes there, and a write driver on the replica
+  (`BENCH_REPLICA_WRITE_DRIVER_*`, 2,000 writes/s to `replica-` keys) supplies
+  the reverse direction.
   Probes the origin-cluster-id cycle-break by confirming writes do not
   echo back to their origin and HLC cursors stabilize on both sides.
 
@@ -176,7 +180,9 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   Mirror of `bidirectional-replication` with `Lattice:Wal:Provider=azuretable`
   set on both silos. Each side writes its WAL to its own dedicated Azurite
   instance (`vfs-azurite` / `vfs-azurite-replica`), so the durable-WAL append
-  cost is paid symmetrically under LWW-conflict load. Compare ship/apply
+  cost is paid symmetrically. The two sides write disjoint keys (vehicle ids on
+  the origin, `replica-` keys from the replica's write driver), so no write
+  meets a conflicting one from the other cluster. Compare ship/apply
   histograms and the leaf commit's WAL-append step (`lattice_wal_append_p99_ms`,
   `lattice_wal_appends_per_second`) against
   `bidirectional-replication` to attribute any throughput regression between

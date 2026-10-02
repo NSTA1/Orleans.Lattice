@@ -7,7 +7,7 @@ using MultiSiteManufacturing.Host.Lattice;
 using Orleans.Lattice;
 
 // ---------------------------------------------------------------------------
-// SeedParts - one-off dev tool (NOT part of the sample build, do not commit).
+// SeedParts - one-off dev tool source (not part of the sample app build).
 //
 // Connects to a running MultiSiteManufacturing cluster as an Orleans client
 // and inserts a batch of synthetic parts into a lattice fact tree so the

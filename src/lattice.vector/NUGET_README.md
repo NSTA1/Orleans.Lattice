@@ -53,8 +53,10 @@ correct and exact.
   caller-owned span, probe scratch is stack-allocated for up to 128 probed
   partitions and pooled beyond, and no metric needs a normalised copy of the
   query. The insert path allocates only the cell blocks - nothing at all after
-  `EnsureCapacity` is called up front - and training rents its scratch from the
-  array pool, allocating only the cells and centroids it keeps.
+  `EnsureCapacity` is called up front on an untrained index (on a trained one the
+  reservation is spread over the cells as a hint, not a guarantee) - and training
+  rents its scratch from the array pool, allocating only the cells and centroids
+  it keeps.
 - **Contiguous storage.** Each cell holds its members in one flat `float` block,
   never as a per-vector object graph and never as an index into a shared block. A
   delete backfills the hole with the cell's last member, so a block stays dense
@@ -142,9 +144,11 @@ Every figure below is produced by a committed harness in the repository, not by
 reasoning. Recall runs in the ordinary unit lane on every build, so a regression
 breaks the suite rather than a document.
 
-At the default configuration (partitions `round(sqrt(n))`, probes
+At the default partition and probe rules (partitions `round(sqrt(n))`, probes
 `2 * ceil(sqrt(partitions))`, at least 8 and never more than the partition count)
-over 20,000 vectors at 64 dimensions, k = 10:
+over 20,000 vectors at 64 dimensions, k = 10. The harness pins
+`TrainingSampleSize` to 8,192 (the default is 32,768) and lowers
+`MinimumTrainingCount` to 16; every other option is the default:
 
 | Corpus geometry | recall@10 floor | measured |
 |---|---|---|

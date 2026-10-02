@@ -142,12 +142,17 @@ replicated and the deployment has peers, each cluster writes a tiny self-naming
 marker into its own sink and reads every peer's marker back out of that same
 sink. A marker that is missing while its peer answers the saga control channel
 proves the sinks are separate; a marker missing from an unreachable peer is
-merely undecided and is re-probed on the next backup-health sweep.
+merely undecided and is re-probed on the next backup-health sweep. Over the
+shipped gRPC saga control channel, though, the peer refuses that reachability
+call, because it carries an empty saga id and the receiving service rejects one
+as an invalid argument, so a reachable peer still counts as unreachable and a
+missing marker leaves the verdict undecided rather than refuting the sink.
 
 The verdict is logged at start, annotated onto every affected backup's health
-report (so it shows as a `Warning` in the Explorer Backups tab), and can be made
-to block silo start outright. Nothing is probed at all - no sink write and no
-network call - when no tree is replicated or the deployment has no peers.
+report (so it shows as a `Warning` in the Health column of the backup catalogue
+in the Explorer's Backups area), and can be made to block silo start outright.
+Nothing is probed at all - no sink write and no network call - when no tree is
+replicated or the deployment has no peers.
 
 See [backup configuration](../lattice.backup/configuration.md#cross-cluster-sink-sharing)
 for the enforcement modes and their defaults, and

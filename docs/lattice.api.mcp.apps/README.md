@@ -71,8 +71,9 @@ and the app's tool would otherwise be advertised under the built-in tool's name.
 For each enabled app the surface pairs the manifest's `mcpTools` declarations with
 the union of every provider registered for the app's slug. The pairing must be
 exact: a declared tool with no implementation, an implementation the manifest does
-not declare, or a local name implemented twice **fails the whole app's tool
-activation**. The app then contributes no tools at all and the failure is logged.
+not declare, a local name declared or implemented twice, an implementation with no
+name, or a declaration naming a role the manifest does not declare **fails the whole
+app's tool activation**. The app then contributes no tools at all and the failure is logged.
 This replaces the warn-and-skip behaviour the facade groups use, because first-wins
 registration would let a second contribution shadow the first.
 

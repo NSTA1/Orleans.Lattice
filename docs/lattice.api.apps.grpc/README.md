@@ -33,7 +33,8 @@ installing a new app never adds a new service, credential bridge or interceptor.
 - **Server-classified operations.** The authorizer receives a
   `LatticeAppsApiAuthorizationContext` whose `Operation` (a `LatticeAppsApiOperation`)
   is derived from the bound RPC on the server, never from the payload, plus the
-  caller-asserted app slug (or `null` for the catalog and capability calls). A call
+  caller-asserted app slug (or `null` for the listing and capability calls, which name
+  no app). A call
   whose request shape does not match its bound RPC classifies as `Unknown` and is
   refused without consulting the authorizer; streaming calls to the service are
   refused outright.

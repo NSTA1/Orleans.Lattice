@@ -7,9 +7,10 @@ namespace Orleans.Lattice;
 /// <see cref="Add(byte[], string, long)"/> tags the element with a unique
 /// <see cref="OrSetDot"/>; <see cref="Remove(byte[])"/> drops only the dots
 /// currently observed for that element. State-level <see cref="Merge(OrSet, OrSet)"/>
-/// is the union of every replica's adds minus the union of every replica's
-/// observed-remove dots, making the CRDT commutative, associative, and
-/// idempotent under arbitrary delivery order.
+/// unions every replica's add dots and every replica's observed-remove dots,
+/// and an add dot counts only while no same-replica observed-remove dot at an
+/// equal or higher counter covers it, making the CRDT commutative,
+/// associative, and idempotent under arbitrary delivery order.
 /// <para>
 /// Element identity is by content (byte equality), encoded internally as a
 /// base64 string for serialization stability. Empty arrays are valid
@@ -48,7 +49,7 @@ public sealed class OrSet : ICrdt<OrSet>
 
     /// <summary>
     /// Observed-remove dots, keyed identically to <see cref="Adds"/>. A dot
-    /// in this map cancels the matching dot in <see cref="Adds"/> on merge.
+    /// in this map cancels same-replica add dots at or below its counter.
     /// </summary>
     [Id(1)]
     public Dictionary<string, List<OrSetDot>> Tombstones { get; set; }

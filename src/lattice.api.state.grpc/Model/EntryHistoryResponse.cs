@@ -4,7 +4,8 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// Wire response for the per-key change-history RPC. A serializable mirror of
 /// <see cref="EntryHistoryResult"/> carrying a continuation-paged page of a
 /// key's revision timeline plus the history metadata (how the timeline is
-/// bounded and, when truncated, the oldest still-readable revision).
+/// bounded and, when truncated, the oldest entry still readable on the
+/// key's WAL partition).
 /// </summary>
 [GenerateSerializer]
 [Alias(GrpcStateTypeAliases.EntryHistoryResponse)]
@@ -34,8 +35,9 @@ public sealed record EntryHistoryResponse
 
     /// <summary>
     /// On a <see cref="EntryHistoryBound.Truncated"/> page, the
-    /// hybrid-logical-clock timestamp of the oldest still-readable revision;
-    /// <see cref="HybridLogicalClock.Zero"/> otherwise.
+    /// hybrid-logical-clock timestamp of the oldest entry still readable on
+    /// the key's WAL partition; <see cref="HybridLogicalClock.Zero"/>
+    /// otherwise.
     /// </summary>
     [Id(6)] public HybridLogicalClock EarliestAvailable { get; init; }
 }

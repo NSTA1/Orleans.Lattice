@@ -11,9 +11,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Singleton-per-tree grain that owns a single reminder for tombstone compaction.
-/// When the reminder fires, a grain timer is started that processes one shard per
-/// tick - avoiding a long-running grain call that could hit Orleans timeouts for
-/// large trees. Failed shards are retried once before being skipped.
+/// When the reminder fires, a grain timer is started that processes at most one
+/// leaf batch from one shard per tick - avoiding a long-running grain call that
+/// could hit Orleans timeouts for large trees. Failed shards are retried once
+/// before being skipped.
 /// <para>
 /// Compaction progress is persisted so that a silo restart mid-compaction can
 /// resume where it left off. A one-minute keepalive reminder is registered at the
@@ -1182,15 +1183,12 @@ internal sealed class TombstoneCompactionGrain(
     /// turn allowed and stopped with work outstanding (<c>outcome=partial</c>,
     /// tagged by the leaf itself).
     /// <para>
-    /// <c>skipped</c> now means the leaf declined, and only that. It used to
-    /// conflate declining with a call that overran the request timeout, because
-    /// an unbounded <c>CompactTombstonesAsync</c> surfaced an overrun as a
-    /// timeout exception and this counter fires unconditionally for any leaf
-    /// exception. Since issue 4135 a turn that runs out of budget returns
-    /// normally with <c>Completed=false</c> and is tagged <c>partial</c>, so the
-    /// two conditions are separate arms with separate remedies: a rising
-    /// <c>partial</c> rate is a capacity signal, a rising <c>skipped</c> rate is
-    /// a fault.
+    /// <c>skipped</c> means the leaf call threw or timed out. Since issue 4135 a
+    /// normal budget boundary returns with <c>Completed=false</c> and is tagged
+    /// <c>partial</c>, so that capacity signal is distinct from skip. A turn that
+    /// still overruns the request timeout - for example because its effective
+    /// background-drain duration is non-positive and therefore unbounded - still
+    /// arrives here as a leaf exception and is counted as <c>skipped</c>.
     /// </para>
     /// <para>
     /// On the legacy chain walk the caller re-throws afterwards, so the

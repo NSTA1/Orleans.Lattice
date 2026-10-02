@@ -51,9 +51,9 @@ public static class LatticeMetrics
     /// Tag key for the tree identity associated with a series. Most grain-side
     /// series use the logical tree id so an alias swap keeps the same series.
     /// Some surfaces instead report the physical or addressed id they operate on:
-    /// WAL garbage collection, WAL storage providers, storage-usage and
-    /// admission gauges, saturation refusals, and several leaf-level replay,
-    /// scan-stall, zero-prime, and frozen-baseline series. Independent trees
+    /// WAL garbage collection (including the storage over-threshold flag it
+    /// sets), WAL storage providers, saturation refusals, and several leaf-level
+    /// replay, scan-stall, zero-prime, and frozen-baseline series. Independent trees
     /// without provenance retain their own identity; arbitrary aliases do not
     /// rewrite creation-time ownership.
     /// </summary>
@@ -10431,15 +10431,17 @@ public static class LatticeMetrics
     // --- Autonomic split admission instruments (HotShardMonitorGrain) -------
 
     /// <summary>
-    /// Histogram sampled once per autonomic monitor pass with the number of
-    /// shard migrations currently in flight for that tree: adaptive split
-    /// sources and consolidation fold donors both report through each shard's
-    /// authoritative <c>IsSplitting</c> status. Tagged with <see cref="TagTree"/>.
-    /// Emitted every pass <em>regardless</em> of whether the cluster-wide split
-    /// gate (<see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>) is
-    /// enabled, so operators can compute the cluster aggregate as a
-    /// <c>sum</c> across the <c>tree</c> tag and decide whether they need the
-    /// gate and how to size it.
+    /// Histogram sampled by autonomic monitor passes that reach the migration
+    /// census with the number of shard migrations currently in flight for that
+    /// tree: adaptive split sources and consolidation fold donors both report
+    /// through each shard's authoritative <c>IsSplitting</c> status. Tagged with
+    /// <see cref="TagTree"/>. Passes held off before that census - for example
+    /// disabled auto-splitting, minimum tree age, or a resize, reshard, merge or
+    /// snapshot in flight - refresh any outstanding footprint but emit no sample.
+    /// When emitted it is independent of whether the cluster-wide split gate
+    /// (<see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>) is enabled,
+    /// so operators can compute the cluster aggregate as a <c>sum</c> across the
+    /// <c>tree</c> tag and decide whether they need the gate and how to size it.
     /// </summary>
     public static readonly Histogram<long> SplitInFlight =
         Meter.CreateHistogram<long>("orleans.lattice.split.in_flight", unit: "{split}",
@@ -10829,8 +10831,8 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of view apply lag, recorded each drain pass as the number of
-    /// source WAL entries committed but not yet applied to the view at the start
-    /// of the pass. Tagged with <see cref="TagView"/>. A persistently high value
+    /// source WAL entries committed but not yet applied to the view after the pass.
+    /// Tagged with <see cref="TagView"/>. A persistently high value
     /// indicates the maintainer is falling behind the source write rate.
     /// </summary>
     public static readonly Histogram<long> ViewApplyLag =
