@@ -154,7 +154,7 @@ The directory is a trusted, silo-side seam: it runs its reads and writes under s
 | `GetGroupAsync(string groupId, CancellationToken)` | `Task<MembershipGroup?>` | Reads a group record, or `null` when no such group exists. |
 | `ListGroupsAsync(CancellationToken)` | `IAsyncEnumerable<MembershipGroup>` | Enumerates every group record in id order. |
 | `RemoveGroupAsync(string groupId, CancellationToken)` | `Task` | Removes a group record; a no-op when it does not exist. Leaves the group's membership edges in place (see below). |
-| `AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken)` | `Task` | Makes `memberId` a direct member of `groupId`; `memberKind` defaults to `User`. Idempotent. |
+| `AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken)` | `Task` | Makes `memberId` a direct member of `groupId`; `memberKind` defaults to `User`. Idempotent. Throws `LatticeTenantGroupNestingException` for an edge that breaks the [tenant group nesting invariant](#tenant-groups). |
 | `RemoveMemberAsync(string groupId, string memberId, CancellationToken)` | `Task` | Removes a membership edge; a no-op when it does not exist. |
 | `GroupsOfAsync(string memberId, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The member's full transitive group closure (nested groups walked with cycle detection), excluding the member itself unless a membership cycle leads back to it. |
 | `ExpandGroupsAsync(IReadOnlyCollection<string> seedGroups, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The transitive closure of a set of seed groups, including the seeds; a seed the directory does not know contributes only itself. |
@@ -163,6 +163,51 @@ The directory is a trusted, silo-side seam: it runs its reads and writes under s
 Every `CancellationToken` parameter defaults to `default`.
 
 Removal is **non-cascading**: `RemoveGroupAsync` deletes only the group record, not the membership edges that reference the group (as a parent or as a nested member). Remove those edges explicitly with `RemoveMemberAsync` when retiring a group, or an orphaned edge can keep contributing the deleted group id to a subject's closure.
+
+## Tenant groups
+
+With [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration),
+a tenant's own administrators keep **tenant groups** in this directory beside the
+cluster's groups. A tenant group's id has the reserved grammar `t/{tenant}/{name}`
+(the core type `LatticeTenantGroupId` owns it), and the whole `t/` namespace belongs
+to the tenant tier. Two rules keep a tenant group inside its tenant.
+
+**The nesting invariant.** `AddMemberAsync` refuses, for every caller, operators and
+system origin included, an edge that would let a tenant group reach outside its
+tenant:
+
+- A tenant group may contain users, groups of the **same** tenant, and cluster groups
+  (for example an Entra group).
+- A tenant group may **never** become a member of a cluster group or of another
+  tenant's group. Otherwise an operator's rule on a cluster group would extend to
+  people a tenant administrator controls.
+- A malformed `t/` id, and any id under the reserved `default` tenant
+  (`t/default/...`), is refused as a member and as a parent.
+
+The check reads only the two ids, never `MembershipMemberKind`, and runs before
+anything is written. A refusal throws `LatticeTenantGroupNestingException`, an
+`ArgumentException` carrying `GroupId` and `MemberId`. Cycle detection is unchanged.
+A cluster group placed inside a tenant group makes its members members of the tenant
+group, as any nested group does.
+
+**The claim filter.** While the feature is on, an id starting with `t/` that the
+identity provider asserts - a token group claim, an Entra group overage, or a group
+`ClaimToGroups` projects - is stripped before group expansion, so no
+identity-provider administrator can join a tenant group by asserting its id. The
+whole `t/` namespace is stripped, well-formed or not. Groups the directory itself
+records the subject in are kept: those are real memberships. The seam is
+`ITenantGroupClaimFilter` (`IsActive`, and `Filter(ICollection<string>)`, which
+removes reserved ids in place). This package registers an inactive default with
+`TryAdd`, and `Orleans.Lattice.Tenancy` replaces it with one that reads its
+delegated-access flag; while inactive, resolution reads one `bool` and allocates
+nothing extra. When the flag changes, the tenancy package clears the resolution
+cache, so no cached subject keeps a verdict from the old setting.
+
+The cluster administration facade refuses to create a group with a `t/` id; tenant
+groups are managed through the tenant directory facade
+(`ILatticeTenantDirectoryAdmin`, see
+[`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration)).
+Deleting a tenant removes its tenant groups and their edges in both directions.
 
 ## Concepts
 
@@ -177,6 +222,9 @@ Removal is **non-cascading**: `RemoveGroupAsync` deletes only the group record, 
 | Built-in authenticators | `JwtCredentialAuthenticator`, `AnonymousCredentialAuthenticator` | The per-issuer JWT authenticator - the extensible base the Entra and OIDC authenticators specialize - and the fallback that never claims a credential. |
 | Subject mapper | `ILatticeSubjectMapper` | Merges a principal with its directory-derived groups into the final `LatticeSubject`; the default mapper applies `GroupMergeMode` and the optional `ClaimToGroups` projection. |
 | Group merge mode | `SubjectGroupMergeMode` | How token-asserted groups combine with directory groups (`Union` by default). |
+| Tenant group | `LatticeTenantGroupId` (core) | A group a tenant's administrators manage, with the reserved id `t/{tenant}/{name}`; see [Tenant groups](#tenant-groups). |
+| Nesting refusal | `LatticeTenantGroupNestingException` | Thrown by `AddMemberAsync` for an edge that would let a tenant group reach outside its tenant. |
+| Tenant group claim filter | `ITenantGroupClaimFilter` | Strips asserted `t/` group ids before expansion while delegated tenant access administration is on. |
 | Identity-directory provider | `ILatticeIdentityDirectory` | The read-only search / validate view onto the external identity source (see [Identity-directory providers](identity-directory-providers.md)). |
 
 ## Relationship to authorization

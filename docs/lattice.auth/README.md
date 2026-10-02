@@ -79,6 +79,8 @@ public sealed class PolicySeeder(ILatticeAuthorizationPolicyStore store)
 
 Rule ids that start with `app:` (`LatticeAppRuleIds.Prefix`; test an id with `LatticeAppRuleIds.IsAppOwned`) belong to [installable apps](../lattice.apps/README.md): the app compiler writes them under system origin and replaces an app's whole set on every reconciliation. The policy store therefore rejects a `PutRuleAsync` or `RemoveRuleAsync` of such an id from any caller that is not already running under system origin - a bootstrap administrator included - with `LatticeAppOwnedRuleException`, an `ArgumentException` carrying the targeted `RuleId`. The check runs before anything is read or written, so a rejected delete does not disclose whether the rule exists. To change what an app's users may do, author a separate rule outside the prefix (for example a deny at the same or a more specific scope, which [Precedence](#precedence) lets win), or change the app's manifest or role bindings.
 
+Rule ids that start with `tenant:` (`LatticeTenantRuleIds.Prefix`) are **tenant-tier** rules, written by a tenant's own administrators through the tenant-administration facade when [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration) is on. The policy store guards them like `app:` ids: a `PutRuleAsync` or `RemoveRuleAsync` of one off system origin throws `LatticeTenantOwnedRuleException` before anything is read or written. Reads are not guarded, so operators can list them. The store also confines every tenant-tier rule, and every rule naming a tenant group, to the owning tenant's trees, for every caller; see [The tenant rule layer](tenant-layer.md#confinement-guards).
+
 ### Scope
 
 A `LatticeScope` names how broadly a rule applies within a tree, from broadest to narrowest:
@@ -88,6 +90,7 @@ A `LatticeScope` names how broadly a rule applies within a tree, from broadest t
 | Tree | `LatticeScope.Tree(treeId)` | Every key in the tree. |
 | Prefix | `LatticeScope.Prefix(treeId, prefix)` | Every key that starts with the prefix. |
 | Key | `LatticeScope.Key(treeId, key)` | Exactly one key. |
+| Tenant-wide | `LatticeScope.TenantWide(tenant)` | A whole-tree scope over the sentinel tree id `t/{tenant}/*`, standing for every tree the tenant owns except its app-owned trees. Authorable only on a tenant-tier rule; see [The tenant rule layer](tenant-layer.md#the-tenant-wide-scope). |
 | Cluster-wide | `LatticeScope.ClusterWide()` | A whole-tree scope over the `*` sentinel tree id, used for a capability not attached to any single tree (`LatticeOperation.Telemetry` and `LatticeOperation.AppInstall`) and, once `AllTreesGrantsEnabled` is set, for a data-plane grant or deny across every application tree (see [Precedence](#precedence)). |
 
 ### Precedence
@@ -99,6 +102,7 @@ When more than one rule matches, the decision engine resolves them deterministic
 3. **A user rule outranks a group rule at equal scope** (configurable through `UserRuleBeatsGroupRuleAtEqualScope`, default on), so a user-specific allow can lift an individual out of a group-level deny.
 4. **Default-deny.** With no matching rule, the configured `DefaultEffect` applies. The recommended and default posture is `Deny`, so anything not explicitly granted is refused. `DefaultEffect` never applies to a control-plane request - the reserved `sys-auth-*` and `sys-tenant-*` namespaces, the installable-apps `sys-app-*` namespace (the app registry, activation status and `sys-app-trees` tree ownership ledger), the tenant-administration capability ids, and a cluster-wide capability request on the `*` sentinel (such as `Telemetry`): there only an explicit matched allow grants access, so an unmatched request is denied even under `DefaultEffect = Allow`.
 5. **All-trees tier (opt-in).** With `AllTreesGrantsEnabled` set, `Tree:*` rules also govern every application tree: an all-trees deny wins outright, otherwise the tree's own most-specific verdict applies, otherwise an all-trees allow grants, otherwise `DefaultEffect` applies. The tier never reaches a control-plane namespace; see [Configuration](configuration.md).
+6. **Tenant layer (opt-in).** Every rule above is an **operator** rule, and a matched operator verdict, allow or deny, is final. With [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration) on, a request on a tenant's own tree that no operator rule matches is decided by that tenant's tenant-tier rules before `DefaultEffect` applies: a tenant-wide deny, then the tree's most-specific tenant verdict, then a tenant-wide allow. A tenant rule therefore never overrides an operator rule. See [The tenant rule layer](tenant-layer.md).
 
 ### Bootstrap administrators
 
@@ -140,12 +144,15 @@ Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocab
 |---|---|
 | `LatticeAuthServiceCollectionExtensions` | `AddLatticeAuth(configure)` installs the enforcing gate; `ConfigureLatticeAuth(configure)` layers a further `LatticeAuthOptions` delegate after registration. |
 | `LatticeAuthOptions` | Every knob; see [Configuration](configuration.md). |
-| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. |
+| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. `LatticeScope.TenantWide(tenant)` creates the tenant-wide scope, and `IsTenantWide()` / `TryGetTenantWideTenant(out tenant)` recognise it. |
 | `LatticeSubjectSelectorKind`, `LatticeScopeKind`, `LatticeEffect` | The discriminators: `User` or `Group`; `Tree`, `Key`, or `Prefix`; `Allow` or `Deny`. |
 | `LatticeAuthOperations` | `All`, the whole-data-plane operation mask. |
 | `ILatticeAuthorizationPolicyStore` | Durable rule storage: `PutRuleAsync`, `GetRuleAsync`, `RemoveRuleAsync`, `ListRulesForTreeAsync`, and `ListRulesAsync`. A write or delete of an app-owned rule id outside system origin throws `LatticeAppOwnedRuleException`. |
 | `LatticeAppRuleIds` | The app-owned rule-id namespace: `Prefix` (`app:`) and `IsAppOwned(ruleId)`. |
 | `LatticeAppOwnedRuleException` | The `ArgumentException` the policy store throws for a direct write or delete of an app-owned rule id; `RuleId` names the targeted id. |
+| `LatticeTenantRuleIds` | The tenant-tier rule-id namespace: `Prefix` (`tenant:`), `For(tenant, localId)`, `IsTenantOwned(ruleId)`, and `TryGetTenant(ruleId, out tenant)`. See [The tenant rule layer](tenant-layer.md#tenant-tier-rule-ids). |
+| `LatticeTenantOwnedRuleException` | The `ArgumentException` the policy store throws for a write or delete of a tenant-tier rule id off system origin; `RuleId` names the targeted id. |
+| `ITenantRuleLayer` | The on/off seam for the tenant rule layer (`IsActive`). The default is inactive; `Orleans.Lattice.Tenancy` supplies the active one, which reads its delegated-access flag. |
 | `ILatticeDecisionEngine` | Evaluates a request against the compiled policy snapshot, synchronously and in memory (`Evaluate`), and reports the snapshot's `CurrentEpoch`. It is the policy decision only: the enforcing gate layers the bootstrap-administrator bypass, the control-plane fail-closed rule, tenant isolation, and the strict epoch fence around it. |
 | `LatticeAuthReservedTrees` | The reserved `sys-auth-*` namespace guard: `Prefix`, `PolicyTreeId`, `IsReserved(treeId)`, and `ThrowIfReserved(treeId)`, which throws the same error the policy store enforces. |
 | `LatticePolicyEpochFenceContext` | The caller half of the strict epoch fence: `RequireAtLeast(epoch)` scopes a required policy-epoch floor onto the ambient request context (nesting never lowers an outer floor), and `RequiredEpoch` reads it. |
@@ -156,6 +163,7 @@ Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocab
 ## Reference
 
 - [Configuration](configuration.md) - every public options property, its type, and its default.
+- [The tenant rule layer](tenant-layer.md) - how tenant-tier rules are evaluated beneath operator rules, and the guards that confine them to their tenant.
 - [Security posture](security-posture.md) - threat model, attack surface, fail-closed guarantees, the internal-grain trust boundary, the bootstrap-administrator root of trust, and TLS expectations.
 - [Observability](observability.md) - the `orleans.lattice.auth` meter and the audit sink.
 
