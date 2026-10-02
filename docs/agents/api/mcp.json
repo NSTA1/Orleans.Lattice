@@ -11975,6 +11975,69 @@
       ]
     },
     {
+      "id": "lattice_treeadmin_wal_reclamation",
+      "in_process": "TreeAdminWalReclamationToolHandlers.GetWalReclamationAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/treeadmin.json#get-wal-reclamation",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true,
+          "notes": "The tree whose WAL reclamation to inspect. Must not be null or empty. An aliased tree is resolved to its physical tree."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTreeWalReclamation",
+        "shape": "Structured JSON projection of TreeWalReclamationReport: treeId, pinStoreReadable, pinCount, pinsWithoutOffset, isWedged, and floorHolder (consumerId, leafId, partition, pinOffset, persistedCheckpoint, state by name, holdsOffsetFloor) or null when the tree holds no pin."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "The host registers no ILatticeWalReclamation, or a remote cluster answers Unimplemented; either is surfaced as an McpException message naming the cause."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects; it never activates a leaf.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminWalReclamationToolHandlers.cs#TreeAdminWalReclamationToolHandlers.GetWalReclamationAsync",
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup",
+        "src/lattice.api.mcp/Remote/GrpcLatticeWalReclamation.cs#GrpcLatticeWalReclamation"
+      ]
+    },
+    {
       "id": "repo-context_claim_status",
       "in_process": "RepoContextToolHandlers.ClaimStatusAsync",
       "grpc_method": null,

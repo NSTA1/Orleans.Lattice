@@ -191,6 +191,11 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeStorageUsageOperations>(sp =>
                 new GrpcLatticeStorageUsageOperations(LatticeTreeAdminApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+
+            // The WAL reclamation read (#4237) forwards over the same endpoint.
+            services.TryAddSingleton<ILatticeWalReclamation>(sp =>
+                new GrpcLatticeWalReclamation(LatticeTreeAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
             services.AddTreeAdminTools(options.EnableSchemaControl, options.EnableLifecycleControl);
         }
 
