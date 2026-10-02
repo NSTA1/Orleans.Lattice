@@ -132,7 +132,16 @@
                 <ul class="lt-access-links">
                     @foreach (var admin in admins)
                     {
-                        <li @key="admin" class="lt-access-mono" data-lt-admin="@admin">@admin</li>
+                        <li @key="admin" class="lt-access-mono" data-lt-admin="@admin">
+                            @if (OwnGroupName(admin) is { } groupName)
+                            {
+                                <a href="@GroupHref(groupName)">@admin</a>
+                            }
+                            else
+                            {
+                                @admin
+                            }
+                        </li>
                     }
                 </ul>
             }

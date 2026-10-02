@@ -77,6 +77,18 @@ public partial class TenantMembersView
 
     private string GroupHref(string name) => Href(AccessRoutes.TenantGroup(Tenant, name));
 
+    /// <summary>
+    /// The local name of one of this tenant's own groups that an administrator entry
+    /// names by its full id (<c>t/{tenant}/{name}</c>), or <see langword="null"/> for
+    /// any other entry - a user, a cluster group, or another tenant's group.
+    /// </summary>
+    /// <param name="entry">The administrator entry.</param>
+    /// <returns>The group's local name, or <see langword="null"/>.</returns>
+    private string? OwnGroupName(string entry) =>
+        LatticeTenantGroupId.TryParse(entry, out var id) && string.Equals(id.Tenant.Value, Tenant, StringComparison.Ordinal)
+            ? id.Name
+            : null;
+
     private async Task LoadAsync()
     {
         var tenant = Tenant;

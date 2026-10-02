@@ -174,7 +174,7 @@ public sealed class TenantMembersViewTests : TenantAccessPagesTestContext
     {
         TenantFacades.AsTenantAdmin();
         TenantAccessAdmin.ListAdminSubjectsAsync("acme", Arg.Any<CancellationToken>())
-            .Returns(new TenantAdminSubjectReport { TenantId = "acme", Subjects = ["zed@example.com", "ann@example.com"] });
+            .Returns(new TenantAdminSubjectReport { TenantId = "acme", Subjects = ["zed@example.com", "t/acme/ops", "ann@example.com", "t/globex/ops"] });
 
         var cut = RenderAt<AccessMembersPage>("t/acme/access/members");
 
@@ -182,7 +182,13 @@ public sealed class TenantMembersViewTests : TenantAccessPagesTestContext
         {
             var admins = cut.Find("[data-lt-implicit-members]");
             Assert.That(admins.GetAttribute("data-lt-implicit-members"), Is.EqualTo("ready"));
-            Assert.That(admins.QuerySelectorAll("[data-lt-admin]").Select(item => item.TextContent), Is.EqualTo(new[] { "ann@example.com", "zed@example.com" }));
+            Assert.That(
+                admins.QuerySelectorAll("[data-lt-admin]").Select(item => item.TextContent.Trim()),
+                Is.EqualTo(new[] { "ann@example.com", "t/acme/ops", "t/globex/ops", "zed@example.com" }));
+            Assert.That(
+                admins.QuerySelectorAll("[data-lt-admin] a").Select(link => link.GetAttribute("href")),
+                Has.Exactly(1).Items.And.All.EndsWith("t/acme/access/groups/ops"),
+                "only this tenant's own group links to its page");
             Assert.That(admins.QuerySelectorAll("button"), Is.Empty, "the administrators are read-only here");
             Assert.That(admins.QuerySelector("a")!.GetAttribute("href"), Does.EndWith(TenancyRoutes.TenantMembers("acme").Format().TrimStart('/')));
         });
