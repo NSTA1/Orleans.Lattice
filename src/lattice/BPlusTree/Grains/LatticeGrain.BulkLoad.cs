@@ -429,6 +429,7 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var registry = grainFactory.GetLatticeRegistry();
+        await EnsureRegisteredForConfigurationAsync(registry, nameof(SetPublishEventsEnabledAsync));
         await registry.SetPublishEventsAsync(TreeId, enabled);
         // Make sure this activation re-reads the registry next time it publishes
         // so the override takes effect immediately locally.
@@ -445,11 +446,33 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var registry = grainFactory.GetLatticeRegistry();
+        await EnsureRegisteredForConfigurationAsync(registry, nameof(SetHistoryRetentionAsync));
         await registry.SetHistoryRetentionAsync(TreeId, mode, window);
         LatticeMetrics.ConfigChanged.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
             LatticeTenantLabel.ForTree(TreeId));
+    }
+
+    /// <summary>
+    /// Registers this tree before a configuration verb rewrites its registry
+    /// row, because the registry's per-field mutators no longer create a missing
+    /// row (issue #4230). Configuring a tree before its first write is a
+    /// supported flow - the system-data initializers pin history retention on
+    /// trees that hold nothing yet - so an id that was never registered is
+    /// registered here, with its structural pins seeded, exactly as its first
+    /// write would. A purged id is refused instead: a configuration change is not
+    /// a write, and registering it would silently undo the purge (issue #4219).
+    /// Runs outside any registry turn, so the extra registry hops cannot re-enter
+    /// it.
+    /// </summary>
+    private async Task EnsureRegisteredForConfigurationAsync(ILatticeRegistry registry, string operation)
+    {
+        if (await registry.ExistsAsync(TreeId))
+            return;
+        if (await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId))
+            throw new LatticeTreeNotRegisteredException(TreeId, operation);
+        await registry.RegisterAsync(TreeId);
     }
 
     public async Task<HistoryRetentionSettings> GetHistoryRetentionAsync(CancellationToken cancellationToken = default)

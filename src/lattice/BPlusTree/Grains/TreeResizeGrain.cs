@@ -281,13 +281,16 @@ internal sealed class TreeResizeGrain(
     /// <summary>
     /// Empty-tree fast-path: repins <c>MaxLeafKeys</c> /
     /// <c>MaxInternalChildren</c> in the registry without running the online
-    /// resize pipeline.
+    /// resize pipeline. Fails closed on a tree with no registry row rather than
+    /// creating one (issue #4230): the resize's options resolve registers a
+    /// never-created tree, so a missing row here means it was purged.
     /// </summary>
     private async Task ApplyEmptyTreeResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
         var registry = grainFactory.GetLatticeRegistry();
-        var existing = await registry.GetEntryAsync(TreeId);
-        var updated = (existing ?? new State.TreeRegistryEntry()) with
+        var existing = await registry.GetEntryAsync(TreeId)
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(ResizeAsync));
+        var updated = existing with
         {
             MaxLeafKeys = newMaxLeafKeys,
             MaxInternalChildren = newMaxInternalChildren,

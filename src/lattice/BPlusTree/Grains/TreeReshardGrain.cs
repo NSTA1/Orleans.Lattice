@@ -881,12 +881,16 @@ internal sealed class TreeReshardGrain(
     /// <summary>
     /// Atomically updates the <see cref="State.TreeRegistryEntry.ShardCount"/>
     /// pin for this tree, preserving every other field on the existing entry.
+    /// Fails closed on a tree with no registry row rather than creating one
+    /// (issue #4230): <see cref="ReshardAsync"/> registers a never-created tree
+    /// through its options resolve, so a missing row here means it was purged.
     /// </summary>
     private async Task UpdateShardCountPinAsync(int newShardCount)
     {
         var registry = grainFactory.GetLatticeRegistry();
-        var existing = await registry.GetEntryAsync(TreeId);
-        var updated = (existing ?? new State.TreeRegistryEntry()) with { ShardCount = newShardCount };
+        var existing = await registry.GetEntryAsync(TreeId)
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(ReshardAsync));
+        var updated = existing with { ShardCount = newShardCount };
         await registry.UpdateAsync(TreeId, updated);
     }
 

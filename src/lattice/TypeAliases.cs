@@ -218,6 +218,11 @@ internal static class TypeAliases
     // server fault - the API bindings map it to a client-error status.
     internal const string LatticeReservedTreeNamespace = "ol.rtn";
 
+    // A registry verb that changes an existing tree's row (shard map, per-tree
+    // configuration, WAL placement, digest latch) refused because the tree has no
+    // row - never registered, or purged. It never creates one (issue #4230).
+    internal const string LatticeTreeNotRegistered = "ol.tnr";
+
     // Per-tree admission-control quota surface. Thrown by the public ILattice
     // write guard when a locally-authored write is refused because the tree's
     // cached live-key count or estimated-byte footprint has reached the
