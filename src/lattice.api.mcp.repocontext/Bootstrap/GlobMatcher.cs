@@ -51,9 +51,28 @@ internal sealed class GlobMatcher
     /// groups - never a backreference, lookaround, or atomic group, which are the
     /// constructs the non-backtracking engine rejects.
     /// </para>
+    /// <para>
+    /// <see cref="RegexOptions.Singleline"/> is load-bearing for the same reason,
+    /// and the polarity is what makes it so. A glob compiled here is used as a
+    /// <em>deny-list</em> - <c>RepoTreeWalker</c> and the git fetcher drop a file
+    /// when an <c>excludeGlobs</c> entry matches it - so for this matcher failing to
+    /// match is failing <em>open</em>, the opposite of the allow-list case. Without
+    /// this option <c>.</c> does not match a line feed, and <see cref="Translate"/>
+    /// emits <c>.</c> for every <c>**</c> construct, so <c>(?:.*/)?</c> could not
+    /// traverse a directory name containing one. A POSIX path segment may hold any
+    /// byte but <c>'/'</c> and NUL, so a single line feed anywhere in the prefix
+    /// defeated every exclude glob: <c>**/secrets/*</c> did not match
+    /// <c>"a\nb/secrets/key"</c> and the operator's excluded secret was ingested
+    /// into the searchable index. Matching across line feeds restores the intended
+    /// reading - the pattern is matched against the whole path, which is what a
+    /// deny-list needs.
+    /// </para>
     /// </summary>
     private const RegexOptions MatchOptions =
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.NonBacktracking;
+        RegexOptions.CultureInvariant
+        | RegexOptions.IgnoreCase
+        | RegexOptions.NonBacktracking
+        | RegexOptions.Singleline;
 
     /// <summary>
     /// Compiles <paramref name="pattern"/> into a matcher.
@@ -120,7 +139,11 @@ internal sealed class GlobMatcher
             }
         }
 
-        builder.Append('$');
+        // '\z', never '$'. '$' also matches immediately before a line feed that
+        // ends the input, so a path ending in one slipped past the end anchor as a
+        // different string than the one being filtered. '\z' admits only the true
+        // end of input, so the glob is matched against the entire path.
+        builder.Append(@"\z");
         return builder.ToString();
     }
 }

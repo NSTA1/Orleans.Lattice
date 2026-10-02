@@ -295,9 +295,24 @@ internal sealed class GitignoreScope
             // (literals, character classes, '.', '*', '?', anchors, non-capturing
             // groups) carries no backreference, lookaround, or atomic group, so it
             // is compatible by construction.
-            const RegexOptions options = RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+            //
+            // Singleline is load-bearing, and the polarity is what makes it so. A
+            // .gitignore rule is a DENY-list - a match removes the entry from the
+            // walk - so failing to match is failing OPEN. Without this option '.'
+            // does not match a line feed, and Translate emits "(?:.*/)?" per "**/"
+            // segment, so the prefix could not traverse a directory name holding
+            // one. A POSIX segment may hold any byte but '/' and NUL, so a single
+            // line feed in the prefix defeated every rule: a committed "secrets/"
+            // rule did not match "a\nb/secrets/key" and the ignored entry was
+            // indexed anyway. Matching across line feeds matches the whole path,
+            // which is what a deny-list needs.
+            const RegexOptions options =
+                RegexOptions.CultureInvariant | RegexOptions.NonBacktracking | RegexOptions.Singleline;
             return new GitignoreRule(
-                new Regex(Translate(line, anchored) + "$", options),
+                // '\z', never '$': '$' also matches immediately before a trailing
+                // line feed, so an entry ending in one was tested as a different
+                // string than the one being filtered.
+                new Regex(Translate(line, anchored) + @"\z", options),
                 negated,
                 directoryOnly);
         }
@@ -322,7 +337,7 @@ internal sealed class GitignoreScope
         /// <summary>
         /// Translates a <c>.gitignore</c> pattern into the body of a regular
         /// expression (anchored at <c>^</c> but with no terminator), so the caller
-        /// can append the <c>$</c> terminator that matches the entry itself.
+        /// can append the <c>\z</c> terminator that matches the entry itself.
         /// </summary>
         private static string Translate(string pattern, bool anchored)
         {
