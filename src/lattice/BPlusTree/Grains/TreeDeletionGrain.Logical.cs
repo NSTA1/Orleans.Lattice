@@ -143,6 +143,7 @@ internal sealed partial class TreeDeletionGrain
         await grainFactory.GetGrain<ITreeDeletionGrain>(state.State.LogicalPhysicalTreeId)
             .DeleteDelegatedAsync();
         await grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).UnregisterReminderAsync();
+        await StopAutonomicLoopsAsync();
         state.State.LogicalDeleteComplete = true;
         state.State.DeletePending = false;
         try { await PersistAsync(); }
@@ -203,6 +204,7 @@ internal sealed partial class TreeDeletionGrain
         if (await deletion.IsPhysicalDeletedAsync())
             await deletion.RecoverPhysicalAsync();
         await grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).EnsureReminderAsync();
+        await ArmAutonomicLoopsAsync();
         await RemoveLogicalReminderAsync();
         var deletedAt = state.State.LogicalDeletedAtUtc;
         var pending = state.State.DeletePending;
@@ -242,6 +244,7 @@ internal sealed partial class TreeDeletionGrain
         if (state.State.RetainsRegistryEntry && state.State.IsDeleted && !state.State.PurgeComplete)
             await PurgePhysicalAsync();
         await grainFactory.GetLatticeRegistry().UnregisterAsync(TreeId);
+        await StopAutonomicLoopsAsync();
         await RemoveLogicalReminderAsync();
         state.State.LogicalPurgeInProgress = false;
         state.State.LogicalPurgeComplete = true;

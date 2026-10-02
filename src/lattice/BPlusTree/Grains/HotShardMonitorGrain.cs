@@ -292,6 +292,17 @@ internal sealed class HotShardMonitorGrain(
         this.DeactivateOnIdle();
     }
 
+    /// <summary>
+    /// Stops this monitor when its tree's deletion record holds a completed
+    /// purge, so no sample ever runs against a purged id (issue #4219). A tree
+    /// that is merely not created yet keeps its monitor armed.
+    /// </summary>
+    private async Task StopIfPurgedAsync()
+    {
+        if (await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).HoldsCompletedPurgeAsync())
+            await StopAsync();
+    }
+
     /// <inheritdoc />
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
@@ -367,6 +378,18 @@ internal sealed class HotShardMonitorGrain(
 
         var nowUtc = TimeProvider.GetUtcNow().UtcDateTime;
 
+        // Observe the tree before doing anything for it (issue #4219). The
+        // resolve never registers, so a sample cannot recreate a tree, and a
+        // purged tree stops this monitor instead of being sampled. A tree that
+        // was never created is merely skipped: its first write still needs a
+        // running monitor.
+        var resolved = await optionsResolver.ResolveIfRegisteredAsync(TreeId);
+        if (resolved is null)
+        {
+            await StopIfPurgedAsync();
+            return;
+        }
+
         // Use the persisted activation time, initializing it if first use.
         var activationUtc = await GetOrSetActivationUtcAsync(nowUtc);
 
@@ -412,7 +435,6 @@ internal sealed class HotShardMonitorGrain(
         // un-gated read here is one of the two terms in the cold-start fan-in
         // product that RegistryFanInGate exists to bound.
         var physicalTreeId = await optionsResolver.RegistryReads.ResolveAsync(TreeId);
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var map = await optionsResolver.RegistryReads.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();

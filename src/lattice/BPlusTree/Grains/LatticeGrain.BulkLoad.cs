@@ -242,6 +242,17 @@ internal sealed partial class LatticeGrain
         }
 
         InvalidateRegistrationMemo();
+
+        // The purge stopped the tree's compaction reminder and autonomic loops.
+        // Forget that this activation armed them, so a write that reuses the id
+        // (issue #3940) arms them for the new tree instead of trusting a latch
+        // set for the purged one (issue #4219).
+        if (status.PurgeComplete)
+        {
+            _compactionEnsured = false;
+            _monitorEnsured = false;
+            _healingEnsured = false;
+        }
     }
 
     /// <summary>
