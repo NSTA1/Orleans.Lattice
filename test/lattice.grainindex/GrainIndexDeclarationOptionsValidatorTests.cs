@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.GrainIndex.Registry;
 
 namespace Orleans.Lattice.GrainIndex.Tests;
 
@@ -60,6 +61,50 @@ public sealed class GrainIndexDeclarationOptionsValidatorTests
     [Test]
     public void Duplicate_detection_is_case_sensitive_because_the_name_is_an_options_key() =>
         Assert.That(Validate(Definition("users"), Definition("Users")).Succeeded, Is.True);
+
+    [Test]
+    public void An_index_name_containing_a_slash_fails_and_names_the_offender()
+    {
+        var result = Validate(Definition("users"), Definition("users/archive"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.Failures?.Count(), Is.EqualTo(1));
+            Assert.That(result.FailureMessage, Does.Contain("'users/archive'"));
+            Assert.That(result.FailureMessage, Does.Contain("contains '/'"));
+        });
+    }
+
+    [Test]
+    public void A_slash_in_an_index_name_would_put_its_registry_entries_inside_another_indexs_scan_range()
+    {
+        // Why the validator rejects '/': the per-index registry scans are prefix
+        // ranges, and 'users/archive' entries sort inside the 'users' range, so the
+        // 'users' backfill would read them as its own seen markers.
+        var foreignSeen = GrainIndexRegistryKeys.Seen("users/archive", "grain-1");
+        var foreignPending = GrainIndexRegistryKeys.Pending("users/archive", "grain-1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(IsWithin(
+                foreignSeen,
+                GrainIndexRegistryKeys.SeenPrefix("users"),
+                GrainIndexRegistryKeys.SeenPrefixEnd("users")), Is.True);
+            Assert.That(IsWithin(
+                foreignPending,
+                GrainIndexRegistryKeys.PendingPrefix("users"),
+                GrainIndexRegistryKeys.PendingPrefixEnd("users")), Is.True);
+            Assert.That(IsWithin(
+                GrainIndexRegistryKeys.Seen("users-archive", "grain-1"),
+                GrainIndexRegistryKeys.SeenPrefix("users"),
+                GrainIndexRegistryKeys.SeenPrefixEnd("users")), Is.False,
+                "A name without '/' stays outside its neighbour's range.");
+        });
+    }
+
+    private static bool IsWithin(string key, string startInclusive, string endExclusive) =>
+        string.CompareOrdinal(key, startInclusive) >= 0 && string.CompareOrdinal(key, endExclusive) < 0;
 
     [Test]
     public void An_empty_projection_set_fails_and_names_the_offender()

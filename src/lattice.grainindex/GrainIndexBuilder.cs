@@ -39,7 +39,10 @@ public sealed class GrainIndexBuilder<TGrain, TState>
     /// Sets the logical index name, which must be unique within the silo and is
     /// the key the index's options are resolved by. Defaults to the grain
     /// interface's simple type name, so a silo declaring two indexes over the
-    /// same grain type must name at least one of them.
+    /// same grain type must name at least one of them. A name containing
+    /// <c>/</c> is rejected by the declaration validator at startup, because the
+    /// registry scans each index's bookkeeping by the prefix
+    /// <c>{name}/</c>.
     /// </summary>
     /// <param name="name">The index name. Must not be <c>null</c>, empty, or white space.</param>
     /// <returns>This builder, for chaining.</returns>

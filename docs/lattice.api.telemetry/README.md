@@ -198,8 +198,11 @@ behind `tree.storage.bytes`, `tree.storage.bytes_trend` and
 `tree.admission.utilization`: the background poller and the cluster storage
 roll-up still walk the physical copy's registered id, but the copy's aggregator
 publishes under the logical id too, so an unfiltered answer never lists the copy
-as a further tree. The filter is matched verbatim: the facade does not compose an
-unqualified name into the caller's tenant namespace, so on a tenancy cluster a
+as a further tree. A tree's WAL-only and deep storage-usage aggregators are placed
+independently, so more than one silo can export the same tree's storage series;
+`tree.storage.bytes` and `tree.storage.bytes_trend` therefore take `max by (tree)`
+across silos rather than summing, which would double-count that tree. The filter is matched verbatim: the facade
+does not compose an unqualified name into the caller's tenant namespace, so on a tenancy cluster a
 tenant's tree is filtered by its full `t/{tenant}/{name}` id, the value its `tree`
 label carries. Each entry also declares `TelemetryQueryBounds`: a requested step is
 clamped into the entry's step budget, but a window outside the entry's bounds -

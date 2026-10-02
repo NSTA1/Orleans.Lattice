@@ -39,7 +39,7 @@ either is a breaking change (see [Drift detection](#drift-detection)).
 
 | Member | Default | What it does |
 |---|---|---|
-| `WithName(string)` | the `TGrain` interface name | The index's name, used to resolve it, to name its tree, and to tag its metrics. Must be unique within the silo. |
+| `WithName(string)` | the `TGrain` interface name | The index's name, used to resolve it, to name its tree, and to tag its metrics. Must be unique within the silo and must not contain `/`. |
 | `WithTreeName(string)` | `__grainindex/<name>` | The lattice tree that backs the index. An override must stay inside the reserved prefix. |
 | `WithKeyCodec(IGrainKeyCodec<TGrain>)` | codec for the grain's key type | How a grain identity is encoded into, and decoded out of, an index entry. |
 | `AllowReplication(bool)` | `false` | Whether the index's tree may be replicated across clusters. See [Grain indexes are cluster-local](#grain-indexes-are-cluster-local). |
@@ -167,8 +167,11 @@ Every `AddGrainIndex` call appends its definition to
 registration order), so the silo's whole declaration set is resolvable as
 `IOptions<GrainIndexDeclarationOptions>`. It is populated by `AddGrainIndex`
 rather than configured by hand, and it is validated as a set when the host starts:
-an index name declared twice, or an index that `Include`s no property, fails
-start-up with a message naming the index.
+an index name declared twice, an index name containing `/`, or an index that
+`Include`s no property, fails start-up with a message naming the index. A `/` is
+refused because the registry scans each index's bookkeeping by the prefix
+`{name}/`, so an index named `users/archive` would fall inside the range of one
+named `users`.
 
 ## Grain indexes are cluster-local
 

@@ -238,6 +238,47 @@ public sealed class LatticeTelemetryQueriesTests
         });
     }
 
+    [TestCase("tree.storage.bytes")]
+    [TestCase("tree.storage.bytes_trend")]
+    public void A_storage_usage_entry_takes_the_max_per_tree_across_silos_rather_than_the_sum(string queryId)
+    {
+        // A tree's WAL-only and deep storage-usage aggregators are placed
+        // independently, so two silos can export the same tree's storage series.
+        // Summing them reported double the tree's footprint.
+        var definition = Definitions.Single(d => d.QueryId == queryId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                definition.QueryTemplate,
+                Is.EqualTo("max by (tree) (orleans_lattice_storage_total_bytes{$scope$})"));
+            Assert.That(definition.QueryTemplate, Does.Not.Contain("sum"));
+        });
+    }
+
+    [Test]
+    public void No_entry_sums_a_storage_usage_gauge_across_silos()
+    {
+        var storageEntries = Definitions
+            .Where(d => d.Descriptor.Instruments.Any(i =>
+                i.Name.StartsWith("orleans.lattice.storage.", StringComparison.Ordinal)))
+            .ToArray();
+        var offenders = storageEntries
+            .Where(d => !d.QueryTemplate.StartsWith("max by (tree) (", StringComparison.Ordinal)
+                || d.QueryTemplate.Contains("sum", StringComparison.Ordinal))
+            .Select(d => $"{d.QueryId}: {d.QueryTemplate}")
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(storageEntries, Has.Length.GreaterThanOrEqualTo(2),
+                "The storage-usage entries this guard inspects are gone, so it would pass vacuously.");
+            Assert.That(offenders, Is.Empty,
+                "More than one silo can export a tree's storage-usage series, so a cross-silo sum "
+                + "double-counts it. Offenders: " + string.Join("; ", offenders));
+        });
+    }
+
     [Test]
     public void The_version_is_positive()
     {
