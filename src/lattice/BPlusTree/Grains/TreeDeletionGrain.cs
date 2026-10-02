@@ -905,18 +905,43 @@ internal sealed partial class TreeDeletionGrain(
     /// after <see cref="DeleteTreeAsync"/> and its state behind after a purge.
     /// The walk is contiguous rather than the map's current physical set so a
     /// retired donor, or the target of an abandoned split, is purged too.
+    /// <para>
+    /// On a copy a logical tree's alias currently targets, a split the tree
+    /// makes after the alias was set is recorded against the logical tree's
+    /// registry entry while its shards live under this copy, so that entry's
+    /// pin, map and high-water mark are folded in as well (issue #4234). The
+    /// owner is the copy's <see cref="TreeRegistryEntry.DerivedFrom"/>, the
+    /// only tree an aliased delete may act through.
+    /// </para>
     /// </summary>
     internal async Task<int> ResolveAllocatedShardCountAsync()
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var highest = resolved.ShardCount - 1;
 
-        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
-        if (entry?.NextShardIndex is { } allocated && allocated > highest)
+        var registry = grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(TreeId);
+        highest = Math.Max(highest, HighestRecordedShardIndex(entry));
+
+        if (entry?.DerivedFrom is { } owner
+            && !string.Equals(owner, TreeId, StringComparison.Ordinal)
+            && await registry.GetEntryAsync(owner) is { } ownerEntry
+            && string.Equals(ownerEntry.PhysicalTreeId, TreeId, StringComparison.Ordinal))
         {
-            highest = allocated;
+            highest = Math.Max(highest, (ownerEntry.ShardCount ?? 0) - 1);
+            highest = Math.Max(highest, HighestRecordedShardIndex(ownerEntry));
         }
 
+        return highest + 1;
+    }
+
+    /// <summary>
+    /// The highest physical shard index a registry entry's split-allocation
+    /// high-water mark or shard map records, or <c>-1</c> when it records none.
+    /// </summary>
+    private static int HighestRecordedShardIndex(TreeRegistryEntry? entry)
+    {
+        var highest = entry?.NextShardIndex ?? -1;
         if (entry?.ShardMap is { } map)
         {
             foreach (var index in map.GetPhysicalShardIndices())
@@ -925,7 +950,7 @@ internal sealed partial class TreeDeletionGrain(
             }
         }
 
-        return highest + 1;
+        return highest;
     }
 
     private async Task PurgeShardAsync(int shardIndex)

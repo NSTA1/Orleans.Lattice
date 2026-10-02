@@ -65,6 +65,8 @@ internal sealed record TreeRegistryEntry
     /// Used by <see cref="ILatticeRegistry.AllocateNextShardIndexAsync"/> to
     /// hand out unique target shard indices when multiple splits run
     /// concurrently for the same tree ( - <c>MaxConcurrentAutoSplits</c> &gt; 1).
+    /// An empty-tree reshard that lowers the pin also raises it to the highest
+    /// index the tree had before, so tree deletion keeps walking those shards.
     /// </summary>
     [Id(5)] public int? NextShardIndex { get; init; }
 

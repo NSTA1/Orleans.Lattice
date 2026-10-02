@@ -164,7 +164,11 @@ internal sealed class TreeReshardGrain(
         // so a grow and a shrink are the same single registry write.
         if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap))
         {
-            await ApplyEmptyTreeResharAsync(registry, newShardCount, virtualShardCount);
+            var previousIndices = currentMap.GetPhysicalShardIndices();
+            var previousHighestShardIndex = Math.Max(
+                resolved.ShardCount - 1,
+                previousIndices.Count > 0 ? previousIndices[previousIndices.Count - 1] : -1);
+            await ApplyEmptyTreeResharAsync(registry, newShardCount, virtualShardCount, previousHighestShardIndex);
             return;
         }
 
@@ -894,12 +898,25 @@ internal sealed class TreeReshardGrain(
     /// (issue #4230): <see cref="ReshardAsync"/> registers a never-created tree
     /// through its options resolve, so a missing row here means it was purged.
     /// </summary>
-    private async Task UpdateShardCountPinAsync(int newShardCount)
+    /// <param name="newShardCount">The shard count to pin.</param>
+    /// <param name="retainedHighestShardIndex">
+    /// When supplied, the split-allocation high-water mark
+    /// (<see cref="State.TreeRegistryEntry.NextShardIndex"/>) is raised to at
+    /// least this index, so a re-pin that drops shards from the pin and the map
+    /// keeps them inside every later delete, recover and purge walk (issue #4234).
+    /// </param>
+    private async Task UpdateShardCountPinAsync(int newShardCount, int? retainedHighestShardIndex = null)
     {
         var registry = grainFactory.GetLatticeRegistry();
         var existing = await registry.GetEntryAsync(TreeId)
             ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(ReshardAsync));
-        var updated = existing with { ShardCount = newShardCount };
+        var nextShardIndex = existing.NextShardIndex;
+        if (retainedHighestShardIndex is { } retained && retained > (nextShardIndex ?? -1))
+        {
+            nextShardIndex = retained;
+        }
+
+        var updated = existing with { ShardCount = newShardCount, NextShardIndex = nextShardIndex };
         await registry.UpdateAsync(TreeId, updated);
     }
 
@@ -909,9 +926,14 @@ internal sealed class TreeReshardGrain(
     /// updates the <see cref="State.TreeRegistryEntry.ShardCount"/> pin and
     /// rebuilds the default identity <see cref="ShardMap"/> for the new
     /// count over the tree's existing virtual slot count. With no data to
-    /// move, a grow and a shrink are the same single registry write.
+    /// move, a grow and a shrink are the same single registry write. The
+    /// split-allocation high-water mark is raised to
+    /// <paramref name="previousHighestShardIndex"/> in the same write as the
+    /// pin, so a shrink's dropped shards - which may still hold tombstones -
+    /// stay inside every later delete, recover and purge walk (issue #4234).
     /// </summary>
-    private async Task ApplyEmptyTreeResharAsync(ILatticeRegistry registry, int newShardCount, int virtualShardCount)
+    private async Task ApplyEmptyTreeResharAsync(
+        ILatticeRegistry registry, int newShardCount, int virtualShardCount, int previousHighestShardIndex)
     {
         var newMap = ShardMap.CreateDefault(virtualShardCount, newShardCount);
 
@@ -933,7 +955,7 @@ internal sealed class TreeReshardGrain(
             grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{indices[i]}")
                 .ReviveAsync([.. ownedSlots[i]], virtualShardCount));
 
-        await UpdateShardCountPinAsync(newShardCount);
+        await UpdateShardCountPinAsync(newShardCount, previousHighestShardIndex);
         await registry.SetShardMapAsync(TreeId, newMap);
         // Snapshot the three fields the empty-tree fast-path mutates so a
         // failing persist doesn't leak Complete=true / Phase=None /
