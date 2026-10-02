@@ -56,6 +56,11 @@ internal static class TypeAliases
     // behaves byte-for-byte as today; the tenancy package fills the seams.
     internal const string TenantId = "ol.tid";
 
+    // Delegated tenant access administration (opt-in): the reserved
+    // tenant-group id grammar t/{tenant}/{name}. Core-owned so membership,
+    // auth and tenancy share one parser without referencing each other.
+    internal const string LatticeTenantGroupId = "ol.tgi";
+
     // Multi-tenancy (opt-in): the fail-closed denial thrown at the ILattice
     // tenant-resolution boundary when the active-tenant context resolver
     // denies an operation (an absent or invalid active tenant). Serializable

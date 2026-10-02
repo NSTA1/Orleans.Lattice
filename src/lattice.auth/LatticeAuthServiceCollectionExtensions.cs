@@ -140,6 +140,13 @@ public static class LatticeAuthServiceCollectionExtensions
         // active enforcer.
         builder.Services.TryAddSingleton<ITenantGateEnforcer, NullTenantGateEnforcer>();
 
+        // Tenant rule layer seam (epic #4154). The decision engine consults the
+        // ITenantRuleLayer null seam to decide whether the tenant-tier rules run
+        // beneath the operator layer. The inactive default keeps an auth-only
+        // cluster (or one with the delegated tenant access flag off) deciding
+        // exactly as before; the tenancy add-on Replaces it.
+        builder.Services.TryAddSingleton<ITenantRuleLayer, NullTenantRuleLayer>();
+
         // Enforcement wiring: replace the core default NullLatticeAccessGate
         // (registered by AddLattice via TryAddSingleton) with PolicyAccessGate,
         // so this add-on becomes the enforcement control point. Replace (not

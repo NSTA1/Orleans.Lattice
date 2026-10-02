@@ -31,4 +31,8 @@
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\lattice\Fakes\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
+  </ItemGroup>
+
 </Project>
