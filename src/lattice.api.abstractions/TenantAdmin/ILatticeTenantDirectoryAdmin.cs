@@ -234,6 +234,16 @@ public interface ILatticeTenantDirectoryAdmin
     /// which admin-set and member-set entries, expanding the subject's transitive
     /// groups from the membership directory.
     /// </summary>
+    /// <remarks>
+    /// The subject may be any principal, not only one already associated with the
+    /// tenant, so a tenant admin who has added a cluster group to the tenant's member
+    /// or admin set can learn whether any given user is a (transitive) member of that
+    /// cluster group. This is by design and not a cross-tenant disclosure: adding a
+    /// cluster group grants its members the ability to act as the tenant, so who
+    /// those members are is the tenant admin's legitimate knowledge of who can act as
+    /// their tenant. A tenant admin learns nothing about a cluster group the tenant
+    /// has not admitted, because only entries of the tenant's own sets are reported.
+    /// </remarks>
     /// <param name="tenantId">The tenant to resolve against. Must be a valid, non-empty tenant id.</param>
     /// <param name="subjectId">The subject id to resolve, read per <paramref name="subjectKind"/>. Must not be <c>null</c> or empty.</param>
     /// <param name="subjectKind">The kind of principal <paramref name="subjectId"/> names.</param>

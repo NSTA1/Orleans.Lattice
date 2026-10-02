@@ -1,10 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Api.TenantAdmin.Tests.Security;
 
-/// <summary>Claims case: an identity provider cannot assert its way into a tenant group (D2).</summary>
+/// <summary>Claims cases: an identity provider cannot assert its way into a tenant group (D2), whatever the flag.</summary>
 public sealed partial class TenantAccessConformanceTests
 {
     [Test]
@@ -84,5 +85,66 @@ public sealed partial class TenantAccessConformanceTests
                 Assert.That(addAdmin, Is.TypeOf<LatticeAuthorizationDeniedException>(), $"{path}: cannot promote itself");
             });
         }
+    }
+
+    [Test]
+    public async Task Case05b_with_the_flag_off_a_token_asserting_a_tenant_group_does_not_match_an_operator_rule_naming_it()
+    {
+        const string Admin = "c05b-pat";
+        const string Mallory = "c05b-mallory";
+        const string Fran = "c05b-fran";
+        var t = await _fixture.SeedTenantAsync("c05b-t", Admin);
+        await _fixture.AddAdminAsync(t, Mallory);
+        var finance = GroupOf(t, "finance");
+        var orders = TreeOf(t, "orders");
+
+        using (As(Admin))
+        {
+            await _fixture.Directory.UpsertGroupAsync(t.Value, new TenantGroupDescriptor { Name = "finance" });
+            await _fixture.Directory.AddGroupMemberAsync(t.Value, "finance", Fran);
+            await _fixture.Directory.AddMemberAsync(t.Value, "finance", TenantSubjectKind.TenantGroup);
+        }
+
+        // An operator rule naming the tenant group: admitted on the tenant's own
+        // trees and honoured whatever the flag.
+        await _fixture.PutOperatorRuleAsync(
+            "c05b-op-finance", LatticeSubjectSelector.Group(finance), LatticeScope.Tree(orders), LatticeOperation.Read, LatticeEffect.Allow);
+
+        await WaitAllowedAsync(Fran, t, orders, "positive control: a directory member of the group holds the operator grant");
+        Assert.That(await AllowsAsync(Mallory, t, orders), Is.False, "baseline: mallory, an exact-id admin, holds no grant on the tree");
+
+        var callers = new (string Path, Func<IDisposable> Use)[]
+        {
+            ("JWT groups claim", () => TenantAccessConformanceClusterFixture.AsJwt(Mallory, finance)),
+            ("asserted groups", () => As(Mallory, finance)),
+        };
+
+        var results = new List<(string Path, LatticeSubject Resolved, LatticeAccessDecision Decision)>();
+        TenantAccessConformanceClusterFixture.Switch.Set(false);
+        try
+        {
+            foreach (var (path, use) in callers)
+            {
+                using (use())
+                {
+                    var resolved = await _fixture.Silo.GetRequiredService<ILatticeMembershipContext>().ResolveCurrentAsync();
+                    results.Add((path, resolved, await _fixture.DecideAsync(t.Value, orders)));
+                }
+            }
+        }
+        finally
+        {
+            TenantAccessConformanceClusterFixture.Switch.Set(true);
+        }
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (path, resolved, decision) in results)
+            {
+                Assert.That(resolved.SubjectId, Is.EqualTo(Mallory), $"{path}: the credential resolves");
+                Assert.That(resolved.GroupIds, Does.Not.Contain(finance), $"{path}: the t/ namespace stays reserved with the flag off");
+                Assert.That(decision.Allowed, Is.False, $"{path}: the operator rule naming the tenant group does not match");
+            }
+        });
     }
 }

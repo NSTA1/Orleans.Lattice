@@ -92,10 +92,17 @@ internal sealed partial class LatticeTenantDirectoryAdmin
 
         // Verify-and-compensate (see the type remarks): concurrent adds can all pass
         // the check above, so re-count and withdraw this edge if over the cap.
-        if (await _store.CountTenantEdgesAsync(tenant, cancellationToken).ConfigureAwait(false) > edgeCap)
+        if (await _store.CountTenantEdgesAsync(tenant, cancellationToken).ConfigureAwait(false) is var edgeCount
+            && edgeCount > edgeCap)
         {
-            await _store.RemoveMemberAsync(groupId, storedMemberId, cancellationToken).ConfigureAwait(false);
-            ThrowCapExceeded(tenant, MembershipConstants.EdgesTree, TenantAccessCaps.MembershipEdgesDimension, edgeCap);
+            await TenantCapCompensation.WithdrawAndRefuseAsync(
+                ct => _store.RemoveMemberAsync(groupId, storedMemberId, ct),
+                _logger,
+                tenant,
+                MembershipConstants.EdgesTree,
+                TenantAccessCaps.MembershipEdgesDimension,
+                edgeCap,
+                edgeCount).ConfigureAwait(false);
         }
 
         return GroupChange(tenant, groupName, memberId, memberKind, changed: true);

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Tenancy;
@@ -43,7 +45,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// in <see cref="PutRuleAsync"/>. Concurrent puts that each pass the cap check
 /// re-count after writing and withdraw their own new rule when the count is over
 /// the cap, so an overshoot self-corrects and at worst every racer is refused (fail
-/// closed). Concurrent puts of one local id to different trees settle on a single
+/// closed). The withdrawal is retried a bounded number of times
+/// (<see cref="TenantCapCompensation"/>); if it still fails the put is refused with a
+/// <see cref="LatticeQuotaExceededException"/> saying the cap may stay exceeded until
+/// the rule is removed. Concurrent puts of one local id to different trees settle on a single
 /// copy by a deterministic tie-break. The residual window is the time between a
 /// racer's write and its re-count, during which the store can briefly hold more
 /// rules than the cap or two copies of one id; and in a pathological interleaving
@@ -70,6 +75,7 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
     private readonly Func<bool> _isEnabled;
     private readonly ILatticeMembershipContext? _membership;
     private readonly ITenantMembershipUsage? _membershipUsage;
+    private readonly ILogger _logger;
 
     /// <summary>Initializes a new <see cref="LatticeTenantPolicyAdmin"/>.</summary>
     /// <param name="authorizer">The tenant-tier fail-closed authorization seam. Must not be <see langword="null"/>.</param>
@@ -80,6 +86,7 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
     /// <param name="isEnabled">Reads the live delegated tenant access administration flag. Must not be <see langword="null"/>.</param>
     /// <param name="membership">The membership context resolving the caller, or <see langword="null"/> when none is registered (every caller is then anonymous).</param>
     /// <param name="membershipUsage">The tenant group and edge counter for the posture, or <see langword="null"/> to report those usages unmeasured.</param>
+    /// <param name="logger">The logger for a cap withdrawal that could not land, or <see langword="null"/> for none.</param>
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
     public LatticeTenantPolicyAdmin(
         TenantRegionResidencyAuthorizer authorizer,
@@ -89,7 +96,8 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         ILatticeAccessGate gate,
         Func<bool> isEnabled,
         ILatticeMembershipContext? membership = null,
-        ITenantMembershipUsage? membershipUsage = null)
+        ITenantMembershipUsage? membershipUsage = null,
+        ILogger<LatticeTenantPolicyAdmin>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(store);
@@ -106,6 +114,7 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         _isEnabled = isEnabled;
         _membership = membership;
         _membershipUsage = membershipUsage;
+        _logger = (ILogger?)logger ?? NullLogger.Instance;
     }
 
     /// <summary>

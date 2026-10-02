@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Membership.Tests;
 /// that hands the subject's group set back uncopied and allocates nothing.
 /// </summary>
 [TestFixture]
-public sealed class MembershipContextTenantGroupClaimFilterTests
+public sealed partial class MembershipContextTenantGroupClaimFilterTests
 {
     private const string Scheme = "issuer-a";
 

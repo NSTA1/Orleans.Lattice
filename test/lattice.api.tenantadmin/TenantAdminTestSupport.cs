@@ -321,7 +321,7 @@ internal static class TenantAdminTestSupport
     /// testable: the caller's pre-merge view and the committed record are
     /// genuinely different objects.
     /// </summary>
-    internal class MergingTenantRegistry : ITenantRegistry
+    internal class MergingTenantRegistry : ITenantRegistry, IGuardedTenantRegistry
     {
         private readonly Dictionary<string, TenantRecord> _records = new(StringComparer.Ordinal);
 
@@ -371,6 +371,32 @@ internal static class TenantAdminTestSupport
             // merged into, which is never the same object as the caller's copy.
             // Clone so a caller that mutates the returned record and writes it
             // back cannot alias the store.
+            return Task.FromResult(stored.Clone());
+        }
+
+        /// <summary>
+        /// Models the real registry's guarded commit: the validation runs on the
+        /// merged record (after any competing write the hook injects) and, when it
+        /// throws, nothing is written.
+        /// </summary>
+        public Task<TenantRecord> PutGuardedAsync(
+            TenantRecord record, Action<TenantRecord> validateMerged, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(validateMerged);
+            Puts++;
+            OnBeforeMerge(Puts);
+
+            if (!_records.TryGetValue(record.Id.Value, out var stored))
+            {
+                validateMerged(record);
+                stored = record.Clone();
+                _records[record.Id.Value] = stored;
+                return Task.FromResult(stored.Clone());
+            }
+
+            validateMerged(stored.Clone().MergeFrom(record));
+            stored.MergeFrom(record);
             return Task.FromResult(stored.Clone());
         }
 

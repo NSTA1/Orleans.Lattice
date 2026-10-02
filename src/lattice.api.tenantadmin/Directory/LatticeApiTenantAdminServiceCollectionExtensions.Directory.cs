@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice.Auth;
@@ -47,7 +48,8 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<ITenantGroupRuleCascade>(),
             DelegatedAccessReader(sp),
             sp.GetService<ILatticeIdentityDirectory>(),
-            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
+            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>(),
+            sp.GetService<ILogger<LatticeTenantDirectoryAdmin>>()));
     }
 
     /// <summary>

@@ -68,10 +68,22 @@ internal sealed partial class LatticeTenantPolicyAdmin
             if (isNew && after.TenantRuleCount > cap)
             {
                 // Concurrent puts each passed the check: withdraw this one so the cap
-                // holds. Exact tree and id, so nothing else is touched.
-                await _store.RemoveRuleAsync(treeId, stored.RuleId, cancellationToken).ConfigureAwait(false);
-                TenantAccessCaps.AdmitAddition(
-                    tenant, treeId, TenantAccessCaps.TenantRulesDimension, after.TenantRuleCount - 1, cap);
+                // holds. Exact tree and id, so nothing else is touched, and idempotent,
+                // so a failed withdrawal is retried.
+                await TenantCapCompensation.WithdrawAndRefuseAsync(
+                    async ct =>
+                    {
+                        using (LatticeAccessGateContext.EnterSystemOrigin())
+                        {
+                            await _store.RemoveRuleAsync(treeId, stored.RuleId, ct).ConfigureAwait(false);
+                        }
+                    },
+                    _logger,
+                    tenant,
+                    treeId,
+                    TenantAccessCaps.TenantRulesDimension,
+                    cap,
+                    after.TenantRuleCount).ConfigureAwait(false);
                 throw new UnreachableException("A count over the cap always refuses the addition.");
             }
 

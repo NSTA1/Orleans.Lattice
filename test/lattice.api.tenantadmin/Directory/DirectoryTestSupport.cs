@@ -44,6 +44,21 @@ internal static class DirectoryTestSupport
         /// <summary>When set, group and edge writes wait here, so concurrent callers all pass their pre-write checks first.</summary>
         public AsyncBarrier? WriteBarrier { get; set; }
 
+        /// <summary>Runs once right after the next group write: a competing write landing between this call's write and its re-count.</summary>
+        public Action<FakeTenantDirectoryStore>? AfterNextUpsertGroup { get; set; }
+
+        /// <summary>Runs once right after the next edge write: a competing write landing between this call's write and its re-count.</summary>
+        public Action<FakeTenantDirectoryStore>? AfterNextAddMember { get; set; }
+
+        /// <summary>How many upcoming <see cref="RemoveGroupCascadeAsync"/> calls fail (transiently) before one succeeds.</summary>
+        public int RemoveGroupCascadeFailures { get; set; }
+
+        /// <summary>How many upcoming <see cref="RemoveMemberAsync"/> calls fail (transiently) before one succeeds.</summary>
+        public int RemoveMemberFailures { get; set; }
+
+        /// <summary>The <see cref="RemoveGroupCascadeAsync"/> and <see cref="RemoveMemberAsync"/> calls made, failed or not.</summary>
+        public int RemovalAttempts { get; private set; }
+
         public IReadOnlyList<(string GroupId, string MemberId, MembershipMemberKind Kind)> Edges => _edges;
 
         public bool HasGroup(string groupId) => _groups.ContainsKey(groupId);
@@ -56,8 +71,9 @@ internal static class DirectoryTestSupport
         public Task<MembershipGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken) =>
             Locked(() => _groups.TryGetValue(groupId, out var group) ? group : null);
 
-        public Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken) =>
-            WithBarrierAsync(() =>
+        public async Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken)
+        {
+            await WithBarrierAsync(() =>
             {
                 lock (_sync)
                 {
@@ -65,6 +81,13 @@ internal static class DirectoryTestSupport
                     _groups[group.GroupId] = group;
                 }
             });
+
+            if (AfterNextUpsertGroup is { } after)
+            {
+                AfterNextUpsertGroup = null;
+                after(this);
+            }
+        }
 
         public Task<int> CountTenantGroupsAsync(TenantId tenant, CancellationToken cancellationToken)
         {
@@ -95,6 +118,13 @@ internal static class DirectoryTestSupport
         {
             return Locked(() =>
             {
+                RemovalAttempts++;
+                if (RemoveGroupCascadeFailures > 0)
+                {
+                    RemoveGroupCascadeFailures--;
+                    throw new InvalidOperationException("transient store failure");
+                }
+
                 Cascades++;
                 var removed = _edges.RemoveAll(e => e.GroupId == groupId || e.MemberId == groupId);
                 _groups.Remove(groupId);
@@ -102,7 +132,7 @@ internal static class DirectoryTestSupport
             });
         }
 
-        public Task AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken cancellationToken)
+        public async Task AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken cancellationToken)
         {
             if (NextAddMemberFailure is { } failure)
             {
@@ -110,7 +140,7 @@ internal static class DirectoryTestSupport
                 throw failure;
             }
 
-            return WithBarrierAsync(() =>
+            await WithBarrierAsync(() =>
             {
                 lock (_sync)
                 {
@@ -121,12 +151,25 @@ internal static class DirectoryTestSupport
                     }
                 }
             });
+
+            if (AfterNextAddMember is { } after)
+            {
+                AfterNextAddMember = null;
+                after(this);
+            }
         }
 
         public Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken)
         {
             return Locked(() =>
             {
+                RemovalAttempts++;
+                if (RemoveMemberFailures > 0)
+                {
+                    RemoveMemberFailures--;
+                    throw new InvalidOperationException("transient store failure");
+                }
+
                 Writes++;
                 return _edges.RemoveAll(e => e.GroupId == groupId && e.MemberId == memberId);
             });

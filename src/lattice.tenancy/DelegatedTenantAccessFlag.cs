@@ -6,9 +6,10 @@ namespace Orleans.Lattice.Tenancy;
 /// The per-silo, live view of
 /// <see cref="LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"/>: a
 /// single <c>volatile</c> field read the hot paths consult (the active
-/// <see cref="Orleans.Lattice.Auth.ITenantRuleLayer"/> and
-/// <see cref="Orleans.Lattice.Membership.ITenantGroupClaimFilter"/> seams answer
-/// <c>IsActive</c> from it), kept current through the options monitor, and a
+/// <see cref="Orleans.Lattice.Auth.ITenantRuleLayer"/> seam answers
+/// <c>IsActive</c> from it; membership's tenant group claim filter does not, being
+/// always active once tenancy is registered), kept current through the options
+/// monitor, and a
 /// <see cref="Changed"/> notification the compiled tenant-policy snapshot
 /// maintainer uses to rebuild when the value flips.
 /// </summary>

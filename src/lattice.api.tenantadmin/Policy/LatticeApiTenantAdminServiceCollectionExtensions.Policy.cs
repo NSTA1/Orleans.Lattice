@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
@@ -40,6 +41,7 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<ILatticeAccessGate>(),
             sp.GetService<DelegatedTenantAccessFlag>() is { } flag ? flag.ReadIsEnabled : static () => false,
             sp.GetService<ILatticeMembershipContext>(),
-            sp.GetService<ITenantMembershipUsage>()));
+            sp.GetService<ITenantMembershipUsage>(),
+            sp.GetService<ILogger<LatticeTenantPolicyAdmin>>()));
     }
 }

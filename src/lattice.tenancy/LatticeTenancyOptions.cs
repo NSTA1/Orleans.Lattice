@@ -85,7 +85,10 @@ public sealed class LatticeTenancyOptions
     /// exactly the exact-subject-id admin check it has always been (a member entry or
     /// a group entry never admits anyone), the compiled tenant-policy snapshot builds
     /// no member or group index, the authorization engine never enters the tenant
-    /// rule layer, and asserted tenant-group claims are not filtered. Turning the
+    /// rule layer. Asserted tenant-group (<c>t/...</c>) claims are stripped
+    /// whatever the flag, because the namespace is reserved to the tenant tier
+    /// once tenancy is registered and operator rules and app role bindings that
+    /// name a tenant group are honoured whatever the flag. Turning the
     /// flag off deletes nothing; existing member entries, groups and rules are
     /// retained and become effective again when it is turned back on.
     /// </para>

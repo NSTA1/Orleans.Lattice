@@ -120,21 +120,26 @@ public static class LatticeTenancyServiceCollectionExtensions
 
         // Delegated tenant access administration (epic #4154). One per-silo live
         // view of the opt-in flag, read by the compiled snapshot maintainer below
-        // (which rebuilds when it flips) and by the two active seams that Replace
-        // the null defaults auth and membership registered with TryAdd: the tenant
-        // rule layer, and membership's tenant group claim filter, which strips
-        // asserted t/ group ids. Both answer IsActive from the flag, so with it off
-        // the authorization engine never enters the tenant rule layer and claim
-        // resolution does no tenant-group filtering, exactly as with the null
-        // seams. Replace (not TryAdd) deterministically supersedes them regardless
-        // of order. The filter's delegate is a method group bound once at
-        // registration, so each IsActive read is one field read and allocates
-        // nothing.
-        // Every resolved subject in membership's resolution cache carries the claim
-        // filter's verdict from when it was resolved, so a flag change in either
-        // direction flushes that cache: turning the flag on must not keep serving
-        // a cached subject whose asserted t/ groups were never stripped, and
-        // turning it off returns asserted groups to how they resolved before.
+        // (which rebuilds when it flips), by the tenant rule layer that Replaces
+        // auth's null default (IsActive = the flag, so with it off the
+        // authorization engine never enters the tenant rule layer), and by the
+        // facades.
+        //
+        // Membership's tenant group claim filter, which strips claim-asserted t/
+        // group ids, is NOT flag-gated: once tenancy is registered the whole t/
+        // namespace is reserved to the tenant tier whatever the flag says. Operator
+        // rules and app role bindings may name t/{T}/x and are honoured whatever
+        // the flag, so a filter that followed the flag would let a token asserting
+        // t/{T}/x match them after the flag is turned off (a rollback, or one silo
+        // ahead of another). The cost is one ordinal prefix test per claim-derived
+        // group on the cold (cache-miss) resolution path only; the warm path never
+        // reaches the filter. Replace (not TryAdd) deterministically supersedes the
+        // null seams regardless of order. Hosts without tenancy keep membership's
+        // inactive null filter, unchanged.
+        //
+        // A flag change still flushes membership's resolution cache in both
+        // directions: it is cheap, and it guarantees no subject resolved before the
+        // flip outlives a change in what the flag governs.
         builder.Services.TryAddSingleton(sp =>
         {
             var flag = new DelegatedTenantAccessFlag(sp.GetRequiredService<IOptionsMonitor<LatticeTenancyOptions>>());
@@ -148,8 +153,7 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.Replace(
             ServiceDescriptor.Singleton<ITenantRuleLayer, TenancyTenantRuleLayer>());
         builder.Services.Replace(
-            ServiceDescriptor.Singleton<ITenantGroupClaimFilter>(sp =>
-                new TenantGroupClaimFilter(sp.GetRequiredService<DelegatedTenantAccessFlag>().ReadIsEnabled)));
+            ServiceDescriptor.Singleton<ITenantGroupClaimFilter>(new TenantGroupClaimFilter(static () => true)));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, TenancyPostureLogger>());
 
