@@ -8158,6 +8158,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "The facade reports a tree-not-registered or not-found fault and the MCP translator surfaces it as an actionable McpException."
         }
       ],
       "retry": {
@@ -9620,7 +9624,13 @@
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#TreeAdminSchemaToolHandlers.ScanComplianceAsync",
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "lattice_treeadmin_schema_compliance_scan_start",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.schema/operations.md"
+      }
     },
     {
       "id": "lattice_treeadmin_schema_set_policy",
@@ -11649,6 +11659,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "The facade reports a tree-not-registered or not-found fault and the MCP translator surfaces it as an actionable McpException."
         }
       ],
       "retry": {

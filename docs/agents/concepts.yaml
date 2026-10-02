@@ -67,6 +67,8 @@ concepts:
           source: "docs/lattice.api.backup/README.md"
         - statement: "Backup and restore start verbs return operation handles and expose status, list, and cancel through ILatticeBackupOperations."
           source: "docs/lattice.api.backup/operations.md"
+        - statement: "Backup health check, catalog rebuild, and catalog scrub start verbs also return operation handles through ILatticeBackupOperations."
+          source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#ILatticeBackupOperations"
       out_of_scope:
         - statement: "Capability probes are advisory and do not replace per-operation authorization."
           source: "docs/lattice.api.backup/README.md"
@@ -137,6 +139,8 @@ concepts:
       in_scope:
         - statement: "Capability probes report allowed operation sets and remain advisory."
           source: "docs/lattice.api.schema/api.md"
+        - statement: "Compliance scan, remediation, migration, and advance-and-migrate start verbs expose the shared ILatticeOperations poll, list, and cancel surface."
+          source: "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#ILatticeSchemaOperations"
       out_of_scope:
         - statement: "Does not replace per-operation fail-closed authorization."
           source: "docs/lattice.api.schema/api.md"
@@ -1142,6 +1146,27 @@ concepts:
     sources:
       - "docs/lattice.schema/README.md"
       - "docs/lattice.tenancy/README.md"
+  - id: grain-storage-fencing
+    name: "Grain storage fencing"
+    category: storage
+    definition: "A startup posture check that verifies the AddLattice grain storage provider rejects stale ETag writes before Lattice relies on it for direct durable state and WAL pin safety."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The probe writes a reserved row twice and then expects a stale ETag write to fail with InconsistentStateException."
+          source: "src/lattice/Storage/GrainStorageFencingProbe.cs#GrainStorageFencingProbe.RunAsync"
+        - statement: "Warn logs and starts, Reject fails silo start only when the provider is proven unfenced, and Disabled runs no probe."
+          source: "src/lattice/Storage/LatticeGrainStorageFencingMode.cs#LatticeGrainStorageFencingMode"
+      out_of_scope:
+        - statement: "An inconclusive probe is not proof the provider is unfenced and does not fail silo start even in Reject mode."
+          source: "src/lattice/Storage/GrainStorageFencingCheck.cs#GrainStorageFencingCheck.RunAsync"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice/Storage/LatticeGrainStorageFencingOptions.cs#LatticeGrainStorageFencingOptions"
+      - "src/lattice/Storage/GrainStorageFencingProbe.cs#GrainStorageFencingProbe"
+      - "src/lattice/Storage/GrainStorageFencingCheck.cs#GrainStorageFencingCheck"
   - id: grpc-binding
     name: "gRPC binding"
     category: api
@@ -1579,6 +1604,7 @@ concepts:
     definition: "The RepoContext store indexes repository files, symbols, memories, vectors, graph edges, and context receipts in Lattice trees."
     packages:
       - "Orleans.Lattice.Api.Mcp.RepoContext"
+      - "Orleans.Lattice.Api.Mcp.RepoContext.Replication"
     capability_boundary:
       in_scope:
         - statement: "Provides repository onboarding, recall, memory, semantic search, graph navigation, context packing, and usage accounting."
@@ -1975,6 +2001,45 @@ concepts:
     sources:
       - "docs/lattice/state-primitives.md"
       - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: tracked-cluster-operation
+    name: "Tracked cluster operation"
+    category: operation
+    definition: "A tracked cluster operation is an accept-then-poll long-running facade operation recorded as a durable operation record, indexed per tenant, and observed through the shared ILatticeOperations status, list, and cancel surface."
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Api.Abstractions"
+    capability_boundary:
+      in_scope:
+        - statement: "A start verb records a durable operation, returns a handle immediately, and lets callers poll status for phase, progress units, terminal state, and result keys."
+          source: "docs/lattice.api.abstractions/operations.md"
+        - statement: "The engine records progress, cancellation, retention, and accepting-silo liveness independently of the caller's request lifetime."
+          source: "src/lattice/Operations/LatticeOperationRunner.cs#LatticeOperationRunner"
+        - statement: "Status, list, and cancel are scoped by facade-owned kinds, tenant, and visible target trees."
+          source: "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ILatticeOperations"
+      out_of_scope:
+        - statement: "Interrupted work is not resumed after the accepting silo is lost; the operation is marked Failed and must be started again."
+          source: "src/lattice/Operations/LatticeOperationGrain.cs#LatticeOperationGrain"
+        - statement: "Operation kind result payloads are opaque string maps documented by each adopting package, not by the core operation record."
+          source: "src/lattice/Operations/LatticeOperationRecord.cs#LatticeOperationRecord"
+    operational_envelope:
+      limits:
+        - name: "operation-id-length"
+          value: 128
+          unit: "characters"
+          source: "src/lattice/Operations/LatticeOperationKey.cs#LatticeOperationKey.MaxOperationIdLength"
+        - name: "default-retention"
+          value: 7
+          unit: "days"
+          source: "src/lattice/Operations/LatticeOperationOptions.cs#LatticeOperationOptions.Retention"
+        - name: "default-heartbeat-lease"
+          value: 2
+          unit: "minutes"
+          source: "src/lattice/Operations/LatticeOperationOptions.cs#LatticeOperationOptions.HeartbeatLease"
+    sources:
+      - "docs/lattice.api.abstractions/operations.md"
+      - "src/lattice/Operations/LatticeOperationRunner.cs"
+      - "src/lattice/Operations/LatticeOperationGrain.cs"
+      - "src/lattice/Operations/LatticeOperationIndexGrain.cs"
   - id: tree
     name: "Tree"
     category: core
@@ -2172,7 +2237,7 @@ concepts:
       - "Orleans.Lattice"
     capability_boundary:
       in_scope:
-        - statement: "A successful SetAsync or DeleteAsync returns after the per-shard WAL append durability point."
+        - statement: "A successful SetAsync or DeleteAsync returns after its WAL partition append durability point."
           source: "docs/lattice/architecture.md"
       out_of_scope:
         - statement: "A WAL failure surfaces before in-memory mutation happens."

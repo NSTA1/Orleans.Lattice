@@ -2297,7 +2297,7 @@
         },
         {
           "error_id": "failed-precondition",
-          "condition": "The same version is already live, the source result is unusable, a registry transition is rejected, or re-applying an enabled upgrade fails."
+          "condition": "The same version is already live, the source result is unusable, ExpectedManifestDigest no longer matches the manifest resolved at commit, a registry transition is rejected, or re-applying an enabled upgrade fails."
         }
       ],
       "retry": {
@@ -2311,7 +2311,7 @@
         "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#InstallCoreAsync"
       },
       "concurrency": {
-        "rule": "For upgrades, the facade reads the current record and passes ExpectedVersion so a racing upgrade is refused rather than silently overwritten; authorization happens before source or registry mutation.",
+        "rule": "For upgrades, the facade reads the current record and passes ExpectedVersion so a racing upgrade is refused rather than silently overwritten; authorization happens before source or registry mutation. When ExpectedManifestDigest is set, the facade re-resolves the manifest at commit and refuses a digest mismatch before recording the install.",
         "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#InstallCoreAsync"
       },
       "sources": [
@@ -2678,7 +2678,7 @@
       "type": "InvalidOperationException",
       "grpc_status": "FailedPrecondition",
       "retryable": false,
-      "meaning": "The app-control precondition failed, including illegal lifecycle transitions, source unusability, same-version install, version-pinned consent mismatch, or activation failure.",
+      "meaning": "The app-control precondition failed, including illegal lifecycle transitions, source unusability, same-version install, reviewed manifest digest mismatch, version-pinned consent mismatch, or activation failure.",
       "source": "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#InvokeAsync"
     },
     {
