@@ -290,6 +290,60 @@ public sealed class RepoContextRecordEditorTests
     }
 
     [Test]
+    public void Every_patch_rejection_is_marked_as_a_client_error()
+    {
+        // Regression: the unknown-field, non-integer-value, and bad-link-target
+        // rejections all interpolate raw caller text into the message. An unmarked
+        // McpException escapes CredentialStampingTool's sanitize-and-cap seam
+        // entirely, so that text would be echoed to the caller verbatim and logged
+        // at Error with a stack. A CR/LF-bearing field value or link target could
+        // then forge whole log records at a caller-chosen length.
+        var fileKey = Parse(RepoContextKeys.File("acme", "a.cs"));
+        var file = Serializer.SerializeToArray(new FileNode { RepoId = "acme", Path = "a.cs" });
+        var memoryKey = Parse(RepoContextKeys.Memory("acme", "notes", "1"));
+        var memory = Serializer.SerializeToArray(
+            new MemoryRecord { RepoId = "acme", Topic = "notes", Id = "1" });
+        const string Forged = "x\r\nfail: Orleans.Lattice[0] FORGED";
+
+        var rejections = new (string Name, Action Act)[]
+        {
+            ("unknown field", () => RepoContextRecordEditor.Patch(
+                memoryKey, memory, new Dictionary<string, string> { [Forged] = "x" },
+                null, null, null, null, Clock(100), Serializer)),
+            ("non-integer value", () => RepoContextRecordEditor.Patch(
+                fileKey, file, new Dictionary<string, string> { ["sizeBytes"] = Forged },
+                null, null, null, null, Clock(100), Serializer)),
+            ("bad link target", () => RepoContextRecordEditor.Patch(
+                memoryKey, memory, null, null, null,
+                new Dictionary<string, IReadOnlyList<string>> { ["broader"] = new[] { Forged } },
+                null, Clock(100), Serializer)),
+            ("links on a non-memory record", () => RepoContextRecordEditor.Patch(
+                fileKey, file, null, null, null,
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["broader"] = new[] { RepoContextKeys.Memory("acme", "g", "x") },
+                },
+                null, Clock(100), Serializer)),
+        };
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (name, act) in rejections)
+            {
+                var fault = Assert.Throws<McpException>(act);
+                Assert.That(fault, Is.Not.Null, name);
+                Assert.That(
+                    McpToolClientErrors.TryGetReason(fault!, out var reason), Is.True,
+                    $"the '{name}' rejection must be marked so the sanitizing seam recognises it");
+                Assert.That(reason, Is.EqualTo(McpToolClientErrorReason.InvalidArgument), name);
+                Assert.That(
+                    McpToolClientErrors.SanitizeForEcho(fault!.Message),
+                    Does.Not.Contain("\r").And.Not.Contain("\n"), name);
+            }
+        });
+    }
+
+    [Test]
     public void Concurrent_style_link_patches_converge_regardless_of_apply_order()
     {
         var left = new OrMap<string, OrSet>();

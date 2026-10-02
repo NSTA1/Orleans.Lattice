@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -204,6 +205,61 @@ public sealed class RepoContextToolInvocationLoggerUnitTests
             Assert.That(warnings[0].Exception, Is.SameAs(failure),
                 "the fault must be attached to the record, not just formatted into the message");
         });
+    }
+
+    [Test]
+    public async Task A_tool_fault_is_logged_sanitized_and_without_the_attached_exception()
+    {
+        // Regression: this decorator is the INNER wrapper, so it sees a rejection
+        // before CredentialStampingTool's sanitizing seam does. Several rejection
+        // messages interpolate a caller-supplied key, so attaching the exception
+        // would render ex.ToString() - beginning with that raw message - into the
+        // log, letting a CR/LF-bearing argument forge whole records.
+        var provider = new CapturingProvider();
+        var failure = McpToolClientErrors.InvalidArgument(
+            "The key 'repo/a/file/x\r\nwarn: Orleans.Lattice[0] FORGED ADMIN GRANT' is malformed.");
+        var decorated = new RepoContextToolInvocationLogger(new StubTool(() => throw failure));
+        var context = await ContextWithLogging(provider);
+
+        var thrown = Assert.ThrowsAsync<McpException>(
+            async () => await decorated.InvokeAsync(context, TestContext.CurrentContext.CancellationToken));
+
+        var warnings = provider.Entries
+            .Where(e => e.Category == RepoContextToolInvocationLogger.LogCategory && e.Level >= LogLevel.Warning)
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.SameAs(failure), "the original fault must propagate unchanged");
+            Assert.That(warnings, Has.Length.EqualTo(1));
+            Assert.That(warnings[0].Message, Does.Contain("repocontext_probe").And.Contain("failed"));
+            Assert.That(
+                warnings[0].Exception, Is.Null,
+                "attaching the fault would render its raw message into the record");
+            Assert.That(
+                warnings[0].Message, Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "a caller-supplied newline must not be able to start a second log record");
+            Assert.That(
+                warnings[0].Message, Does.Contain("x??warn:"),
+                "each control character must be replaced by a placeholder in place");
+        });
+    }
+
+    [Test]
+    public async Task A_tool_fault_message_is_capped_before_it_reaches_the_log()
+    {
+        // The rejection text is caller-composed and unbounded at the throw site, so
+        // the cap is what stops one argument from writing an arbitrarily large record.
+        var provider = new CapturingProvider();
+        var failure = McpToolClientErrors.InvalidArgument(new string('k', 64 * 1024));
+        var decorated = new RepoContextToolInvocationLogger(new StubTool(() => throw failure));
+        var context = await ContextWithLogging(provider);
+
+        Assert.ThrowsAsync<McpException>(
+            async () => await decorated.InvokeAsync(context, TestContext.CurrentContext.CancellationToken));
+
+        var warning = provider.Entries
+            .Single(e => e.Category == RepoContextToolInvocationLogger.LogCategory && e.Level >= LogLevel.Warning);
+        Assert.That(warning.Message, Has.Length.LessThan(4096));
     }
 
     [Test]

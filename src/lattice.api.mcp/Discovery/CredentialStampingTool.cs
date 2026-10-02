@@ -167,11 +167,20 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
             return await InvokeInnerAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
-        // Explicit region: resolve fail-closed against this tool's group.
+        // Explicit region: resolve fail-closed against this tool's group. A rejection
+        // names the caller-supplied region, which is accepted as any non-empty JSON
+        // string - no character class, no length bound - so throwing it here would
+        // carry that raw value out of this method, past the client-error seam below
+        // (which only guards InvokeInnerAsync), and into the SDK's Error-level
+        // "threw an unhandled exception" record with a stack. A value carrying CR/LF
+        // would forge whole log records at a caller-chosen length. It is a caller
+        // mistake, so it is answered exactly as the unknown-argument path above is:
+        // sanitized, capped, counted, and logged without a stack (issue #3761).
         var route = ResolveRegion(services, requestedRegion);
         if (!route.IsRouted)
         {
-            throw new McpException(route.Fault!);
+            return ReportClientError(
+                services, toolName, route.Fault!, McpToolClientErrorReason.InvalidArgument);
         }
 
         using var credentialScope = McpToolCredentialScope.Stamp(services);

@@ -451,6 +451,44 @@ public sealed class RepoContextStoreClaimTests
                 Throws.TypeOf<McpException>().With.Message.Contains("memory records only"));
         });
 
+    [Test]
+    public void A_rejected_claim_is_marked_as_a_client_error_so_the_key_is_sanitized()
+    {
+        // Regression: these rejections interpolate the caller's raw key, which
+        // TryParse accepts with no character class or length bound. An unmarked
+        // McpException escapes CredentialStampingTool's sanitize-and-cap seam, so
+        // the raw value would be echoed to the caller and logged at Error with a
+        // stack - a caller mistake misreported as a server fault. The marker is
+        // what routes it through the seam instead.
+        const string Forged = "repo/lattice/file/src/x.cs\r\nfail: Orleans.Lattice[0] FORGED";
+
+        var fromClaim = Assert.ThrowsAsync<McpException>(
+            () => _store.ClaimAsync(Forged, "agent-a", null, null, CancellationToken.None));
+        var fromFence = Assert.ThrowsAsync<McpException>(
+            () => _store.UpdateAsync(Forged, null, null, null, null, null, 1L, CancellationToken.None));
+        var fromDuration = Assert.ThrowsAsync<McpException>(
+            () => _store.ClaimAsync(Key, "agent-a", 0L, null, CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (name, fault) in new[]
+                     {
+                         ("claim", fromClaim!), ("fence", fromFence!), ("duration", fromDuration!),
+                     })
+            {
+                Assert.That(
+                    McpToolClientErrors.TryGetReason(fault, out var reason), Is.True,
+                    $"the {name} rejection must be marked so the sanitizing seam recognises it");
+                Assert.That(reason, Is.EqualTo(McpToolClientErrorReason.InvalidArgument));
+            }
+
+            Assert.That(
+                McpToolClientErrors.SanitizeForEcho(fromClaim!.Message),
+                Does.Not.Contain("\r").And.Not.Contain("\n"),
+                "once marked, the seam strips the caller's newlines before echoing or logging");
+        });
+    }
+
     // ---- renew ------------------------------------------------------------
 
     [Test]

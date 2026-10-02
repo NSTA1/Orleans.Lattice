@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -88,8 +89,28 @@ internal sealed class RepoContextToolInvocationLogger : DelegatingMcpServerTool
                 toolName, (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds);
             throw;
         }
+        catch (McpException ex)
+        {
+            // A tool-level fault is the caller's own rejection, and several of the
+            // messages that reach here are composed by interpolating a caller-supplied
+            // key, target, or field value. Attaching the exception would render
+            // ex.ToString() - which begins with that raw message - into the log, so a
+            // value carrying CR/LF would forge whole records beside the genuine line,
+            // at a caller-chosen length. This decorator is the INNER wrapper, so it
+            // runs before CredentialStampingTool's sanitizing seam ever sees the
+            // fault; the message is therefore sanitized and capped here, and the
+            // exception is deliberately not attached.
+            logger.LogWarning(
+                "Repo-context tool {Tool} failed after {ElapsedMs} ms: {Fault}",
+                toolName,
+                (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+                McpToolClientErrors.SanitizeForEcho(ex.Message));
+            throw;
+        }
         catch (Exception ex)
         {
+            // A server fault carries no caller-composed text and its stack is the
+            // point of the record, so it keeps the attached exception.
             logger.LogWarning(
                 ex,
                 "Repo-context tool {Tool} failed after {ElapsedMs} ms.",

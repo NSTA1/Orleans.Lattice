@@ -63,7 +63,7 @@ internal static class RepoContextRecordEditor
 
         if (key.Kind != RepoContextRecordKind.Memory && (HasLinks(addLinks) || HasLinks(removeLinks)))
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 $"Knowledge-linking edges are only supported on memory records, not on a {key.Kind} record.");
         }
 
@@ -74,7 +74,7 @@ internal static class RepoContextRecordEditor
             RepoContextRecordKind.File => PatchFile(key, existing, fields, addTags, removeTags, clock, serializer),
             RepoContextRecordKind.Symbol => PatchSymbol(key, existing, fields, addTags, removeTags, clock, serializer),
             RepoContextRecordKind.Memory => PatchMemory(key, existing, fields, addTags, removeTags, addLinks, removeLinks, capturedLinkDigests, clock, serializer),
-            _ => throw new McpException(
+            _ => throw McpToolClientErrors.InvalidArgument(
                 $"The key kind '{key.Kind}' is not a patchable record; only structural and memory records can be updated."),
         };
     }
@@ -406,7 +406,7 @@ internal static class RepoContextRecordEditor
         {
             if (string.IsNullOrWhiteSpace(relation))
             {
-                throw new McpException("A link relation name must be a non-empty string.");
+                throw McpToolClientErrors.InvalidArgument("A link relation name must be a non-empty string.");
             }
 
             if (targets is null)
@@ -418,7 +418,7 @@ internal static class RepoContextRecordEditor
             {
                 if (string.IsNullOrWhiteSpace(target) || !RepoContextKeys.TryParse(target, out _))
                 {
-                    throw new McpException(
+                    throw McpToolClientErrors.InvalidArgument(
                         $"The link target '{target}' under relation '{relation}' is not a well-formed "
                         + "repository-context key (expected 'repo/{repoId}/...').");
                 }
@@ -433,8 +433,10 @@ internal static class RepoContextRecordEditor
     private static long ParseInt(string name, string value)
         => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
-            : throw new McpException($"The '{name}' field expects an integer value but got '{value}'.");
+            : throw McpToolClientErrors.InvalidArgument(
+                $"The '{name}' field expects an integer value but got '{value}'.");
 
     private static McpException UnknownField(string name, RepoContextRecordKind kind)
-        => new($"The field '{name}' is not a settable scalar on a {kind} record.");
+        => McpToolClientErrors.InvalidArgument(
+            $"The field '{name}' is not a settable scalar on a {kind} record.");
 }
