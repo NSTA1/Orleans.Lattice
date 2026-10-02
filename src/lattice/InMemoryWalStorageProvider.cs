@@ -55,11 +55,23 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
             // contiguity.
             for (var i = 1; i < entries.Count; i++)
             {
-                if (entries[i].Offset != entries[i - 1].Offset + 1)
+                var previous = entries[i - 1].Offset;
+
+                // previous + 1 wraps to long.MinValue at long.MaxValue, which
+                // would accept a batch that runs off the end of the offset space
+                // and break the ascending order the log is kept in.
+                if (previous == long.MaxValue)
+                {
+                    throw new InvalidOperationException(
+                        $"Append batch for '{treeId}/{shardIndex}' is not dense within the batch: entry {i - 1} "
+                        + $"has offset {previous}, the largest a WAL offset can be, so no entry can follow it.");
+                }
+
+                if (entries[i].Offset != previous + 1)
                 {
                     throw new InvalidOperationException(
                         $"Append batch for '{treeId}/{shardIndex}' is not dense within the batch: entry {i} "
-                        + $"has offset {entries[i].Offset} but expected {entries[i - 1].Offset + 1}. Offsets "
+                        + $"has offset {entries[i].Offset} but expected {previous + 1}. Offsets "
                         + "supplied to a single AppendBatchAsync call must be strictly ascending and gap-free.");
                 }
             }
