@@ -50,8 +50,9 @@ public sealed class ClusterOverviewTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(HasButton(cut, "Re-measure every shard..."), Is.True));
 
         Button(cut, "Re-measure every shard...").Click();
-        cut.Find(".lt-confirm input").Input("lattice");
-        Assert.That(cut.Find(".lt-confirm button[type=submit]").HasAttribute("disabled"), Is.True, "a near miss does not enable it");
+        // #4254: the confirmation dialog renders after an async continuation.
+        cut.WaitForElement(".lt-confirm input").Input("lattice");
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm button[type=submit]").HasAttribute("disabled"), Is.True, "a near miss does not enable it"));
         ConfirmTyping(cut, "lattice-prod");
 
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Re-measured by a leaf walk")));
