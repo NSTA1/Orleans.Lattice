@@ -331,7 +331,9 @@ internal sealed partial class LatticeTreeAdmin
     private static async Task<OrphanedLeafPassTotals> RunOrphanedLeafPassAsync(
         ILattice lattice, bool repair, ILatticeOperationProgress progress, CancellationToken cancellationToken)
     {
-        var routing = await lattice.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+        // Forced: the walk reports progress per physical shard, so a worker activation's
+        // pre-reshard cached map would name shards the tree no longer has (#4180).
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
         var shards = routing.Map.GetPhysicalShardIndices().ToArray();
         Array.Sort(shards);
 

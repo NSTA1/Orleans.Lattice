@@ -61,6 +61,11 @@ public sealed class AppBridgeExceptionTests
 
         Assert.Multiple(() =>
         {
+            // Failures() is the [TestCaseSource] every parameterised test in this
+            // fixture draws from. Is.All and Is.Unique both pass on an empty
+            // sequence, so an enum that stopped yielding members would silently
+            // empty those tests and still report green here.
+            Assert.That(messages, Is.Not.Empty);
             Assert.That(messages, Is.All.Not.Empty);
             Assert.That(messages, Is.Unique);
         });

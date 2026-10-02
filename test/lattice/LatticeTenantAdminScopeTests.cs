@@ -116,9 +116,15 @@ public class LatticeTenantAdminScopeTests
     [Test]
     public void Equality_same_form_is_equal()
     {
+        // The platform arm is bound to distinct locals so it is visibly between
+        // two independent reads rather than reading as a self-comparison, and so
+        // a failure reports both observed values.
+        var firstPlatform = LatticeTenantAdminScope.Platform;
+        var secondPlatform = LatticeTenantAdminScope.Platform;
+
         Assert.Multiple(() =>
         {
-            Assert.That(LatticeTenantAdminScope.Platform, Is.EqualTo(LatticeTenantAdminScope.Platform));
+            Assert.That(secondPlatform, Is.EqualTo(firstPlatform));
             Assert.That(
                 LatticeTenantAdminScope.ForTenant(Acme),
                 Is.EqualTo(LatticeTenantAdminScope.ForTenant(Acme)));

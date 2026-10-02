@@ -66,6 +66,11 @@ public sealed class LatticeDashboardsResourceResolutionTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(
+                names,
+                Is.Not.Empty,
+                "LatticeDashboards.All resolved to nothing, and Is.Unique and both Has.All "
+                + "constraints below pass on an empty population.");
             Assert.That(names, Is.Unique, "Two dashboard kinds resolve to the same embedded resource.");
             Assert.That(names, Has.All.StartWith("Orleans.Lattice.Dashboards.Grafana."));
             Assert.That(names, Has.All.EndWith(".json"));
