@@ -29,6 +29,24 @@ internal static class SampleSeeder
     /// <summary>The id of the rule letting globex's admin read acme's orders, which acme offers globex through a grant.</summary>
     public const string SharedOrdersRuleId = "globex-admin-read-acme-orders";
 
+    /// <summary>The tenant-local id of globex's own rule granting its <c>operators</c> group Read on its orders.</summary>
+    public const string GlobexOrdersRuleId = "operators-read-orders";
+
+    /// <summary>
+    /// The tenant-local id of globex's own rule granting its <c>operators</c> group
+    /// Read on its invoices, which <see cref="GlobexInvoicesPlatformRuleId"/> shadows.
+    /// </summary>
+    public const string GlobexInvoicesRuleId = "operators-read-invoices";
+
+    /// <summary>The id of the Platform rule that denies alice globex's invoices, deciding before globex's own rules.</summary>
+    public const string GlobexInvoicesPlatformRuleId = "platform-deny-alice-globex-invoices";
+
+    /// <summary>How many invoices globex's <c>invoices</c> tree holds.</summary>
+    public const int InvoicesPerTenant = 3;
+
+    /// <summary>The tenant-scoped id of globex's <c>invoices</c> tree.</summary>
+    public static string InvoicesTree { get; } = LatticeTenantTrees.Compose(TenantId.Parse(SampleIdentities.GlobexTenant), SampleIdentities.GlobexInvoicesTree);
+
     /// <summary>How many orders each tenant's <c>orders</c> tree holds.</summary>
     public const int OrdersPerTenant = 5;
 
@@ -63,6 +81,7 @@ internal static class SampleSeeder
 
         await SeedTenancyAsync(region, cancellationToken).ConfigureAwait(false);
         log($"[{region.Id}] Tenancy: tenants '{SampleIdentities.AcmeTenant}' (admin '{SampleIdentities.AcmeAdmin}') and '{SampleIdentities.GlobexTenant}' (admin '{SampleIdentities.GlobexAdmin}'), both also administered by the operator and allowed in east and west, each with an '{SampleIdentities.TenantOrdersTree}' tree and quotas; '{SampleIdentities.AcmeTenant}' is resident and Online in east and west, '{SampleIdentities.GlobexTenant}' has no residency and is served in every region; '{SampleIdentities.AcmeTenant}' offers '{SampleIdentities.GlobexTenant}' Read on its orders.");
+        log($"[{region.Id}] Delegated access: '{SampleIdentities.GlobexTenant}' keeps its own group 't/{SampleIdentities.GlobexTenant}/{SampleIdentities.GlobexOperatorsGroup}' (member '{SampleIdentities.Alice}') in its member set, with globex rules granting it Read on '{SampleIdentities.TenantOrdersTree}' and '{SampleIdentities.GlobexInvoicesTree}'; a Platform rule denies '{SampleIdentities.Alice}' the invoices, shadowing globex's rule.");
     }
 
     /// <summary>
@@ -354,6 +373,71 @@ internal static class SampleSeeder
                     scope: LatticeScope.Tree(OrdersTree(SampleIdentities.AcmeTenant)),
                     operations: LatticeOperation.Read | LatticeOperation.RangeRead,
                     effect: LatticeEffect.Allow),
+                cancellationToken).ConfigureAwait(false);
+
+            // globex's invoices, where a Platform rule shadows globex's own rule.
+            var invoices = grains.GetGrain<ILattice>(InvoicesTree);
+            for (var i = 0; i < InvoicesPerTenant; i++)
+            {
+                await invoices.SetAsync($"invoice-{i + 1:D3}", Encoding.UTF8.GetBytes($"{{\"customer\":\"{SampleIdentities.GlobexTenant}\",\"total\":{(i + 1) * 100}}}"), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            // The Platform layer is decided first: this cluster rule withholds
+            // globex's invoices from alice whatever globex's own rules say.
+            await policy.PutRuleAsync(
+                new LatticeAuthorizationRule(
+                    ruleId: GlobexInvoicesPlatformRuleId,
+                    subject: LatticeSubjectSelector.User(SampleIdentities.Alice),
+                    scope: LatticeScope.Tree(InvoicesTree),
+                    operations: LatticeOperation.Read | LatticeOperation.RangeRead,
+                    effect: LatticeEffect.Deny),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await SeedGlobexAccessAsync(services, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Seeds globex's delegated tenant access through the same tenant directory and
+    /// tenant policy facades Access calls: its own group <c>t/globex/operators</c>
+    /// holding alice, a member set holding that group, and globex rules granting it
+    /// Read on its orders and its invoices (the second shadowed by the Platform rule
+    /// above). Runs as the operator, who also administers globex.
+    /// </summary>
+    private static async Task SeedGlobexAccessAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        const string Globex = SampleIdentities.GlobexTenant;
+        const string Group = SampleIdentities.GlobexOperatorsGroup;
+
+        using var _ = LatticeCredentialContext.Use(BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme);
+        var directory = services.GetRequiredService<ILatticeTenantDirectoryAdmin>();
+        var policy = services.GetRequiredService<ILatticeTenantPolicyAdmin>();
+
+        // The group record first: a membership edge alone makes no group.
+        await directory.UpsertGroupAsync(Globex, new TenantGroupDescriptor { Name = Group, DisplayName = "Globex operators" }, cancellationToken)
+            .ConfigureAwait(false);
+        await directory.AddGroupMemberAsync(Globex, Group, SampleIdentities.Alice, TenantSubjectKind.User, cancellationToken).ConfigureAwait(false);
+        await directory.AddMemberAsync(Globex, Group, TenantSubjectKind.TenantGroup, cancellationToken).ConfigureAwait(false);
+
+        foreach (var (ruleId, tree) in new[]
+        {
+            (GlobexOrdersRuleId, SampleIdentities.TenantOrdersTree),
+            (GlobexInvoicesRuleId, SampleIdentities.GlobexInvoicesTree),
+        })
+        {
+            await policy.PutRuleAsync(
+                Globex,
+                new TenantRuleDraft
+                {
+                    RuleId = ruleId,
+                    SubjectId = Group,
+                    SubjectKind = TenantSubjectKind.TenantGroup,
+                    ScopeKind = TenantRuleScopeKind.Tree,
+                    TreeName = tree,
+                    Operations = LatticeOperation.Read | LatticeOperation.RangeRead,
+                    Effect = LatticeEffect.Allow,
+                },
                 cancellationToken).ConfigureAwait(false);
         }
     }

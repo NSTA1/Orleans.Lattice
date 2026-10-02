@@ -31,6 +31,7 @@ internal sealed class ShellTransportPeer : HttpMessageHandler
 
     private StatusCode _status = StatusCode.OK;
     private string _detail = string.Empty;
+    private IReadOnlyDictionary<string, string>? _trailers;
 
     /// <summary>The Orleans serializer provider the success frames are encoded with.</summary>
     public IServiceProvider? Serializers { get; set; }
@@ -45,6 +46,21 @@ internal sealed class ShellTransportPeer : HttpMessageHandler
     {
         _status = status;
         _detail = detail;
+        _trailers = null;
+    }
+
+    /// <summary>
+    /// Answers every later call with a trailers-only <paramref name="status"/> that
+    /// also carries <paramref name="trailers"/>, as a binding attaches a fault's
+    /// structured detail.
+    /// </summary>
+    /// <param name="status">The status to answer with.</param>
+    /// <param name="detail">The status detail.</param>
+    /// <param name="trailers">The extra trailers.</param>
+    public void AnswerWith(StatusCode status, string detail, IReadOnlyDictionary<string, string> trailers)
+    {
+        AnswerWith(status, detail);
+        _trailers = trailers;
     }
 
     /// <summary>Answers every later call with success, using the registered responses or a default one.</summary>
@@ -106,6 +122,11 @@ internal sealed class ShellTransportPeer : HttpMessageHandler
             if (_detail.Length > 0)
             {
                 response.Headers.Add("grpc-message", _detail);
+            }
+
+            foreach (var (name, value) in _trailers ?? new Dictionary<string, string>())
+            {
+                response.Headers.Add(name, value);
             }
 
             return response;
