@@ -28,7 +28,11 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// <see cref="ILatticeTenantGrantAdmin"/> cross-tenant grant RPCs
 /// (<c>ListCrossTenantGrants</c>, <c>OfferCrossTenantGrant</c>,
 /// <c>ApproveCrossTenantGrant</c>, <c>RejectCrossTenantGrant</c>,
-/// <c>RevokeCrossTenantGrant</c>).
+/// <c>RevokeCrossTenantGrant</c>), and the eighteen delegated tenant access
+/// administration RPCs - eleven over <see cref="ILatticeTenantDirectoryAdmin"/>
+/// (tenant groups, group members, the tenant member set, subject resolution) and
+/// seven over <see cref="ILatticeTenantPolicyAdmin"/> (tenant-tier rules, explain,
+/// effective permissions, posture).
 /// Contract-versioning policy: fields on the wire messages are additive-only (new
 /// <c>[Id(n)]</c>); aliases and field numbers are never renumbered, so a newer
 /// response decodes cleanly under an older client, and new RPCs are added without
@@ -102,6 +106,60 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary cross-tenant grant revocation RPC method name (either party's admin).</summary>
     public const string RevokeCrossTenantGrantMethodName = "RevokeCrossTenantGrant";
 
+    /// <summary>The unary, read-only tenant-directory group listing RPC method name.</summary>
+    public const string ListTenantGroupsMethodName = "ListTenantGroups";
+
+    /// <summary>The unary, read-only tenant-directory group lookup RPC method name.</summary>
+    public const string GetTenantGroupMethodName = "GetTenantGroup";
+
+    /// <summary>The unary tenant-directory group create-or-replace RPC method name.</summary>
+    public const string UpsertTenantGroupMethodName = "UpsertTenantGroup";
+
+    /// <summary>The unary tenant-directory group removal (with cascade) RPC method name.</summary>
+    public const string RemoveTenantGroupMethodName = "RemoveTenantGroup";
+
+    /// <summary>The unary, read-only tenant-directory group direct-member listing RPC method name.</summary>
+    public const string ListTenantGroupMembersMethodName = "ListTenantGroupMembers";
+
+    /// <summary>The unary tenant-directory group-member add RPC method name.</summary>
+    public const string AddTenantGroupMemberMethodName = "AddTenantGroupMember";
+
+    /// <summary>The unary tenant-directory group-member remove RPC method name.</summary>
+    public const string RemoveTenantGroupMemberMethodName = "RemoveTenantGroupMember";
+
+    /// <summary>The unary, read-only tenant member-set listing RPC method name.</summary>
+    public const string ListTenantMembersMethodName = "ListTenantMembers";
+
+    /// <summary>The unary tenant member-set add RPC method name.</summary>
+    public const string AddTenantMemberMethodName = "AddTenantMember";
+
+    /// <summary>The unary tenant member-set remove RPC method name.</summary>
+    public const string RemoveTenantMemberMethodName = "RemoveTenantMember";
+
+    /// <summary>The unary, read-only tenant subject resolution RPC method name.</summary>
+    public const string ResolveTenantSubjectMethodName = "ResolveTenantSubject";
+
+    /// <summary>The unary tenant-tier rule create-or-replace RPC method name.</summary>
+    public const string PutTenantRuleMethodName = "PutTenantRule";
+
+    /// <summary>The unary, read-only tenant-tier rule lookup RPC method name.</summary>
+    public const string GetTenantRuleMethodName = "GetTenantRule";
+
+    /// <summary>The unary tenant-tier rule removal RPC method name.</summary>
+    public const string RemoveTenantRuleMethodName = "RemoveTenantRule";
+
+    /// <summary>The unary, read-only tenant rule listing RPC method name.</summary>
+    public const string ListTenantRulesMethodName = "ListTenantRules";
+
+    /// <summary>The unary, read-only layer-aware tenant access explanation RPC method name.</summary>
+    public const string ExplainTenantAccessMethodName = "ExplainTenantAccess";
+
+    /// <summary>The unary, read-only tenant effective-permissions RPC method name.</summary>
+    public const string GetTenantEffectivePermissionsMethodName = "GetTenantEffectivePermissions";
+
+    /// <summary>The unary, read-only tenant access posture RPC method name.</summary>
+    public const string GetTenantAccessPostureMethodName = "GetTenantAccessPosture";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
@@ -129,7 +187,31 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantAdminGrantRequest> grantRequestSerializer,
         Serializer<TenantAdminGrantOfferRequest> grantOfferRequestSerializer,
         Serializer<TenantGrantReport> grantReportSerializer,
-        Serializer<TenantGrantChangeResult> grantChangeResultSerializer)
+        Serializer<TenantGrantChangeResult> grantChangeResultSerializer,
+        Serializer<TenantAdminAccessListRequest> accessListRequestSerializer,
+        Serializer<TenantAdminGroupRequest> groupRequestSerializer,
+        Serializer<TenantAdminGroupUpsertRequest> groupUpsertRequestSerializer,
+        Serializer<TenantAdminGroupMemberRequest> groupMemberRequestSerializer,
+        Serializer<TenantAdminMemberRequest> memberRequestSerializer,
+        Serializer<TenantAdminRulePutRequest> rulePutRequestSerializer,
+        Serializer<TenantAdminRuleRequest> ruleRequestSerializer,
+        Serializer<TenantAdminExplainRequest> explainRequestSerializer,
+        Serializer<TenantAdminEffectivePermissionsRequest> effectivePermissionsRequestSerializer,
+        Serializer<TenantGroupPage> groupPageSerializer,
+        Serializer<TenantAdminGroupLookup> groupLookupSerializer,
+        Serializer<TenantGroupDescriptor> groupDescriptorSerializer,
+        Serializer<TenantGroupRemovalResult> groupRemovalResultSerializer,
+        Serializer<TenantAdminGroupMemberList> groupMemberListSerializer,
+        Serializer<TenantMembershipChangeResult> membershipChangeResultSerializer,
+        Serializer<TenantMemberPage> memberPageSerializer,
+        Serializer<TenantSubjectResolution> subjectResolutionSerializer,
+        Serializer<TenantRuleView> ruleViewSerializer,
+        Serializer<TenantAdminRuleLookup> ruleLookupSerializer,
+        Serializer<TenantAdminRuleRemoval> ruleRemovalSerializer,
+        Serializer<TenantRulePage> rulePageSerializer,
+        Serializer<TenantExplanation> explanationSerializer,
+        Serializer<TenantEffectivePermissions> effectivePermissionsSerializer,
+        Serializer<TenantAccessPosture> accessPostureSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
         ArgumentNullException.ThrowIfNull(createRequestSerializer);
@@ -157,6 +239,30 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(grantOfferRequestSerializer);
         ArgumentNullException.ThrowIfNull(grantReportSerializer);
         ArgumentNullException.ThrowIfNull(grantChangeResultSerializer);
+        ArgumentNullException.ThrowIfNull(accessListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(groupRequestSerializer);
+        ArgumentNullException.ThrowIfNull(groupUpsertRequestSerializer);
+        ArgumentNullException.ThrowIfNull(groupMemberRequestSerializer);
+        ArgumentNullException.ThrowIfNull(memberRequestSerializer);
+        ArgumentNullException.ThrowIfNull(rulePutRequestSerializer);
+        ArgumentNullException.ThrowIfNull(ruleRequestSerializer);
+        ArgumentNullException.ThrowIfNull(explainRequestSerializer);
+        ArgumentNullException.ThrowIfNull(effectivePermissionsRequestSerializer);
+        ArgumentNullException.ThrowIfNull(groupPageSerializer);
+        ArgumentNullException.ThrowIfNull(groupLookupSerializer);
+        ArgumentNullException.ThrowIfNull(groupDescriptorSerializer);
+        ArgumentNullException.ThrowIfNull(groupRemovalResultSerializer);
+        ArgumentNullException.ThrowIfNull(groupMemberListSerializer);
+        ArgumentNullException.ThrowIfNull(membershipChangeResultSerializer);
+        ArgumentNullException.ThrowIfNull(memberPageSerializer);
+        ArgumentNullException.ThrowIfNull(subjectResolutionSerializer);
+        ArgumentNullException.ThrowIfNull(ruleViewSerializer);
+        ArgumentNullException.ThrowIfNull(ruleLookupSerializer);
+        ArgumentNullException.ThrowIfNull(ruleRemovalSerializer);
+        ArgumentNullException.ThrowIfNull(rulePageSerializer);
+        ArgumentNullException.ThrowIfNull(explanationSerializer);
+        ArgumentNullException.ThrowIfNull(effectivePermissionsSerializer);
+        ArgumentNullException.ThrowIfNull(accessPostureSerializer);
 
         CreateTenant = new Method<TenantAdminCreateRequest, TenantCreationResult>(
             type: MethodType.Unary,
@@ -304,7 +410,39 @@ internal sealed class LatticeTenantAdminGrpcMethods
             name: RevokeCrossTenantGrantMethodName,
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantChangeResultSerializer));
+
+        ListTenantGroups = Unary(ListTenantGroupsMethodName, accessListRequestSerializer, groupPageSerializer);
+        GetTenantGroup = Unary(GetTenantGroupMethodName, groupRequestSerializer, groupLookupSerializer);
+        UpsertTenantGroup = Unary(UpsertTenantGroupMethodName, groupUpsertRequestSerializer, groupDescriptorSerializer);
+        RemoveTenantGroup = Unary(RemoveTenantGroupMethodName, groupRequestSerializer, groupRemovalResultSerializer);
+        ListTenantGroupMembers = Unary(ListTenantGroupMembersMethodName, groupRequestSerializer, groupMemberListSerializer);
+        AddTenantGroupMember = Unary(AddTenantGroupMemberMethodName, groupMemberRequestSerializer, membershipChangeResultSerializer);
+        RemoveTenantGroupMember = Unary(RemoveTenantGroupMemberMethodName, groupMemberRequestSerializer, membershipChangeResultSerializer);
+        ListTenantMembers = Unary(ListTenantMembersMethodName, accessListRequestSerializer, memberPageSerializer);
+        AddTenantMember = Unary(AddTenantMemberMethodName, memberRequestSerializer, membershipChangeResultSerializer);
+        RemoveTenantMember = Unary(RemoveTenantMemberMethodName, memberRequestSerializer, membershipChangeResultSerializer);
+        ResolveTenantSubject = Unary(ResolveTenantSubjectMethodName, memberRequestSerializer, subjectResolutionSerializer);
+        PutTenantRule = Unary(PutTenantRuleMethodName, rulePutRequestSerializer, ruleViewSerializer);
+        GetTenantRule = Unary(GetTenantRuleMethodName, ruleRequestSerializer, ruleLookupSerializer);
+        RemoveTenantRule = Unary(RemoveTenantRuleMethodName, ruleRequestSerializer, ruleRemovalSerializer);
+        ListTenantRules = Unary(ListTenantRulesMethodName, accessListRequestSerializer, rulePageSerializer);
+        ExplainTenantAccess = Unary(ExplainTenantAccessMethodName, explainRequestSerializer, explanationSerializer);
+        GetTenantEffectivePermissions = Unary(
+            GetTenantEffectivePermissionsMethodName, effectivePermissionsRequestSerializer, effectivePermissionsSerializer);
+        GetTenantAccessPosture = Unary(GetTenantAccessPostureMethodName, tenantRequestSerializer, accessPostureSerializer);
     }
+
+    /// <summary>Builds one unary method definition on this service from its request and response serializers.</summary>
+    private static Method<TRequest, TResponse> Unary<TRequest, TResponse>(
+        string name, Serializer<TRequest> requestSerializer, Serializer<TResponse> responseSerializer)
+        where TRequest : class
+        where TResponse : class
+        => new(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: name,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(requestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(responseSerializer));
 
     /// <summary>The unary tenant-creation RPC.</summary>
     public Method<TenantAdminCreateRequest, TenantCreationResult> CreateTenant { get; }
@@ -369,6 +507,60 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary cross-tenant grant revocation RPC (either party's admin).</summary>
     public Method<TenantAdminGrantRequest, TenantGrantChangeResult> RevokeCrossTenantGrant { get; }
 
+    /// <summary>The unary, read-only tenant-directory group listing RPC.</summary>
+    public Method<TenantAdminAccessListRequest, TenantGroupPage> ListTenantGroups { get; }
+
+    /// <summary>The unary, read-only tenant-directory group lookup RPC.</summary>
+    public Method<TenantAdminGroupRequest, TenantAdminGroupLookup> GetTenantGroup { get; }
+
+    /// <summary>The unary tenant-directory group create-or-replace RPC.</summary>
+    public Method<TenantAdminGroupUpsertRequest, TenantGroupDescriptor> UpsertTenantGroup { get; }
+
+    /// <summary>The unary tenant-directory group removal (with cascade) RPC.</summary>
+    public Method<TenantAdminGroupRequest, TenantGroupRemovalResult> RemoveTenantGroup { get; }
+
+    /// <summary>The unary, read-only tenant-directory group direct-member listing RPC.</summary>
+    public Method<TenantAdminGroupRequest, TenantAdminGroupMemberList> ListTenantGroupMembers { get; }
+
+    /// <summary>The unary tenant-directory group-member add RPC.</summary>
+    public Method<TenantAdminGroupMemberRequest, TenantMembershipChangeResult> AddTenantGroupMember { get; }
+
+    /// <summary>The unary tenant-directory group-member remove RPC.</summary>
+    public Method<TenantAdminGroupMemberRequest, TenantMembershipChangeResult> RemoveTenantGroupMember { get; }
+
+    /// <summary>The unary, read-only tenant member-set listing RPC.</summary>
+    public Method<TenantAdminAccessListRequest, TenantMemberPage> ListTenantMembers { get; }
+
+    /// <summary>The unary tenant member-set add RPC.</summary>
+    public Method<TenantAdminMemberRequest, TenantMembershipChangeResult> AddTenantMember { get; }
+
+    /// <summary>The unary tenant member-set remove RPC.</summary>
+    public Method<TenantAdminMemberRequest, TenantMembershipChangeResult> RemoveTenantMember { get; }
+
+    /// <summary>The unary, read-only tenant subject resolution RPC.</summary>
+    public Method<TenantAdminMemberRequest, TenantSubjectResolution> ResolveTenantSubject { get; }
+
+    /// <summary>The unary tenant-tier rule create-or-replace RPC.</summary>
+    public Method<TenantAdminRulePutRequest, TenantRuleView> PutTenantRule { get; }
+
+    /// <summary>The unary, read-only tenant-tier rule lookup RPC.</summary>
+    public Method<TenantAdminRuleRequest, TenantAdminRuleLookup> GetTenantRule { get; }
+
+    /// <summary>The unary tenant-tier rule removal RPC.</summary>
+    public Method<TenantAdminRuleRequest, TenantAdminRuleRemoval> RemoveTenantRule { get; }
+
+    /// <summary>The unary, read-only tenant rule listing RPC.</summary>
+    public Method<TenantAdminAccessListRequest, TenantRulePage> ListTenantRules { get; }
+
+    /// <summary>The unary, read-only layer-aware tenant access explanation RPC.</summary>
+    public Method<TenantAdminExplainRequest, TenantExplanation> ExplainTenantAccess { get; }
+
+    /// <summary>The unary, read-only tenant effective-permissions RPC.</summary>
+    public Method<TenantAdminEffectivePermissionsRequest, TenantEffectivePermissions> GetTenantEffectivePermissions { get; }
+
+    /// <summary>The unary, read-only tenant access posture RPC.</summary>
+    public Method<TenantAdminTenantRequest, TenantAccessPosture> GetTenantAccessPosture { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -404,7 +596,31 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantAdminGrantRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantAdminGrantOfferRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantGrantReport>>(),
-            serializerProvider.GetRequiredService<Serializer<TenantGrantChangeResult>>());
+            serializerProvider.GetRequiredService<Serializer<TenantGrantChangeResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminAccessListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGroupRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGroupUpsertRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGroupMemberRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminMemberRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminRulePutRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminRuleRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminExplainRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminEffectivePermissionsRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantGroupPage>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGroupLookup>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantGroupDescriptor>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantGroupRemovalResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGroupMemberList>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantMembershipChangeResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantMemberPage>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantSubjectResolution>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantRuleView>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminRuleLookup>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminRuleRemoval>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantRulePage>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantExplanation>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantEffectivePermissions>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAccessPosture>>());
     }
 }
 
