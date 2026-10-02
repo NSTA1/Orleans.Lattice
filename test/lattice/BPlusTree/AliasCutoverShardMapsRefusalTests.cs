@@ -7,10 +7,11 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <summary>
 /// Issue #4270: the alias-cutover shard-map carries rewrite registry rows with
 /// <see cref="ILatticeRegistry.UpdateAsync"/>, an unconditional upsert. They used
-/// to default a missing row to an empty entry and write it, creating a row with
-/// no structural pins. A missing destination or revert row now refuses and writes
-/// nothing; a missing logical row on a cutover is the genuine create of a
-/// restore into a fresh target and still proceeds.
+/// to default a missing row to an empty entry and write it. A revert whose logical
+/// row is missing - impossible while the alias resolves to the shadow, so a sign
+/// something already went wrong - now refuses and writes nothing. A cutover still
+/// creates the rows it legitimately creates: a destination copy addressed before
+/// its row is materialised, and the logical row of a restore into a fresh target.
 /// </summary>
 [TestFixture]
 public sealed class AliasCutoverShardMapsRefusalTests
@@ -33,16 +34,16 @@ public sealed class AliasCutoverShardMapsRefusalTests
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_refuses_an_unregistered_destination_without_writing()
+    public async Task PrepareCutoverAsync_records_the_replaced_map_on_a_destination_with_no_row_yet()
     {
+        // A restore or remediation copy is routinely addressed before its row is
+        // materialised; the carry is what first records it, so it must not refuse.
         _registry.ResolveAsync(Logical).Returns(Task.FromResult(Logical));
         StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2 });
 
-        var ex = Assert.ThrowsAsync<LatticeTreeNotRegisteredException>(
-            () => AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination));
+        await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
 
-        Assert.That(ex!.TreeId, Is.EqualTo(Destination));
-        await _registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+        await _registry.Received(1).UpdateAsync(Destination, Arg.Is<TreeRegistryEntry>(e => e.ReplacedShardMap != null));
     }
 
     [Test]

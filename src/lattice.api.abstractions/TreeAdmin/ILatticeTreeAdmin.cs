@@ -198,7 +198,10 @@ public interface ILatticeTreeAdmin
     /// through the tree target the physical tree, after authorizing whole-tree
     /// administration on the tree fail-closed. Only a single level of indirection is
     /// allowed - the physical target must not itself be aliased. Reserved system tree
-    /// ids are rejected.
+    /// ids are rejected. Once the alias is set, the tree's shard map and split
+    /// allocation mark are taken from the target's own, so every key the target holds
+    /// stays readable through the tree; the map they replace is written to the
+    /// previous physical tree's own entry. A refused alias changes nothing.
     /// </summary>
     /// <param name="treeId">The logical tree to alias. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="physicalTreeId">The physical tree to point at. Must not be <c>null</c> or empty, and must differ from <paramref name="treeId"/>.</param>
