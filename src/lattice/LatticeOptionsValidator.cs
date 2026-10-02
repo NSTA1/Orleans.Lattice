@@ -606,7 +606,11 @@ return ValidateOptionsResult.Success;
     /// passed validation and then failed every WAL flush, append, forward or
     /// publish that armed it. A grain timer rejects the same range, so an
     /// over-long hot-shard sampling or shard-healing interval threw each time the
-    /// monitor armed its timer, and the tree was never sampled or healed.
+    /// monitor armed its timer, and the tree was never sampled or healed; an
+    /// over-long compaction tick threw each time a compaction pass armed its timer,
+    /// so tombstones were never reclaimed; and an over-long storage-usage roll-up
+    /// budget threw from <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>
+    /// on every cluster-wide storage-usage read.
     /// <see cref="Timeout.InfiniteTimeSpan"/> is skipped by the caller; the options
     /// that accept it bypass the timer for it.
     /// </summary>
@@ -630,5 +634,7 @@ return ValidateOptionsResult.Success;
         (nameof(LatticeOptions.MaxScanPageStallDuration), options.MaxScanPageStallDuration ?? Timeout.InfiniteTimeSpan),
         (nameof(LatticeOptions.HotShardSampleInterval), options.HotShardSampleInterval),
         (nameof(LatticeOptions.ShardHealingInterval), options.ShardHealingInterval),
+        (nameof(LatticeOptions.CompactionShardTickInterval), options.CompactionShardTickInterval),
+        (nameof(LatticeOptions.StorageUsageRollupBudget), options.StorageUsageRollupBudget),
     ];
 }

@@ -38,12 +38,12 @@ steps:
     expects: "Returns copy range, entry estimate, and target resolvability without side effects."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
   - n: 4
-    action: "Execute the move."
-    api: "ILatticeTreeAdmin.ExecuteWalMoveAsync / ExecuteWalMove"
-    expects: "Quiesces the partition, copies and verifies the retained tail, flips placement, and returns a receipt."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+    action: "Start the tracked move."
+    api: "ILatticeTreeAdminOperations.StartWalMoveAsync / StartWalMove / lattice_treeadmin_wal_move_start"
+    expects: "Returns an operation handle; poll tree-admin operation status through copy, verify, and flip phases."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
   - n: 5
-    action: "Reclaim only after rollback is no longer needed."
+    action: "Reclaim only after rollback is no longer needed and the tracked move has succeeded."
     api: "ILatticeTreeAdmin.ReclaimMovedWalSourceAsync / ReclaimMovedWalSource"
     expects: "Discards the orphaned source tail and returns a reclaim receipt."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
@@ -52,6 +52,8 @@ postconditions:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
   - check: "After reclaim, moving back cannot recover the discarded source data."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+  - check: "A tracked WAL move cancelled before the placement flip leaves the partition on the source provider; cancellation after the flip does not undo the move."
+    source: "docs/lattice.api.treeadmin/operations.md"
 failure_modes:
   - id: continuity-failure
     signal: "InvalidOperationException when target cannot continue offsets."

@@ -298,6 +298,9 @@ public class LatticeOptions
     /// the cost of less scheduler headroom for other grains. Values
     /// below <see cref="MinCompactionShardTickInterval"/> are clamped to
     /// the floor with a one-shot warning per tree per process.
+    /// The value is the compaction pass's grain-timer period, so options
+    /// validation rejects one above <c>0xFFFFFFFE</c> milliseconds (about
+    /// 49.7 days), the longest period a grain timer accepts.
     /// Snapshotted at pass start, so mid-pass option changes do not
     /// retroactively reshape an in-flight pass.
     /// </summary>
@@ -3318,7 +3321,10 @@ public class LatticeOptions
     /// that grain is not keyed by tree. Defaults to
     /// <see cref="DefaultStorageUsageRollupBudget"/> (20 seconds). A
     /// non-positive value disables the budget, restoring the previous
-    /// run-to-completion behaviour.
+    /// run-to-completion behaviour. A positive budget is armed as a
+    /// cancellation timer, so options validation rejects one above
+    /// <c>0xFFFFFFFE</c> milliseconds (about 49.7 days); use a non-positive
+    /// value, not <see cref="TimeSpan.MaxValue"/>, to remove the budget.
     /// </summary>
     public TimeSpan StorageUsageRollupBudget { get; set; } = DefaultStorageUsageRollupBudget;
 

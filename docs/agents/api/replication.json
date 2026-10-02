@@ -1216,7 +1216,7 @@
         "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#GetPeerStatusAsync"
       },
       "concurrency": {
-        "rule": "Rows are ordered by effective tree id, peer id and direction; denied rows are skipped, a tree filter is scoped to the caller tenant before the authorization check, and continuation tokens are issued only after rows the caller was shown.",
+        "rule": "Rows are ordered by effective tree id, peer id and direction; denied rows are skipped, a tree filter is scoped to the caller tenant before the authorization check, and continuation tokens are issued only after rows the caller was shown. Inbound contact rows are populated only for runs the receiver locally admits, and new inbound rows are bounded at recording time.",
         "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#GetPeerStatusAsync"
       },
       "sources": [

@@ -140,4 +140,45 @@ public sealed class RepoContextSecretRedactorTests
             Assert.That(scrubbed, Does.Contain("two.invalid"));
         });
     }
+
+    /// <summary>
+    /// Regression: a credential leak. RFC 3986 forbids <c>'?'</c> and <c>'#'</c> in
+    /// a conforming userinfo, so bounding the scan at them looked sound - but this
+    /// redactor is handed whatever a transport exception quoted, and git accepts an
+    /// authority whose password carries a raw gen-delim because it splits on the
+    /// last <c>'@'</c> before the path. The scan stopped at the gen-delim, found no
+    /// <c>'@'</c> in the prefix it had seen, concluded there was no userinfo at all,
+    /// and copied the authority through verbatim - emitting the whole credential
+    /// into the log it exists to scrub.
+    /// </summary>
+    [TestCase("user:p?ss", "p?ss", TestName = "RedactUrls_redacts_userinfo_containing_a_question_mark")]
+    [TestCase("user:p#ss", "p#ss", TestName = "RedactUrls_redacts_userinfo_containing_a_hash")]
+    [TestCase("user:p?s#s", "p?s#s", TestName = "RedactUrls_redacts_userinfo_containing_both_gen_delims")]
+    public void RedactUrls_redacts_userinfo_containing_a_gen_delim(string userinfo, string secret)
+    {
+        var text = "fatal: could not read " + Url(userinfo, "host.invalid/repo.git");
+
+        var scrubbed = RepoContextSecretRedactor.RedactUrls(text);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scrubbed, Does.Not.Contain(secret));
+            Assert.That(scrubbed, Does.Not.Contain(userinfo));
+            Assert.That(scrubbed, Does.Contain("host.invalid/repo.git"));
+            Assert.That(scrubbed, Does.Contain(RepoContextSecretRedactor.Placeholder));
+        });
+    }
+
+    /// <summary>
+    /// The gen-delim fix widens the userinfo scan to the authority boundary, so it
+    /// must not start redacting a query string that merely follows a path: the
+    /// <c>'/'</c> still ends the authority before any <c>'@'</c> in the query.
+    /// </summary>
+    [Test]
+    public void RedactUrls_leaves_an_at_sign_in_a_query_after_a_path_untouched()
+    {
+        var url = Url(string.Empty, "host.invalid/path?contact=a@b.invalid");
+
+        Assert.That(RepoContextSecretRedactor.RedactUrls(url), Is.EqualTo(url));
+    }
 }

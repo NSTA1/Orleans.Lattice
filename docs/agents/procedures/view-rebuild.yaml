@@ -28,15 +28,15 @@ steps:
     expects: "Returns source tree, apply lag, active generation tree id, provider key, and projection version."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync"
   - n: 2
-    action: "Run reconcile when drift repair is conditional."
-    api: "ILatticeTreeAdmin.ReconcileViewAsync / ReconcileView"
-    expects: "Repairs only when expected view diverges from live view."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileViewAsync"
+    action: "Start tracked reconcile when drift repair is conditional."
+    api: "ILatticeTreeAdminOperations.StartViewReconcileAsync / StartViewReconcile / lattice_treeadmin_view_reconcile_start"
+    expects: "Returns an operation handle; poll tree-admin operation status for driftRepaired."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartViewReconcileAsync"
   - n: 3
-    action: "Run rebuild when a full generation rebuild is intended."
-    api: "ILatticeTreeAdmin.RebuildViewAsync / RebuildView"
-    expects: "Builds a complete shadow generation and atomically flips it active."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RebuildViewAsync"
+    action: "Start tracked rebuild when a full generation rebuild is intended."
+    api: "ILatticeTreeAdminOperations.StartViewRebuildAsync / StartViewRebuild / lattice_treeadmin_view_rebuild_start"
+    expects: "Returns an operation handle; poll tree-admin operation status until the shadow generation swaps or the operation fails."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartViewRebuildAsync"
 postconditions:
   - check: "Readers do not observe a half-built view during rebuild."
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
@@ -47,6 +47,10 @@ failure_modes:
     signal: "A view whose source cannot be resolved is rejected fail-closed."
     effect: "No maintenance is performed."
     response: "Repair or recreate the view registration."
+  - id: operation-runner-lost
+    signal: "Tracked view operation status becomes Failed after the accepting silo is lost or stops heartbeating."
+    effect: "The background rebuild or reconcile is not resumed."
+    response: "Start a new tracked operation after confirming the previous status."
   - id: startup-declared-drop
     signal: "Drop rejects startup-declared views."
     effect: "The view remains declared by code."

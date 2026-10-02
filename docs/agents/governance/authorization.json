@@ -1307,8 +1307,15 @@
           "id": "strict-fence",
           "check": "Write targets a strict-consistency tree with an unmet required policy epoch.",
           "on_true": "deny",
-          "on_false": "policy-evaluate",
+          "on_false": "snapshot-warm",
           "source": "src/lattice.auth/PolicyAccessGate.cs"
+        },
+        {
+          "id": "snapshot-warm",
+          "check": "CompiledPolicySnapshotMaintainer.IsWarm; a cold snapshot (first request on the silo, or an empty snapshot whose first committed rule is still being rebuilt) is warmed with EnsureWarmAsync before evaluation, so the request is never answered from the empty snapshot.",
+          "on_true": "policy-evaluate",
+          "on_false": "policy-evaluate",
+          "source": "src/lattice.auth/PolicyAccessGate.cs#PolicyAccessGate"
         },
         {
           "id": "policy-evaluate",

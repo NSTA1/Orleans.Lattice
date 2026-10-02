@@ -1458,7 +1458,13 @@
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CheckBackupHealthAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CheckBackupHealth"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-backup-health-check",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.backup/operations.md"
+      }
     },
     {
       "id": "cold-restore",
@@ -2339,7 +2345,13 @@
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RebuildCatalogFromSinkAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-catalog-rebuild",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.backup/operations.md"
+      }
     },
     {
       "id": "restore-backup",
@@ -2564,7 +2576,13 @@
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
-      ]
+      ],
+      "deprecated": {
+        "diagnostic": "LATTICE0002",
+        "replacement": "start-catalog-scrub",
+        "removal": "will be removed in the next major version",
+        "migration": "docs/lattice.api.backup/operations.md"
+      }
     },
     {
       "id": "start-backup",
