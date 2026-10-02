@@ -818,7 +818,7 @@ internal sealed class LatticeAuthAdmin(
     private static IReadOnlyList<string> Sorted(IReadOnlyCollection<string> values)
     {
         var list = new List<string>(values);
-        list.Sort(StringComparer.Ordinal);
+        list.Sort(OrdinalStringOrder.Comparison);
         return list;
     }
 

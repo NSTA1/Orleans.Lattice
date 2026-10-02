@@ -4,6 +4,7 @@ using NSubstitute;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Explorer.Tests.UI.Operations;
 using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Areas.Data;
@@ -26,7 +27,8 @@ public abstract class DataTestContext : ShellChromeTestContext
     protected DataTestContext()
     {
         Client = new FakeStateClient();
-        Admin = Substitute.For<ILatticeTreeAdmin>();
+        Admin = Substitute.For<ILatticeTreeAdmin, ILatticeTreeAdminOperations>();
+        Tracked = new TreeAdminOperationScript(Admin);
         Admin.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(Capabilities(call.Arg<string>(), AdministeredTrees.Contains(call.Arg<string>()))));
 
@@ -44,6 +46,9 @@ public abstract class DataTestContext : ShellChromeTestContext
 
     /// <summary>The substitute tree-administration facade.</summary>
     internal ILatticeTreeAdmin Admin { get; }
+
+    /// <summary>The scripted accept-then-poll half of <see cref="Admin"/> (#4124).</summary>
+    internal TreeAdminOperationScript Tracked { get; }
 
     /// <summary>The tenancy facades behind the grant listing: a test adds tenants and grants, or fails the listing.</summary>
     internal FakeTenancyCluster Grants { get; }

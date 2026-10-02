@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 using Orleans.Storage;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -48,6 +49,7 @@ public sealed class AliasSwapRegistryTurnRestartChaosTests
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
 
         // The guard's tree is registered, so the guard reads it, but no shard of it is seeded.
         await Grains.GetLatticeRegistry().RegisterAsync(LedgerTree);

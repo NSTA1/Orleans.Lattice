@@ -29,7 +29,16 @@ public sealed class RepoContextAppMcpToolProviderTests
         var provider = new RepoContextAppMcpToolProvider(new RepoContextToolGroup(enableWrites: true, workspaceMode: true));
         var names = provider.Tools.Select(t => t.ProtocolTool.Name).ToArray();
 
-        Assert.That(names, Has.None.AnyOf("remember", "update", "forget", "claim", "renew_claim", "release_claim", "add_repo", "remove_repo", "reset_index", "bootstrap", "changed", "list_repos"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                names,
+                Is.Not.Empty,
+                "Has.None passes on an empty population, so a provider that contributed no tools "
+                + "at all would be indistinguishable here from one that correctly withheld the "
+                + "mutating and path-taking ones.");
+            Assert.That(names, Has.None.AnyOf("remember", "update", "forget", "claim", "renew_claim", "release_claim", "add_repo", "remove_repo", "reset_index", "bootstrap", "changed", "list_repos"));
+        });
     }
 
     [Test]

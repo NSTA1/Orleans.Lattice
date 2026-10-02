@@ -72,11 +72,13 @@ static async Task<LatticeOperationStatus?> WaitForAsync(
 
 ## Adopting the contract
 
-A facade adopts the contract by running its work on the engine-side coordinator in the core library, which supplies the durable status record, idempotent start, cancellation, the heartbeat lease, retention and progress reporting; the facade adds only its authorization, its kinds and its result keys, and maps the engine record onto these public types with the shared mapping. Backup and restore are the first adopter - see [Backup operations](../lattice.api.backup/operations.md) for its kinds, phases, units and result keys. The schema compliance scan ([Schema compliance operations](../lattice.api.schema/operations.md)) and the fresh cluster storage-usage measure ([Storage usage operations](../lattice.api.treeadmin/operations.md)) adopt it the same way.
+A facade adopts the contract by running its work on the engine-side coordinator in the core library, which supplies the durable status record, idempotent start, cancellation, the heartbeat lease, retention and progress reporting; the facade adds only its authorization, its kinds and its result keys, and maps the engine record onto these public types with the shared mapping. Backup and restore are the first adopter - see [Backup operations](../lattice.api.backup/operations.md) for its kinds, phases, units and result keys - and tree administration the second: view rebuild and reconcile, tag-index reconcile, WAL moves, orphaned-leaf passes and the fresh cluster storage-usage measure (see [Tree-administration operations](../lattice.api.treeadmin/operations.md)). The schema compliance scan ([Schema compliance operations](../lattice.api.schema/operations.md)) adopts it the same way.
+
+Work that runs inside a grain in one long call adopts the contract as a **tracked grain call**: the facade starts the operation and passes the grain a ticket naming it, and the grain reports its progress straight to the operation's record and stops when the operation is cancelled, so its progress is real even though the work is not in the facade's process.
 
 ## See also
 
 - [Backup operations](../lattice.api.backup/operations.md) - accept-then-poll backup and restore, and migrating from the deprecated blocking verbs.
+- [Tree-administration operations](../lattice.api.treeadmin/operations.md) - accept-then-poll view, tag-index, WAL-move, orphaned-leaf and fresh storage-usage operations.
 - [Schema compliance operations](../lattice.api.schema/operations.md) - the accept-then-poll compliance scan.
-- [Storage usage operations](../lattice.api.treeadmin/operations.md) - the accept-then-poll fresh storage usage.
 - [`Orleans.Lattice.Api.Abstractions`](README.md) - the contract package this namespace lives in.

@@ -77,4 +77,13 @@ public static class GrpcSchemaTypeAliases
 
     /// <summary>Alias for <see cref="SchemaComplianceOperationStatusResponse"/>.</summary>
     public const string SchemaComplianceOperationStatusResponse = "oisg.csopstat";
+
+    /// <summary>Alias for <see cref="SchemaMigrationStartRequest"/>.</summary>
+    public const string SchemaMigrationStartRequest = "oisg.msreq";
+
+    /// <summary>Alias for <see cref="SchemaOperationRequest"/>.</summary>
+    public const string SchemaOperationRequest = "oisg.opreq";
+
+    /// <summary>Alias for <see cref="SchemaOperationStatusResponse"/>.</summary>
+    public const string SchemaOperationStatusResponse = "oisg.opresp";
 }

@@ -52,7 +52,20 @@ Dead-letter operations inspect diverted, schema-rejected writes. `ListDeadLetter
 
 Versioning operations require the separate schema-versioning add-on. If the host did not register `AddLatticeSchemaVersioning(...)`, these calls throw a clear `InvalidOperationException` rather than failing dependency resolution. Reads require Read authority; mutations require SchemaAdmin authority. The config and migration semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
 
-Remediation operations apply or report a tree-wide repair. `RemediateAsync` requires SchemaAdmin authority, applies a `LatticeValueTransform` across a tree, and adopts the supplied target policy. `GetRemediationStatusAsync` requires Read authority and returns the status or last report.
+Remediation operations apply or report a tree-wide repair. `RemediateAsync` requires SchemaAdmin authority, applies a `LatticeValueTransform` across a tree, and adopts the supplied target policy. `GetRemediationStatusAsync` requires Read authority and returns the status or last report; it never waits behind a running remediation, and it names the tracked operation that started the run in its `OperationId`.
+
+`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` are **deprecated** (`LATTICE0002`) and will be removed in the next major version. They block until the run ends, so a long run is cut off by the caller's timeout. The same singleton implements `ILatticeSchemaOperations`, whose start verbs return as soon as the run is accepted and whose status verbs report its phase and values processed:
+
+| Method | Signature |
+|---|---|
+| `StartRemediationAsync` | `Task<LatticeOperationHandle> StartRemediationAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartMigrationAsync` | `Task<LatticeOperationHandle> StartMigrationAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `StartAdvanceAndMigrateAsync` | `Task<LatticeOperationHandle> StartAdvanceAndMigrateAsync(string treeId, uint newTargetVersion, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `GetOperationStatusAsync` | `Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)` |
+| `ListOperationsAsync` | `Task<LatticeOperationPage> ListOperationsAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
+| `CancelOperationAsync` | `Task<LatticeOperationStatus?> CancelOperationAsync(string operationId, CancellationToken cancellationToken = default)` |
+
+See [Schema operations](operations.md) for the kinds, phases, outcomes, scoping and the migration from the blocking verbs.
 
 Scan compliance is read-only. It scans a tree's entries against the cached compiled policy and reports per-tree compliant and non-compliant counts plus a reason breakdown; when no policy is set, it returns the ungoverned report (`HasPolicy` is `false` and every count is zero). It never mutates values or policy. The blocking `ScanComplianceAsync` is deprecated (`LATTICE0002`, removed in the next major version) because a large scan outlasts the caller's timeout; start the scan with `ILatticeSchemaComplianceOperations` instead (below).
 

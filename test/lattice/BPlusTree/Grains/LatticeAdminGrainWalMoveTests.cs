@@ -161,6 +161,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         public required ScriptedWalProvider Target { get; init; }
         public required IWalShardGrain Wal { get; init; }
         public required ILatticeRegistry Registry { get; init; }
+        public required IGrainFactory Factory { get; init; }
 
         /// <summary>Quiesce answers served in call order; the last one repeats.</summary>
         public List<Func<WalMoveQuiesceResult>> QuiesceScript { get; } = new();
@@ -190,7 +191,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         var factory = Substitute.For<IGrainFactory>();
 
         var lattice = Substitute.For<ILattice>();
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(
                 new RoutingInfo(TreeId, ShardMap.CreateDefault(1, 1))));
         factory.GetGrain<ILattice>(TreeId).Returns(lattice);
@@ -234,6 +235,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
             Target = target,
             Wal = wal,
             Registry = registry,
+            Factory = factory,
         };
 
         wal.QuiesceForMoveAsync(Arg.Any<long>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())

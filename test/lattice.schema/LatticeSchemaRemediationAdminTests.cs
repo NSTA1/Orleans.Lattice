@@ -20,18 +20,24 @@ public class LatticeSchemaRemediationAdminTests
     private static LatticeSchemaPolicy JsonPolicy() => new(new[] { LatticeSchemaRule.Json() });
 
     [Test]
-    public async Task RemediateAsync_delegates_to_the_per_tree_grain()
+    public async Task RemediateAsync_accepts_on_the_per_tree_grain_then_drives_it_one_slice_at_a_time()
     {
         var (admin, grain) = Create();
         var policy = JsonPolicy();
         var transform = LatticeValueTransform.Passthrough();
-        grain.StartAsync(transform, policy, Arg.Any<CancellationToken>())
-            .Returns(LatticeSchemaRemediationReport.Completed(2, "orders/remediated/op", "op"));
+        grain.AcceptAsync(transform, policy, Arg.Any<string>())
+            .Returns(LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.DryRun, 0, "orders/remediated/x", "op"));
+        grain.RunSliceAsync().Returns(
+            new SchemaRemediationSlice(
+                LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 0, "orders/remediated/x", "op"), 2),
+            new SchemaRemediationSlice(LatticeSchemaRemediationReport.Completed(2, "orders/remediated/x", "op"), null));
 
         var report = await admin.RemediateAsync("orders", transform, policy);
 
         Assert.That(report.Succeeded, Is.True);
-        await grain.Received(1).StartAsync(transform, policy, Arg.Any<CancellationToken>());
+        await grain.Received(1).AcceptAsync(transform, policy, Arg.Any<string>());
+        await grain.Received(2).RunSliceAsync();
+        await grain.DidNotReceiveWithAnyArgs().StartAsync(default, default!, default);
     }
 
     [Test]

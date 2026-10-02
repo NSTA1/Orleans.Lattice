@@ -397,7 +397,7 @@ public sealed class LatticeStateQueryTenantScopingTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var acme = WireTree(factory, AcmeTree);
-        acme.GetRoutingAsync(Arg.Any<CancellationToken>())
+        acme.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new RoutingInfo(AcmeTree, new ShardMap { Slots = [0, 1, 2, 3], Version = 1 }));
         var query = CreateQuery(factory, new AmbientTenantContextResolver());
 

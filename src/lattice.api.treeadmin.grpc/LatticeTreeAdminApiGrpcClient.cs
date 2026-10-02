@@ -817,6 +817,25 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Reads which durable pin holds the WAL floor of <paramref name="treeId"/> and
+    /// whether it has wedged reclamation, with no side effects. Requires whole-tree
+    /// read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's WAL reclamation report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalReclamationReport> GetWalReclamationAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetWalReclamation,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Audits <paramref name="treeId"/> for orphaned leaves - leaves spliced into a
     /// shard's sibling chain but unreachable by descent - with no side effects.
     /// Requires whole-tree read authority.
@@ -917,6 +936,7 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The move receipt.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c> or empty.</exception>
+    [Obsolete("ExecuteWalMoveAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartWalMoveAsync and poll GetTreeAdminOperationStatusAsync instead. ExecuteWalMoveAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     public Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
         string treeId, int partition, string targetProviderKey,
         TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)
@@ -1035,6 +1055,7 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The view's status after the rebuild.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    [Obsolete("RebuildViewAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartViewRebuildAsync and poll GetTreeAdminOperationStatusAsync instead. RebuildViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     public Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
@@ -1049,6 +1070,7 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The reconcile result.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    [Obsolete("ReconcileViewAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartViewReconcileAsync and poll GetTreeAdminOperationStatusAsync instead. ReconcileViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     public Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
@@ -1100,6 +1122,7 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The reconcile report.</returns>
     /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
+    [Obsolete("ReconcileTagIndexAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartTagIndexReconcileAsync and poll GetTreeAdminOperationStatusAsync instead. ReconcileTagIndexAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
     public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(indexName);
@@ -1157,6 +1180,156 @@ public sealed class LatticeTreeAdminApiGrpcClient
         }
 
         return UnaryAsync(_methods.SetHistoryRetention, new TreeAdminSetRetentionRequest { TreeId = treeId, Mode = mode, Window = window }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Starts a tracked materialised-view rebuild and returns its handle at once;
+    /// poll <see cref="GetTreeAdminOperationStatusAsync"/> for progress and the outcome.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartViewRebuildAsync(
+        string viewName, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return UnaryAsync(
+            _methods.StartViewRebuild,
+            new TreeAdminViewRequest { ViewName = viewName, TrackingOperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked materialised-view reconcile and returns its handle at once.</summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartViewReconcileAsync(
+        string viewName, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return UnaryAsync(
+            _methods.StartViewReconcile,
+            new TreeAdminViewRequest { ViewName = viewName, TrackingOperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked tag-index reconcile sweep and returns its handle at once.</summary>
+    /// <param name="indexName">The logical tag-index name. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartTagIndexReconcileAsync(
+        string indexName, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+        return UnaryAsync(
+            _methods.StartTagIndexReconcile,
+            new TreeAdminTagIndexRequest { IndexName = indexName, TrackingOperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked WAL partition move and returns its handle at once.</summary>
+    /// <param name="treeId">The tree whose partition to move. Must not be <c>null</c> or empty.</param>
+    /// <param name="partition">The WAL partition index to move.</param>
+    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty.</param>
+    /// <param name="options">Optional move tunables; <c>null</c> takes the conventional defaults.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartWalMoveAsync(
+        string treeId,
+        int partition,
+        string targetProviderKey,
+        TreeWalMoveOptions? options = null,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
+        return UnaryAsync(
+            _methods.StartWalMove,
+            new TreeAdminWalMoveExecuteRequest
+            {
+                TreeId = treeId,
+                Partition = partition,
+                TargetProviderKey = targetProviderKey,
+                Options = options,
+                TrackingOperationId = operationId,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked whole-tree orphaned-leaf audit and returns its handle at once.</summary>
+    /// <param name="treeId">The tree to audit. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartOrphanedLeavesAuditAsync(
+        string treeId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.StartOrphanedLeavesAudit,
+            new TreeAdminOrphanedLeafRequest { TreeId = treeId, TrackingOperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Starts a tracked whole-tree orphaned-leaf repair and returns its handle at once.</summary>
+    /// <param name="treeId">The tree to repair. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartOrphanedLeavesRepairAsync(
+        string treeId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.StartOrphanedLeavesRepair,
+            new TreeAdminOrphanedLeafRequest { TreeId = treeId, TrackingOperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Reads a tracked tree-administration operation's status.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    public async Task<LatticeOperationStatus?> GetTreeAdminOperationStatusAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.GetTreeAdminOperationStatus,
+            new TreeAdminOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    /// <summary>Lists one page of the caller's tracked tree-administration operations, newest-first.</summary>
+    /// <param name="request">The page request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The page.</returns>
+    public Task<LatticeOperationPage> ListTreeAdminOperationsAsync(
+        LatticeOperationListRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.ListTreeAdminOperations, request, cancellationToken);
+    }
+
+    /// <summary>Requests cancellation of a tracked tree-administration operation.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status after the request, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    public async Task<LatticeOperationStatus?> CancelTreeAdminOperationAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.CancelTreeAdminOperation,
+            new TreeAdminOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
     }
 
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(

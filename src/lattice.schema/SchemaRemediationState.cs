@@ -83,4 +83,19 @@ internal sealed class SchemaRemediationState
 
     /// <summary>Persisted before reserving the alias; an idle pass releases an abandoned preparation.</summary>
     [Id(13)] public string? AliasReservationId { get; set; }
+
+    /// <summary>
+    /// The last source key the current phase has fully processed, or <c>null</c>
+    /// when the phase has not processed any. Each bounded slice resumes its scan
+    /// strictly after this key, so a slice interrupted by a fault or a silo loss
+    /// resumes where the last durable slice stopped rather than from the start.
+    /// </summary>
+    [Id(14)] public string? ScanCursor { get; set; }
+
+    /// <summary>
+    /// The number of values the current phase will process, when known: <c>null</c>
+    /// during the dry run (the tree is not counted up front), and the dry run's
+    /// count during the build.
+    /// </summary>
+    [Id(15)] public int? PhaseTotal { get; set; }
 }

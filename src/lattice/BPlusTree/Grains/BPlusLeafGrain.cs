@@ -3494,32 +3494,51 @@ internal sealed partial class BPlusLeafGrain(
         // this method with batches sized at MaxLeafKeys, so the per-call
         // grain-hop count drops from O(MaxLeafKeys) to O(1) on the
         // merge channel as well.
-        List<WalRecord>? walEntries = null;
+        // Threshold-gated pooling, mirroring CommitSetManyAsync. WalRecord is
+        // a ~160-byte readonly record struct, so a MaxLeafKeys-wide merge
+        // batch allocates tens of kilobytes of backing array per call. Below
+        // the threshold the pool's bucket rounding and clear cost outweigh the
+        // saving, so allocate directly. The rental is per-call state - exactly
+        // as the List it replaces was - so it is safe under [AlwaysInterleave]
+        // where a reusable grain field would not be.
+        WalRecord[]? walEntries = null;
+        var walCount = 0;
+        var walRented = false;
         if (writer is not null && entries.Count > 0)
-            walEntries = new List<WalRecord>(entries.Count);
+        {
+            walRented = entries.Count >= CommitSetManyPoolThreshold;
+            walEntries = walRented
+                ? ArrayPool<WalRecord>.Shared.Rent(entries.Count)
+                : new WalRecord[entries.Count];
+        }
 
+        try
+        {
         foreach (var (key, incoming) in entries)
         {
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            walEntries?.Add(new WalRecord
+            if (walEntries is not null)
             {
-                TreeId = treeId,
-                Op = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
-                Key = key,
-                Value = incoming.IsTombstone ? null : incoming.Value,
-                Timestamp = incoming.Timestamp,
-                IsTombstone = incoming.IsTombstone,
-                ExpiresAtTicks = incoming.IsTombstone ? 0 : incoming.ExpiresAtTicks,
-                OriginClusterId = incoming.OriginClusterId,
-                VectorClock = incoming.VectorClock,
-                TransactionId = transactionId,
-                Category = maintenance,
-                IsPrepared = false,
-                IsMerge = true,
-                ShardIndex = shardIndex,
-            });
+                walEntries[walCount++] = new WalRecord
+                {
+                    TreeId = treeId,
+                    Op = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                    Key = key,
+                    Value = incoming.IsTombstone ? null : incoming.Value,
+                    Timestamp = incoming.Timestamp,
+                    IsTombstone = incoming.IsTombstone,
+                    ExpiresAtTicks = incoming.IsTombstone ? 0 : incoming.ExpiresAtTicks,
+                    OriginClusterId = incoming.OriginClusterId,
+                    VectorClock = incoming.VectorClock,
+                    TransactionId = transactionId,
+                    Category = maintenance,
+                    IsPrepared = false,
+                    IsMerge = true,
+                    ShardIndex = shardIndex,
+                };
+            }
         }
 
         // step 1 (wal) - one batched dispatch for the whole merge batch.
@@ -3529,12 +3548,12 @@ internal sealed partial class BPlusLeafGrain(
         // writes on the same instrument. (Per-entry recording would
         // inflate the histogram count and bias percentile reads of the
         // single-write path.)
-        if (walEntries is { Count: > 0 })
+        if (walCount > 0)
         {
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(walEntries);
+                await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
             }
             finally
             {
@@ -3543,6 +3562,20 @@ internal sealed partial class BPlusLeafGrain(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
                     LatticeTenantLabel.ForTree(treeId));
+            }
+        }
+        }
+        finally
+        {
+            if (walRented)
+            {
+                // Each record holds string / byte[] / VersionVector
+                // references, so the written prefix is cleared before the
+                // rental goes back: a pool slot must not keep a merged
+                // value reachable between rents. Only the prefix is
+                // cleared, never the whole rounded-up rental.
+                walEntries!.AsSpan(0, walCount).Clear();
+                ArrayPool<WalRecord>.Shared.Return(walEntries!);
             }
         }
 
@@ -4141,13 +4174,26 @@ internal sealed partial class BPlusLeafGrain(
         // `KeyValuePair<string, LwwValue<byte[]>>[]` backing array
         // (~64 B per entry, ~16 KiB on a default-size leaf) is not
         // allocated.
-        List<WalRecord>? walEntries = null;
+        WalRecord[]? walEntries = null;
+        var walCount = 0;
+        var walRented = false;
         List<KeyValuePair<string, LwwValue<byte[]>>>? accepted = null;
         if (writer is not null && entries.Count > 0)
-            walEntries = new List<WalRecord>(entries.Count);
+        {
+            // Threshold-gated pooling, mirroring CommitSetManyAsync; see
+            // MergeEntriesAsync for the rationale. The guard below can reject
+            // entries, so the batch is tracked by write index rather than by
+            // entries.Count.
+            walRented = entries.Count >= CommitSetManyPoolThreshold;
+            walEntries = walRented
+                ? ArrayPool<WalRecord>.Shared.Rent(entries.Count)
+                : new WalRecord[entries.Count];
+        }
         if (isCrossShardMigration && entries.Count > 0)
             accepted = new List<KeyValuePair<string, LwwValue<byte[]>>>(entries.Count);
 
+        try
+        {
         foreach (var (key, incoming) in entries)
         {
             // Asymmetric migration-vs-foreground rule. Only fires on the
@@ -4199,34 +4245,37 @@ internal sealed partial class BPlusLeafGrain(
             var toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
             accepted?.Add(new KeyValuePair<string, LwwValue<byte[]>>(key, toStore));
 
-            walEntries?.Add(new WalRecord
+            if (walEntries is not null)
             {
-                TreeId = treeId,
-                Op = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
-                Key = key,
-                Value = toStore.IsTombstone ? null : toStore.Value,
-                Timestamp = toStore.Timestamp,
-                IsTombstone = toStore.IsTombstone,
-                ExpiresAtTicks = toStore.IsTombstone ? 0 : toStore.ExpiresAtTicks,
-                OriginClusterId = toStore.OriginClusterId,
-                VectorClock = toStore.VectorClock,
-                TransactionId = transactionId,
-                Category = maintenance,
-                IsPrepared = false,
-                IsMerge = true,
-                ShardIndex = shardIndex,
-            });
+                walEntries[walCount++] = new WalRecord
+                {
+                    TreeId = treeId,
+                    Op = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                    Key = key,
+                    Value = toStore.IsTombstone ? null : toStore.Value,
+                    Timestamp = toStore.Timestamp,
+                    IsTombstone = toStore.IsTombstone,
+                    ExpiresAtTicks = toStore.IsTombstone ? 0 : toStore.ExpiresAtTicks,
+                    OriginClusterId = toStore.OriginClusterId,
+                    VectorClock = toStore.VectorClock,
+                    TransactionId = transactionId,
+                    Category = maintenance,
+                    IsPrepared = false,
+                    IsMerge = true,
+                    ShardIndex = shardIndex,
+                };
+            }
         }
 
         // step 1 (wal) - one batched dispatch for the whole accepted
         // batch. Recorded once on LeafWriteDuration tagged kind=merge;
         // see MergeEntriesAsync for the per-batch-recording rationale.
-        if (walEntries is { Count: > 0 })
+        if (walCount > 0)
         {
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(walEntries);
+                await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
             }
             finally
             {
@@ -4235,6 +4284,18 @@ internal sealed partial class BPlusLeafGrain(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
                     LatticeTenantLabel.ForTree(treeId));
+            }
+        }
+        }
+        finally
+        {
+            if (walRented)
+            {
+                // See MergeEntriesAsync: the written prefix is cleared so no
+                // merged value's string / byte[] / VersionVector references
+                // stay reachable from a pool slot between rents.
+                walEntries!.AsSpan(0, walCount).Clear();
+                ArrayPool<WalRecord>.Shared.Return(walEntries!);
             }
         }
 

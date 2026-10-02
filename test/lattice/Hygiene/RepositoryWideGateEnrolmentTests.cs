@@ -128,6 +128,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts every raw IAsyncEnumerable enumeration in src is wrapped or justified, not instrument declarations",
             ["RegistryAcquisitionSeamGuardTests"] =
                 "asserts every ILatticeRegistry acquisition in src goes through the timing seam, not instrument declarations",
+            ["RoutingForceRefreshGuardTests"] =
+                "asserts every GetRoutingAsync caller in src that routes no key forces a routing refresh or is allow-listed with a reason (issues #4176, #4180), not instrument declarations",
             ["SecurityInstructionsCoverageTests"] =
                 "asserts the security instructions cover the packages they claim, not instruments",
             ["SerializableExceptionDeepCopyGateEnrolmentTests"] =

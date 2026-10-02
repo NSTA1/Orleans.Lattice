@@ -66,8 +66,16 @@ public static class LatticeApiTreeAdminServiceCollectionExtensions
         builder.Services.AddOptions<LatticeApiTreeAdminOptions>();
 
         // The transport-agnostic control facade. Registered as a silo singleton that
-        // every transport binding (for example gRPC, MCP) adapts over.
-        builder.Services.TryAddSingleton<ILatticeTreeAdmin, LatticeTreeAdmin>();
+        // every transport binding (for example gRPC, MCP) adapts over. The
+        // accept-then-poll operations facade (#4124) is the same singleton, so a
+        // blocking verb and its start share one authorization path and one engine.
+        builder.Services.TryAddSingleton<LatticeTreeAdmin>();
+        builder.Services.TryAddSingleton<ILatticeTreeAdmin>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
+        builder.Services.TryAddSingleton<ILatticeTreeAdminOperations>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
+
+        // The read-only WAL reclamation diagnostics (#4195), on the same singleton so
+        // it shares the facade's tenant composition and authorization seam.
+        builder.Services.TryAddSingleton<ILatticeWalReclamation>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
 
         // Accept-then-poll fresh storage usage (#4126), run on the core operation
         // coordinator that AddLattice registers.

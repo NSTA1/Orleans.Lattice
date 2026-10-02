@@ -1,3 +1,4 @@
+using System.Buffers;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
@@ -180,17 +181,35 @@ public readonly record struct RwSetAccessor
 
     private static OrSetDeltaDot[] ObservedRemoves(RwSet set, byte[] element)
     {
-        var key = Convert.ToBase64String(element);
-        if (!set.Removes.TryGetValue(key, out var dots) || dots.Count == 0)
+        // The base64 encoding is wanted only to index Removes, so it is
+        // built into a stack or pooled span and probed through the
+        // dictionary's alternate lookup rather than materialised as a
+        // string that is dead the moment TryGetValue returns.
+        var charCount = OrSet.Base64CharCount(element.Length);
+        var rented = charCount > OrSet.MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        try
         {
-            return Array.Empty<OrSetDeltaDot>();
+            Span<char> buffer = rented ?? stackalloc char[OrSet.MaxStackBase64Chars];
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var removes = set.Removes.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!removes.TryGetValue(buffer[..written], out var dots) || dots.Count == 0)
+            {
+                return Array.Empty<OrSetDeltaDot>();
+            }
+            var observed = new OrSetDeltaDot[dots.Count];
+            for (var i = 0; i < dots.Count; i++)
+            {
+                observed[i] = new OrSetDeltaDot { Element = element, ReplicaId = dots[i].ReplicaId, Counter = dots[i].Counter };
+            }
+            return observed;
         }
-        var observed = new OrSetDeltaDot[dots.Count];
-        for (var i = 0; i < dots.Count; i++)
+        finally
         {
-            observed[i] = new OrSetDeltaDot { Element = element, ReplicaId = dots[i].ReplicaId, Counter = dots[i].Counter };
+            if (rented is not null)
+            {
+                ArrayPool<char>.Shared.Return(rented);
+            }
         }
-        return observed;
     }
 
     private static OrSetDeltaDot[] FlattenDots(Dictionary<string, List<OrSetDot>> map)

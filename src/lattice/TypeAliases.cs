@@ -499,6 +499,12 @@ internal static class TypeAliases
     internal const string ILatticeStats = "ol.gls";
     internal const string ILatticeStorageUsage = "ol.gsu";
     internal const string ILatticeWalUsage = "ol.gwu";
+
+    /// <summary>Alias for the per-tree WAL floor-holder probe grain interface (issue #4195).</summary>
+    internal const string ILatticeWalFloorHolderProbe = "ol.gfh";
+
+    /// <summary>Alias for the WAL floor-holder probe's report (issue #4195).</summary>
+    internal const string WalFloorHolderProbeReport = "ol.wfh";
     internal const string ILatticeAdmin = "ol.gad";
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
@@ -751,5 +757,14 @@ internal static class TypeAliases
 
     /// <summary>Alias for one page of the coordinated-operation index.</summary>
     internal const string LatticeOperationIndexPage = "ol.oip";
+
+    /// <summary>Alias for the ticket a tracked grain call relays progress through.</summary>
+    internal const string LatticeOperationTicket = "ol.opt";
+
+    /// <summary>Alias for the admin grain's tracked (operation-relayed) surface.</summary>
+    internal const string ILatticeAdminTrackedGrain = "ol.atg";
+
+    // Grain-storage fencing probe
+    internal const string GrainStorageFencingProbeState = "ol.gfp";
 }
 

@@ -181,6 +181,33 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Sets a tree's durable-history retention policy on the wrapped facade.</summary>
     public abstract Task<TreeHistoryRetention> SetHistoryRetention(TreeAdminSetRetentionRequest request, ServerCallContext context);
 
+    /// <summary>Starts an accept-then-poll view rebuild on the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationHandle> StartViewRebuild(TreeAdminViewRequest request, ServerCallContext context);
+
+    /// <summary>Starts an accept-then-poll view reconcile on the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationHandle> StartViewReconcile(TreeAdminViewRequest request, ServerCallContext context);
+
+    /// <summary>Starts an accept-then-poll tag-index reconcile on the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationHandle> StartTagIndexReconcile(TreeAdminTagIndexRequest request, ServerCallContext context);
+
+    /// <summary>Starts an accept-then-poll WAL move on the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationHandle> StartWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context);
+
+    /// <summary>Starts an accept-then-poll orphaned-leaf audit on the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationHandle> StartOrphanedLeavesAudit(TreeAdminOrphanedLeafRequest request, ServerCallContext context);
+
+    /// <summary>Starts an accept-then-poll orphaned-leaf repair on the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationHandle> StartOrphanedLeavesRepair(TreeAdminOrphanedLeafRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tree-administration operation's status from the wrapped operations facade.</summary>
+    public abstract Task<TreeAdminOperationStatusResponse> GetTreeAdminOperationStatus(TreeAdminOperationRequest request, ServerCallContext context);
+
+    /// <summary>Lists the caller's tree-administration operations from the wrapped operations facade.</summary>
+    public abstract Task<LatticeOperationPage> ListTreeAdminOperations(LatticeOperationListRequest request, ServerCallContext context);
+
+    /// <summary>Requests cancellation of a tree-administration operation on the wrapped operations facade.</summary>
+    public abstract Task<TreeAdminOperationStatusResponse> CancelTreeAdminOperation(TreeAdminOperationRequest request, ServerCallContext context);
+
     /// <summary>Starts an accept-then-poll storage-usage refresh. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<LatticeOperationHandle> StartStorageUsageRefresh(TreeAdminStorageUsageRefreshRequest request, ServerCallContext context);
 
@@ -192,6 +219,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
 
     /// <summary>Requests cancellation of a storage-usage refresh. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeAdminStorageUsageOperationStatusResponse> CancelStorageUsageRefresh(TreeAdminStorageUsageOperationRequest request, ServerCallContext context);
+
+    /// <summary>Reads which durable pin holds a tree's WAL floor and whether it has wedged reclamation. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeWalReclamationReport> GetWalReclamation(TreeAdminTreeRequest request, ServerCallContext context);
 
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
@@ -263,10 +293,20 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.TriggerShardCompaction, (UnaryServerMethod<TreeAdminShardRequest, TreeCompactionTriggerResult>?)null);
         binder.AddMethod(methods.GetHistoryRetention, (UnaryServerMethod<TreeAdminTreeRequest, TreeHistoryRetention>?)null);
         binder.AddMethod(methods.SetHistoryRetention, (UnaryServerMethod<TreeAdminSetRetentionRequest, TreeHistoryRetention>?)null);
+            binder.AddMethod(methods.StartViewRebuild, (UnaryServerMethod<TreeAdminViewRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartViewReconcile, (UnaryServerMethod<TreeAdminViewRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartTagIndexReconcile, (UnaryServerMethod<TreeAdminTagIndexRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartWalMove, (UnaryServerMethod<TreeAdminWalMoveExecuteRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartOrphanedLeavesAudit, (UnaryServerMethod<TreeAdminOrphanedLeafRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartOrphanedLeavesRepair, (UnaryServerMethod<TreeAdminOrphanedLeafRequest, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.GetTreeAdminOperationStatus, (UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>?)null);
+            binder.AddMethod(methods.ListTreeAdminOperations, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
+            binder.AddMethod(methods.CancelTreeAdminOperation, (UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>?)null);
             binder.AddMethod(methods.StartStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle>?)null);
             binder.AddMethod(methods.GetStorageUsageRefreshStatus, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
             binder.AddMethod(methods.ListStorageUsageRefreshes, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
             binder.AddMethod(methods.CancelStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
+            binder.AddMethod(methods.GetWalReclamation, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>?)null);
             return;
         }
 
@@ -321,10 +361,20 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.TriggerShardCompaction, new UnaryServerMethod<TreeAdminShardRequest, TreeCompactionTriggerResult>(serviceImpl.TriggerShardCompaction));
         binder.AddMethod(methods.GetHistoryRetention, new UnaryServerMethod<TreeAdminTreeRequest, TreeHistoryRetention>(serviceImpl.GetHistoryRetention));
         binder.AddMethod(methods.SetHistoryRetention, new UnaryServerMethod<TreeAdminSetRetentionRequest, TreeHistoryRetention>(serviceImpl.SetHistoryRetention));
+        binder.AddMethod(methods.StartViewRebuild, new UnaryServerMethod<TreeAdminViewRequest, LatticeOperationHandle>(serviceImpl.StartViewRebuild));
+        binder.AddMethod(methods.StartViewReconcile, new UnaryServerMethod<TreeAdminViewRequest, LatticeOperationHandle>(serviceImpl.StartViewReconcile));
+        binder.AddMethod(methods.StartTagIndexReconcile, new UnaryServerMethod<TreeAdminTagIndexRequest, LatticeOperationHandle>(serviceImpl.StartTagIndexReconcile));
+        binder.AddMethod(methods.StartWalMove, new UnaryServerMethod<TreeAdminWalMoveExecuteRequest, LatticeOperationHandle>(serviceImpl.StartWalMove));
+        binder.AddMethod(methods.StartOrphanedLeavesAudit, new UnaryServerMethod<TreeAdminOrphanedLeafRequest, LatticeOperationHandle>(serviceImpl.StartOrphanedLeavesAudit));
+        binder.AddMethod(methods.StartOrphanedLeavesRepair, new UnaryServerMethod<TreeAdminOrphanedLeafRequest, LatticeOperationHandle>(serviceImpl.StartOrphanedLeavesRepair));
+        binder.AddMethod(methods.GetTreeAdminOperationStatus, new UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(serviceImpl.GetTreeAdminOperationStatus));
+        binder.AddMethod(methods.ListTreeAdminOperations, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListTreeAdminOperations));
+        binder.AddMethod(methods.CancelTreeAdminOperation, new UnaryServerMethod<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(serviceImpl.CancelTreeAdminOperation));
         binder.AddMethod(methods.StartStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageRefreshRequest, LatticeOperationHandle>(serviceImpl.StartStorageUsageRefresh));
         binder.AddMethod(methods.GetStorageUsageRefreshStatus, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.GetStorageUsageRefreshStatus));
         binder.AddMethod(methods.ListStorageUsageRefreshes, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListStorageUsageRefreshes));
         binder.AddMethod(methods.CancelStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.CancelStorageUsageRefresh));
+        binder.AddMethod(methods.GetWalReclamation, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>(serviceImpl.GetWalReclamation));
     }
 }
 
@@ -338,11 +388,13 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
 internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceBase
 {
     private readonly ILatticeTreeAdmin _control;
+    private readonly ILatticeTreeAdminOperations? _operations;
     private readonly ILatticeTreeAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTreeAdminApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeTreeAdminApiGrpcOptions> _options;
     private readonly ILogger<LatticeTreeAdminGrpcService> _logger;
     private readonly ILatticeStorageUsageOperations? _storageUsageOperations;
+    private readonly ILatticeWalReclamation? _walReclamation;
 
     /// <summary>
     /// Initialises the service. The <paramref name="methods"/> parameter is unused
@@ -361,7 +413,9 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         ILatticeTreeAdminApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeTreeAdminApiGrpcOptions> options,
         ILogger<LatticeTreeAdminGrpcService> logger,
-        ILatticeStorageUsageOperations? storageUsageOperations = null)
+        ILatticeStorageUsageOperations? storageUsageOperations = null,
+        ILatticeTreeAdminOperations? operations = null,
+        ILatticeWalReclamation? walReclamation = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -371,11 +425,13 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
+        _operations = operations;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;
         _logger = logger;
         _storageUsageOperations = storageUsageOperations;
+        _walReclamation = walReclamation;
     }
 
     /// <summary>
@@ -561,9 +617,13 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     public override Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.PlanWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, ct));
 
+    // The deprecated blocking RPCs (LATTICE0002) are served by the deprecated facade
+    // verbs, which now start the matching operation and wait for it in-process.
+#pragma warning disable LATTICE0002
     /// <inheritdoc />
     public override Task<TreeWalMoveReceipt> ExecuteWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ExecuteWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, req.Options, ct));
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context)
@@ -600,6 +660,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     public override Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetViewStatusAsync(req.ViewName, ct));
 
+#pragma warning disable LATTICE0002 // Deprecated blocking RPCs; see ExecuteWalMove.
     /// <inheritdoc />
     public override Task<TreeViewStatus> RebuildView(TreeAdminViewRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.RebuildViewAsync(req.ViewName, ct));
@@ -607,6 +668,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeViewReconcileResult> ReconcileView(TreeAdminViewRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileViewAsync(req.ViewName, ct));
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context)
@@ -626,9 +688,11 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     public override Task<TreeTagIndexStatus> GetTagIndexStatus(TreeAdminTagIndexRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetTagIndexStatusAsync(req.IndexName, ct));
 
+#pragma warning disable LATTICE0002 // Deprecated blocking RPC; see ExecuteWalMove.
     /// <inheritdoc />
     public override Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileTagIndexAsync(req.IndexName, ct));
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<TreeCompactionTriggerResult> TriggerShardCompaction(TreeAdminShardRequest request, ServerCallContext context)
@@ -667,6 +731,15 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
                 Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
             });
 
+    /// <inheritdoc />
+    public override Task<TreeWalReclamationReport> GetWalReclamation(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(WalReclamation, request, context, static (reclamation, req, ct) => reclamation.GetWalReclamationAsync(req.TreeId, ct));
+
+    private ILatticeWalReclamation WalReclamation => _walReclamation
+        ?? throw new RpcException(new Status(
+            StatusCode.Unimplemented,
+            "This host registers no ILatticeWalReclamation, so the WAL reclamation read is unavailable."));
+
     private ILatticeStorageUsageOperations StorageUsageOperations => _storageUsageOperations
         ?? throw new RpcException(new Status(
             StatusCode.Unimplemented,
@@ -683,11 +756,65 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         return Task.FromResult(_authSchemeSource.GetAdvertisement());
     }
 
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartViewRebuild(TreeAdminViewRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) => ops.StartViewRebuildAsync(req.ViewName, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartViewReconcile(TreeAdminViewRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) => ops.StartViewReconcileAsync(req.ViewName, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartTagIndexReconcile(TreeAdminTagIndexRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) => ops.StartTagIndexReconcileAsync(req.IndexName, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) =>
+            ops.StartWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, req.Options, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartOrphanedLeavesAudit(TreeAdminOrphanedLeafRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) => ops.StartOrphanedLeavesAuditAsync(req.TreeId, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartOrphanedLeavesRepair(TreeAdminOrphanedLeafRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) => ops.StartOrphanedLeavesRepairAsync(req.TreeId, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAdminOperationStatusResponse> GetTreeAdminOperationStatus(TreeAdminOperationRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static async (ops, req, ct) =>
+            new TreeAdminOperationStatusResponse { Status = await ops.GetOperationStatusAsync(req.OperationId, ct).ConfigureAwait(false) });
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationPage> ListTreeAdminOperations(LatticeOperationListRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static (ops, req, ct) => ops.ListOperationsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAdminOperationStatusResponse> CancelTreeAdminOperation(TreeAdminOperationRequest request, ServerCallContext context)
+        => InvokeOperationsAsync(request, context, static async (ops, req, ct) =>
+            new TreeAdminOperationStatusResponse { Status = await ops.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false) });
+
     private Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
         Func<ILatticeTreeAdmin, TRequest, CancellationToken, Task<TResponse>> handler)
         => InvokeAsync(_control, request, context, handler);
+
+    private Task<TResponse> InvokeOperationsAsync<TRequest, TResponse>(
+        TRequest request,
+        ServerCallContext context,
+        Func<ILatticeTreeAdminOperations, TRequest, CancellationToken, Task<TResponse>> handler)
+    {
+        if (_operations is not { } operations)
+        {
+            throw new RpcException(new Status(
+                StatusCode.Unimplemented,
+                "The accept-then-poll tree-administration operations are not registered on this host."));
+        }
+
+        return InvokeAsync(operations, request, context, handler);
+    }
 
     private async Task<TResponse> InvokeAsync<TFacade, TRequest, TResponse>(
         TFacade facade,
@@ -697,7 +824,6 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
-
         using var credentialScope = StampCallerCredential(context);
         using var activeTenantScope = StampActiveTenant(context);
 

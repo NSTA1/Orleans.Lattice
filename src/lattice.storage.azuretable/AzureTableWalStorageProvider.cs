@@ -434,6 +434,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 nameof(entries));
         }
 
+        ThrowIfBatchRunsPastTheLastOffset(treeId, shardIndex, firstOffset, entries.Count, nameof(entries));
+
         for (var i = 1; i < entries.Count; i++)
         {
             var expected = firstOffset + i;
@@ -1560,6 +1562,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 "offsets");
         }
 
+        ThrowIfBatchRunsPastTheLastOffset(treeId, shardIndex, firstOffset, offsetSpan.Length, "offsets");
+
         for (var i = 1; i < offsetSpan.Length; i++)
         {
             var expected = firstOffset + i;
@@ -1570,6 +1574,23 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                     + "Supplied offsets must equal offsets[0] + i for every i.",
                     "offsets");
             }
+        }
+    }
+
+    /// <summary>
+    /// Rejects a batch whose dense run would pass <see cref="long.MaxValue"/>.
+    /// Without it, <c>firstOffset + i</c> wraps to a negative offset, so a batch
+    /// that runs off the end of the offset space would pass the density check.
+    /// </summary>
+    private static void ThrowIfBatchRunsPastTheLastOffset(
+        string treeId, int shardIndex, long firstOffset, int count, string paramName)
+    {
+        if (firstOffset > long.MaxValue - (count - 1))
+        {
+            throw new ArgumentException(
+                $"Append batch for '{treeId}/{shardIndex}' of {count} entries starting at offset {firstOffset} would run past "
+                + $"{long.MaxValue}, the largest a WAL offset can be.",
+                paramName);
         }
     }
 

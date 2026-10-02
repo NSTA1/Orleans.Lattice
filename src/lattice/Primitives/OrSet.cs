@@ -31,9 +31,12 @@ public sealed class OrSet : ICrdt<OrSet>
     // Elements whose base64 encoding fits in this many chars are keyed
     // through a stack buffer; larger elements rent from the shared pool.
     // 256 chars covers elements up to 192 bytes with no allocation.
-    private const int MaxStackBase64Chars = 256;
+    // Internal rather than private so the OR-Set and RW-Set delta
+    // accessors can key their dictionary probes through the identical
+    // span path instead of materialising a throwaway base64 string.
+    internal const int MaxStackBase64Chars = 256;
 
-    private static int Base64CharCount(int byteCount) => checked((byteCount + 2) / 3 * 4);
+    internal static int Base64CharCount(int byteCount) => checked((byteCount + 2) / 3 * 4);
 
     /// <summary>
     /// Per-element live-add dots, keyed by the base64 encoding of the

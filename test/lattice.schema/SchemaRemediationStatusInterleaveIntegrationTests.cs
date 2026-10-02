@@ -83,7 +83,8 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
         {
             Assert.That(during.InProgress, Is.True);
             Assert.That(during.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Build));
-            Assert.That(during.ScannedCount, Is.EqualTo(3), "the durable dry-run count is published to the read");
+            Assert.That(during.ScannedCount, Is.Zero,
+                "the build's own durable progress is published to the read: no value is copied yet");
             Assert.That(during.OperationId, Is.Not.Null);
             Assert.That(report.Succeeded, Is.True);
             Assert.That(report.OperationId, Is.EqualTo(during.OperationId));

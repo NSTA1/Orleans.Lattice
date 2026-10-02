@@ -196,13 +196,28 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public void PutMissing(GrainId leaf) => _states[leaf] = null;
 
+        /// <summary>Seeds an explicit leaf state, for a shape the canned seeds do not cover.</summary>
+        public void Put(GrainId leaf, LeafNodeState state) => _states[leaf] = state;
+
         /// <summary>
         /// A live leaf that has never checkpointed partition 0. The offset is
         /// born <c>0</c> rather than at the <c>-1</c> sentinel, so
         /// <c>ProjectionCheckpointOffsetAssigned</c> is the only thing
         /// separating "applied up to offset 0" from "applied nothing"
-        /// (issue #2703). This is the population whose Zero pin is CORRECT, and
-        /// which must never be driven toward coverage.
+        /// (issue #2703). This is the population with no proven durable
+        /// checkpoint, whose block is CORRECT and which must never be driven
+        /// toward coverage.
+        /// <para>
+        /// It says nothing about the pin the caller seeds beside it, and that
+        /// is deliberate: the classifier derives this state from the persisted
+        /// checkpoint alone, so the same leaf state backs both readings of it
+        /// (issue #3258). Seed it with an unusable pin for the benign sentinel
+        /// shape, or with a usable pin at a real offset for the divergent shape
+        /// a leaf leaves behind when it publishes from
+        /// <c>max(persisted, pending)</c> and then deactivates without
+        /// persisting - the shape that wedges a tree permanently when it holds
+        /// the offset floor.
+        /// </para>
         /// </summary>
         public void PutNeverCheckpointed(GrainId leaf, string treeId) =>
             _states[leaf] = new LeafNodeState
@@ -244,8 +259,15 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Task.CompletedTask;
     }
 
+    /// <summary>
+    /// A guid-keyed leaf id, the only key shape a <c>BPlusLeafGrain</c> has. It
+    /// must be one: the sweep refuses to retire a pin whose leaf id is not a
+    /// leaf's own (issue #4238).
+    /// </summary>
     private static GrainId OrphanLeafGrainId(int ordinal) =>
-        GrainId.Create("bplusleaf", "leaf-3105-" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        GrainId.Create(
+            GrainType.Create("bplusleaf"),
+            GrainIdKeyExtensions.CreateGuidKey(new Guid(ordinal, 3105, 0, new byte[8])));
 
     private static string OrphanConsumerId(int ordinal, string treeId = OrphanSweepTree) =>
         $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{OrphanLeafGrainId(ordinal)}";

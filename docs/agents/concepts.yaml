@@ -205,6 +205,8 @@ concepts:
       in_scope:
         - statement: "Exposes an advisory per-operation capability probe."
           source: "PACKAGES.md"
+        - statement: "Runs view rebuild and reconcile, tag-index reconcile, WAL moves and orphaned-leaf passes as accept-then-poll operations with progress."
+          source: "docs/lattice.api.treeadmin/operations.md"
       out_of_scope:
         - statement: "The server still authorizes each real operation fail-closed."
           source: "FEATURES.md"
@@ -212,6 +214,7 @@ concepts:
       limits: []
     sources:
       - "docs/lattice.api.treeadmin/README.md"
+      - "docs/lattice.api.treeadmin/operations.md"
   - id: app-bridge
     name: "App bridge"
     category: apps
@@ -373,7 +376,7 @@ concepts:
   - id: app-manifest
     name: "App manifest"
     category: apps
-    definition: "An app manifest is the embedded JSON declaration of an app's identity, trees, roles, replication intent, schema bindings, subscriptions, and MCP tools."
+    definition: "An app manifest is the embedded JSON declaration of an app's identity, trees, roles, replication intent, schema bindings, subscriptions, MCP tools, presentation metadata, and optional UI bundle."
     packages:
       - "Orleans.Lattice.Apps"
     capability_boundary:
@@ -961,8 +964,8 @@ concepts:
       - "Orleans.Lattice.Schema"
     capability_boundary:
       in_scope:
-        - statement: "Strict ingest dead-letters a non-compliant replicated or restored item."
-          source: "FEATURES.md"
+        - statement: "Strict ingest dead-letters a non-compliant replicated entry that reaches a checked write path; backup restore, tree merge, and plain last-writer-wins replication apply outside atomic batch are stored unchecked."
+          source: "docs/lattice.explorer/managing-schema.md"
       out_of_scope:
         - statement: "Dead-letter listing is a bounded read surface, not a mutating remediation by itself."
           source: "docs/lattice.api.schema/README.md"
@@ -2349,11 +2352,11 @@ concepts:
       - "Orleans.Lattice.Schema"
     capability_boundary:
       in_scope:
-        - statement: "Schema enforcement validates every local write against per-tree policy."
+        - statement: "Schema enforcement validates the values a tree's checked local write operations carry against per-tree policy."
           source: "FEATURES.md"
       out_of_scope:
-        - statement: "Strict ingest dead-letters replicated or restored items instead of applying them."
-          source: "FEATURES.md"
+        - statement: "Strict ingest dead-letters a non-compliant replicated entry that reaches a checked write path instead of applying it, and does not cover backup restore, tree merge, or plain last-writer-wins replication apply outside atomic batch."
+          source: "docs/lattice.explorer/managing-schema.md"
     operational_envelope:
       limits: []
     sources:

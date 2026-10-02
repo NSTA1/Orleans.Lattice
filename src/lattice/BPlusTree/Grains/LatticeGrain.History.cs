@@ -218,8 +218,12 @@ internal sealed partial class LatticeGrain
         // Resolve the WAL the same way the writer did: against the physical tree
         // id (routing can alias the logical id after a snapshot/reshard) and the
         // registry-pinned partition count (tree-immutable from first register, not
-        // the silo's live LatticeOptions.WalPartitions).
-        var (physicalTreeId, _) = await GetRoutingAsync(cancellationToken);
+        // the silo's live LatticeOptions.WalPartitions). Forced: this read routes no
+        // key through a shard, so it never meets the StaleTreeRoutingException that
+        // heals a routed call, and an activation that cached the alias before a
+        // resize, snapshot or restore would otherwise keep reading the retired
+        // physical tree's log (issue #4176). One registry read per history page.
+        var (physicalTreeId, _) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         var partitions = await optionsResolver.GetWalPartitionsAsync(physicalTreeId);
         var partition = WalPartitionHash.Compute(key, partitions);
         var tail = await reader.GetTailOffsetAsync(physicalTreeId, partition, cancellationToken);

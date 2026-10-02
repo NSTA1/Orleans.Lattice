@@ -50,6 +50,8 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeBackupControl),
         typeof(ILatticeBackupOperations),
         typeof(ILatticeSchemaControl),
+        typeof(ILatticeSchemaOperations),
+        typeof(ILatticeSchemaComplianceOperations),
         typeof(ILatticeTenantAdmin),
         typeof(ILatticeTenantAccessAdmin),
         typeof(ILatticeTenantGrantAdmin),
@@ -58,6 +60,8 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeTenantQuotaUsage),
         typeof(ILatticeTelemetry),
         typeof(ILatticeTreeAdmin),
+        typeof(ILatticeStorageUsageOperations),
+        typeof(ILatticeWalReclamation),
         typeof(ILatticeReplicationControl),
         typeof(ILatticeReplicationStatus),
         typeof(ILatticeAppsControl),
@@ -88,6 +92,8 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddKeyedScoped<ILatticeBackupControl, ShellBackupControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeBackupOperations, ShellBackupControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeSchemaControl, ShellSchemaControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeSchemaOperations, ShellSchemaControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeSchemaComplianceOperations, ShellSchemaComplianceOperationsTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantAdmin, ShellTenantAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantAccessAdmin, ShellTenantAccessAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantGrantAdmin, ShellTenantGrantAdminTransport>(ShellFacades.Key);
@@ -96,6 +102,8 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddKeyedScoped<ILatticeTenantQuotaUsage, ShellTenantQuotaUsageTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTelemetry, ShellTelemetryTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTreeAdmin, ShellTreeAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeStorageUsageOperations, ShellStorageUsageOperationsTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeWalReclamation, ShellWalReclamationTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeReplicationControl, ShellReplicationControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeReplicationStatus, ShellReplicationStatusTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppsControl, ShellAppsControlTransport>(ShellFacades.Key);

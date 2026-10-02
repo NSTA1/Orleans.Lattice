@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -28,7 +29,9 @@ internal sealed partial class LatticeAdminGrain
         string treeId, CancellationToken cancellationToken)
     {
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
+        // Forced: a WAL move names a partition, not a key, so a cached alias would
+        // plan or move the retired physical tree's log after a resize (#4180).
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var walPartitions = await RequireResolver().GetWalPartitionsAsync(routing.PhysicalTreeId);
         return (routing.PhysicalTreeId, walPartitions);
@@ -225,6 +228,50 @@ internal sealed partial class LatticeAdminGrain
     }
 
     /// <inheritdoc />
+    public async Task<WalMoveReceipt> ExecuteWalMoveTrackedAsync(
+        string treeId,
+        int partition,
+        string targetProviderKey,
+        WalMoveOptions? options,
+        LatticeOperationTicket ticket,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        using var relay = LatticeOperationRelay.Open(grainFactory, ticket, cancellationToken);
+        try
+        {
+            var receipt = await ExecuteWalMoveAsync(treeId, partition, targetProviderKey, options, relay.Token);
+            await relay.FlushAsync();
+            return receipt;
+        }
+        catch
+        {
+            await BankRelayedProgressAsync(relay);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Banks a tracked move's coalesced copy progress on its fault and
+    /// cancellation path, so the entries copied before the fault stay recorded
+    /// (#2545).
+    /// </summary>
+    private static Task BankRelayedProgressAsync(LatticeOperationRelay relay) => relay.BankProgressAsync();
+
+    /// <summary>
+    /// Reports progress to the coordinated operation running this call, if any; a
+    /// single null check otherwise.
+    /// </summary>
+    private static ValueTask ReportMoveProgressAsync(
+        string phase, long completedUnits = 0, long? totalUnits = null, string? unitName = null)
+    {
+        var progress = LatticeOperationProgress.Current;
+        return progress is null
+            ? ValueTask.CompletedTask
+            : progress.ReportAsync(phase, completedUnits, totalUnits, unitName);
+    }
+
+    /// <inheritdoc />
     public async Task<WalMoveReceipt> ExecuteWalMoveAsync(
         string treeId,
         int partition,
@@ -389,6 +436,15 @@ internal sealed partial class LatticeAdminGrain
                 }
                 copiedThrough = offsets[^1];
                 cursor = offsets[^1];
+
+                // Units are offsets of the live tail: a resumed copy counts the
+                // prefix an earlier attempt already landed as done.
+                var floor = srcLowest >= 0 && srcLowest <= copiedFrom ? srcLowest : copiedFrom;
+                await ReportMoveProgressAsync(
+                    LatticeMaintenanceProgress.Copying,
+                    copiedThrough - floor + 1,
+                    Math.Max(throughInclusive, copiedThrough) - floor + 1,
+                    LatticeMaintenanceProgress.Entries);
             }
             return cursor;
         }
@@ -409,6 +465,8 @@ internal sealed partial class LatticeAdminGrain
             //    prior attempt copied a prefix, continue past the target's tail.
             if (hasLiveRange)
             {
+                await ReportMoveProgressAsync(
+                    LatticeMaintenanceProgress.Copying, 0, srcHighest - srcLowest + 1, LatticeMaintenanceProgress.Entries);
                 var dstHighestBefore = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
                 if (!WalMoveResumeCore.IsTargetCleanPrefix(dstHighestBefore, srcHighest))
                 {
@@ -481,6 +539,7 @@ internal sealed partial class LatticeAdminGrain
 
             // 4. Verify the target tail before the irreversible cutover. The
             //    overshoot guard runs even when content verification is off.
+            await ReportMoveProgressAsync(LatticeMaintenanceProgress.Verifying);
             dstHighest = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
             if (srcHighest >= 0 && dstHighest > srcHighest)
             {
@@ -506,6 +565,12 @@ internal sealed partial class LatticeAdminGrain
                     + $"{dstHighest}). After the cutover the target would reuse offsets from {dstHighest + 1}. The pin was "
                     + "not flipped; the source remains live. Retry once the partition holds live entries.");
             }
+
+            // The last cancellation point of a tracked move: a cancel observed here
+            // still lands in the catch below, which unfences the source. The report
+            // itself can carry the stop signal back, so check the token after it.
+            await ReportMoveProgressAsync(LatticeMaintenanceProgress.Flipping);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch
         {

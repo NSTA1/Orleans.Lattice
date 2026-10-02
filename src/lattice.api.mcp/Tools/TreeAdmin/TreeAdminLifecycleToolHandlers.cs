@@ -473,7 +473,9 @@ internal static class TreeAdminLifecycleToolHandlers
             CopyPageSize = copyPageSize,
             DisableVerifyAfterCopy = disableVerifyAfterCopy,
         };
+#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
         return treeAdmin.ExecuteWalMoveAsync(treeId, partition, targetProviderKey, options, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <summary>Reclaims the orphaned source tail left by a completed WAL move; this is the irreversible finalisation step.</summary>
@@ -574,7 +576,9 @@ internal static class TreeAdminLifecycleToolHandlers
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
+#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
         return treeAdmin.RebuildViewAsync(viewName, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <summary>Reconciles a materialised view against current source state, repairing drift only when detected.</summary>
@@ -585,7 +589,9 @@ internal static class TreeAdminLifecycleToolHandlers
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
+#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
         return treeAdmin.ReconcileViewAsync(viewName, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <summary>Drops a materialised view (decommissions its maintainer and deletes its backing generations); returns the dropped view name.</summary>
@@ -628,7 +634,9 @@ internal static class TreeAdminLifecycleToolHandlers
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
+#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
         return treeAdmin.ReconcileTagIndexAsync(indexName, cancellationToken);
+#pragma warning restore LATTICE0002
     }
 
     /// <summary>Triggers an out-of-cycle tombstone-compaction pass on one physical shard of a tree; reaps only tombstones and expired entries, never live data. Returns whether the coordinator accepted the pass.</summary>

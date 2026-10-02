@@ -221,7 +221,15 @@ public sealed class LatticeWalGc(
         cancellationToken.ThrowIfCancellationRequested();
 
         var resolved = optionsMonitor.Get(treeName);
-        var partitions = resolved.WalPartitions;
+
+        // The partition count is the registry pin, not the configured value
+        // (issue #4238): the pin is set at registration and immutable after it,
+        // so a tree registered under a different configuration would otherwise
+        // have partitions beyond the configured count never scanned or trimmed,
+        // and every pin's partition suffix read against the wrong count.
+        var partitions = OptionsResolver is { } partitionResolver
+            ? Math.Max(1, await partitionResolver.GetWalPartitionsAsync(treeName).ConfigureAwait(false))
+            : resolved.WalPartitions;
 
         // Prime the trim-stop arms before any early return below, so a tree whose
         // pass returns without reaching the trim loop still publishes
@@ -2033,11 +2041,26 @@ public sealed class LatticeWalGc(
     /// activation predating the offset contract, surfaced by a substitute in
     /// tests) contributes nothing rather than faulting the read.
     /// </summary>
-    private async Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
+    private Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
         IGrainFactory factory,
         string treeName)
+        => ReadDurablePinOffsetsAsync(
+            factory, treeName, WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor));
+
+    /// <summary>
+    /// As the instance overload, over an explicit pin shard count. Shared with the
+    /// on-demand floor-holder probe (issue #4195) so the floor it names is taken
+    /// over exactly the offsets the GC pass minimises.
+    /// </summary>
+    /// <param name="factory">The grain factory.</param>
+    /// <param name="treeName">The physical tree id.</param>
+    /// <param name="shardCount">The pin shard count.</param>
+    /// <returns>The union of durable pin offsets, keyed by consumer id.</returns>
+    internal static async Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
+        IGrainFactory factory,
+        string treeName,
+        int shardCount)
     {
-        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
         var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
         if (keys.Count == 1)
         {

@@ -3,6 +3,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.TestingHost;
 using System.Diagnostics;
 using System.Text;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -61,9 +62,11 @@ public sealed class ShardHealingArmsOnActivationIntegrationTests
     public async Task OneTimeSetUp()
     {
         var builder = new TestClusterBuilder();
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]

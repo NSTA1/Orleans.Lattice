@@ -5,6 +5,7 @@ using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Operations;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -141,6 +142,108 @@ internal sealed class TagIndexReconcileGrain(
             await ProcessNextPhaseAsync();
         }
         return CurrentReport();
+    }
+
+    public async Task<TagReconcileReport> RunTrackedSweepAsync(
+        LatticeOperationTicket ticket,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        using var relay = LatticeOperationRelay.Open(grainFactory, ticket, cancellationToken);
+        try
+        {
+            await InitSweepStateAsync();
+            while (state.State.InProgress)
+            {
+                await ReportSweepProgressAsync(relay);
+                relay.Token.ThrowIfCancellationRequested();
+                await ProcessNextPhaseAsync();
+            }
+
+            await ReportFinishedSweepAsync(relay);
+            await relay.FlushAsync();
+            return CurrentReport();
+        }
+        catch (OperationCanceledException) when (relay.Token.IsCancellationRequested)
+        {
+            await BankRelayedProgressAsync(relay);
+            await AbandonSweepAsync();
+            throw;
+        }
+        catch
+        {
+            await BankRelayedProgressAsync(relay);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Banks a tracked sweep's coalesced progress on its fault and cancellation
+    /// path, so the trees probed or repaired before the fault stay recorded (#2545).
+    /// </summary>
+    private static Task BankRelayedProgressAsync(LatticeOperationRelay relay) => relay.BankProgressAsync();
+
+    private ValueTask ReportSweepProgressAsync(LatticeOperationRelay relay)
+    {
+        if (relay.Progress is not { } progress)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return state.State.Phase == TagIndexReconcilePhase.Repair
+            ? progress.ReportAsync(
+                LatticeMaintenanceProgress.Repairing,
+                state.State.NextRepairIndex,
+                state.State.DirtyTrees.Count,
+                LatticeMaintenanceProgress.Trees)
+            : progress.ReportAsync(
+                LatticeMaintenanceProgress.Probing,
+                state.State.NextProbeIndex,
+                state.State.CoveredTrees.Count,
+                LatticeMaintenanceProgress.Trees);
+    }
+
+    /// <summary>
+    /// Reports the last unit of a finished sweep. The finish clears the sweep's
+    /// cursors, so the totals are rebuilt from the counters it keeps: a sweep that
+    /// found no divergent tree (or only probed) ends in its probe phase, any other
+    /// in its repair phase, with every divergent tree repaired.
+    /// </summary>
+    private ValueTask ReportFinishedSweepAsync(LatticeOperationRelay relay)
+    {
+        if (relay.Progress is not { } progress)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return state.State.ProbeOnlySweep || state.State.TreesMismatched == 0
+            ? progress.ReportAsync(
+                LatticeMaintenanceProgress.Probing,
+                state.State.TreesProbed,
+                state.State.TreesProbed,
+                LatticeMaintenanceProgress.Trees)
+            : progress.ReportAsync(
+                LatticeMaintenanceProgress.Repairing,
+                state.State.TreesMismatched,
+                state.State.TreesMismatched,
+                LatticeMaintenanceProgress.Trees);
+    }
+
+    /// <summary>
+    /// Abandons a cancelled tracked sweep: the coordinator goes idle so the
+    /// schedule can start the next sweep. Baselines already advanced for repaired
+    /// trees are kept; a tree the sweep did not reach is simply probed next time.
+    /// </summary>
+    private async Task AbandonSweepAsync()
+    {
+        state.State.InProgress = false;
+        state.State.Phase = TagIndexReconcilePhase.Idle;
+        state.State.CoveredTrees = [];
+        state.State.DirtyTrees = [];
+        state.State.PendingBaselines.Clear();
+        state.State.NextProbeIndex = 0;
+        state.State.NextRepairIndex = 0;
+        await state.WriteStateAsync();
     }
 
     public async Task<bool> ReconcileTreeAsync(string subjectTreeId)
@@ -416,14 +519,18 @@ internal sealed class TagIndexReconcileGrain(
     /// subject tree into a 16-byte fingerprint. Returns <see langword="null"/>
     /// when the tree is unresolvable or its projection digest is disabled, in
     /// which case the caller treats the tree as divergent (it cannot be gated).
+    /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    private async Task<byte[]?> ComputeFingerprintAsync(string treeId, CancellationToken cancellationToken)
+    internal async Task<byte[]?> ComputeFingerprintAsync(string treeId, CancellationToken cancellationToken)
     {
         var tree = grainFactory.GetGrain<ILattice>(treeId);
         IReadOnlyList<int> shards;
         try
         {
-            var routing = await tree.GetRoutingAsync(cancellationToken);
+            // Forced: the fingerprint enumerates shards and routes no key, so the
+            // tree's cached map would fold a pre-reshard shard set and gate a sweep
+            // off a tree whose changes landed on a shard it no longer lists (#4180).
+            var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken);
             shards = routing.Map.GetPhysicalShardIndices();
         }
         catch

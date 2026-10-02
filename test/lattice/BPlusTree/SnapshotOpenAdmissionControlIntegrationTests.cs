@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -37,14 +38,18 @@ public sealed class SnapshotOpenAdmissionControlIntegrationTests
     public async Task OneTimeSetUp()
     {
         var shedOn = new TestClusterBuilder();
+        shedOn.UseSharedInMemoryWal();
         shedOn.AddSiloBuilderConfigurator<ShedOnConfigurator>();
         _shedOnCluster = shedOn.Build();
         await _shedOnCluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_shedOnCluster);
 
         var shedOff = new TestClusterBuilder();
+        shedOff.UseSharedInMemoryWal();
         shedOff.AddSiloBuilderConfigurator<ShedOffConfigurator>();
         _shedOffCluster = shedOff.Build();
         await _shedOffCluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_shedOffCluster);
     }
 
     [OneTimeTearDown]
