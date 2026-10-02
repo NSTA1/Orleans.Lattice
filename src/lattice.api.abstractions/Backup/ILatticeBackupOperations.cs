@@ -99,4 +99,63 @@ public interface ILatticeBackupOperations : ILatticeOperations
         LatticeRestoreRequest request,
         string? operationId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Starts a health verification of one backup against the durable sink - manifest
+    /// and artifact presence, and a re-hash of every present artifact - which persists
+    /// the fresh report as the backup's latest health state when it completes. Progress
+    /// counts the backup's artifacts checked; read the full report afterwards with
+    /// <see cref="ILatticeBackupControl.GetBackupHealthAsync"/>.
+    /// </summary>
+    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty, or <paramref name="operationId"/> is malformed.</exception>
+    /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    /// <exception cref="InvalidOperationException">The id is in use by an operation of a different kind.</exception>
+    Task<LatticeOperationHandle> StartBackupHealthCheckAsync(
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Starts a rebuild of the in-cluster backup catalog from the durable sink, a
+    /// cluster-wide administrative action authorized as
+    /// <see cref="ILatticeBackupControl.RebuildCatalogFromSinkAsync"/> is. Progress
+    /// counts the sink's manifests re-registered; the result is read with
+    /// <see cref="BackupOperationResults.TryReadCatalogRebuildReport"/>.
+    /// </summary>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is malformed.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to rebuild the catalog.</exception>
+    /// <exception cref="InvalidOperationException">The id is in use by an operation of a different kind.</exception>
+    Task<LatticeOperationHandle> StartCatalogRebuildAsync(
+        string? operationId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Starts a scrub of the in-cluster backup catalog against the durable sink, a
+    /// cluster-wide administrative action authorized as
+    /// <see cref="ILatticeBackupControl.ScrubCatalogAgainstSinkAsync"/> is. Progress
+    /// counts the catalog rows probed and, when pruning, the orphans removed; the
+    /// result is read with <see cref="BackupOperationResults.TryReadCatalogScrubReport"/>.
+    /// </summary>
+    /// <param name="pruneOrphans">
+    /// <see langword="true"/> to destructively remove orphan rows; <see langword="false"/>
+    /// (the default) to flag them non-destructively.
+    /// </param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> generates one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started operation.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is malformed.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to scrub the catalog.</exception>
+    /// <exception cref="InvalidOperationException">The id is in use by an operation of a different kind.</exception>
+    Task<LatticeOperationHandle> StartCatalogScrubAsync(
+        bool pruneOrphans = false,
+        string? operationId = null,
+        CancellationToken cancellationToken = default);
 }

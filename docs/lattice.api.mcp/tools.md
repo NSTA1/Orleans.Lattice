@@ -151,6 +151,9 @@ Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Regi
 | `lattice_backup_start_incremental` | control | Start a tracked incremental backup layered on a base backup and return an operation handle. |
 | `lattice_backup_start_set` | control | Start a tracked backup set over `treeIds` and return an operation handle. |
 | `lattice_backup_start_restore` | control | Start a tracked restore and return an operation handle; a succeeded status includes `restoreResult` for `lattice_backup_revert_restore`. |
+| `lattice_backup_start_health_check` | control | Start a tracked health check of one backup against the sink and return an operation handle; progress counts `artifacts`, the verdict is the `healthStatus` result key, and the fresh report is persisted as the backup's latest health state. |
+| `lattice_backup_start_catalog_rebuild` | control | Start a tracked rebuild of the backup catalog from the sink and return an operation handle; needs the restore grant over the backup catalog. |
+| `lattice_backup_start_catalog_scrub` | control | Start a tracked scrub of the backup catalog against the sink, pruning orphans when `pruneOrphans` is true, and return an operation handle; needs the restore grant over the backup catalog. |
 | `lattice_backup_operation_cancel` | control | Request cancellation of a tracked backup or restore operation. |
 | `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore from a prior restore result. |
 | `lattice_backup_delete` | control | Delete a backup and its unshared artifacts. |
@@ -158,7 +161,7 @@ Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Regi
 | `lattice_backup_create_incremental` | control | Deprecated alias for `lattice_backup_start_incremental`; will be removed in the next major version and now returns an operation handle instead of blocking. |
 | `lattice_backup_restore` | control | Deprecated alias for `lattice_backup_start_restore`; will be removed in the next major version and keeps its `operationId` argument as the restore engine idempotency key. |
 
-The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 17.
+The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 20.
 
 ## Auth tools (`lattice_auth_*`)
 

@@ -223,6 +223,47 @@ internal static class BackupToolInvocations
         return BackupToolMappings.ToMcp(handle);
     }
 
+    /// <summary>Starts a tracked health check of one backup against the durable sink.</summary>
+    public static async Task<McpBackupOperationHandle> StartHealthCheckAsync(
+        ILatticeBackupOperations operations,
+        string backupId,
+        string? operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var handle = await operations
+            .StartBackupHealthCheckAsync(backupId, NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
+    }
+
+    /// <summary>Starts a tracked rebuild of the backup catalog from the durable sink.</summary>
+    public static async Task<McpBackupOperationHandle> StartCatalogRebuildAsync(
+        ILatticeBackupOperations operations,
+        string? operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var handle = await operations
+            .StartCatalogRebuildAsync(NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
+    }
+
+    /// <summary>Starts a tracked scrub of the backup catalog against the durable sink.</summary>
+    public static async Task<McpBackupOperationHandle> StartCatalogScrubAsync(
+        ILatticeBackupOperations operations,
+        bool pruneOrphans,
+        string? operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var handle = await operations
+            .StartCatalogScrubAsync(pruneOrphans, NullIfEmpty(operationId), cancellationToken)
+            .ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(handle);
+    }
+
     /// <summary>Reads a tracked backup operation's status.</summary>
     public static async Task<McpBackupOperationResult> GetOperationStatusAsync(
         ILatticeBackupOperations operations,

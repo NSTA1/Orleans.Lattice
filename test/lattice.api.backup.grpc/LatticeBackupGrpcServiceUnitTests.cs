@@ -8,6 +8,10 @@ using Orleans.Lattice;
 using Orleans.Lattice.Backup;
 using Orleans.Serialization;
 
+// These tests exercise the deprecated blocking CheckBackupHealth RPC (LATTICE0002) on
+// purpose: they prove the wrapper still behaves exactly as before.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 
 /// <summary>

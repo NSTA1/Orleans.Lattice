@@ -120,6 +120,15 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Requests cancellation of a tracked backup operation. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupOperationStatusResponse> CancelBackupOperation(BackupOperationRequestMessage request, ServerCallContext context);
 
+    /// <summary>Starts a tracked backup health check. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartBackupHealthCheck(BackupHealthCheckRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts a tracked catalog rebuild. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartCatalogRebuild(BackupCatalogRebuildRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts a tracked catalog scrub. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<LatticeOperationHandle> StartCatalogScrub(BackupCatalogScrubRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -166,6 +175,9 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.GetBackupOperationStatus, (UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>?)null);
             binder.AddMethod(methods.ListBackupOperations, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
             binder.AddMethod(methods.CancelBackupOperation, (UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>?)null);
+            binder.AddMethod(methods.StartBackupHealthCheck, (UnaryServerMethod<BackupHealthCheckRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartCatalogRebuild, (UnaryServerMethod<BackupCatalogRebuildRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.StartCatalogScrub, (UnaryServerMethod<BackupCatalogScrubRequestMessage, LatticeOperationHandle>?)null);
             return;
         }
 
@@ -196,6 +208,9 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.GetBackupOperationStatus, new UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>(serviceImpl.GetBackupOperationStatus));
         binder.AddMethod(methods.ListBackupOperations, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListBackupOperations));
         binder.AddMethod(methods.CancelBackupOperation, new UnaryServerMethod<BackupOperationRequestMessage, BackupOperationStatusResponse>(serviceImpl.CancelBackupOperation));
+        binder.AddMethod(methods.StartBackupHealthCheck, new UnaryServerMethod<BackupHealthCheckRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackupHealthCheck));
+        binder.AddMethod(methods.StartCatalogRebuild, new UnaryServerMethod<BackupCatalogRebuildRequestMessage, LatticeOperationHandle>(serviceImpl.StartCatalogRebuild));
+        binder.AddMethod(methods.StartCatalogScrub, new UnaryServerMethod<BackupCatalogScrubRequestMessage, LatticeOperationHandle>(serviceImpl.StartCatalogScrub));
     }
 }
 
@@ -515,6 +530,21 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                 Status = await operations.CancelOperationAsync(req.OperationId, ct).ConfigureAwait(false),
             });
 
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartBackupHealthCheck(BackupHealthCheckRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartBackupHealthCheckAsync(req.BackupId, req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartCatalogRebuild(BackupCatalogRebuildRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartCatalogRebuildAsync(req.TrackingOperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeOperationHandle> StartCatalogScrub(BackupCatalogScrubRequestMessage request, ServerCallContext context)
+        => InvokeAsync(Operations, request, context, static (operations, req, ct) =>
+            operations.StartCatalogScrubAsync(req.PruneOrphans, req.TrackingOperationId, ct));
+
     private ILatticeBackupOperations Operations => _operations
         ?? throw new RpcException(new Status(
             StatusCode.Unimplemented,
@@ -629,7 +659,9 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     public override Task<BackupHealthReportResponse> CheckBackupHealth(BackupHealthCheckRequestMessage request, ServerCallContext context)
         => InvokeAsync(request, context, static async (control, req, ct) =>
         {
+#pragma warning disable LATTICE0002 // The deprecated RPC is served by the deprecated verb; see CreateBackup.
             var report = await control.CheckBackupHealthAsync(req.BackupId, ct).ConfigureAwait(false);
+#pragma warning restore LATTICE0002
             return new BackupHealthReportResponse { Found = true, Report = report };
         });
 

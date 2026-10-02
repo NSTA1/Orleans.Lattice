@@ -2,6 +2,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Backup;
 using Orleans.Serialization;
 
+// These tests exercise the deprecated blocking CheckBackupHealthAsync (LATTICE0002) on
+// purpose: they prove the client call still behaves exactly as before.
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 
 /// <summary>

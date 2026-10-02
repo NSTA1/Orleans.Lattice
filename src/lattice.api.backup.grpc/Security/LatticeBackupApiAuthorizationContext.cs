@@ -95,6 +95,17 @@ public enum LatticeBackupApiOperation
 
     /// <summary>The <c>CancelBackupOperation</c> RPC.</summary>
     CancelBackupOperation,
+
+    // Appended for #4125, again after every earlier member.
+
+    /// <summary>The <c>StartBackupHealthCheck</c> accept-then-poll health-check RPC.</summary>
+    StartBackupHealthCheck,
+
+    /// <summary>The <c>StartCatalogRebuild</c> accept-then-poll catalog-rebuild RPC.</summary>
+    StartCatalogRebuild,
+
+    /// <summary>The <c>StartCatalogScrub</c> accept-then-poll catalog-scrub RPC.</summary>
+    StartCatalogScrub,
 }
 
 /// <summary>

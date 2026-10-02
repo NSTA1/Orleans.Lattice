@@ -139,6 +139,27 @@ internal sealed partial class FakeBackupControl : ILatticeBackupOperations
     }
 
     /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartBackupHealthCheckAsync(string backupId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((nameof(StartBackupHealthCheckAsync), backupId));
+        return StartAsync(operationId, BackupOperationKinds.HealthCheck, "captured");
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartCatalogRebuildAsync(string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((nameof(StartCatalogRebuildAsync), null));
+        return StartAsync(operationId, BackupOperationKinds.CatalogRebuild, "sys-backup-catalog");
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartCatalogScrubAsync(bool pruneOrphans = false, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((nameof(StartCatalogScrubAsync), pruneOrphans));
+        return StartAsync(operationId, BackupOperationKinds.CatalogScrub, "sys-backup-catalog");
+    }
+
+    /// <inheritdoc />
     public Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)
     {
         StatusReads++;

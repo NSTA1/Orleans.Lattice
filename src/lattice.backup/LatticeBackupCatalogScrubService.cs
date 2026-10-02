@@ -1,3 +1,5 @@
+using Orleans.Lattice.Operations;
+
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
@@ -25,6 +27,15 @@ internal sealed class LatticeBackupCatalogScrubService(
         long scanned = 0;
         var orphans = new List<string>();
 
+        // Tracked-operation progress (#4125). The catalog is streamed, so the row
+        // count is unknown until the walk ends and no total is invented.
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(
+                BackupOperationPhases.ScrubbingCatalog, 0, null, BackupOperationUnits.Manifests).ConfigureAwait(false);
+        }
+
         // Read pass: collect every catalog row whose sink payload is unresolvable.
         // The catalog is drained first so the (possibly destructive) second pass
         // does not mutate the collection being enumerated.
@@ -37,18 +48,42 @@ internal sealed class LatticeBackupCatalogScrubService(
             {
                 orphans.Add(manifest.Id);
             }
+
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.ScrubbingCatalog, scanned, null, BackupOperationUnits.Manifests)
+                    .ConfigureAwait(false);
+            }
         }
 
         long removed = 0;
         if (pruneOrphans && orphans.Count > 0)
         {
+            if (progress is not null)
+            {
+                await progress.ReportAsync(
+                    BackupOperationPhases.PruningOrphans, 0, orphans.Count, BackupOperationUnits.Manifests)
+                    .ConfigureAwait(false);
+            }
+
             using (LatticeAccessGateContext.EnterSystemOrigin())
             {
+                long visited = 0;
                 foreach (var orphanId in orphans)
                 {
                     if (await _catalog.RemoveAsync(orphanId, cancellationToken).ConfigureAwait(false))
                     {
                         removed++;
+                    }
+
+                    // Every orphan visited counts, removed or already gone, so the
+                    // count reaches the total.
+                    if (progress is not null)
+                    {
+                        await progress.ReportAsync(
+                            BackupOperationPhases.PruningOrphans, ++visited, orphans.Count, BackupOperationUnits.Manifests)
+                            .ConfigureAwait(false);
                     }
                 }
             }
