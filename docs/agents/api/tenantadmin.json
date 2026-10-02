@@ -572,6 +572,104 @@
       ]
     },
     {
+      "id": "add-tenant-group-member",
+      "in_process": "ILatticeTenantDirectoryAdmin.AddGroupMemberAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/AddTenantGroupMember",
+      "transport_scope": "both",
+      "request": "TenantAdminGroupMemberRequest",
+      "response": "TenantMembershipChangeResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A D13 delegated-access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects or MaxTenantRules) would be exceeded; carried as ResourceExhausted with lattice-quota-dimension, -current and -limit trailers."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Adding an existing member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "add-tenant-member",
+      "in_process": "ILatticeTenantDirectoryAdmin.AddMemberAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/AddTenantMember",
+      "transport_scope": "both",
+      "request": "TenantAdminMemberRequest",
+      "response": "TenantMembershipChangeResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A D13 delegated-access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects or MaxTenantRules) would be exceeded; carried as ResourceExhausted with lattice-quota-dimension, -current and -limit trailers."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Adding an existing member-set entry reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
       "id": "approve-cross-tenant-grant",
       "in_process": "ILatticeTenantGrantAdmin.ApproveGrantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/ApproveCrossTenantGrant",
@@ -740,6 +838,51 @@
       ]
     },
     {
+      "id": "explain-tenant-access",
+      "in_process": "ILatticeTenantPolicyAdmin.ExplainAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ExplainTenantAccess",
+      "transport_scope": "both",
+      "request": "TenantAdminExplainRequest",
+      "response": "TenantExplanation",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only layer-aware explanation.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
       "id": "get-auth-scheme",
       "in_process": null,
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetAuthScheme",
@@ -834,6 +977,141 @@
       ]
     },
     {
+      "id": "get-tenant-access-posture",
+      "in_process": "ILatticeTenantPolicyAdmin.GetPostureAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantAccessPosture",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantAccessPosture",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The target is the reserved default tenant."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only posture; answers while the feature is disabled.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-tenant-effective-permissions",
+      "in_process": "ILatticeTenantPolicyAdmin.EffectivePermissionsAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantEffectivePermissions",
+      "transport_scope": "both",
+      "request": "TenantAdminEffectivePermissionsRequest",
+      "response": "TenantEffectivePermissions",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only effective permissions.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-tenant-group",
+      "in_process": "ILatticeTenantDirectoryAdmin.GetGroupAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantGroup",
+      "transport_scope": "both",
+      "request": "TenantAdminGroupRequest",
+      "response": "TenantAdminGroupLookup",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only group lookup; null when absent.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
       "id": "get-tenant-quota-usage",
       "in_process": "ILatticeTenantQuotaUsage.GetQuotaUsageAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantQuotaUsage",
@@ -907,6 +1185,51 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-tenant-rule",
+      "in_process": "ILatticeTenantPolicyAdmin.GetRuleAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantRule",
+      "transport_scope": "both",
+      "request": "TenantAdminRuleRequest",
+      "response": "TenantAdminRuleLookup",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only rule lookup; null when absent.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]
@@ -1027,6 +1350,186 @@
       ]
     },
     {
+      "id": "list-tenant-group-members",
+      "in_process": "ILatticeTenantDirectoryAdmin.ListGroupMembersAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantGroupMembers",
+      "transport_scope": "both",
+      "request": "TenantAdminGroupRequest",
+      "response": "TenantAdminGroupMemberList",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only listing of direct members.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-tenant-groups",
+      "in_process": "ILatticeTenantDirectoryAdmin.ListGroupsAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantGroups",
+      "transport_scope": "both",
+      "request": "TenantAdminAccessListRequest",
+      "response": "TenantGroupPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Paged listing of the tenant's own groups.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-tenant-members",
+      "in_process": "ILatticeTenantDirectoryAdmin.ListMembersAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantMembers",
+      "transport_scope": "both",
+      "request": "TenantAdminAccessListRequest",
+      "response": "TenantMemberPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Paged listing of the tenant member set.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-tenant-rules",
+      "in_process": "ILatticeTenantPolicyAdmin.ListRulesAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantRules",
+      "transport_scope": "both",
+      "request": "TenantAdminAccessListRequest",
+      "response": "TenantRulePage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only paged listing of tenant-tier and read-only Platform rules.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
       "id": "offer-cross-tenant-grant",
       "in_process": "ILatticeTenantGrantAdmin.OfferGrantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/OfferCrossTenantGrant",
@@ -1067,6 +1570,55 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "put-tenant-rule",
+      "in_process": "ILatticeTenantPolicyAdmin.PutRuleAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/PutTenantRule",
+      "transport_scope": "both",
+      "request": "TenantAdminRulePutRequest",
+      "response": "TenantRuleView",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A D13 delegated-access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects or MaxTenantRules) would be exceeded; carried as ResourceExhausted with lattice-quota-dimension, -current and -limit trailers."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Putting the same draft again replaces the rule with an identical one; one stored copy per local id.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]
@@ -1153,6 +1705,231 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "remove-tenant-group",
+      "in_process": "ILatticeTenantDirectoryAdmin.RemoveGroupAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RemoveTenantGroup",
+      "transport_scope": "both",
+      "request": "TenantAdminGroupRequest",
+      "response": "TenantGroupRemovalResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent group reports Removed false; an interrupted cascade completes on re-run.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "remove-tenant-group-member",
+      "in_process": "ILatticeTenantDirectoryAdmin.RemoveGroupMemberAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RemoveTenantGroupMember",
+      "transport_scope": "both",
+      "request": "TenantAdminGroupMemberRequest",
+      "response": "TenantMembershipChangeResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "remove-tenant-member",
+      "in_process": "ILatticeTenantDirectoryAdmin.RemoveMemberAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RemoveTenantMember",
+      "transport_scope": "both",
+      "request": "TenantAdminMemberRequest",
+      "response": "TenantMembershipChangeResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent member-set entry reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "remove-tenant-rule",
+      "in_process": "ILatticeTenantPolicyAdmin.RemoveRuleAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RemoveTenantRule",
+      "transport_scope": "both",
+      "request": "TenantAdminRuleRequest",
+      "response": "TenantAdminRuleRemoval",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent rule reports false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "resolve-tenant-subject",
+      "in_process": "ILatticeTenantDirectoryAdmin.ResolveSubjectAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ResolveTenantSubject",
+      "transport_scope": "both",
+      "request": "TenantAdminMemberRequest",
+      "response": "TenantSubjectResolution",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only resolution of admin and member entries.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]
@@ -1716,6 +2493,55 @@
       "sources": [
         "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#SetSchemaPolicyAsync",
         "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "upsert-tenant-group",
+      "in_process": "ILatticeTenantDirectoryAdmin.UpsertGroupAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/UpsertTenantGroup",
+      "transport_scope": "both",
+      "request": "TenantAdminGroupUpsertRequest",
+      "response": "TenantGroupDescriptor",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant (group-aware while delegated tenant access administration is enabled)."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A D13 delegated-access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects or MaxTenantRules) would be exceeded; carried as ResourceExhausted with lattice-quota-dimension, -current and -limit trailers."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant directory or tenant policy facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Upserting the same group again changes nothing.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]
     }
   ],

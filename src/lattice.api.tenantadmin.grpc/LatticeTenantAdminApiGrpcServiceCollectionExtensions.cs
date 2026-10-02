@@ -97,7 +97,8 @@ public static class LatticeTenantAdminApiGrpcServiceCollectionExtensions
 
     /// <summary>
     /// Maps the tenant-administration control-API RPC routes: lifecycle and quota,
-    /// quota usage, region residency, admin-subject, cross-tenant grant, read-only
+    /// quota usage, region residency, admin-subject, cross-tenant grant, delegated
+    /// tenant access (directory and policy), read-only
     /// self-service, and unauthenticated auth-scheme discovery RPCs on the supplied
     /// <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeTenantAdminApiGrpc"/> and must expose

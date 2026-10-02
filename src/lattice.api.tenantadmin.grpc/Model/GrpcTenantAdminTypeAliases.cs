@@ -59,4 +59,43 @@ public static class GrpcTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantAdminGrantOfferRequest"/>.</summary>
     public const string TenantAdminGrantOfferRequest = "oitng.grntoff";
+
+    /// <summary>Alias for <see cref="TenantAdminAccessListRequest"/>.</summary>
+    public const string TenantAdminAccessListRequest = "oitng.acclist";
+
+    /// <summary>Alias for <see cref="TenantAdminGroupRequest"/>.</summary>
+    public const string TenantAdminGroupRequest = "oitng.grpreq";
+
+    /// <summary>Alias for <see cref="TenantAdminGroupUpsertRequest"/>.</summary>
+    public const string TenantAdminGroupUpsertRequest = "oitng.grpups";
+
+    /// <summary>Alias for <see cref="TenantAdminGroupMemberRequest"/>.</summary>
+    public const string TenantAdminGroupMemberRequest = "oitng.grpmem";
+
+    /// <summary>Alias for <see cref="TenantAdminMemberRequest"/>.</summary>
+    public const string TenantAdminMemberRequest = "oitng.mbrreq";
+
+    /// <summary>Alias for <see cref="TenantAdminRulePutRequest"/>.</summary>
+    public const string TenantAdminRulePutRequest = "oitng.ruleput";
+
+    /// <summary>Alias for <see cref="TenantAdminRuleRequest"/>.</summary>
+    public const string TenantAdminRuleRequest = "oitng.rulereq";
+
+    /// <summary>Alias for <see cref="TenantAdminExplainRequest"/>.</summary>
+    public const string TenantAdminExplainRequest = "oitng.explreq";
+
+    /// <summary>Alias for <see cref="TenantAdminEffectivePermissionsRequest"/>.</summary>
+    public const string TenantAdminEffectivePermissionsRequest = "oitng.effreq";
+
+    /// <summary>Alias for <see cref="TenantAdminGroupLookup"/>.</summary>
+    public const string TenantAdminGroupLookup = "oitng.grplkp";
+
+    /// <summary>Alias for <see cref="TenantAdminGroupMemberList"/>.</summary>
+    public const string TenantAdminGroupMemberList = "oitng.grpmlst";
+
+    /// <summary>Alias for <see cref="TenantAdminRuleLookup"/>.</summary>
+    public const string TenantAdminRuleLookup = "oitng.rulelkp";
+
+    /// <summary>Alias for <see cref="TenantAdminRuleRemoval"/>.</summary>
+    public const string TenantAdminRuleRemoval = "oitng.rulerm";
 }
