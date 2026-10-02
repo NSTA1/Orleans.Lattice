@@ -109,6 +109,10 @@ public partial class LatticeSchemaRemediationGrainTests
             new RoutingInfo(TreeId, new ShardMap { Slots = new[] { 0 } })));
 
         var destination = Substitute.For<ILattice>();
+        // The destination's own routing, which the cutover carries onto the
+        // logical entry (#4250).
+        destination.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
+            new RoutingInfo(TreeId + "/remediated/", new ShardMap { Slots = new[] { 0 } })));
 
         var registry = Substitute.For<ILatticeRegistry>();
         // A never-aliased source tree resolves its physical id to its own name.
