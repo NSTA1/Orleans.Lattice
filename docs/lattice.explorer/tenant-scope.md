@@ -20,7 +20,7 @@ The visible address determines whether the tenant root is kept:
 At a tenant-rooted address every area lists only that tenant's items, and so do the counts, Home status lines, spine badges, address completions and pickers drawn from those listings:
 
 - **Rules.** The listing is the rules whose governed tree is one of the tenant's own trees. Cluster-wide rules (`Tree:*`) belong to no tenant, so they are not listed; one quiet line counts those that also apply and links to `/access/rules`. The same holds for an explanation's effective permissions.
-- **Groups.** Groups belong to the whole cluster, not to a tenant, so `/t/{tenant}/access/groups` lists none and links to the cluster's groups. No group completes or is found at a tenant-rooted address.
+- **Groups.** Cluster groups belong to the whole cluster, not to a tenant, so `/t/{tenant}/access/groups` lists none and links to the cluster's groups. With [delegated tenant access administration](#tenant-access) on, a tenant's administrators see the tenant's own groups there instead, and its member set, rules and a layer-aware Explain beside them. Otherwise no group completes or is found at a tenant-rooted address.
 - **Trees and storage.** `/t/{tenant}/cluster` counts and measures only the tenant's own trees. Regions, WAL placement and orphaned leaves belong to the whole cluster, so the overview replaces them with one quiet line that links to the cluster-wide overview.
 - **Not found.** A tenant-rooted deep link to another tenant's rule, tree, backup or schema tree is not found, and is never read. Under a tenant other than `default`, a bare tree name is that tenant's own tree, as the cluster reads it.
 - **The default tenant.** `default` owns the bare trees, and the cluster answers it with every tenant's trees, rules and backups. The Explorer narrows every listing to `default`'s own, so it never shows another tenant's items.
@@ -85,6 +85,125 @@ The area's forms use [pickers](navigation-model.md#pickers), and each one is ten
 - **Grants.** The grantee tenant is a picker. For a platform operator, who can list every tenant, it accepts only a listed tenant; for anyone else it suggests the tenants they can reach and accepts any id. The scope suggests the tenant's trees and accepts a tree-name prefix too. A bare name or prefix is qualified into the granting tenant's namespace before the offer is sent, so `orders` is offered as `t/{tenant}/orders`: the cluster matches a grant's scope against the full tree id it reads, so a bare name would share nothing. Approving, rejecting or revoking a grant refreshes the Data listing in the same session.
 
 The Tenancy area supplies the reachable-tenant list used by the directory, by the `t/` completions in the address line, and by the tenant switcher. It is exactly the tenants the cluster names for the caller, plus `default` for a proven platform operator, and never a tenant the cluster did not name. The established tenant is listed first and suspended tenants are not offered, except that the established tenant remains available so the current scope never disappears under the caller.
+
+## Tenant access
+
+When the cluster has [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration)
+on, a tenant's own administrators manage who belongs to the tenant and who may do
+what on its trees from the tenant-rooted Access area, `/t/{tenant}/access`. The pages
+talk to the tenant directory and tenant policy facades
+(`ILatticeTenantDirectoryAdmin`, `ILatticeTenantPolicyAdmin`) through the circuit's
+connection; the web head's gRPC transports do not carry those two facades yet, so a
+standalone Explorer reports the feature as unavailable.
+
+### Who sees the pages
+
+Each tenant page first reads the tenant's access posture (`GetPostureAsync`) and
+decides from it:
+
+- **Delegated** - the feature is on and the caller is an admin of the tenant, directly
+  or through a group, or a platform operator. The tenant pages are shown. A caller
+  who is a tenant admin but not an operator therefore sees the Access area for its
+  active tenant even though the cluster Access pages stay closed to it.
+- **Off** - the feature is off. Each page says so, for example "Delegated tenant
+  access administration is off, so groups belong to the whole cluster, not to one
+  tenant, and tenant {id}'s Access pages do not list them."
+- **Not permitted** - the feature is on and the caller administers neither the tenant
+  nor the cluster. The page says the tenant's groups, member set or rules are
+  administered by its administrators.
+- **Unavailable** - no posture could be read: the connection does not serve the
+  facades, the tenant is the reserved `default` tenant, or the cluster did not
+  answer. The page keeps its earlier behaviour.
+
+The Access navigation adds **Groups**, **Members**, **Rules** and **Explain** for a
+delegated tenant. `/t/{tenant}/access/members` is the one Access address with no
+cluster-wide form. The reserved `default` tenant never has these pages.
+
+### Picking a subject
+
+Wherever a tenant page asks for a user or group, the subject picker first asks what
+kind it is: **Tenant group** (one of this tenant's groups, picked from the tenant's
+list by its local name), **Cluster group** or **Cluster user** (both searched in the
+identity directory). The cluster kinds never offer an id starting with `t/`, and
+typing one is refused, so another tenant's group can never be picked. Beside the
+choice, a provenance line names its source and full id, such as `t/acme/ops`.
+
+### Groups
+
+`/t/{tenant}/access/groups` lists the tenant's groups with their display name and how
+many direct members, rules and app roles name each. **New group** checks the name
+against the tenant group grammar as you type and refuses a name already in use. When
+the tenant is at its `MaxGroups` cap, creating is disabled and the page says why.
+
+A group's page edits its display name and lists its direct members with their kind
+(User, This tenant's group, or Cluster group). Members are added with the subject
+picker and removed after a confirmation. A refused nesting - this group inside a
+cluster group or another tenant's group - is explained beside the picker, and adding
+is disabled at the `MaxMembershipEdges` cap. A tenant administrator who signed in
+with a user name and password, and is not yet a direct member, is offered **Add me to this group**.
+A **Used by** table lists the rules and app roles that name the group, and the group's
+history comes from the existing per-key history of the membership tree.
+
+Deleting a group first shows what goes with it - its member entries, the tenant rules
+and app bindings that name it, and its member-set or admin-set entry - and refuses to
+remove the tenant's last admin entry.
+
+### Members
+
+`/t/{tenant}/access/members` lists the tenant's member set with each entry's kind.
+Entries are added with the subject picker and removed after a confirmation, up to the
+`MaxMemberSubjects` cap. The page reminds the administrator that "a member no rule
+allows can do nothing (default-deny)", and lists the tenant's administrators
+read-only, since they are members already.
+
+### Rules
+
+`/t/{tenant}/access/rules` shows two groups of rules:
+
+- **Platform** - the operator rules on the tenant's own trees, marked with a lock as
+  "Read-only, decided first; your rules apply only where none of these match."
+- **Tenant** - the tenant's own rules, each linking to its page.
+
+Both can be filtered by tree and by subject, and a line reports the tenant's rule
+count against its `MaxTenantRules` cap. The rule editor offers the scopes **Tree**,
+**Prefix**, **Key** and **Tenant-wide**, the tree from the tenant's own trees (never
+its app trees), the data-plane operations only, and the subject picker; it suggests a
+rule id. While you edit, it warns when a platform rule would decide the same requests
+first, so the rule would not take effect. A rule's page edits or deletes it, links to
+Explain with its subject and tree filled in, and shows its history from the policy
+tree.
+
+### Explain
+
+`/t/{tenant}/access/explain` first resolves the subject. A subject that is neither an
+admin nor a member reads "Cannot act as tenant {id}", with a link to Members. For a
+subject that can act, the answer is drawn as the two layers in order: the Platform
+layer, read-only and final when it matches; then the Tenant layer the administrator
+controls; then the default effect. The deciding layer and rule are marked, the layers
+that did not decide are dimmed, and when a platform rule decided while tenant rules
+also matched, the page says "These rules match but do not take effect: platform rule
+{id} decided first." A deciding cluster-wide or app role rule is shown by id and
+effect only.
+
+### Admin set, quota caps and app bindings
+
+- **Admin set.** On a delegated tenant, the Tenancy area's Members tab accepts the
+  tenant's own groups and cluster groups as admin subjects through the same picker,
+  and shows each entry's kind; an entry naming another tenant's group is marked as not
+  counted. A refused removal of the last entry says a group counts as one admin
+  subject. On a tenant that is not delegated, the editor offers users only.
+- **Quota caps.** The operator's Quota tab shows and edits the four access caps -
+  Tenant groups, Group membership edges, Tenant members and Tenant access rules. A
+  blank cap is the default, shown as for example "500 (default)", never unbounded.
+- **App role bindings.** On a delegated tenant, the Apps role-binding picker offers
+  the installing tenant's own groups beside cluster groups, never another tenant's. A
+  stored binding to another tenant's group is explained and blocks continuing, and a
+  role's "Add me" link leads to the tenant group's page when the role is bound to one.
+
+### Tenant rules on the cluster pages
+
+The cluster Access pages mark a tenant-tier rule with a badge naming its tenant, and
+an explanation on `/access/explain` says under "Decided by" whether a platform rule, a tenant rule or the default decided it.
 
 ## Regions and residency
 

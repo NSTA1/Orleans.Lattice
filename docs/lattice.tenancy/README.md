@@ -191,7 +191,9 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   is outstanding, or while rebuilds are failing, the gate confirms every request
   that acts as an asserted active tenant against the registry itself: the active
   tenant's record must exist, be `Active`, and list the subject as an admin (the
-  same rule the snapshot applies), and a cross-tenant crossing must also find an
+  same rule the snapshot applies; with
+  [delegated tenant access administration](#delegated-tenant-access-administration)
+  on, a member entry or a group entry counts too), and a cross-tenant crossing must also find an
   active grant in the owning tenant's record. Both checks must pass on their own.
   So a removed admin, or a subject acting as a just-suspended or deleted tenant, is
   refused on that tenant's own trees as soon as the write commits, a revoked grant
@@ -231,7 +233,9 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   that set - there is no implicit "sole membership" default. Every branch that
   consumes the assertion re-validates it against the caller's own membership, and
   it is denied unless the named tenant is registered, `Active`, and lists the
-  caller as an admin subject. A request that asserts *nothing* resolves the
+  caller as an admin subject (or, with
+  [delegated tenant access administration](#delegated-tenant-access-administration)
+  on, as a member, directly or through one of its groups). A request that asserts *nothing* resolves the
   reserved `default` tenant, which is what keeps legacy adoption
   non-destructive; on a tenant-owned (`t/...`) tree that unasserted request is
   denied instead, because the uninitialised "no tenant" value can never be an
@@ -726,6 +730,178 @@ control-plane facade, which is reachable
 [over gRPC](../lattice.api.tenantadmin.grpc/README.md#region-residency-rpcs) and
 [through MCP tools](../lattice.api.mcp/tools.md#tenant-region-residency-lattice_tenant_authorize_regions-lattice_tenant_set_residency-lattice_tenant_region_status).
 
+## Delegated tenant access administration
+
+A tenant usually stands for an organisation, so this opt-in feature lets a tenant's
+own administrators decide who belongs to the tenant, which groups exist inside it,
+and who may do what on its trees, without a platform operator in the loop and without
+reaching outside the tenant. It adds three things:
+
+- **Tenant groups** - membership groups a tenant's administrators create and manage
+  inside the tenant.
+- **Tenant members** - a member set of users and groups that may act as the tenant on
+  the data plane.
+- **Tenant-tier rules** - authorization rules a tenant's administrators write on the
+  tenant's own trees, evaluated beneath every operator rule.
+
+Tenant administrators manage all three through `ILatticeTenantDirectoryAdmin` and
+`ILatticeTenantPolicyAdmin` (see
+[`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration)),
+in-process, over gRPC, as MCP tools, or from the Explorer's
+[tenant Access pages](../lattice.explorer/tenant-scope.md#tenant-access).
+
+### Turning it on
+
+The feature is off by default. Enable it with
+`LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`:
+
+```csharp verify
+using Orleans.Lattice.Tenancy;
+
+siloBuilder.AddLatticeTenancy(options =>
+{
+    options.DelegatedAccessAdministrationEnabled = true;
+});
+```
+
+Each silo logs its value once at start-up, at Information level, as
+`Lattice tenancy posture: DelegatedAccessAdministrationEnabled={value}`. The auth
+facade's `GetAccessModelAsync` reports it as
+`AccessModelDescriptor.DelegatedTenantAccessAdministrationEnabled`, and
+`ILatticeTenantPolicyAdmin.GetPostureAsync` reports it per tenant as
+`TenantAccessPosture.Enabled`.
+
+While the flag is off:
+
+- Tenant groups, member entries, group entries in an admin set and tenant-tier rules
+  are **inert**. Active-tenant validation is the exact-subject-id admin check it has
+  always been, the compiled tenant-policy snapshot builds no member or group index,
+  the authorization engine never enters the tenant rule layer, and asserted tenant
+  group claims are not filtered.
+- Every delegated access operation except `GetPostureAsync` is refused with
+  `TenantAccessAdministrationDisabledException`.
+- **Nothing is deleted.** Existing groups, member entries and tenant-tier rules are
+  kept and become effective again when the flag is turned back on.
+
+The flag is read through the options monitor, so a change applies without a restart:
+
+- It invalidates the silo's compiled tenant-policy snapshot and schedules a rebuild.
+  Until the rebuild lands, a request that acts as an asserted active tenant is
+  confirmed against the tenant registry under the new value, as for any other
+  registry change (see
+  [Membership, status and grant changes take effect at once](#isolation-model)).
+  Member and group entries are honoured only while both the snapshot and the live
+  flag have the feature on, so turning it off takes effect at once, before the
+  rebuild.
+- It clears the membership package's subject-resolution cache, because a cached
+  subject carries the claim filter's verdict from when it was resolved.
+
+### Tenant groups
+
+A tenant group's id has the reserved grammar `t/{tenant}/{name}`, owned by the core
+type `LatticeTenantGroupId` (`Compose`, `Parse`, `TryParse`, `IsTenantGroupId`,
+`Tenant`, `Name`, `Value`). `{tenant}` is a valid tenant other than `default`, and
+`{name}` is 1 to 63 (`LatticeTenantGroupId.MaxNameLength`) characters of lower-case
+ASCII letters, digits, `-`, `_` and `.`. Administrators name a group by its local
+`{name}`; the facades compose the full id from the tenant the call names.
+
+Tenant groups live in the same `sys-membership-*` trees as cluster groups, so they
+replicate to every region with the other system trees and are not bound by the
+tenant's residency. The whole `t/` group namespace is reserved to the tenant tier:
+
+- The cluster auth facade refuses to create a group whose id starts with `t/`
+  (`LatticeTenantOwnedGroupException`).
+- While the feature is on, a group id starting with `t/` that an identity provider
+  asserts (a token claim, a group overage, or a `ClaimToGroups` projection) is
+  stripped before group expansion, so no identity-provider administrator can join a
+  tenant group by asserting its id. Groups the membership directory itself records
+  are kept.
+- A tenant group may contain users, groups of the same tenant and cluster groups, but
+  may never become a member of a cluster group or of another tenant's group. The
+  membership directory enforces this for every caller, operators included; see
+  [Tenant groups](../lattice.membership/README.md#tenant-groups) in the membership
+  guide.
+
+### Tenant members and group admins
+
+A `TenantRecord` carries a member set (`MemberSubjects`, `MemberSubjectCount`,
+`HasMemberSubject`, `AddMemberSubject`, `RemoveMemberSubject`) beside its admin set.
+Its entries are users, the tenant's own groups and cluster groups; the reserved
+`default` tenant accepts none.
+
+While the feature is on, a subject may act as tenant T when its id, or any of its
+resolved transitive groups, is an entry of T's admin set or member set
+(`TenantRecord.IsMember`; admins are implicitly members). Being a member only passes
+the tenant gate: everything a member may then do is decided by rules, default-deny.
+The admin set accepts the tenant's own groups and cluster groups too
+(`TenantRecord.IsAdmin`), so a group of people can administer a tenant. A group entry
+counts as one entry for the guard that refuses removing the last one. An entry naming
+another tenant's group, or a malformed `t/` id, never counts, even when it arrives by
+replication or restore.
+
+### Tenant-tier rules
+
+A tenant administrator writes rules only for the tenant's own trees
+(`t/{tenant}/...`), never for its app-owned trees (`t/{tenant}/a/...`, which app roles
+govern), a reserved or `sys-` tree, or another tenant's tree. A rule may cover only
+the data-plane operations (`LatticeAuthOperations.All`), at tree, prefix or key
+scope, or at the **tenant-wide** scope `LatticeScope.TenantWide(tenant)`, which
+stands for every tree the tenant owns. Its subject may be a user, one of the tenant's
+own groups or a cluster group. The stored rule id carries the reserved prefix
+`tenant:{tenant}:` (`LatticeTenantRuleIds`), which only the tenant facade writes;
+operators can list and remove these rules but not write them.
+
+Operator rules are evaluated first, and a matched operator verdict is final. Only
+when no operator rule matches does the tree owner's tenant layer decide, so a tenant
+allow can never carve a hole in an operator deny, and a tenant deny can never revoke
+an operator allow. See [The tenant rule layer](../lattice.auth/tenant-layer.md).
+
+### Caps
+
+Tenant groups, membership edges and tenant-tier rules live in trees every tenant
+shares, so four `TenantQuotas` dimensions bound one tenant's footprint:
+
+| Property | Default | Bounds |
+|---|---|---|
+| `MaxGroups` | 500 (`DefaultMaxGroups`) | The tenant's groups. |
+| `MaxMembershipEdges` | 10000 (`DefaultMaxMembershipEdges`) | Membership edges whose parent is one of the tenant's groups. |
+| `MaxMemberSubjects` | 5000 (`DefaultMaxMemberSubjects`) | Entries in the tenant's member set. |
+| `MaxTenantRules` | 1000 (`DefaultMaxTenantRules`) | The tenant's tenant-tier rules. |
+
+Unlike the resource dimensions above, a `null` access cap means its **default, never
+unbounded**: read the cap in force through `EffectiveMaxGroups`,
+`EffectiveMaxMembershipEdges`, `EffectiveMaxMemberSubjects` and
+`EffectiveMaxTenantRules`. The caps take no burst and play no part in `IsUnbounded`.
+An operator sets them through `SetTenantQuotasAsync`, like any other quota. An
+addition that would exceed one is refused through `TenantAccessCaps.AdmitAddition`,
+which throws `LatticeQuotaExceededException` with `Dimension` set to one of
+`TenantAccessCaps.GroupsDimension` (`tenant-groups`), `MembershipEdgesDimension`
+(`tenant-membership-edges`), `MemberSubjectsDimension` (`tenant-member-subjects`) or
+`TenantRulesDimension` (`tenant-rules`).
+
+### Isolation and the default tenant
+
+- **No bypass of tenant isolation.** Membership and tenant-tier rules never bypass the
+  tenant gate or the cross-tenant grant protocol. Reaching another tenant's trees
+  still needs an active cross-tenant grant, and the tenant layer that then applies is
+  the tree owner's.
+- **The reserved `default` tenant is excluded.** It gets no tenant groups, members or
+  tenant-tier rules, its tree ids carry no `t/` segment for the tenant layer to
+  govern, and the delegated access facades refuse it with
+  `ReservedTenantOperationException`. Its access stays operator-administered.
+
+### Deleting a tenant purges its access data
+
+Deleting a tenant (`ITenantRegistry.DeleteAsync`, which the tenant-admin facade's
+delete calls after cascading the tenant's trees) first purges the tenant's access
+data: its tenant-tier rules, then its tenant groups with their membership edges in
+both directions. Only then is the registry record removed, taking the member set with
+it. The purge runs whether or not the feature is enabled, and is idempotent: a delete
+that fails part-way leaves the record in place, and running it again completes the
+purge. A host that replaced the membership directory or the authorization policy
+store with its own implementation cannot be purged, so deleting a tenant there fails
+closed with `InvalidOperationException` and keeps the record.
+
 ## Observability
 
 `TenantObservabilityOptions` (default `PublishGauges = true`, `PublishInterval` 30
@@ -853,7 +1029,11 @@ also match the `_lattice_` and `sys-` platform trees.
   tenant-tier facades check on that tenant's own record: it confers nothing on the
   policy store and nothing over a tenant whose set does not name it, so a tenant admin
   can neither reach the policy store to author a registry-read rule (for itself or
-  anyone else) nor act for another tenant. Direct writes to `sys-tenant-*` are likewise refused off the
+  anyone else) nor act for another tenant. With
+  [delegated tenant access administration](#delegated-tenant-access-administration)
+  on, a tenant admin can author tenant-tier rules, but only through the tenant facade
+  and only over its own tenant's trees, never a reserved or `sys-` tree, so the
+  registry stays out of reach. Direct writes to `sys-tenant-*` are likewise refused off the
   system-origin path by the reserved-prefix write guard. Consequently, granting
   cross-tenant registry visibility always requires a deliberate operator decision to
   author (or delegate the authority to author) that rule; a caller acting purely as a
@@ -933,6 +1113,7 @@ the service collection directly - for example
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view (`sys-tenant-registry-history`) over the `sys-tenant-registry` tree. |
 | `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
+| `DelegatedAccessAdministrationEnabled` | `bool` | `false` | Whether [delegated tenant access administration](#delegated-tenant-access-administration) is enabled: tenant groups, tenant member sets, group entries in an admin set, and tenant-tier rules. While `false` they are inert and unauthorable, and nothing is deleted. Read live: a change invalidates the compiled tenant-policy snapshot and clears the subject-resolution cache, with no restart. |
 | `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy, residency and placement snapshots as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, every request that acts as an asserted active tenant (on its own trees or across a cross-tenant grant), residency checks and inbound-replication tenant checks are confirmed against the registry or denied, and a tenant tree's registration waits up to a fifth of this for the placement view to become authoritative before it is refused. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
 
 ### `TenantUsageAccountingOptions`
@@ -972,7 +1153,8 @@ silos. See [Rate limiting](#rate-limiting) for the full table.
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server that
   contributes the read-only tenant self-awareness tools.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the authorization gate the
-  tenant boundary is enforced at.
+  tenant boundary is enforced at, and [the tenant rule layer](../lattice.auth/tenant-layer.md)
+  that evaluates tenant-tier rules.
 - [`Orleans.Lattice.Membership`](../lattice.membership/README.md) - the identity layer
   that resolves the caller subject a tenant's admin-subject set is matched against.
 - [MultiTenancy sample](../../samples/MultiTenancy/README.md) - a runnable end-to-end

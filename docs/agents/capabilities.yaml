@@ -876,6 +876,60 @@ capabilities:
       - "FEATURES.md"
       - "PACKAGES.md"
       - "docs/lattice.replication/README.md"
+  - id: delegated-tenant-access-administration
+    name: "Delegated tenant access administration"
+    packages:
+      - "Orleans.Lattice.Tenancy"
+      - "Orleans.Lattice.Auth"
+      - "Orleans.Lattice.Membership"
+      - "Orleans.Lattice.Api.TenantAdmin"
+      - "Orleans.Lattice.Api.TenantAdmin.Grpc"
+      - "Orleans.Lattice.Api.Mcp"
+    concepts:
+      - tenant
+      - tenant-group
+      - tenant-member
+      - tenant-rule-layer
+      - tenant-wide-scope
+    guarantees:
+      - statement: "A tenant's administrators manage its groups, member set and tenant-tier rules through ILatticeTenantDirectoryAdmin and ILatticeTenantPolicyAdmin, authorized as a platform operator or an admin of the tenant directly or through a group."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Every operation authorizes before the feature flag and the reserved-tenant check, so a denied caller learns nothing about the tenant or the posture."
+        source: "src/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdmin.cs#LatticeTenantDirectoryAdmin"
+      - statement: "Operator rules are final; tenant-tier rules decide only where no operator rule matches."
+        source: "docs/lattice.auth/tenant-layer.md"
+      - statement: "Deleting a tenant purges its tenant-tier rules, tenant groups and their edges before removing the record."
+        source: "docs/lattice.tenancy/README.md"
+    non_guarantees:
+      - statement: "Tenant groups replicate with the shared sys-membership trees and are not bound by tenant residency."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Caps are verified after each write and the addition withdrawn when over; a reader can briefly see a tenant over its cap."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Tenant-authored rules on app-owned trees and claim or attribute conditions are not supported."
+        source: "docs/lattice.tenancy/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "enable DelegatedAccessAdministrationEnabled"
+          - "add a tenant group to a tenant's admin set before creating the group"
+        hazard: "The admin-set add is refused with ArgumentException; create the group first."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - sequence:
+          - "write a tenant allow rule"
+          - "expect it to override an operator deny on the same tree"
+        hazard: "The operator verdict is final; ExplainAsync reports the Platform layer as deciding."
+        source: "docs/lattice.auth/tenant-layer.md"
+    concurrency_rules:
+      - statement: "Concurrent additions at a cap re-count after writing and withdraw their own addition when over, so racers may all be refused."
+        source: "src/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdmin.cs#LatticeTenantDirectoryAdmin"
+      - statement: "A tenant-local rule id is kept to one stored copy across the tenant's trees; concurrent moves settle on one copy deterministically."
+        source: "src/lattice.api.tenantadmin/Policy/LatticeTenantPolicyAdmin.cs#LatticeTenantPolicyAdmin"
+      - statement: "A flag change invalidates the compiled tenant-policy snapshot; member and group entries are honoured only while both the snapshot and the live flag are on."
+        source: "docs/lattice.tenancy/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.tenancy/README.md"
+      - "docs/lattice.api.tenantadmin/README.md"
+      - "docs/lattice.auth/tenant-layer.md"
   - id: diagnostics
     name: "Diagnostics"
     packages:

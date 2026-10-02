@@ -703,6 +703,13 @@
           "default": "null"
         },
         {
+          "name": "includeTenantGroups",
+          "type": "bool",
+          "required": false,
+          "default": "false",
+          "notes": "When true, the page also lists tenant-owned groups (ids under the reserved 't/' namespace) alongside the cluster groups."
+        },
+        {
           "name": "region",
           "type": "string",
           "required": false,
@@ -1204,7 +1211,7 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "rule": "Rules are stored as ILattice LWW rows keyed by governed tree id and rule id; concurrent remove and put of the same rule resolve by the highest HLC, with the delete tombstone winning an exact HLC tie.",
+        "rule": "Rules are stored as ILattice LWW rows keyed by governed tree id and rule id; concurrent remove and put of the same rule resolve by the highest HLC, with the delete tombstone winning an exact HLC tie. A tenant: rule is removed under system origin as an operator break-glass action.",
         "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
@@ -7415,6 +7422,34 @@
           "notes": "The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative."
         },
         {
+          "name": "maxGroups",
+          "type": "long?",
+          "required": false,
+          "default": "null",
+          "notes": "Delegated tenant access cap, or null for the default cap (500). Never unbounded."
+        },
+        {
+          "name": "maxMembershipEdges",
+          "type": "long?",
+          "required": false,
+          "default": "null",
+          "notes": "Delegated tenant access cap, or null for the default cap (10000). Never unbounded."
+        },
+        {
+          "name": "maxMemberSubjects",
+          "type": "long?",
+          "required": false,
+          "default": "null",
+          "notes": "Delegated tenant access cap, or null for the default cap (5000). Never unbounded."
+        },
+        {
+          "name": "maxTenantRules",
+          "type": "long?",
+          "required": false,
+          "default": "null",
+          "notes": "Delegated tenant access cap, or null for the default cap (1000). Never unbounded."
+        },
+        {
           "name": "region",
           "type": "string",
           "required": false,
@@ -7574,6 +7609,1304 @@
       "sources": [
         "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolInvocations.cs#TenantAdminToolInvocations.SuspendTenantAsync",
         "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_list",
+      "in_process": "TenantAccessToolHandlers.ListGroupsAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#list-tenant-groups",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0"
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantGroupListResult",
+        "shape": "Structured JSON projection of McpTenantGroupListResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Paged listing of the tenant's own groups.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.ListGroupsAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_get",
+      "in_process": "TenantAccessToolHandlers.GetGroupAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#get-tenant-group",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local group name."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantGroupGetResult",
+        "shape": "Structured JSON projection of McpTenantGroupGetResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only group lookup; null when absent.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.GetGroupAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_members",
+      "in_process": "TenantAccessToolHandlers.ListGroupMembersAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#list-tenant-group-members",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "groupName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantGroupMembersResult",
+        "shape": "Structured JSON projection of McpTenantGroupMembersResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only listing of direct members.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.ListGroupMembersAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_member_list",
+      "in_process": "TenantAccessToolHandlers.ListMembersAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#list-tenant-members",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0"
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantMemberListResult",
+        "shape": "Structured JSON projection of McpTenantMemberListResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Paged listing of the tenant member set.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.ListMembersAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_upsert",
+      "in_process": "TenantAccessToolHandlers.UpsertGroupAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#upsert-tenant-group",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local group name."
+        },
+        {
+          "name": "displayName",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantGroupResult",
+        "shape": "Structured JSON projection of McpTenantGroupResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Upserting the same group again changes nothing.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.UpsertGroupAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_remove",
+      "in_process": "TenantAccessToolHandlers.RemoveGroupAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#remove-tenant-group",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local group name."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantGroupRemovalResult",
+        "shape": "Structured JSON projection of McpTenantGroupRemovalResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent group reports Removed false; an interrupted cascade completes on re-run.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.RemoveGroupAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_member_add",
+      "in_process": "TenantAccessToolHandlers.AddGroupMemberAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#add-tenant-group-member",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "groupName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "memberId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "memberKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantMembershipChangeResult",
+        "shape": "Structured JSON projection of McpTenantMembershipChangeResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Adding an existing member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.AddGroupMemberAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_group_member_remove",
+      "in_process": "TenantAccessToolHandlers.RemoveGroupMemberAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#remove-tenant-group-member",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "groupName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "memberId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "memberKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantMembershipChangeResult",
+        "shape": "Structured JSON projection of McpTenantMembershipChangeResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.RemoveGroupMemberAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_member_add",
+      "in_process": "TenantAccessToolHandlers.AddMemberAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#add-tenant-member",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "subjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "subjectKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantMembershipChangeResult",
+        "shape": "Structured JSON projection of McpTenantMembershipChangeResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Adding an existing member-set entry reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.AddMemberAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_member_remove",
+      "in_process": "TenantAccessToolHandlers.RemoveMemberAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#remove-tenant-member",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "subjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "subjectKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantMembershipChangeResult",
+        "shape": "Structured JSON projection of McpTenantMembershipChangeResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent member-set entry reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Directory writes run under system origin through the membership store and the tenant record CRDT merge; D13 caps use verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.cs#TenantAccessToolHandlers.RemoveMemberAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_rule_list",
+      "in_process": "TenantAccessToolHandlers.ListRulesAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#list-tenant-rules",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0"
+        },
+        {
+          "name": "pageToken",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantRuleListResult",
+        "shape": "Structured JSON projection of McpTenantRuleListResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only paged listing of tenant-tier and read-only Platform rules.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.ListRulesAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_rule_get",
+      "in_process": "TenantAccessToolHandlers.GetRuleAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#get-tenant-rule",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "ruleId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local rule id."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantRuleGetResult",
+        "shape": "Structured JSON projection of McpTenantRuleGetResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only rule lookup; null when absent.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.GetRuleAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_explain",
+      "in_process": "TenantAccessToolHandlers.ExplainAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#explain-tenant-access",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "subjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "treeName",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local tree name."
+        },
+        {
+          "name": "operation",
+          "type": "LatticeOperation",
+          "required": true
+        },
+        {
+          "name": "key",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "subjectKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantExplanationResult",
+        "shape": "Structured JSON projection of McpTenantExplanationResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only layer-aware explanation.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.ExplainAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_effective_permissions",
+      "in_process": "TenantAccessToolHandlers.EffectivePermissionsAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#get-tenant-effective-permissions",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "subjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "treeName",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Omit to report across every tree the tenant owns."
+        },
+        {
+          "name": "subjectKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantEffectivePermissionsResult",
+        "shape": "Structured JSON projection of McpTenantEffectivePermissionsResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only effective permissions.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.EffectivePermissionsAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_access_posture",
+      "in_process": "TenantAccessToolHandlers.GetPostureAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#get-tenant-access-posture",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Read"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantAccessPostureResult",
+        "shape": "Structured JSON projection of McpTenantAccessPostureResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only posture; answers while the feature is disabled.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.GetPostureAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_rule_put",
+      "in_process": "TenantAccessToolHandlers.PutRuleAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#put-tenant-rule",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "ruleId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local rule id."
+        },
+        {
+          "name": "subjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "scopeKind",
+          "type": "TenantRuleScopeKind",
+          "required": true,
+          "notes": "Tree, Key, Prefix or TenantWide (treeName omitted)."
+        },
+        {
+          "name": "operations",
+          "type": "LatticeOperation",
+          "required": true,
+          "notes": "A non-empty subset of the data-plane operations."
+        },
+        {
+          "name": "effect",
+          "type": "LatticeEffect",
+          "required": true
+        },
+        {
+          "name": "treeName",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Required for Tree, Key and Prefix scopes; omitted for TenantWide."
+        },
+        {
+          "name": "keyOrPrefix",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "subjectKind",
+          "type": "TenantSubjectKind",
+          "required": false,
+          "default": "User",
+          "notes": "User, TenantGroup (a tenant-local group name) or ClusterGroup."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantRulePutResult",
+        "shape": "Structured JSON projection of McpTenantRulePutResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Putting the same draft again replaces the rule with an identical one; one stored copy per local id.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.PutRuleAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
+      ]
+    },
+    {
+      "id": "lattice_tenant_rule_remove",
+      "in_process": "TenantAccessToolHandlers.RemoveRuleAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#remove-tenant-rule",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup.Write"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant the call acts on; groups, trees and rules are named tenant-locally within it."
+        },
+        {
+          "name": "ruleId",
+          "type": "string",
+          "required": true,
+          "notes": "The tenant-local rule id."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantRuleRemoveResult",
+        "shape": "Structured JSON projection of McpTenantRuleRemoveResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer denies the tool, or the facade refuses a caller that is neither a platform operator nor an admin of the tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing an absent rule reports false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolHandlers.Policy.cs#TenantAccessToolHandlers.RemoveRuleAsync",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs#TenantAccessToolGroup",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolFaults.cs#TenantAccessToolFaults"
       ]
     },
     {

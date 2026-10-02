@@ -16,7 +16,7 @@
     "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
   ],
   "in_process": {
-    "interface": "ILatticeTenantAdmin, ILatticeTenantRegionAdmin, ILatticeTenantAccessAdmin, ILatticeTenantGrantAdmin, ILatticeTenantSelfService, ILatticeTenantQuotaUsage",
+    "interface": "ILatticeTenantAdmin, ILatticeTenantRegionAdmin, ILatticeTenantAccessAdmin, ILatticeTenantGrantAdmin, ILatticeTenantSelfService, ILatticeTenantQuotaUsage, ILatticeTenantDirectoryAdmin, ILatticeTenantPolicyAdmin",
     "registration": "AddLatticeTenantAdminApi",
     "source": "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs"
   },
@@ -81,6 +81,95 @@
       ],
       "source": "src/lattice.api.tenantadmin.grpc/Model/AuthSchemeDescriptor.cs"
     },
+    "TenantAccessConfinementRule": {
+      "kind": "enum",
+      "values": [
+        "GroupNesting",
+        "ForeignTenantGroup",
+        "RuleTree",
+        "RuleOperations",
+        "ReservedRuleId"
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessConfinementRule.cs#TenantAccessConfinementRule"
+    },
+    "TenantAccessPageRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessPageRequest.cs"
+    },
+    "TenantAccessPosture": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Enabled",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CallerIsTenantAdmin",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CallerIsPlatformOperator",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Groups",
+          "type": "TenantQuotaDimensionUsage",
+          "required": false
+        },
+        {
+          "name": "MembershipEdges",
+          "type": "TenantQuotaDimensionUsage",
+          "required": false
+        },
+        {
+          "name": "MemberSubjects",
+          "type": "TenantQuotaDimensionUsage",
+          "required": false
+        },
+        {
+          "name": "TenantRules",
+          "type": "TenantQuotaDimensionUsage",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessPosture.cs"
+    },
+    "TenantAdminAccessListRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Page",
+          "type": "TenantAccessPageRequest",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminAccessListRequest.cs"
+    },
     "TenantAdminCreateRequest": {
       "kind": "record",
       "fields": [
@@ -96,6 +185,68 @@
         }
       ],
       "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminCreateRequest.cs"
+    },
+    "TenantAdminEffectivePermissionsRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminEffectivePermissionsRequest.cs"
+    },
+    "TenantAdminExplainRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Operation",
+          "type": "LatticeOperation",
+          "required": false
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminExplainRequest.cs"
     },
     "TenantAdminGrantOfferRequest": {
       "kind": "record",
@@ -144,6 +295,107 @@
       ],
       "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGrantRequest.cs"
     },
+    "TenantAdminGroupLookup": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Group",
+          "type": "TenantGroupDescriptor?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGroupLookup.cs"
+    },
+    "TenantAdminGroupMemberList": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Members",
+          "type": "IReadOnlyList<TenantGroupMember>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGroupMemberList.cs"
+    },
+    "TenantAdminGroupMemberRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GroupName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "MemberId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "MemberKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGroupMemberRequest.cs"
+    },
+    "TenantAdminGroupRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GroupName",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGroupRequest.cs"
+    },
+    "TenantAdminGroupUpsertRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Group",
+          "type": "TenantGroupDescriptor",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGroupUpsertRequest.cs"
+    },
+    "TenantAdminMemberRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminMemberRequest.cs"
+    },
     "TenantAdminRegionSetRequest": {
       "kind": "record",
       "fields": [
@@ -159,6 +411,60 @@
         }
       ],
       "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminRegionSetRequest.cs"
+    },
+    "TenantAdminRuleLookup": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Rule",
+          "type": "TenantRuleView?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminRuleLookup.cs"
+    },
+    "TenantAdminRulePutRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Rule",
+          "type": "TenantRuleDraft",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminRulePutRequest.cs"
+    },
+    "TenantAdminRuleRemoval": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Removed",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminRuleRemoval.cs"
+    },
+    "TenantAdminRuleRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "RuleId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminRuleRequest.cs"
     },
     "TenantAdminSetQuotasRequest": {
       "kind": "record",
@@ -261,6 +567,108 @@
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantDescriptor.cs"
     },
+    "TenantEffectivePermissions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        },
+        {
+          "name": "TreeName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Rules",
+          "type": "IReadOnlyList<TenantRuleView>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantEffectivePermissions.cs"
+    },
+    "TenantExplanation": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        },
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Operation",
+          "type": "LatticeOperation",
+          "required": false
+        },
+        {
+          "name": "Allowed",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Filtered",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Reason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "DecidingLayer",
+          "type": "TenantRuleLayer?",
+          "required": false
+        },
+        {
+          "name": "DecidingRule",
+          "type": "TenantRuleView?",
+          "required": false
+        },
+        {
+          "name": "DefaultEffect",
+          "type": "LatticeEffect",
+          "required": false
+        },
+        {
+          "name": "MatchedRules",
+          "type": "IReadOnlyList<TenantRuleView>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantExplanation.cs"
+    },
     "TenantGrantChangeResult": {
       "kind": "record",
       "fields": [
@@ -334,6 +742,158 @@
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantReport.cs"
     },
+    "TenantGroupDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupDescriptor.cs"
+    },
+    "TenantGroupMember": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "MemberId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "TenantSubjectKind",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupMember.cs"
+    },
+    "TenantGroupPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<TenantGroupDescriptor>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupPage.cs"
+    },
+    "TenantGroupRemovalResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GroupName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Removed",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "EdgesRemoved",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "RemovedFromMemberSet",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "RemovedFromAdminSet",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "RemovedRuleIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupRemovalResult.cs"
+    },
+    "TenantMemberEntry": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "TenantSubjectKind",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantMemberEntry.cs"
+    },
+    "TenantMemberPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<TenantMemberEntry>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantMemberPage.cs"
+    },
+    "TenantMembershipChangeResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GroupName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        },
+        {
+          "name": "Changed",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantMembershipChangeResult.cs"
+    },
     "TenantQuotaEnforcementScope": {
       "kind": "enum",
       "values": [
@@ -400,6 +960,30 @@
           "name": "BurstPercent",
           "type": "int",
           "required": true
+        },
+        {
+          "name": "MaxGroups",
+          "type": "long?",
+          "required": false,
+          "notes": "Delegated tenant access cap; null means the built-in default, never unbounded."
+        },
+        {
+          "name": "MaxMembershipEdges",
+          "type": "long?",
+          "required": false,
+          "notes": "Delegated tenant access cap; null means the built-in default, never unbounded."
+        },
+        {
+          "name": "MaxMemberSubjects",
+          "type": "long?",
+          "required": false,
+          "notes": "Delegated tenant access cap; null means the built-in default, never unbounded."
+        },
+        {
+          "name": "MaxTenantRules",
+          "type": "long?",
+          "required": false,
+          "notes": "Delegated tenant access cap; null means the built-in default, never unbounded."
         }
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotasDescriptor.cs"
@@ -445,6 +1029,157 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantResidencyChangeResult.cs"
+    },
+    "TenantRuleDraft": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "RuleId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        },
+        {
+          "name": "ScopeKind",
+          "type": "TenantRuleScopeKind",
+          "required": false
+        },
+        {
+          "name": "TreeName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "KeyOrPrefix",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Operations",
+          "type": "LatticeOperation",
+          "required": false
+        },
+        {
+          "name": "Effect",
+          "type": "LatticeEffect",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleDraft.cs"
+    },
+    "TenantRuleLayer": {
+      "kind": "enum",
+      "values": [
+        "Platform",
+        "Tenant"
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleLayer.cs#TenantRuleLayer"
+    },
+    "TenantRuleOrigin": {
+      "kind": "enum",
+      "values": [
+        "PlatformTree",
+        "PlatformWide",
+        "AppRole",
+        "Tenant"
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleOrigin.cs#TenantRuleOrigin"
+    },
+    "TenantRulePage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<TenantRuleView>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRulePage.cs"
+    },
+    "TenantRuleScopeKind": {
+      "kind": "enum",
+      "values": [
+        "Tree",
+        "Key",
+        "Prefix",
+        "TenantWide"
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleScopeKind.cs#TenantRuleScopeKind"
+    },
+    "TenantRuleView": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "RuleId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Layer",
+          "type": "TenantRuleLayer",
+          "required": false
+        },
+        {
+          "name": "Origin",
+          "type": "TenantRuleOrigin",
+          "required": false
+        },
+        {
+          "name": "Editable",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SubjectId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        },
+        {
+          "name": "ScopeKind",
+          "type": "TenantRuleScopeKind",
+          "required": false
+        },
+        {
+          "name": "TreeName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "KeyOrPrefix",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Operations",
+          "type": "LatticeOperation",
+          "required": false
+        },
+        {
+          "name": "Effect",
+          "type": "LatticeEffect",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleView.cs"
     },
     "TenantSelfCurrentRequest": {
       "kind": "record",
@@ -523,6 +1258,56 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusReport.cs"
+    },
+    "TenantSubjectKind": {
+      "kind": "enum",
+      "values": [
+        "User",
+        "TenantGroup",
+        "ClusterGroup"
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectKind.cs#TenantSubjectKind"
+    },
+    "TenantSubjectResolution": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectKind",
+          "type": "TenantSubjectKind",
+          "required": false
+        },
+        {
+          "name": "IsAdmin",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "IsMember",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "AdminEntries",
+          "type": "IReadOnlyList<TenantMemberEntry>",
+          "required": false
+        },
+        {
+          "name": "MemberEntries",
+          "type": "IReadOnlyList<TenantMemberEntry>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectResolution.cs"
     }
   },
   "operations": [
@@ -2564,7 +3349,7 @@
     },
     {
       "id": "failed-precondition",
-      "type": "ReservedTenantOperationException, TenantLastAdminSubjectException, TenantLastRegionException, TenantGrantTransitionException, TenantRegionNotAllowedException, InvalidOperationException",
+      "type": "ReservedTenantOperationException, TenantAccessAdministrationDisabledException, TenantLastAdminSubjectException, TenantLastRegionException, TenantGrantTransitionException, TenantRegionNotAllowedException, InvalidOperationException",
       "grpc_status": "FailedPrecondition",
       "retryable": false,
       "meaning": "Cluster state or reserved-target invariants refused a well-formed request.",
@@ -2580,7 +3365,7 @@
     },
     {
       "id": "invalid-argument",
-      "type": "ArgumentException",
+      "type": "ArgumentException (including TenantAccessConfinementException)",
       "grpc_status": "InvalidArgument",
       "retryable": false,
       "meaning": "Request validation failed.",
@@ -2605,9 +3390,9 @@
     {
       "id": "quota-exceeded",
       "type": "LatticeQuotaExceededException",
-      "grpc_status": null,
+      "grpc_status": "ResourceExhausted",
       "retryable": false,
-      "meaning": "The active tenant quota would be exceeded.",
+      "meaning": "The active tenant quota, or a delegated tenant access cap (MaxGroups, MaxMembershipEdges, MaxMemberSubjects, MaxTenantRules), would be exceeded. Over gRPC it is ResourceExhausted with lattice-quota-dimension, -current and -limit trailers.",
       "source": "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException"
     },
     {

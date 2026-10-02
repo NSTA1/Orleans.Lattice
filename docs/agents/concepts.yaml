@@ -1979,6 +1979,106 @@ concepts:
     sources:
       - "docs/lattice.tenancy/README.md"
       - "PACKAGES.md"
+  - id: tenant-group
+    name: "Tenant group"
+    category: identity
+    definition: "A tenant group is a membership group a tenant's own administrators create and manage inside their tenant, identified by the reserved grammar t/{tenant}/{name}."
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Membership"
+      - "Orleans.Lattice.Api.TenantAdmin"
+    capability_boundary:
+      in_scope:
+        - statement: "LatticeTenantGroupId owns the t/{tenant}/{name} grammar; the name is 1 to 63 lower-case ASCII letters, digits, '-', '_' and '.'."
+          source: "src/lattice/LatticeTenantGroupId.cs#LatticeTenantGroupId"
+        - statement: "A tenant group may contain users, groups of the same tenant and cluster groups."
+          source: "docs/lattice.membership/README.md"
+        - statement: "Tenant administrators manage tenant groups through ILatticeTenantDirectoryAdmin by tenant-local name."
+          source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin"
+      out_of_scope:
+        - statement: "A tenant group never becomes a member of a cluster group or of another tenant's group."
+          source: "src/lattice.membership/LatticeTenantGroupNestingException.cs#LatticeTenantGroupNestingException"
+        - statement: "Tenant groups share the sys-membership trees and are not bound by tenant residency."
+          source: "docs/lattice.tenancy/README.md"
+    operational_envelope:
+      limits:
+        - statement: "MaxGroups caps a tenant's groups (default 500, never unbounded)."
+          source: "src/lattice.tenancy/TenantQuotas.cs#TenantQuotas.DefaultMaxGroups"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - "docs/lattice.membership/README.md"
+  - id: tenant-member
+    name: "Tenant member"
+    category: identity
+    definition: "A tenant member is an entry of a tenant's member set - a user, one of the tenant's own groups, or a cluster group - whose subjects may act as the tenant on the data plane while delegated tenant access administration is enabled."
+    packages:
+      - "Orleans.Lattice.Tenancy"
+      - "Orleans.Lattice.Api.TenantAdmin"
+    capability_boundary:
+      in_scope:
+        - statement: "A subject may act as a tenant when its id or a resolved transitive group is in the tenant's admin set or member set; admins are implicitly members."
+          source: "src/lattice.tenancy/TenantRecord.cs#TenantRecord.IsMember"
+        - statement: "Tenant administrators manage the member set through ILatticeTenantDirectoryAdmin."
+          source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.AddMemberAsync"
+      out_of_scope:
+        - statement: "Membership only passes the tenant gate; what a member may do is decided by rules, default-deny."
+          source: "docs/lattice.tenancy/README.md"
+        - statement: "The reserved default tenant accepts no member entries."
+          source: "src/lattice.tenancy/TenantRecord.cs#TenantRecord.AddMemberSubject"
+    operational_envelope:
+      limits:
+        - statement: "MaxMemberSubjects caps a tenant's member set (default 5000, never unbounded)."
+          source: "src/lattice.tenancy/TenantQuotas.cs#TenantQuotas.DefaultMaxMemberSubjects"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+  - id: tenant-rule-layer
+    name: "Tenant rule layer"
+    category: identity
+    definition: "The tenant rule layer evaluates tenant-tier authorization rules (ids prefixed tenant:{tenant}:) on a tenant's own trees beneath the operator layer, only when no operator rule matches."
+    packages:
+      - "Orleans.Lattice.Auth"
+      - "Orleans.Lattice.Tenancy"
+    capability_boundary:
+      in_scope:
+        - statement: "A matched operator verdict is final; the tenant layer runs only when no operator rule matches, in the order tenant-wide deny, tree most-specific verdict, tenant-wide allow, default effect."
+          source: "docs/lattice.auth/tenant-layer.md"
+        - statement: "ITenantRuleLayer is the on/off seam; tenancy supplies an active implementation that reads its delegated-access flag."
+          source: "src/lattice.auth/ITenantRuleLayer.cs#ITenantRuleLayer"
+        - statement: "LatticeTenantRuleIds owns the reserved tenant: rule-id namespace."
+          source: "src/lattice.auth/LatticeTenantRuleIds.cs#LatticeTenantRuleIds"
+      out_of_scope:
+        - statement: "The tenant layer never governs app-owned, reserved, system or default-tenant trees."
+          source: "docs/lattice.auth/tenant-layer.md"
+        - statement: "A tenant rule can neither override an operator deny nor revoke an operator allow."
+          source: "docs/lattice.auth/tenant-layer.md"
+    operational_envelope:
+      limits:
+        - statement: "MaxTenantRules caps a tenant's tenant-tier rules (default 1000, never unbounded)."
+          source: "src/lattice.tenancy/TenantQuotas.cs#TenantQuotas.DefaultMaxTenantRules"
+    sources:
+      - "docs/lattice.auth/tenant-layer.md"
+      - "src/lattice.auth/PolicyEvaluator.cs"
+  - id: tenant-wide-scope
+    name: "Tenant-wide scope"
+    category: identity
+    definition: "The tenant-wide scope is a whole-tree authorization scope over the sentinel tree id t/{tenant}/*, standing for every tree a tenant owns; it is authorable only on a tenant-tier rule."
+    packages:
+      - "Orleans.Lattice.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "LatticeScope.TenantWide creates the scope; IsTenantWide and TryGetTenantWideTenant recognise it."
+          source: "src/lattice.auth/LatticeScope.cs#LatticeScope.TenantWide"
+        - statement: "The policy store refuses a t/{x}/* scope unless the rule is that tenant's own tenant-tier rule."
+          source: "docs/lattice.auth/tenant-layer.md"
+      out_of_scope:
+        - statement: "The tenant-wide scope never reaches app-owned, reserved or system trees, nor another tenant's trees."
+          source: "src/lattice.auth/LatticeScope.cs#LatticeScope.TenantWide"
+        - statement: "The cluster Tree:* tier and AllTreesGrantsEnabled are unchanged and stay operator-only."
+          source: "docs/lattice.auth/tenant-layer.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.auth/tenant-layer.md"
   - id: tombstone
     name: "Tombstone"
     category: core

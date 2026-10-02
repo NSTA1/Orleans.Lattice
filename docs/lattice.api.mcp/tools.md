@@ -27,7 +27,7 @@ Each module registration is idempotent except `AddDataTools`, which is meant to 
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
 | TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree lifecycle, restore, bulk-load, WAL-move, orphaned-leaf repair, view, tag-index, compaction, and retention control, gated by `enableLifecycle` |
 | Tenant self-awareness | `AddTenantSelfAwarenessTools()` | always (self-gates on tenancy) | none (read-only facade) |
-| Tenant-admin | `AddTenantAdminTools(enableControl)` | none (its one inspect tool, `lattice_tenant_region_status`, is contributed only with `enableControl`) | tenant create / suspend / resume / delete / set-quotas and region authorize / set-residency, gated by `enableControl` |
+| Tenant-admin | `AddTenantAdminTools(enableControl)` | none (its inspect tools - `lattice_tenant_region_status` and the nine [delegated tenant access](#delegated-tenant-access-tools) reads - are contributed only with `enableControl`) | tenant create / suspend / resume / delete / set-quotas, region authorize / set-residency, and the eight delegated tenant access writes, gated by `enableControl` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -184,6 +184,8 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 | `lattice_auth_remove_member` | admin | Remove a group member. |
 | `lattice_auth_put_rule` | admin | Create or replace a rule. |
 | `lattice_auth_remove_rule` | admin | Remove a rule. |
+
+`lattice_auth_list_groups` lists cluster groups only. Pass `includeTenantGroups: true` to also list every tenant's tenant groups (the ids in the reserved `t/{tenant}/{name}` grammar that tenant administrators manage through the [delegated tenant access tools](#delegated-tenant-access-tools)); the filter applies before the page is cut. `lattice_auth_upsert_group` refuses an id starting with `t/`, and `lattice_auth_put_rule` refuses a rule id starting with `tenant:` or a tenant-wide `t/{tenant}/*` scope: those belong to the tenant tier. `lattice_auth_remove_rule` can still remove a tenant-tier rule, as a break-glass action. See [Delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration).
 
 `lattice_auth_explain` and `lattice_auth_effective_permissions` take an optional `subjectKind` argument (`User` by default). Set it to `Group` when `subjectId` names a group, so the tool resolves the group's rule closure instead of treating the id as a user; otherwise a group subject matches no rules and the decision falls through to the tree's default effect.
 
@@ -380,7 +382,7 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 | `lattice_tenant_suspend` | manage | Move a tenant to the suspended status. Idempotent; the reserved default tenant cannot be suspended. |
 | `lattice_tenant_resume` | manage | Return a suspended tenant to the active status. Idempotent; fails closed if the tenant does not exist. |
 | `lattice_tenant_delete` | manage | Delete a tenant, cascading a soft-delete to every tree the tenant owns before removing its registry record. The reserved default tenant cannot be deleted. |
-| `lattice_tenant_set_quotas` | manage | Author a tenant's resource quotas and burst allowance, replacing whatever quotas it currently carries. Each ceiling (`maxBytes`, `maxKeys`, `maxMemoryBytes`, `maxTreeCount`, `maxOpsPerSecond`) is null for unbounded on that dimension, and a bounded ceiling must be non-negative; pass every dimension null to lift the caps again. `burstPercent` must be non-negative. The reserved default tenant cannot be given quotas, and it fails closed if the tenant does not exist. |
+| `lattice_tenant_set_quotas` | manage | Author a tenant's resource quotas and burst allowance, replacing whatever quotas it currently carries. Each ceiling (`maxBytes`, `maxKeys`, `maxMemoryBytes`, `maxTreeCount`, `maxOpsPerSecond`) is null for unbounded on that dimension, and a bounded ceiling must be non-negative; pass every dimension null to lift the caps again. `burstPercent` must be non-negative. The four delegated access caps (`maxGroups`, `maxMembershipEdges`, `maxMemberSubjects`, `maxTenantRules`) are each null for their default (500, 10000, 5000 and 1000), never unbounded, and lifting the resource ceilings does not lift them; the result echoes them. The reserved default tenant cannot be given quotas, and it fails closed if the tenant does not exist. |
 
 Every tool carries `destructiveHint = true` and `readOnlyHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's own fail-closed tenant-admin access gate, so an unauthorized caller is default-denied on every mutation.
 
@@ -418,6 +420,50 @@ The typical workflow is:
 
 This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires a region-residency gRPC adapter off the same `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint.
 
+## Delegated tenant access tools
+
+Tenant groups, the tenant member set, tenant-tier rules, a layer-aware explain and the tenant access posture, as thin adapters over `ILatticeTenantDirectoryAdmin` and `ILatticeTenantPolicyAdmin` (see [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration)). They are contributed by the same `AddTenantAdminTools(enableControl)` registration and advertised under the existing tenant-admin group, so `lattice_capabilities` gains no new group. Two conditions decide whether they appear:
+
+- **`enableControl` gates reads and writes alike.** Without it none of the seventeen tools is contributed, exactly as for `lattice_tenant_region_status`.
+- **Each facade's tools need that facade registered.** The directory tools appear only when `ILatticeTenantDirectoryAdmin` is registered, and the policy tools only when `ILatticeTenantPolicyAdmin` is; the check reads the service collection without resolving the facade. `AddLatticeTenantAdminApi` registers both on a silo.
+
+Every tool takes `tenantId` and names groups, trees and rules by their **tenant-local** names; the facade composes `t/{tenant}/{name}`, `t/{tenant}/{tree}` and `tenant:{tenant}:{id}`. A `subjectKind` or `memberKind` argument (`User` by default, `TenantGroup`, or `ClusterGroup`) says how to read a subject id. The paged reads take `pageSize` and `pageToken` and return `nextPageToken`.
+
+| Tool | Kind | Facade member | Purpose |
+|---|---|---|---|
+| `lattice_tenant_group_list` | inspect | `ListGroupsAsync` | One page of the tenant's own groups by local name. Another tenant's groups are never listed. |
+| `lattice_tenant_group_get` | inspect | `GetGroupAsync` | One group by local name; `found: false` when it does not exist, including another tenant's group. |
+| `lattice_tenant_group_members` | inspect | `ListGroupMembersAsync` | A group's direct members, each with its kind. |
+| `lattice_tenant_member_list` | inspect | `ListMembersAsync` | One page of the tenant member set, each entry with its kind. |
+| `lattice_tenant_rule_list` | inspect | `ListRulesAsync` | One page of the tenant's tenant-tier rules (editable) and the operator rules scoped to its own trees (layer `Platform`, read-only). Cluster-wide and app rules are not listed. |
+| `lattice_tenant_rule_get` | inspect | `GetRuleAsync` | One tenant-tier rule by local id; `found: false` when none exists. |
+| `lattice_tenant_explain` | inspect | `ExplainAsync` | Whether a subject may perform an operation on one of the tenant's trees, optionally one key, with the deciding layer and rule. |
+| `lattice_tenant_effective_permissions` | inspect | `EffectivePermissionsAsync` | The rules of both layers that apply to a subject on the tenant's trees, optionally one tree, labelled by layer and origin. |
+| `lattice_tenant_access_posture` | inspect | `GetPostureAsync` | Whether the feature is enabled, whether the caller is an admin of the tenant or a platform operator, and the four access caps with their usage. The one tool that answers while the feature is off. |
+| `lattice_tenant_group_upsert` | manage | `UpsertGroupAsync` | Create a group, or change its display name. Creating counts against `MaxGroups`. |
+| `lattice_tenant_group_remove` | manage | `RemoveGroupAsync` | Remove a group, cascading its edges in both directions, its member-set and admin-set entries and the tenant rules that name it. `removed: false` when it does not exist. Removing the tenant's last admin entry is refused. |
+| `lattice_tenant_group_member_add` | manage | `AddGroupMemberAsync` | Add a user, a cluster group or another of the tenant's groups to a group. Idempotent; counts against `MaxMembershipEdges`. |
+| `lattice_tenant_group_member_remove` | manage | `RemoveGroupMemberAsync` | Remove a direct member; `changed: false` when it was absent. |
+| `lattice_tenant_member_add` | manage | `AddMemberAsync` | Add a user, a cluster group or one of the tenant's groups to the member set. Idempotent; counts against `MaxMemberSubjects`. |
+| `lattice_tenant_member_remove` | manage | `RemoveMemberAsync` | Remove a member-set entry; `changed: false` when it was absent. |
+| `lattice_tenant_rule_put` | manage | `PutRuleAsync` | Create or replace a tenant-tier rule over a tree, a key, a prefix, or every tree the tenant owns (`scopeKind: TenantWide`, with no `treeName`). Counts against `MaxTenantRules`. |
+| `lattice_tenant_rule_remove` | manage | `RemoveRuleAsync` | Remove a tenant-tier rule by local id; `removed: false` when none existed. Operator rules cannot be removed here. |
+
+The reads carry `readOnlyHint = true` and `destructiveHint = false`; the writes carry `destructiveHint = true` and `readOnlyHint = false`. A rule that a cluster-wide (`Tree:*`) rule or an app role contributed is reported by `ruleId`, `layer`, `origin` and `effect` only, with `subjectWithheld: true`. `ResolveSubjectAsync` has no tool.
+
+The module adds no authorization path of its own: each tool stamps the caller credential and defers to the facade, which authorizes a platform operator or an admin of the tenant, directly or through a group, before it reads or writes anything. A denial stays a denial. The facades' other typed failures are mapped to fixed messages:
+
+| Facade failure | What the client sees |
+|---|---|
+| `TenantAccessAdministrationDisabledException` | An error saying delegated tenant access administration is not enabled on the cluster and pointing at `lattice_tenant_access_posture`. |
+| `TenantAccessConfinementException` | A client error (`rejected_content`) naming the confinement rule (`GroupNesting`, `ForeignTenantGroup`, `RuleTree`, `RuleOperations` or `ReservedRuleId`) with fixed text; the facade's own message is not echoed. |
+| `ReservedTenantOperationException` | A client error (`invalid_argument`) saying the reserved default tenant has no delegated access administration. |
+| `TenantLastAdminSubjectException` | A client error (`invalid_argument`) saying the change would leave the tenant with no admin subject. |
+| `LatticeQuotaExceededException` | An error naming the cap's dimension and limit and pointing at `lattice_tenant_set_quotas`. |
+| Any other `ArgumentException` | A client error (`invalid_argument`) carrying the facade's message, sanitised. |
+
+A remote (out-of-silo) head does not yet register either facade, so it contributes none of these tools.
+
 ## Error handling
 
 Every facade-backed tool call is routed through a single translation seam, so a fault is surfaced to the client as an actionable error result rather than the SDK's opaque generic mask. The translated message names the failure class:
@@ -445,7 +491,7 @@ The ModelContextProtocol SDK logs every exception a tool throws at Error level w
 
 The message of a classified client error is sanitised once, before it is returned or logged: every control character and Unicode line or paragraph separator is replaced with `?`, and a message longer than 2,048 characters is cut there and ends in `...`, so a caller-chosen key, path or argument name cannot forge a record in a line-oriented log.
 
-The built-in `lattice_*` tools raise only the two argument-binding reasons - `unknown_argument`, and `invalid_argument` for an argument the SDK's binder cannot bind; `rejected_content`, `not_found`, and the other `invalid_argument` cases come from the [repository-context tools](../lattice.api.mcp.repocontext/tools.md#tool-parameters). A caller mistake that a tool does not classify is still thrown, so it still logs at Error and is not counted. In the built-in groups that includes a `value` that is not valid base64 on `lattice_data_set`, an argument the facade rejects, and an `InvalidArgument` status from a remote head. Several repository-context refusals are unclassified too, for example a fencing conflict or a claim on a non-memory key; the repository-context page lists them.
+The built-in `lattice_*` tools raise the two argument-binding reasons - `unknown_argument`, and `invalid_argument` for an argument the SDK's binder cannot bind - and the [delegated tenant access tools](#delegated-tenant-access-tools) also raise `rejected_content` for a confinement refusal and `invalid_argument` for the facade failures that table lists; `not_found` and the other `rejected_content` and `invalid_argument` cases come from the [repository-context tools](../lattice.api.mcp.repocontext/tools.md#tool-parameters). A caller mistake that a tool does not classify is still thrown, so it still logs at Error and is not counted. In the built-in groups that includes a `value` that is not valid base64 on `lattice_data_set`, an argument the facade rejects, and an `InvalidArgument` status from a remote head. Several repository-context refusals are unclassified too, for example a fencing conflict or a claim on a non-memory key; the repository-context page lists them.
 
 The Debug line is the MCP host's own record, and a tool group can log a failure itself before the host sees it. The repository-context tools do: they log every call that reaches one of their tools and fails at Warning with its exception, a classified client error included. So a caller mistake on a `repocontext_*` tool still leaves a Warning line with a stack beside the host's Debug line. An undeclared argument, a refused `region`, and a refusal by the registered `ILatticeApiMcpAuthorizer` are turned away before the tool runs, so they leave no such line. An access-gate denial that fails the call from inside a `repocontext_*` tool - the `LatticeAuthorizationDeniedException` the tree access gate throws when it refuses the caller's credential on one of the tool's tree operations - does reach that logger, so it leaves the Warning line with its stack. The host then turns it into an unclassified error, so it also logs at Error and is not counted as a client error.
 

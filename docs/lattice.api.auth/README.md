@@ -100,6 +100,44 @@ In the Explorer's Access area, the rule editor's **All trees (cluster-wide)** sc
 
 **Security caveat.** An all-trees grant is broad by design - it applies to every application tree, including trees created after the rule was authored. Grant it sparingly, and prefer a specific-tree deny to carve out an exception. Turning `AllTreesGrantsEnabled` back off stops **new** all-trees evaluation but does **not** delete existing `Tree:*` rules - remove the rule to retire it.
 
+### Tenant-tier alignment
+
+[Delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration)
+lets a tenant's own administrators manage tenant groups and write tenant-tier rules
+through the tenant facades of [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration).
+This facade stays the operator's surface, and it keeps the two tiers apart. Every
+`ILatticeAuthAdmin` member is unchanged; the behaviour below holds whether or not the
+feature is enabled.
+
+- **The `t/` group namespace is reserved.** `UpsertGroupAsync` refuses any group id
+  starting with `t/` with `LatticeTenantOwnedGroupException` (an `ArgumentException`
+  carrying `GroupId`), after the administrator check and before directory
+  validation. `AddMemberAsync` skips identity-directory validation for a `t/` id, so
+  an edge that would nest a tenant group outside its tenant reaches the membership
+  directory and fails there with `LatticeTenantGroupNestingException`.
+- **Group listings show cluster groups by default.** `ListGroupsAsync` lists only
+  cluster groups unless `AuthPageRequest.IncludeTenantGroups` is set; the filter is
+  applied before the page is cut.
+- **Operators cannot author tenant-tier rules.** `PutRuleAsync` refuses a `tenant:`
+  rule id with `LatticeTenantOwnedRuleException`, and a rule over a tenant-wide
+  sentinel tree `t/{tenant}/*` with an `ArgumentException` naming
+  `ILatticeTenantPolicyAdmin`; neither reaches the policy store.
+- **Break-glass removal.** `RemoveRuleAsync` of a `tenant:` rule runs the store call
+  under system origin, so an operator can remove a tenant-tier rule after the
+  administrator check.
+- **Tenant-tier rules are visible.** `ListRulesAsync` and `ListRulesForTreeAsync`
+  list tenant-tier rules, and `AuthRulePage.TenantRuleTenants` marks each one with its
+  owning tenant. For a tree the tenant layer governs, `ListRulesForTreeAsync` and the
+  rules `ExplainAsync` cites also include the owning tenant's tenant-wide rules, as
+  they include the `Tree:*` bucket.
+- **Explain names the deciding layer.** `AuthExplanation.DecidingLayer` is `Platform`
+  when an operator rule decided and `Tenant` when a tenant-tier rule did, with
+  `DecidingRuleId`; both are `null` when the default effect decided or a tree- or
+  prefix-scoped verdict was resolved key by key. `AuthEffectivePermissions.RuleLayers`
+  labels each listed rule's layer.
+- **Posture.** `AccessModelDescriptor.DelegatedTenantAccessAdministrationEnabled`
+  reports whether the tenant rule layer is active.
+
 ## Wire model
 
 Every request / response record is Orleans-serialized with a stable, compact alias (the `oli.` prefix). Group records are the facade's own serializable DTOs (`AuthGroup`, which like every facade DTO ships in the shared `Orleans.Lattice.Api.Abstractions` package); rules are surfaced as the durable `LatticeAuthorizationRule` policy model directly, so a binding sees the same rule shape the store persists. Only the **catalog** list endpoints - `ListGroupsAsync`, `ListRulesAsync`, and `ListRulesForTreeAsync` - page with an exclusive continuation-token cursor (`AuthPageRequest` / `Auth*Page`, see [Paging and group DTOs](#paging-and-group-dtos)), mirroring the `Orleans.Lattice.Api.State` catalog paging convention. The membership lookups `ListGroupMembersAsync` and `ListSubjectGroupsAsync` are **not** paged: each returns the full `IReadOnlyList<string>` of member (or group) ids in a single call.
@@ -145,6 +183,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `LocalMembershipEffective` | `bool` | Whether locally-administered group membership (the groups and member edges this facade manages) contributes to a subject's effective groups at authorization time; `false` under the token-only group-merge mode, where groups come solely from the identity-provider token and local membership administration is inert. |
 | `AllTreesGrantsEnabled` | `bool` | The live all-trees-grants tier flag. |
 | `AccessAdministrationDelegationEnabled` | `bool` | The live access-administration-delegation tier flag. |
+| `DelegatedTenantAccessAdministrationEnabled` | `bool` | Whether delegated tenant access administration is enabled (`LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`), so tenant groups, members and tenant-tier rules are in force. `false` on a cluster without the tenancy add-on, and from a server that predates the member. |
 
 ### `AuthExplanation` (returned by `ExplainAsync`)
 
@@ -160,6 +199,8 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `DefaultEffect` | `LatticeEffect` | The closed-world default effect applied when no rule matches. |
 | `MatchedRules` | `IReadOnlyList<LatticeAuthorizationRule>` | The authored rules whose subject, operations, and scope overlap the request, from the target tree and the cluster-wide `*` bucket, capped at `MaxExplanationRules` (advisory; `Allowed` is authoritative). The list is assembled independently of the verdict: it is empty when no authored rule matches, but it can cite a rule that did not decide the verdict - for example one naming a bootstrap administrator, whose allow comes from the bypass, or a data-plane `Tree:*` rule that is inert while `AllTreesGrantsEnabled` is off (see `Posture`). |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags), so a caller can tell an in-force all-trees rule from an authored-but-inert one. |
+| `DecidingLayer` | `TenantRuleLayer?` | `Platform` when an operator rule decided (its verdict is final), `Tenant` when no operator rule matched and a tenant-tier rule did. For a tree- or prefix-scoped request it is set only when one rule decides the whole scope; `null` when the default effect decided, when the verdict is resolved key by key, and from a server that predates the member. |
+| `DecidingRuleId` | `string?` | The id of the deciding rule; `null` exactly when `DecidingLayer` is. |
 
 ### `AuthEffectivePermissions` (returned by `EffectivePermissionsAsync`)
 
@@ -169,6 +210,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `GroupIds` | `IReadOnlyList<string>` | The subject's transitive directory group closure, ascending, resolved exactly as for `AuthExplanation.GroupIds`. |
 | `Rules` | `IReadOnlyList<LatticeAuthorizationRule>` | Every authored rule whose subject is the subject itself or one of its groups, allow and deny alike, read from the live policy store, capped at `MaxExplanationRules`, and ordered by `(governed tree id, rule id)`. A listing rather than a verdict; see `EffectivePermissionsAsync` above. |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags). |
+| `RuleLayers` | `IReadOnlyList<TenantRuleLayer>` | The layer of each rule in `Rules`, index-aligned with it; empty when every rule is an operator (`Platform`) rule, and from a server that predates the member. |
 
 ### `AuthPolicyPosture`
 
@@ -186,6 +228,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `PageSize` | `int` | Maximum entries per page. Defaults to `AuthPageRequest.DefaultPageSize` (100); a value below 1 falls back to that default and a value above `AuthPageRequest.MaxPageSize` (1000) is clamped to it. `EffectivePageSize` reports the size actually applied. |
 | `PageToken` | `string?` | The exclusive continuation cursor - the previous page's `NextPageToken` - or `null` to start from the beginning. |
 | `ActiveTenantOnly` | `bool` | When `true`, `ListRulesAsync` lists only the rules whose governed tree is one of the caller's active tenant's own trees (`t/{tenant}/{name}`, or a bare tree id for the reserved default tenant). Cluster-wide `Tree:*` rules and rules on platform trees belong to no tenant and are never listed; read them with `ListRulesForTreeAsync` for `*`. The tenant is never taken from the request: it is the caller's validated active-tenant assertion, or the default tenant when the call asserts none, and an assertion the caller may not make is refused, never defaulted. The narrowing happens before the page is cut, so every page but the last is full. `false` (the default) lists the whole catalogue. Ignored by `ListGroupsAsync` and `ListRulesForTreeAsync`. |
+| `IncludeTenantGroups` | `bool` | When `true`, `ListGroupsAsync` also lists every tenant's tenant groups (ids in the reserved `t/{tenant}/{name}` grammar). `false` (the default) lists cluster groups only. The narrowing happens before the page is cut. A server that predates the member ignores it and lists every group. Ignored by the rule listings. |
 
 `AuthGroupPage` (returned by `ListGroupsAsync`) and `AuthRulePage` (returned by `ListRulesAsync` and `ListRulesForTreeAsync`):
 
@@ -194,6 +237,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `Entries` | `IReadOnlyList<AuthGroup>` / `IReadOnlyList<LatticeAuthorizationRule>` | The page's groups, ordered by group id, or its rules, ordered by `(governed tree id, rule id)`. |
 | `NextPageToken` | `string?` | The cursor to pass back as the next request's `PageToken`, or `null` on the final page. |
 | `Tenant` | `string?` | `AuthRulePage` only. The tenant a narrowed listing (`ActiveTenantOnly`) was narrowed to, or `null` for a page of the whole catalogue. A caller that asked for a narrowed page and reads `null` here was answered by a server that predates the narrowing, which ignores the flag and lists the whole catalogue. |
+| `TenantRuleTenants` | `IReadOnlyList<string?>` | `AuthRulePage` only. Empty when no entry on the page is a tenant-tier (`tenant:`) rule; otherwise index-aligned with `Entries`, holding the owning tenant id of each tenant-tier rule and `null` for an operator rule. |
 
 `AuthGroup` (input to `UpsertGroupAsync`; returned by `GetGroupAsync` and inside `AuthGroupPage`):
 
