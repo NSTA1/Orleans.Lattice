@@ -33,6 +33,45 @@ public sealed class AccessTenantAreaTests : AccessTestContext
     }
 
     [Test]
+    public async Task A_tenant_admin_who_sees_the_area_is_not_a_cluster_access_administrator()
+    {
+        // The platform-operator gate asks this question; seeing the area through the
+        // tenant posture must never read as standing over every tenant.
+        AssertTenant("acme");
+        Admin.Fail(nameof(FakeAuthAdmin.ListGroupsAsync), Denied());
+        TenantFacades.AsTenantAdmin();
+        var area = new AccessArea(Services);
+
+        var availability = await area.GetAvailabilityAsync(CancellationToken.None);
+        var operatorStanding = await area.IsClusterAccessAdministratorAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(availability, Is.EqualTo(AreaAvailability.Visible));
+            Assert.That(operatorStanding, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_cluster_access_administrator_has_operator_standing_without_the_posture()
+    {
+        AssertTenant("acme");
+        TenantFacades.AsTenantAdmin();
+        var area = new AccessArea(Services);
+
+        var first = await area.IsClusterAccessAdministratorAsync(CancellationToken.None);
+        var second = await area.IsClusterAccessAdministratorAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.True);
+            Assert.That(second, Is.True, "remembered for the caller");
+            Assert.That(Admin.Calls.Count(call => call == nameof(FakeAuthAdmin.ListGroupsAsync)), Is.EqualTo(1), "probed once");
+            Assert.That(TenantFacades.Gate.Calls, Is.Empty, "the tenant posture is never asked");
+        });
+    }
+
+    [Test]
     public async Task A_platform_operator_reported_by_the_posture_sees_the_area()
     {
         AssertTenant("acme");

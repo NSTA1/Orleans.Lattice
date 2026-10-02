@@ -38,7 +38,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// per-navigation ask is free until any of them changes.
 /// </para>
 /// </remarks>
-internal sealed class AccessArea : IExplorerArea
+internal sealed class AccessArea : IExplorerArea, IPlatformOperatorProbe
 {
     /// <summary>The reason shown while the Explorer is not signed in.</summary>
     public const string SignInReason = "Sign in to administer access on this cluster.";
@@ -51,6 +51,7 @@ internal sealed class AccessArea : IExplorerArea
     private readonly ShellAssertedTenant _tenant;
     private readonly ShellCaller _caller;
     private (ShellCallerKey Caller, AreaAvailability Availability)? _verdict;
+    private (ShellCallerKey Caller, AreaAvailability Availability)? _clusterVerdict;
 
     /// <summary>Creates the area over the circuit's services, any of which may be absent.</summary>
     /// <param name="services">The circuit's services.</param>
@@ -160,7 +161,7 @@ internal sealed class AccessArea : IExplorerArea
 
     private async Task<AreaAvailability> ProbeAsync(bool authenticated, CancellationToken cancellationToken)
     {
-        var cluster = _admin is null ? AreaAvailability.Hidden : await ProbeClusterAsync(authenticated, cancellationToken).ConfigureAwait(true);
+        var cluster = await GetClusterAvailabilityAsync(authenticated, cancellationToken).ConfigureAwait(true);
         if (cluster.Kind != AreaAvailabilityKind.Hidden)
         {
             return cluster;
@@ -170,6 +171,43 @@ internal sealed class AccessArea : IExplorerArea
         // still sees the area while the cluster has delegated tenant access
         // administration on; nobody else is let in by this second question.
         return await ProbeTenantAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Whether the caller administers access for the whole cluster: the cluster
+    /// probe alone, never the tenant posture question that also admits a delegated
+    /// tenant administrator to the area. The platform-operator gate asks this, so a
+    /// tenant administrator never gains operator standing - the tenant switcher or
+    /// the reserved default tenant - by seeing the area.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><see langword="true"/> only when the cluster admitted the probe.</returns>
+    public async ValueTask<bool> IsClusterAccessAdministratorAsync(CancellationToken cancellationToken)
+    {
+        var cluster = await GetClusterAvailabilityAsync(_caller.Current.Authenticated, cancellationToken).ConfigureAwait(true);
+        return cluster.Kind == AreaAvailabilityKind.Visible;
+    }
+
+    private async ValueTask<AreaAvailability> GetClusterAvailabilityAsync(bool authenticated, CancellationToken cancellationToken)
+    {
+        if (_admin is null)
+        {
+            return AreaAvailability.Hidden;
+        }
+
+        var caller = _caller.Current;
+        if (_clusterVerdict is { } memo && memo.Caller == caller)
+        {
+            return memo.Availability;
+        }
+
+        var availability = await ProbeClusterAsync(authenticated, cancellationToken).ConfigureAwait(true);
+        if (_caller.Current == caller)
+        {
+            _clusterVerdict = (caller, availability);
+        }
+
+        return availability;
     }
 
     private async Task<AreaAvailability> ProbeClusterAsync(bool authenticated, CancellationToken cancellationToken)
