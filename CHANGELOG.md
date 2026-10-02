@@ -205,6 +205,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
+
 - **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Security - A password containing `?` or `#` was logged in full.** The secret redactor stopped its userinfo scan at those two characters, found no `@` in the truncated prefix, and read the URL as carrying no credential, so the whole authority reached the log verbatim. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

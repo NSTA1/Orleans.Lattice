@@ -26,15 +26,21 @@ namespace Orleans.Lattice.Backup;
 /// included), so it applies here without any additional wiring.
 /// </para>
 /// <para>
-/// A scope is authorized at its <b>root</b>: a tree scope is a whole-tree check
-/// (a partial / filtered allow is refused, fail-closed, exactly as a bulk-load
-/// or admin operation is), and a prefix or key scope is a point check at the
-/// prefix / key, so a matching allow rule at that scope (or a broader one)
-/// authorizes it while deny-overrides and prefix specificity are honoured by the
-/// gate's own evaluation. Consistent with the high-privilege nature of
-/// <see cref="LatticeOperation.Backup"/>, the capture capability is evaluated as
-/// its own operation and never narrowed by the per-key read key-filter that an
-/// ordinary read honours.
+/// Each scope is authorized over exactly the extent the operation touches. A
+/// tree scope is a whole-tree check (a partial / filtered allow is refused,
+/// fail-closed, exactly as a bulk-load or admin operation is). A prefix scope
+/// is a range check over every key that starts with the prefix
+/// (<c>[prefix, LatticeKeyRange.PrefixUpperBound(prefix))</c>) with the same
+/// hard-deny semantics: the capture or restore drains the whole range under a
+/// system-origin scope, so it is allowed only when the gate grants the entire
+/// range uniformly. An exact-key grant on the prefix string therefore does not
+/// authorize the prefix, and a deny carve-out anywhere below the prefix refuses
+/// it. A key scope is a point check at the key, so a matching allow rule at that
+/// key (or a broader one) authorizes it while deny-overrides and prefix
+/// specificity are honoured by the gate's own evaluation. Consistent with the
+/// high-privilege nature of <see cref="LatticeOperation.Backup"/>, the capture
+/// capability is evaluated as its own operation and never narrowed by the
+/// per-key read key-filter that an ordinary read honours.
 /// </para>
 /// </remarks>
 internal sealed class BackupAccessAuthorizer
@@ -125,7 +131,7 @@ internal sealed class BackupAccessAuthorizer
         {
             BackupScopeKind.WholeTree => LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
                 _gate, _membership, scope.TreeId, operation, cancellationToken),
-            BackupScopeKind.Prefix => LatticeAccessGateEnforcement.EnforcePointAsync(
+            BackupScopeKind.Prefix => LatticeAccessGateEnforcement.EnforcePrefixAsync(
                 _gate, _membership, scope.TreeId, operation, scope.KeyOrPrefix!, cancellationToken),
             BackupScopeKind.Key => LatticeAccessGateEnforcement.EnforcePointAsync(
                 _gate, _membership, scope.TreeId, operation, scope.KeyOrPrefix!, cancellationToken),
