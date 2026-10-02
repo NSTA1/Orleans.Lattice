@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TreeAdmin</PackageId>
-    <Version>9.8.1</Version>
+    <Version>9.9.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice whole-tree administration. Presents one discoverable, fail-closed surface for capability probes, shard diagnostics and hotness, tree statistics, storage and WAL usage, tree lifecycle, configuration and aliases, bulk load, resize, reshard, snapshots, restore, WAL placement and moves, view administration, tag-index repair, retention, shard compaction, the orphaned-leaf audit, survey and repair, and schema-capability delegation. Registered separately; adds no transport behaviour of its own.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
