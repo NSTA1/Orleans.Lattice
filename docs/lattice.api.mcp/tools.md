@@ -213,7 +213,7 @@ The MCP group holds the `ILatticeSchemaControl` facade and delegates to it verba
 | `lattice_treeadmin_schema_count_dead_letters` | inspect | Count a tree's strict-mode dead-letter entries. |
 | `lattice_treeadmin_schema_get_version_config` | inspect | Read a tree's envelope-version config, or none when unversioned. |
 | `lattice_treeadmin_schema_get_remediation_status` | inspect | Read a tree's current or last-known remediation status. |
-| `lattice_treeadmin_schema_scan_compliance` | inspect | Scan every current value against the compiled policy and report compliance. |
+| `lattice_treeadmin_schema_scan_compliance` | inspect | Scan every current value against the compiled policy and report compliance, in one blocking call; prefer `lattice_treeadmin_schema_compliance_scan_start`. |
 | `lattice_treeadmin_schema_probe_capabilities` | inspect | Probe which schema operations the caller may perform, side-effect free. |
 | `lattice_treeadmin_schema_set_policy` | manage | Set or replace a tree's enforcement policy. |
 | `lattice_treeadmin_schema_clear_policy` | manage | Clear a tree's enforcement policy. |
@@ -239,11 +239,28 @@ Read-only administrative diagnostics and storage accounting over `ILatticeTreeAd
 | `lattice_treeadmin_shard_map_inspect` | inspect | Inspect a tree's shard-map topology (physical tree id, virtual/physical shard counts, map version). |
 | `lattice_treeadmin_projection_digest` | inspect | Read a single shard's leaf-projection content digest for cheap divergence detection. |
 | `lattice_treeadmin_tree_stats` | inspect | Read a tree's rolled-up topology, live-key counts, and storage byte breakdown in one call. |
-| `lattice_treeadmin_storage_usage` | inspect | Read cluster-wide storage accounting; the `deep` flag forces a fresh leaf-walk instead of the cheap cached WAL-poll aggregate. |
+| `lattice_treeadmin_storage_usage` | inspect | Read cluster-wide storage accounting; the `deep` flag forces a fresh leaf-walk instead of the cheap cached WAL-poll aggregate, in one call - prefer `lattice_treeadmin_storage_usage_refresh_start` for a fresh measure. |
 
 Every tool carries `readOnlyHint = true` and `destructiveHint = false`. `lattice_treeadmin_shard_diagnostics` and `lattice_treeadmin_storage_usage` take an optional `deep` flag (default `false`, the cheap path); `lattice_treeadmin_projection_digest` takes a `treeId` and a non-negative `shardIndex`; the remaining per-tree tools take a `treeId`. `lattice_treeadmin_storage_usage` is cluster-wide and takes no tree id.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires a tree-administration-API gRPC adapter off the `LatticeApiMcpRemoteOptions.TreeAdmin` endpoint. Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+
+## TreeAdmin operation tools (`lattice_treeadmin_*`)
+
+Accept-then-poll compliance scans and fresh storage-usage refreshes, on the shared [long-running operation contract](../lattice.api.abstractions/operations.md), surfaced under the tree-administration group and always exposed (no opt-in flag). A start tool returns a handle naming the operation id and the status tool to poll; the status, list and cancel tools are scoped by the facade to the tool's own kind, the caller's tenant and what the caller may read, and report `found = false` for an operation the caller may not see.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_treeadmin_schema_compliance_scan_start` | operate | Start a tracked compliance scan of a tree (`ILatticeSchemaComplianceOperations`); needs read over the tree. |
+| `lattice_treeadmin_schema_compliance_scan_status` | inspect | Read a compliance scan's state, phase, entries scanned of total, and on success the report in the result map. |
+| `lattice_treeadmin_schema_compliance_scan_list` | inspect | List the caller's compliance scans, newest-first. |
+| `lattice_treeadmin_schema_compliance_scan_cancel` | operate | Request cancellation of a compliance scan. |
+| `lattice_treeadmin_storage_usage_refresh_start` | operate | Start a tracked deep re-measure of every tree's storage usage (`ILatticeStorageUsageOperations`); needs cluster telemetry. |
+| `lattice_treeadmin_storage_usage_refresh_status` | inspect | Read a refresh's state, trees measured of total, and on success the cluster totals in the result map. |
+| `lattice_treeadmin_storage_usage_refresh_list` | inspect | List the caller's refreshes, newest-first. |
+| `lattice_treeadmin_storage_usage_refresh_cancel` | operate | Request cancellation of a refresh. |
+
+The inspect tools carry `readOnlyHint = true`; the operate tools record or stop an operation, so they carry `readOnlyHint = false`, but never mutate data, so every tool carries `destructiveHint = false`. Each start takes an optional `operationId` that makes it idempotent. Over the remote topology `AddLatticeMcpRemote` wires gRPC adapters for both surfaces off the `LatticeApiMcpRemoteOptions.TreeAdmin` endpoint. See [Schema compliance operations](../lattice.api.schema/operations.md) and [Storage usage operations](../lattice.api.treeadmin/operations.md) for the phases, units and result keys.
 
 ## TreeAdmin lifecycle and control tools (`lattice_treeadmin_*`)
 

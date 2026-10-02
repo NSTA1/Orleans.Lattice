@@ -3,6 +3,10 @@ using NSubstitute;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Schema;
 
+// These tests exercise the deprecated blocking compliance scan (LATTICE0002) on purpose:
+// it is still served, unchanged, until the next major version removes it (#4126).
+#pragma warning disable LATTICE0002
+
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>

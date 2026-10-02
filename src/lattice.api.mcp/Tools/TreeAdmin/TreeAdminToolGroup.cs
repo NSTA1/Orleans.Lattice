@@ -106,7 +106,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Scans every current value of a tree against its compiled enforcement policy and returns a "
                 + "compliance report: whether the tree has a policy, how many values are compliant / non-compliant, "
                 + "the total scanned, and the non-compliant population grouped by failure reason. A pure read - it "
-                + "never mutates data. Read-only."),
+                + "never mutates data. Blocks until the whole tree is read, so a large tree can time out: prefer "
+                + "lattice_treeadmin_schema_compliance_scan_start, which runs in the background with progress. "
+                + "Read-only."),
             Read(services, TreeAdminSchemaToolHandlers.ProbeCapabilitiesAsync, "lattice_treeadmin_schema_probe_capabilities",
                 "Probe a caller's schema capabilities",
                 "Probes which schema-management operations the current caller may perform over a tree, evaluated "
@@ -151,7 +153,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Reads a cluster-wide storage accounting summary across every tree, split by surface (write-ahead "
                 + "log, snapshots, leaf state) with per-tree breakdowns. The default returns the cheap cached "
                 + "WAL-poll aggregate; the deep flag forces an expensive fresh leaf-walk that re-measures every "
-                + "shard. Requires cluster telemetry authority. Read-only."),
+                + "shard, in one call - prefer lattice_treeadmin_storage_usage_refresh_start, which re-measures in "
+                + "the background with progress. Requires cluster telemetry authority. Read-only."),
 
             // ----- Tree lifecycle and registry config (read-only) -----
             Read(services, TreeAdminLifecycleToolHandlers.CheckTreeExistsAsync, "lattice_treeadmin_tree_exists",
@@ -317,6 +320,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "state, phase and progress. Only operations over trees the caller may read are listed. Pass "
                 + "nextPageToken back to continue. Read-only."),
         };
+
+        // ----- Accept-then-poll compliance scans and storage refreshes (#4126) -----
+        tools.AddRange(TreeAdminOperationTools.Create());
 
         if (enableSchemaControl)
         {

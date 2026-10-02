@@ -12,6 +12,8 @@
     "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs",
     "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs",
     "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+    "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations",
+    "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations",
     "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs",
     "src/lattice.api.abstractions/Operations/ILatticeOperations.cs"
   ],
@@ -110,187 +112,6 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/ClusterStorageUsageSummary.cs#ClusterStorageUsageSummary"
-    },
-    "LatticeOperationHandle": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "OperationId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "Kind",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "Scope",
-          "type": "LatticeOperationScope",
-          "required": true
-        },
-        {
-          "name": "Created",
-          "type": "bool",
-          "required": true
-        }
-      ],
-      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationHandle.cs#LatticeOperationHandle"
-    },
-    "LatticeOperationListRequest": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "PageSize",
-          "type": "int",
-          "required": true
-        },
-        {
-          "name": "PageToken",
-          "type": "string?",
-          "required": false
-        },
-        {
-          "name": "EffectivePageSize",
-          "type": "int",
-          "required": true
-        }
-      ],
-      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationListRequest.cs#LatticeOperationListRequest"
-    },
-    "LatticeOperationPage": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "Operations",
-          "type": "IReadOnlyList<LatticeOperationStatus>",
-          "required": false
-        },
-        {
-          "name": "NextPageToken",
-          "type": "string?",
-          "required": false
-        }
-      ],
-      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationPage.cs#LatticeOperationPage"
-    },
-    "LatticeOperationScope": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "TenantId",
-          "type": "string?",
-          "required": false
-        },
-        {
-          "name": "TreeIds",
-          "type": "IReadOnlyList<string>",
-          "required": false
-        }
-      ],
-      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationScope.cs#LatticeOperationScope"
-    },
-    "LatticeOperationState": {
-      "kind": "enum",
-      "values": [
-        "Queued",
-        "Running",
-        "Succeeded",
-        "Failed",
-        "Cancelled"
-      ],
-      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationState.cs#LatticeOperationState"
-    },
-    "LatticeOperationStatus": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "OperationId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "Kind",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "Scope",
-          "type": "LatticeOperationScope",
-          "required": true
-        },
-        {
-          "name": "State",
-          "type": "LatticeOperationState",
-          "required": true
-        },
-        {
-          "name": "Phase",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "PhaseIndex",
-          "type": "int?",
-          "required": false
-        },
-        {
-          "name": "PhaseCount",
-          "type": "int?",
-          "required": false
-        },
-        {
-          "name": "CompletedUnits",
-          "type": "long",
-          "required": true
-        },
-        {
-          "name": "TotalUnits",
-          "type": "long?",
-          "required": false
-        },
-        {
-          "name": "UnitName",
-          "type": "string?",
-          "required": false
-        },
-        {
-          "name": "StartedAtUtc",
-          "type": "DateTimeOffset",
-          "required": true
-        },
-        {
-          "name": "FinishedAtUtc",
-          "type": "DateTimeOffset?",
-          "required": false
-        },
-        {
-          "name": "FailureReason",
-          "type": "string?",
-          "required": false
-        },
-        {
-          "name": "ResultReference",
-          "type": "string?",
-          "required": false
-        },
-        {
-          "name": "Result",
-          "type": "IReadOnlyDictionary<string, string>",
-          "required": false
-        },
-        {
-          "name": "CancelRequested",
-          "type": "bool",
-          "required": true
-        },
-        {
-          "name": "IsTerminal",
-          "type": "bool",
-          "required": true
-        }
-      ],
-      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs#LatticeOperationStatus"
     },
     "LatticeSchemaCapabilities": {
       "kind": "record",
@@ -762,28 +583,6 @@
       ],
       "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminDiagnosticsRequest.cs#TreeAdminDiagnosticsRequest"
     },
-    "TreeAdminOperationRequest": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "OperationId",
-          "type": "string",
-          "required": true
-        }
-      ],
-      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminOperationRequest.cs#TreeAdminOperationRequest"
-    },
-    "TreeAdminOperationStatusResponse": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "Status",
-          "type": "LatticeOperationStatus?",
-          "required": false
-        }
-      ],
-      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminOperationStatusResponse.cs#TreeAdminOperationStatusResponse"
-    },
     "TreeAdminOrphanedLeafRequest": {
       "kind": "record",
       "fields": [
@@ -994,6 +793,39 @@
         }
       ],
       "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminSnapshotRequest.cs#TreeAdminSnapshotRequest"
+    },
+    "TreeAdminStorageUsageOperationRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageOperationRequest.cs#TreeAdminStorageUsageOperationRequest"
+    },
+    "TreeAdminStorageUsageOperationStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "LatticeOperationStatus?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageOperationStatusResponse.cs#TreeAdminStorageUsageOperationStatusResponse"
+    },
+    "TreeAdminStorageUsageRefreshRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageRefreshRequest.cs#TreeAdminStorageUsageRefreshRequest"
     },
     "TreeAdminStorageUsageRequest": {
       "kind": "record",
@@ -2161,6 +1993,209 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalPlacementAudit.cs#TreeWalPlacementAudit"
+    },
+    "LatticeOperationHandle": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "LatticeOperationScope",
+          "required": true
+        },
+        {
+          "name": "Created",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationHandle.cs#LatticeOperationHandle"
+    },
+    "LatticeOperationListRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "EffectivePageSize",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationListRequest.cs#LatticeOperationListRequest"
+    },
+    "LatticeOperationPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Operations",
+          "type": "IReadOnlyList<LatticeOperationStatus>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationPage.cs#LatticeOperationPage"
+    },
+    "LatticeOperationScope": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "TreeIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationScope.cs#LatticeOperationScope"
+    },
+    "LatticeOperationState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Cancelled"
+      ],
+      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationState.cs#LatticeOperationState"
+    },
+    "LatticeOperationStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "LatticeOperationScope",
+          "required": true
+        },
+        {
+          "name": "State",
+          "type": "LatticeOperationState",
+          "required": true
+        },
+        {
+          "name": "Phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PhaseIndex",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "PhaseCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "CompletedUnits",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalUnits",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "UnitName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "StartedAtUtc",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "FinishedAtUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "FailureReason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ResultReference",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Result",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        },
+        {
+          "name": "CancelRequested",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "IsTerminal",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Operations/Model/LatticeOperationStatus.cs#LatticeOperationStatus"
+    },
+    "TreeAdminOperationRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminOperationRequest.cs#TreeAdminOperationRequest"
+    },
+    "TreeAdminOperationStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "LatticeOperationStatus?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminOperationStatusResponse.cs#TreeAdminOperationStatusResponse"
     }
   },
   "operations": [
@@ -2354,12 +2389,12 @@
       ]
     },
     {
-      "id": "cancel-tree-admin-operation",
-      "in_process": "ILatticeTreeAdminOperations.CancelOperationAsync",
-      "grpc_method": "/orleans.lattice.api.treeadmin/CancelTreeAdminOperation",
+      "id": "cancel-storage-usage-refresh",
+      "in_process": "ILatticeStorageUsageOperations.CancelOperationAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CancelStorageUsageRefresh",
       "transport_scope": "both",
-      "request": "TreeAdminOperationRequest",
-      "response": "TreeAdminOperationStatusResponse",
+      "request": "TreeAdminStorageUsageOperationRequest",
+      "response": "TreeAdminStorageUsageOperationStatusResponse",
       "errors": [
         {
           "error_id": "invalid-argument",
@@ -2367,43 +2402,38 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "Authorization denied the caller."
-        },
-        {
-          "error_id": "not-found",
-          "condition": "The named view or tag index does not exist."
+          "condition": "The caller lacks cluster telemetry authority."
         },
         {
           "error_id": "cancelled",
-          "condition": "Call cancellation."
+          "condition": "Request was cancelled."
         },
         {
           "error_id": "internal",
-          "condition": "Unhandled server failure."
+          "condition": "Unhandled failure."
         },
         {
           "error_id": "unimplemented",
-          "condition": "Server registered ILatticeTreeAdmin but not ILatticeTreeAdminOperations."
+          "condition": "Server registered no ILatticeStorageUsageOperations."
         }
       ],
       "retry": {
         "safe": true,
-        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
+        "policy": "Cancellation is recorded durably; repeating it returns the same or a terminal status.",
         "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Reads do not mutate; a cancel request is recorded once.",
+        "basis": "A second cancel request leaves the operation unchanged; a terminal operation is returned unchanged.",
         "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
       },
       "concurrency": {
-        "rule": "Cancelling needs the grant that starting the operation needed; the work stops at its next progress report, and a WAL move past its flip is not undone.",
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
         "source": "docs/lattice.api.abstractions/operations.md"
       },
       "sources": [
         "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CancelTreeAdminOperation",
-        "docs/lattice.api.treeadmin/operations.md"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CancelStorageUsageRefresh"
       ]
     },
     {
@@ -3174,6 +3204,50 @@
       ]
     },
     {
+      "id": "get-storage-usage-refresh-status",
+      "in_process": "ILatticeStorageUsageOperations.GetOperationStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetStorageUsageRefreshStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminStorageUsageOperationRequest",
+      "response": "TreeAdminStorageUsageOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup; safe to repeat.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Status reads do not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetStorageUsageRefreshStatus"
+      ]
+    },
+    {
       "id": "get-tag-index-status",
       "in_process": "ILatticeTreeAdmin.GetTagIndexStatusAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/GetTagIndexStatus",
@@ -3219,51 +3293,6 @@
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTagIndexStatus"
-      ]
-    },
-    {
-      "id": "get-tree-admin-operation-status",
-      "in_process": "ILatticeTreeAdminOperations.GetOperationStatusAsync",
-      "grpc_method": "/orleans.lattice.api.treeadmin/GetTreeAdminOperationStatus",
-      "transport_scope": "both",
-      "request": "TreeAdminOperationRequest",
-      "response": "TreeAdminOperationStatusResponse",
-      "errors": [
-        {
-          "error_id": "invalid-argument",
-          "condition": "Request validation failed."
-        },
-        {
-          "error_id": "cancelled",
-          "condition": "Call cancellation."
-        },
-        {
-          "error_id": "internal",
-          "condition": "Unhandled server failure."
-        },
-        {
-          "error_id": "unimplemented",
-          "condition": "Server registered ILatticeTreeAdmin but not ILatticeTreeAdminOperations."
-        }
-      ],
-      "retry": {
-        "safe": true,
-        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
-        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
-      },
-      "idempotency": {
-        "idempotent": true,
-        "basis": "Reads do not mutate; a cancel request is recorded once.",
-        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
-      },
-      "concurrency": {
-        "rule": "Reads are scoped fail-closed to treeadmin. kinds, the caller tenant and trees the caller may read; an invisible operation reads as null.",
-        "source": "docs/lattice.api.abstractions/operations.md"
-      },
-      "sources": [
-        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTreeAdminOperationStatus",
-        "docs/lattice.api.treeadmin/operations.md"
       ]
     },
     {
@@ -3535,6 +3564,50 @@
       ]
     },
     {
+      "id": "list-storage-usage-refreshes",
+      "in_process": "ILatticeStorageUsageOperations.ListOperationsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListStorageUsageRefreshes",
+      "transport_scope": "both",
+      "request": "LatticeOperationListRequest",
+      "response": "LatticeOperationPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only listing; safe to repeat with the same page token.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Listing does not mutate operation state.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to the treeadmin.storage-usage-refresh kind, the caller's tenant and callers holding cluster telemetry, and return null for invisible operations.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListStorageUsageRefreshes"
+      ]
+    },
+    {
       "id": "list-tag-indexes",
       "in_process": "ILatticeTreeAdmin.ListTagIndexesAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/ListTagIndexes",
@@ -3580,51 +3653,6 @@
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListTagIndexesAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListTagIndexes"
-      ]
-    },
-    {
-      "id": "list-tree-admin-operations",
-      "in_process": "ILatticeTreeAdminOperations.ListOperationsAsync",
-      "grpc_method": "/orleans.lattice.api.treeadmin/ListTreeAdminOperations",
-      "transport_scope": "both",
-      "request": "LatticeOperationListRequest",
-      "response": "LatticeOperationPage",
-      "errors": [
-        {
-          "error_id": "invalid-argument",
-          "condition": "Request validation failed."
-        },
-        {
-          "error_id": "cancelled",
-          "condition": "Call cancellation."
-        },
-        {
-          "error_id": "internal",
-          "condition": "Unhandled server failure."
-        },
-        {
-          "error_id": "unimplemented",
-          "condition": "Server registered ILatticeTreeAdmin but not ILatticeTreeAdminOperations."
-        }
-      ],
-      "retry": {
-        "safe": true,
-        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
-        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
-      },
-      "idempotency": {
-        "idempotent": true,
-        "basis": "Reads do not mutate; a cancel request is recorded once.",
-        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
-      },
-      "concurrency": {
-        "rule": "Lists newest-first only the treeadmin. operations visible to the caller.",
-        "source": "docs/lattice.api.abstractions/operations.md"
-      },
-      "sources": [
-        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListTreeAdminOperations",
-        "docs/lattice.api.treeadmin/operations.md"
       ]
     },
     {
@@ -5329,6 +5357,330 @@
       ]
     },
     {
+      "id": "start-storage-usage-refresh",
+      "in_process": "ILatticeStorageUsageOperations.StartStorageUsageRefreshAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/StartStorageUsageRefresh",
+      "transport_scope": "both",
+      "request": "TreeAdminStorageUsageRefreshRequest",
+      "response": "LatticeOperationHandle",
+      "operation_kind": "treeadmin.storage-usage-refresh",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks cluster telemetry authority."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Request was cancelled."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered no ILatticeStorageUsageOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry with the same caller-supplied operation id; a duplicate start returns the existing handle with Created=false.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The optional operationId is the tracked operation idempotency key; reusing it returns the existing operation instead of starting new work.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations"
+      },
+      "concurrency": {
+        "rule": "The operation runs on the accepting silo, heartbeats while active, and is marked Failed if that silo is lost or the lease lapses; resumption is not supported.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartStorageUsageRefresh",
+        "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
+      "id": "survey-orphaned-leaves",
+      "in_process": "ILatticeTreeAdmin.SurveyOrphanedLeavesAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, string? resumeFrom",
+      "response": "TreeOrphanedLeafReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks whole-tree Read authority."
+        },
+        {
+          "error_id": "not-supported",
+          "condition": "The implementation does not override the default survey member."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only and bounded per call.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
+      },
+      "concurrency": {
+        "rule": "Drive batches with ResumeFrom using this same survey verb until IsComplete is true; survey counts do not authorize repair.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
+      ]
+    },
+    {
+      "id": "trigger-shard-compaction",
+      "in_process": "ILatticeTreeAdmin.TriggerShardCompactionAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/TriggerShardCompaction",
+      "transport_scope": "both",
+      "request": "TreeAdminShardRequest",
+      "response": "TreeCompactionTriggerResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Compaction is online and idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+      },
+      "concurrency": {
+        "rule": "Operator trigger bypasses background cooldown.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#TriggerShardCompaction"
+      ]
+    },
+    {
+      "id": "undo-tree-resize",
+      "in_process": "ILatticeTreeAdmin.UndoTreeResizeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/UndoTreeResize",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeResizeStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "precondition-failed",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Safe to retry: RequestUndoAsync records the undo intent once per resize operation id and acknowledges a repeat while that undo is pending; after the unwind is recorded a repeat throws InvalidOperationException whose message names the most recent resize as already undone, which is the benign terminal condition.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The undo intent is keyed by the resize operation id, so a repeat while it is pending starts no second unwind; once the unwind is recorded a repeat is refused because no resize remains to undo.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
+      },
+      "concurrency": {
+        "rule": "RequestUndoAsync is interleaved with the resize phase loop and writes only the separate undo-intent slot under a semaphore, so the undo is admitted even while a resize phase is in flight; the phase loop runs the unwind at its next phase or snapshot-slice boundary, and the call waits only a bounded time for it. A returned status with UndoRequested true means the undo was accepted and is still unwinding; poll GetResizeStatusAsync instead of retrying.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#UndoTreeResize"
+      ]
+    },
+    {
+      "id": "cancel-tree-admin-operation",
+      "in_process": "ILatticeTreeAdminOperations.CancelOperationAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CancelTreeAdminOperation",
+      "transport_scope": "both",
+      "request": "TreeAdminOperationRequest",
+      "response": "TreeAdminOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The named view or tag index does not exist."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered ILatticeTreeAdmin but not ILatticeTreeAdminOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Reads do not mutate; a cancel request is recorded once.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+      },
+      "concurrency": {
+        "rule": "Cancelling needs the grant that starting the operation needed; the work stops at its next progress report, and a WAL move past its flip is not undone.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CancelTreeAdminOperation",
+        "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
+      "id": "get-tree-admin-operation-status",
+      "in_process": "ILatticeTreeAdminOperations.GetOperationStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetTreeAdminOperationStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminOperationRequest",
+      "response": "TreeAdminOperationStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered ILatticeTreeAdmin but not ILatticeTreeAdminOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Reads do not mutate; a cancel request is recorded once.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reads are scoped fail-closed to treeadmin. kinds, the caller tenant and trees the caller may read; an invisible operation reads as null.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTreeAdminOperationStatus",
+        "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
+      "id": "list-tree-admin-operations",
+      "in_process": "ILatticeTreeAdminOperations.ListOperationsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListTreeAdminOperations",
+      "transport_scope": "both",
+      "request": "LatticeOperationListRequest",
+      "response": "LatticeOperationPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Server registered ILatticeTreeAdmin but not ILatticeTreeAdminOperations."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Repeating is safe; a repeated cancel is a no-op on an operation already cancelling or finished.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Reads do not mutate; a cancel request is recorded once.",
+        "source": "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync"
+      },
+      "concurrency": {
+        "rule": "Lists newest-first only the treeadmin. operations visible to the caller.",
+        "source": "docs/lattice.api.abstractions/operations.md"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListTreeAdminOperations",
+        "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
       "id": "start-orphaned-leaves-audit",
       "in_process": "ILatticeTreeAdminOperations.StartOrphanedLeavesAuditAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/StartOrphanedLeavesAudit",
@@ -5651,137 +6003,6 @@
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartWalMove",
         "docs/lattice.api.treeadmin/operations.md"
       ]
-    },
-    {
-      "id": "survey-orphaned-leaves",
-      "in_process": "ILatticeTreeAdmin.SurveyOrphanedLeavesAsync",
-      "grpc_method": null,
-      "transport_scope": "in_process_only",
-      "request": "string treeId, string? resumeFrom",
-      "response": "TreeOrphanedLeafReport",
-      "errors": [
-        {
-          "error_id": "invalid-argument",
-          "condition": "Request validation failed."
-        },
-        {
-          "error_id": "permission-denied",
-          "condition": "The caller lacks whole-tree Read authority."
-        },
-        {
-          "error_id": "not-supported",
-          "condition": "The implementation does not override the default survey member."
-        }
-      ],
-      "retry": {
-        "safe": true,
-        "policy": "Retry by reissuing the same request.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
-      },
-      "idempotency": {
-        "idempotent": true,
-        "basis": "Read-only and bounded per call.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
-      },
-      "concurrency": {
-        "rule": "Drive batches with ResumeFrom using this same survey verb until IsComplete is true; survey counts do not authorize repair.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
-      },
-      "sources": [
-        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
-      ]
-    },
-    {
-      "id": "trigger-shard-compaction",
-      "in_process": "ILatticeTreeAdmin.TriggerShardCompactionAsync",
-      "grpc_method": "/orleans.lattice.api.treeadmin/TriggerShardCompaction",
-      "transport_scope": "both",
-      "request": "TreeAdminShardRequest",
-      "response": "TreeCompactionTriggerResult",
-      "errors": [
-        {
-          "error_id": "invalid-argument",
-          "condition": "Request validation failed."
-        },
-        {
-          "error_id": "permission-denied",
-          "condition": "Authorization denied the caller."
-        },
-        {
-          "error_id": "cancelled",
-          "condition": "Call cancellation."
-        },
-        {
-          "error_id": "internal",
-          "condition": "Unhandled server failure."
-        }
-      ],
-      "retry": {
-        "safe": true,
-        "policy": "Retry by reissuing the same request.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
-      },
-      "idempotency": {
-        "idempotent": true,
-        "basis": "Compaction is online and idempotent.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
-      },
-      "concurrency": {
-        "rule": "Operator trigger bypasses background cooldown.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
-      },
-      "sources": [
-        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#TriggerShardCompaction"
-      ]
-    },
-    {
-      "id": "undo-tree-resize",
-      "in_process": "ILatticeTreeAdmin.UndoTreeResizeAsync",
-      "grpc_method": "/orleans.lattice.api.treeadmin/UndoTreeResize",
-      "transport_scope": "both",
-      "request": "TreeAdminTreeRequest",
-      "response": "TreeResizeStatus",
-      "errors": [
-        {
-          "error_id": "invalid-argument",
-          "condition": "Request validation failed."
-        },
-        {
-          "error_id": "permission-denied",
-          "condition": "Authorization denied the caller."
-        },
-        {
-          "error_id": "precondition-failed",
-          "condition": "Facade precondition failed."
-        },
-        {
-          "error_id": "cancelled",
-          "condition": "Call cancellation."
-        },
-        {
-          "error_id": "internal",
-          "condition": "Unhandled server failure."
-        }
-      ],
-      "retry": {
-        "safe": "conditional",
-        "policy": "Safe to retry: RequestUndoAsync records the undo intent once per resize operation id and acknowledges a repeat while that undo is pending; after the unwind is recorded a repeat throws InvalidOperationException whose message names the most recent resize as already undone, which is the benign terminal condition.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
-      },
-      "idempotency": {
-        "idempotent": "conditional",
-        "basis": "The undo intent is keyed by the resize operation id, so a repeat while it is pending starts no second unwind; once the unwind is recorded a repeat is refused because no resize remains to undo.",
-        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#RequestUndoAsync"
-      },
-      "concurrency": {
-        "rule": "RequestUndoAsync is interleaved with the resize phase loop and writes only the separate undo-intent slot under a semaphore, so the undo is admitted even while a resize phase is in flight; the phase loop runs the unwind at its next phase or snapshot-slice boundary, and the call waits only a bounded time for it. A returned status with UndoRequested true means the undo was accepted and is still unwinding; poll GetResizeStatusAsync instead of retrying.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
-      },
-      "sources": [
-        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#UndoTreeResize"
-      ]
     }
   ],
   "error_taxonomy": [
@@ -5876,9 +6097,9 @@
     {
       "id": "unimplemented",
       "grpc_status": "Unimplemented",
-      "retryable": false,
-      "meaning": "Server registered the tree-admin facade but not ILatticeTreeAdminOperations.",
-      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#LatticeTreeAdminGrpcService"
+      "meaning": "Server registered the tree-admin facade but not the operations interface the call needs (ILatticeTreeAdminOperations or ILatticeStorageUsageOperations).",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#StorageUsageOperations",
+      "retryable": false
     }
   ]
 }

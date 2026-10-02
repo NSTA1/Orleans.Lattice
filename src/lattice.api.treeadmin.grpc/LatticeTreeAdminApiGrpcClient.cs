@@ -211,6 +211,66 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Starts an accept-then-poll deep re-measure of every tree's storage usage and
+    /// returns its handle at once; poll <see cref="GetStorageUsageRefreshStatusAsync"/>
+    /// for progress and the cluster totals, then read the refreshed per-tree figures
+    /// with <see cref="GetStorageUsageAsync"/>.
+    /// </summary>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> lets the server generate one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started refresh.</param>
+    /// <returns>The operation handle.</returns>
+    public Task<LatticeOperationHandle> StartStorageUsageRefreshAsync(
+        string? operationId = null, CancellationToken cancellationToken = default)
+        => UnaryAsync(
+            _methods.StartStorageUsageRefresh,
+            new TreeAdminStorageUsageRefreshRequest { OperationId = operationId },
+            cancellationToken);
+
+    /// <summary>Reads a storage-usage refresh's status.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public async Task<LatticeOperationStatus?> GetStorageUsageRefreshStatusAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.GetStorageUsageRefreshStatus,
+            new TreeAdminStorageUsageOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    /// <summary>Lists one page of the caller's storage-usage refreshes, newest-first.</summary>
+    /// <param name="request">The page request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The page.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    public Task<LatticeOperationPage> ListStorageUsageRefreshesAsync(
+        LatticeOperationListRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.ListStorageUsageRefreshes, request, cancellationToken);
+    }
+
+    /// <summary>Requests cancellation of a storage-usage refresh.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status after the request, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public async Task<LatticeOperationStatus?> CancelStorageUsageRefreshAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.CancelStorageUsageRefresh,
+            new TreeAdminStorageUsageOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    /// <summary>
     /// Explicitly creates (registers) <paramref name="treeId"/> with an optional
     /// initial structural sizing. Idempotent: creating an existing tree preserves its
     /// configuration and reports <see cref="TreeCreationResult.Created"/>
