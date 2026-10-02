@@ -39,28 +39,43 @@ internal sealed class CompiledTenantPolicy
 
     private CompiledTenantPolicy(
         FrozenDictionary<string, TenantId[]> subjectToTenants,
-        FrozenDictionary<string, CompiledTenant> tenants)
+        FrozenDictionary<string, CompiledTenant> tenants,
+        bool delegatedAccessEnabled)
     {
         _subjectToTenants = subjectToTenants;
         _tenants = tenants;
+        IsDelegatedAccessEnabled = delegatedAccessEnabled;
     }
 
     /// <summary>The empty snapshot: no tenants and no subjects. Used before the first compile.</summary>
     public static CompiledTenantPolicy Empty { get; } =
-        new(FrozenDictionary<string, TenantId[]>.Empty, FrozenDictionary<string, CompiledTenant>.Empty);
+        new(FrozenDictionary<string, TenantId[]>.Empty, FrozenDictionary<string, CompiledTenant>.Empty, false);
+
+    /// <summary>
+    /// <c>true</c> when the snapshot was compiled with delegated tenant access
+    /// administration enabled, so member entries and group entries count. When
+    /// <c>false</c> the snapshot is exactly the exact-id admin index it has always
+    /// been: no member or group index is built.
+    /// </summary>
+    public bool IsDelegatedAccessEnabled { get; }
 
     /// <summary>The number of registered tenants in the snapshot. Exposed for tests.</summary>
     internal int TenantCount => _tenants.Count;
 
-    /// <summary>The number of distinct admin subjects across all tenants in the snapshot. Exposed for tests.</summary>
+    /// <summary>
+    /// The number of distinct subject entries (admin entries, plus member entries
+    /// when delegated access administration is enabled) across all tenants in the
+    /// snapshot. Exposed for tests.
+    /// </summary>
     internal int SubjectCount => _subjectToTenants.Count;
 
     /// <summary>
     /// The tenants <paramref name="subjectId"/> may act as - the tenants for which
-    /// it is a registered tenant-admin subject - in ascending tenant-id order. A
-    /// zero-allocation lookup that returns a shared empty array when the subject
-    /// administers no tenant; the returned array is the snapshot's own cached
-    /// projection and must not be mutated.
+    /// it is a registered tenant-admin subject, or, when the snapshot was compiled
+    /// with delegated access administration enabled, an admin or member entry - in
+    /// ascending tenant-id order. A zero-allocation lookup that returns a shared
+    /// empty array when the subject may act as no tenant; the returned array is the
+    /// snapshot's own cached projection and must not be mutated.
     /// </summary>
     /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
     /// <returns>The tenants the subject may act as.</returns>
@@ -71,6 +86,130 @@ internal sealed class CompiledTenantPolicy
         return _subjectToTenants.TryGetValue(subjectId, out var tenants) ? tenants : NoTenants;
     }
 
+    /// <summary>
+    /// The tenants <paramref name="subjectId"/> administers by exact id, in
+    /// ascending tenant-id order, ignoring member entries. On a snapshot compiled
+    /// with delegated access administration disabled - where the subject index
+    /// holds admin entries only - this is exactly
+    /// <see cref="ResolveAllowedTenants(string)"/> and returns the cached array.
+    /// On a group-aware snapshot it filters the subject's tenants to those it
+    /// administers, returning the cached array when nothing is filtered out.
+    /// </summary>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <returns>The tenants the subject administers by exact id.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> is <c>null</c>.</exception>
+    public IReadOnlyList<TenantId> ResolveAdminTenants(string subjectId)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        if (!_subjectToTenants.TryGetValue(subjectId, out var tenants))
+        {
+            return NoTenants;
+        }
+
+        if (!IsDelegatedAccessEnabled)
+        {
+            return tenants;
+        }
+
+        var admins = 0;
+        foreach (var tenant in tenants)
+        {
+            if (_tenants[tenant.Value].IsAdmin(subjectId))
+            {
+                admins++;
+            }
+        }
+
+        if (admins == tenants.Length)
+        {
+            return tenants;
+        }
+
+        if (admins == 0)
+        {
+            return NoTenants;
+        }
+
+        // Already in ascending tenant-id order; filtering preserves it.
+        var result = new TenantId[admins];
+        var next = 0;
+        foreach (var tenant in tenants)
+        {
+            if (_tenants[tenant.Value].IsAdmin(subjectId))
+            {
+                result[next++] = tenant;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The tenants a subject may act as, considering its resolved transitive
+    /// groups: the tenants for which its id or any of its groups is an admin or
+    /// member entry, in ascending tenant-id order, without duplicates. When the
+    /// snapshot was compiled with delegated access administration disabled, or the
+    /// subject carries no groups, this is exactly
+    /// <see cref="ResolveAllowedTenants(string)"/>.
+    /// </summary>
+    /// <remarks>
+    /// Returns the snapshot's own cached array, with no merged copy, when at most
+    /// one of the subject's id and groups resolves to any tenant; a subject whose id
+    /// and groups resolve through several entries gets a freshly merged array. This
+    /// is a listing read, not the per-request decision path, which is
+    /// <see cref="CompiledTenant.IsMember"/>.
+    /// </remarks>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <param name="groupIds">The subject's resolved transitive group ids. Must not be <c>null</c>.</param>
+    /// <returns>The tenants the subject may act as.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> or <paramref name="groupIds"/> is <c>null</c>.</exception>
+    public IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId, IReadOnlyCollection<string> groupIds)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        ArgumentNullException.ThrowIfNull(groupIds);
+
+        if (!IsDelegatedAccessEnabled || groupIds.Count == 0)
+        {
+            return ResolveAllowedTenants(subjectId);
+        }
+
+        TenantId[]? single = _subjectToTenants.TryGetValue(subjectId, out var own) ? own : null;
+        List<TenantId[]>? several = null;
+        foreach (var group in groupIds)
+        {
+            if (group is null || !_subjectToTenants.TryGetValue(group, out var tenants))
+            {
+                continue;
+            }
+
+            if (single is null)
+            {
+                single = tenants;
+            }
+            else if (!ReferenceEquals(single, tenants))
+            {
+                several ??= [single];
+                several.Add(tenants);
+            }
+        }
+
+        if (several is null)
+        {
+            return single ?? NoTenants;
+        }
+
+        var merged = new HashSet<TenantId>();
+        foreach (var tenants in several)
+        {
+            merged.UnionWith(tenants);
+        }
+
+        var result = new TenantId[merged.Count];
+        merged.CopyTo(result);
+        Array.Sort(result, static (a, b) => string.CompareOrdinal(a.Value, b.Value));
+        return result;
+    }
+
     /// <summary>Attempts to get the compiled entry for <paramref name="tenantId"/>.</summary>
     /// <param name="tenantId">The tenant id text.</param>
     /// <param name="tenant">The compiled tenant when present; otherwise <c>null</c>.</param>
@@ -79,16 +218,40 @@ internal sealed class CompiledTenantPolicy
         _tenants.TryGetValue(tenantId, out tenant);
 
     /// <summary>
+    /// Compiles a set of tenant records into an immutable snapshot with delegated
+    /// tenant access administration disabled: exactly
+    /// <see cref="Compile(IEnumerable{TenantRecord}, bool)"/> with <c>false</c>.
+    /// </summary>
+    /// <param name="records">The tenant records. Must not be <c>null</c>.</param>
+    /// <returns>The compiled snapshot.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="records"/> is <c>null</c>.</exception>
+    public static CompiledTenantPolicy Compile(IEnumerable<TenantRecord> records) => Compile(records, false);
+
+    /// <summary>
     /// Compiles a set of tenant records into an immutable snapshot. Each record's
     /// admin subjects populate the subject-to-tenants index and the per-tenant
     /// admin set; each record's tenant-grantee cross-tenant grants are indexed by
     /// grantee tenant id for fast resolution. Records with the uninitialised
     /// tenant id are skipped.
     /// </summary>
+    /// <remarks>
+    /// When <paramref name="delegatedAccessEnabled"/> is <c>true</c>, each record's
+    /// member subjects are compiled into a per-tenant member set and join the
+    /// subject index, and the tenants become group-aware. The reserved
+    /// <see cref="TenantId.Default"/> tenant never does: it accepts no member
+    /// entries and stays exact-id. A group-aware tenant's admin and member entries
+    /// are also filtered through <see cref="TenantAccessEntries.IsAdmissible"/>, so
+    /// another tenant's group or a malformed <c>t/</c> entry - which a record can
+    /// carry if it arrived by replication or restore without facade validation -
+    /// never admits anyone (D4). When it is <c>false</c>, no member set or group
+    /// index is built, nothing is filtered, and the snapshot is exactly what it was
+    /// before member sets existed.
+    /// </remarks>
     /// <param name="records">The tenant records. Must not be <c>null</c>.</param>
+    /// <param name="delegatedAccessEnabled">Whether delegated tenant access administration is enabled.</param>
     /// <returns>The compiled snapshot.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="records"/> is <c>null</c>.</exception>
-    public static CompiledTenantPolicy Compile(IEnumerable<TenantRecord> records)
+    public static CompiledTenantPolicy Compile(IEnumerable<TenantRecord> records, bool delegatedAccessEnabled)
     {
         ArgumentNullException.ThrowIfNull(records);
 
@@ -110,26 +273,67 @@ internal sealed class CompiledTenantPolicy
             }
 
             var id = record.Id;
+            var groupAware = delegatedAccessEnabled && !id.Equals(TenantId.Default);
             var admins = record.AdminSubjects;
             var adminSet = admins.Count == 0
                 ? FrozenSet<string>.Empty
-                : admins.ToFrozenSet(StringComparer.Ordinal);
+                : groupAware
+                    ? Admissible(admins, id)
+                    : admins.ToFrozenSet(StringComparer.Ordinal);
 
             tenants[id.Value] = new CompiledTenant(
                 id,
                 record.Status,
                 adminSet,
-                CompileTenantGrants(record.Grants));
+                CompileTenantGrants(record.Grants),
+                groupAware ? CompileMembers(record) : null);
         }
 
         if (tenants.Count == 0)
         {
-            return Empty;
+            return delegatedAccessEnabled ? EmptyDelegated : Empty;
         }
 
         return new CompiledTenantPolicy(
             BuildSubjectIndex(tenants),
-            tenants.ToFrozenDictionary(StringComparer.Ordinal));
+            tenants.ToFrozenDictionary(StringComparer.Ordinal),
+            delegatedAccessEnabled);
+    }
+
+    /// <summary>The empty snapshot compiled with delegated access administration enabled.</summary>
+    private static CompiledTenantPolicy EmptyDelegated { get; } =
+        new(FrozenDictionary<string, TenantId[]>.Empty, FrozenDictionary<string, CompiledTenant>.Empty, true);
+
+    /// <summary>Compiles a record's live, admissible member subjects into a frozen set.</summary>
+    private static FrozenSet<string> CompileMembers(TenantRecord record)
+    {
+        if (record.MemberSubjectCount == 0)
+        {
+            return FrozenSet<string>.Empty;
+        }
+
+        return Admissible(record.MemberSubjects, record.Id);
+    }
+
+    /// <summary>
+    /// Freezes the entries of <paramref name="entries"/> that may count for
+    /// <paramref name="tenant"/> (<see cref="TenantAccessEntries.IsAdmissible"/>):
+    /// another tenant's group and any malformed <c>t/</c> entry are dropped, so a
+    /// record that arrived by replication or restore without facade validation can
+    /// never admit through one. Runs only on the rebuild path.
+    /// </summary>
+    private static FrozenSet<string> Admissible(IReadOnlyList<string> entries, TenantId tenant)
+    {
+        var kept = new List<string>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (TenantAccessEntries.IsAdmissible(entry, tenant))
+            {
+                kept.Add(entry);
+            }
+        }
+
+        return kept.Count == 0 ? FrozenSet<string>.Empty : kept.ToFrozenSet(StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -167,7 +371,7 @@ internal sealed class CompiledTenantPolicy
         var adminSlots = 0;
         foreach (var tenant in tenants.Values)
         {
-            adminSlots += tenant.Admins.Count;
+            adminSlots += tenant.Admins.Count + tenant.Members.Count;
         }
 
         if (adminSlots == 0)
@@ -175,8 +379,8 @@ internal sealed class CompiledTenantPolicy
             return FrozenDictionary<string, TenantId[]>.Empty;
         }
 
-        // Total admin slots is an upper bound on the distinct subject count,
-        // clamped so a single subject-heavy tenant cannot inflate the hint.
+        // Total admin and member slots is an upper bound on the distinct subject
+        // count, clamped so a single subject-heavy tenant cannot inflate the hint.
         var widths = new Dictionary<string, int>(
             Math.Min(adminSlots, SubjectCapacityHintLimit),
             StringComparer.Ordinal);
@@ -188,6 +392,18 @@ internal sealed class CompiledTenantPolicy
                 ref var width = ref CollectionsMarshal.GetValueRefOrAddDefault(widths, subject, out _);
                 width++;
             }
+
+            // A member entry that is also an admin entry of the same tenant is one
+            // slot, not two: the subject's tenants stay distinct. A tenant that is
+            // not group-aware has no members, so this loop is empty for it.
+            foreach (var subject in tenant.Members)
+            {
+                if (!tenant.Admins.Contains(subject))
+                {
+                    ref var width = ref CollectionsMarshal.GetValueRefOrAddDefault(widths, subject, out _);
+                    width++;
+                }
+            }
         }
 
         var index = new Dictionary<string, TenantId[]>(widths.Count, StringComparer.Ordinal);
@@ -196,17 +412,15 @@ internal sealed class CompiledTenantPolicy
             var id = tenant.Id;
             foreach (var subject in tenant.Admins)
             {
-                // Guaranteed present: the width pass counted this exact slot.
-                ref var remaining = ref CollectionsMarshal.GetValueRefOrAddDefault(widths, subject, out _);
-                var slot = --remaining;
+                Place(widths, index, subject, id);
+            }
 
-                ref var bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(index, subject, out var existed);
-                if (!existed)
+            foreach (var subject in tenant.Members)
+            {
+                if (!tenant.Admins.Contains(subject))
                 {
-                    bucket = new TenantId[slot + 1];
+                    Place(widths, index, subject, id);
                 }
-
-                bucket![slot] = id;
             }
         }
 
@@ -226,6 +440,30 @@ internal sealed class CompiledTenantPolicy
         }
 
         return index.ToFrozenDictionary(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Places <paramref name="tenant"/> in <paramref name="subject"/>'s bucket,
+    /// filling it from the back with the width counted in the first pass as the
+    /// cursor, and allocating the bucket at its exact width on first use.
+    /// </summary>
+    private static void Place(
+        Dictionary<string, int> widths,
+        Dictionary<string, TenantId[]> index,
+        string subject,
+        TenantId tenant)
+    {
+        // Guaranteed present: the width pass counted this exact slot.
+        ref var remaining = ref CollectionsMarshal.GetValueRefOrAddDefault(widths, subject, out _);
+        var slot = --remaining;
+
+        ref var bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(index, subject, out var existed);
+        if (!existed)
+        {
+            bucket = new TenantId[slot + 1];
+        }
+
+        bucket![slot] = tenant;
     }
 
     /// <summary>

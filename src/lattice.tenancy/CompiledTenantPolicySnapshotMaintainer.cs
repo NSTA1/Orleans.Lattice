@@ -56,6 +56,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     private readonly ITenantPolicyEpochPublisher _publisher;
     private readonly TimeProvider _time;
     private readonly TenantSnapshotCurrency _currency;
+    private readonly DelegatedTenantAccessFlag _delegatedAccess;
     private readonly ILogger<CompiledTenantPolicySnapshotMaintainer> _logger;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
     private readonly CancellationTokenSource _disposed = new();
@@ -89,12 +90,18 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// <param name="publisher">Publishes a committed registry change to every silo.</param>
     /// <param name="timeProvider">The clock the silo's lease is measured on.</param>
     /// <param name="logger">The logger for background-rebuild and publish failures.</param>
-    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    /// <param name="delegatedAccess">
+    /// The silo's live delegated tenant access administration flag, or <c>null</c>
+    /// for a fixed disabled flag. The snapshot is compiled under its value, and a
+    /// change of that value invalidates the snapshot and schedules a rebuild.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="delegatedAccess"/> is <c>null</c>.</exception>
     public CompiledTenantPolicySnapshotMaintainer(
         ITenantRegistry registry,
         ITenantPolicyEpochPublisher publisher,
         TimeProvider timeProvider,
-        ILogger<CompiledTenantPolicySnapshotMaintainer> logger)
+        ILogger<CompiledTenantPolicySnapshotMaintainer> logger,
+        DelegatedTenantAccessFlag? delegatedAccess = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(publisher);
@@ -105,7 +112,20 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
         _time = timeProvider;
         _currency = new TenantSnapshotCurrency(timeProvider);
         _logger = logger;
+        _delegatedAccess = delegatedAccess ?? DelegatedTenantAccessFlag.Disabled;
+        if (delegatedAccess is not null)
+        {
+            delegatedAccess.Changed += OnDelegatedAccessChanged;
+        }
     }
+
+    /// <summary>
+    /// Whether delegated tenant access administration is enabled on this silo right
+    /// now. The current snapshot reports the value it was compiled under through
+    /// <see cref="CompiledTenantPolicy.IsDelegatedAccessEnabled"/>; a policy
+    /// compiled outside the snapshot (the gate's registry confirmation) uses this.
+    /// </summary>
+    public bool IsDelegatedAccessEnabled => _delegatedAccess.IsEnabled;
 
     /// <summary>The current compiled snapshot. Read without locking; swapped atomically on rebuild.</summary>
     public CompiledTenantPolicy Current => Volatile.Read(ref _current);
@@ -299,8 +319,27 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     }
 
     /// <inheritdoc />
-    /// <remarks>Stops any background re-publish of a failed epoch advance. Idempotent.</remarks>
-    public void Dispose() => _disposed.Cancel();
+    /// <remarks>Stops any background re-publish of a failed epoch advance, and stops observing the delegated-access flag. Idempotent.</remarks>
+    public void Dispose()
+    {
+        _delegatedAccess.Changed -= OnDelegatedAccessChanged;
+        _disposed.Cancel();
+    }
+
+    /// <summary>
+    /// Reacts to a change of the delegated tenant access administration flag. The
+    /// current snapshot was compiled under the old value, so it stops being
+    /// authoritative at once (its consumers confirm against the registry under the
+    /// new value) and a rebuild is scheduled - the same trigger a silo uses when it
+    /// cannot vouch for its snapshot (<see cref="InvalidateClusterView"/>).
+    /// </summary>
+    private void OnDelegatedAccessChanged()
+    {
+        _logger.LogInformation(
+            "Delegated tenant access administration is now {State}; rebuilding the compiled tenant-policy snapshot.",
+            _delegatedAccess.IsEnabled ? "enabled" : "disabled");
+        InvalidateClusterView();
+    }
 
     private async Task PublishAdvanceAsync(CancellationToken cancellationToken)
     {
@@ -486,7 +525,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// </summary>
     private void PublishSnapshot(List<TenantRecord> records, long generation)
     {
-        var compiled = CompiledTenantPolicy.Compile(records);
+        var compiled = CompiledTenantPolicy.Compile(records, _delegatedAccess.IsEnabled);
         Volatile.Write(ref _current, compiled);
         Volatile.Write(ref _builtForGeneration, generation);
         Volatile.Write(ref _consecutiveRebuildFailures, 0);

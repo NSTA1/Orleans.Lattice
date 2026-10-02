@@ -286,7 +286,7 @@ internal sealed class TenantGateEnforcer(
             // tenant it has no membership of and consume that tenant's inbound
             // cross-tenant grants, reading (or, with a write grant, writing) the
             // granting tenant's data. Residency is still gated per branch below.
-            var validation = engine.ValidateActiveTenant(subjectId, activeTenant);
+            var validation = engine.ValidateActiveTenantAs(subjectId, request.Subject.GroupIds, activeTenant);
             if (!validation.Allowed)
             {
                 return Deny(validation.Reason);
@@ -372,12 +372,13 @@ internal sealed class TenantGateEnforcer(
             return DenyUnconfirmed(in pending);
         }
 
-        var confirmed = CompileConfirmed(in pending, activeRecord, ownerRecord);
+        var confirmed = CompileConfirmed(in pending, activeRecord, ownerRecord, policy.IsDelegatedAccessEnabled);
         var active = activeRecord is not null && activeRecord.Id.Equals(pending.ActiveTenant) ? activeRecord : null;
 
         var validation = LatticeTenantPolicyEngine.ValidateActiveTenant(
             confirmed,
             pending.SubjectId,
+            pending.GroupIds,
             pending.ActiveTenant);
         if (!validation.Allowed)
         {
@@ -449,7 +450,10 @@ internal sealed class TenantGateEnforcer(
     }
 
     /// <summary>
-    /// Compiles the registry records a confirmation read into a policy. A record is
+    /// Compiles the registry records a confirmation read into a policy, under this
+    /// silo's current delegated tenant access administration posture so the
+    /// confirmation applies the same member and group rule the rebuilt snapshot
+    /// will. A record is
     /// admitted only under the tenant id it was read for, so a record the registry
     /// returned for a different tenant can neither stand in for the active tenant
     /// nor for the owner (fail closed: the missing tenant then reads unregistered).
@@ -457,7 +461,8 @@ internal sealed class TenantGateEnforcer(
     private static CompiledTenantPolicy CompileConfirmed(
         in PendingConfirmation pending,
         TenantRecord? activeRecord,
-        TenantRecord? ownerRecord)
+        TenantRecord? ownerRecord,
+        bool delegatedAccessEnabled)
     {
         var active = activeRecord is not null && activeRecord.Id.Equals(pending.ActiveTenant) ? activeRecord : null;
         var owner = ownerRecord is not null && ownerRecord.Id.Equals(pending.Owner) ? ownerRecord : null;
@@ -465,9 +470,9 @@ internal sealed class TenantGateEnforcer(
         return (active, owner) switch
         {
             (null, null) => CompiledTenantPolicy.Empty,
-            (not null, null) => CompiledTenantPolicy.Compile([active]),
-            (null, not null) => CompiledTenantPolicy.Compile([owner]),
-            _ => CompiledTenantPolicy.Compile([active, owner]),
+            (not null, null) => CompiledTenantPolicy.Compile([active], delegatedAccessEnabled),
+            (null, not null) => CompiledTenantPolicy.Compile([owner], delegatedAccessEnabled),
+            _ => CompiledTenantPolicy.Compile([active, owner], delegatedAccessEnabled),
         };
     }
 
@@ -568,6 +573,7 @@ internal sealed class TenantGateEnforcer(
         TenantId ActiveTenant,
         TenantId Owner,
         string SubjectId,
+        IReadOnlyCollection<string> GroupIds,
         string TreeId,
         TenantGrantOperations Operation)
     {
@@ -583,6 +589,7 @@ internal sealed class TenantGateEnforcer(
                 LatticeActiveTenantContext.Current.GetValueOrDefault(),
                 LatticeTenantTrees.GetOwner(request.TreeId).Tenant,
                 request.Subject.SubjectId,
+                request.Subject.GroupIds ?? Array.Empty<string>(),
                 request.TreeId,
                 ToGrantOperations(request.Operation));
     }
