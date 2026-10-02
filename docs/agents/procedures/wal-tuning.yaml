@@ -42,6 +42,11 @@ steps:
     api: "LatticeOptions and WalSaturationReceiverFlowControlOptions"
     expects: "Host configuration changes take effect when the host applies the options."
     source: "src/lattice.replication/WalSaturationReceiverFlowControlOptions.cs#WalSaturationReceiverFlowControlOptions"
+  - n: 5
+    action: "When retained WAL bytes stay high, read WAL reclamation posture before changing ceilings again."
+    api: "ILatticeWalReclamation.GetWalReclamationAsync / GetWalReclamation / lattice_treeadmin_wal_reclamation"
+    expects: "Returns pin-store readability, pin count, pins without offsets, IsWedged, and the floor holder without activating a leaf."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeWalReclamation.cs#GetWalReclamationAsync"
 postconditions:
   - check: "The WAL retained-byte ceiling is advisory and never changes what a WAL garbage-collection pass may trim."
     source: "docs/lattice.api.treeadmin/README.md"

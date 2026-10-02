@@ -44,7 +44,9 @@ steps:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
 postconditions:
   - check: "The tree keeps serving ordinary reads and writes while a shadow tree is built and swapped; bulk loads and appends are not retried across the rejecting window."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+    source: "docs/lattice/tree-sizing.md"
+  - check: "Bulk loads and appends force-refresh routing at call start, so a call made after the swap reaches the destination, but one already in flight when the alias swaps is applied to the old physical tree and removed by its purge."
+    source: "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#LatticeGrain.BulkLoadAsync"
   - check: "The logical registry entry keeps the live alias, sizing, configuration overrides, and tombstone compaction schedule after the old physical copy is retired."
     source: "docs/lattice/tree-sizing.md"
   - check: "Undo is available only while a resize is in progress or while the pre-resize tree is inside its soft-delete recovery window."
