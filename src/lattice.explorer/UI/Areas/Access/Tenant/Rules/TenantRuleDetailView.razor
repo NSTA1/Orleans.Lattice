@@ -1,0 +1,30 @@
+@inherits TenantAccessView
+
+@*
+    One of the tenant's tenant-tier rules (/t/{tenant}/access/rules/{localId}),
+    named by its local id. The page shell: title, navigation, and the loading and
+    error states; a local id the tenant has no rule of is not found.
+*@
+
+<PageTitle>@RuleId - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@RuleId</h1>
+<AccessNav Current="@AccessRoutes.RulesSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="rule" aria-label="Rule @RuleId of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The rule could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_rule is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading the rule" />
+    }
+    else
+    {
+        <p class="lt-access-count" role="status">@LayerText</p>
+    }
+</section>

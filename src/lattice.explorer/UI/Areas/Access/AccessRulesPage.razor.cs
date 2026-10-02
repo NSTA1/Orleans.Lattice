@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 
@@ -9,7 +10,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// <summary>
 /// The rule list (<c>/access/rules</c>, also the area root): every rule, paged,
 /// with a search, an ownership filter, and a "New rule" editor. Rules link to
-/// their own page, where authored rules are edited and deleted.
+/// their own page, where authored rules are edited and deleted. At a tenant-rooted
+/// address whose access administration is delegated to the caller, the rules
+/// governing that tenant in both layers instead.
 /// </summary>
 public partial class AccessRulesPage
 {
@@ -33,9 +36,13 @@ public partial class AccessRulesPage
     private bool _loaded;
     private string? _loadedScope;
     private (int Count, bool More)? _clusterWide;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -137,6 +144,13 @@ public partial class AccessRulesPage
 
         _loaded = true;
         _loadedScope = Scope;
+        if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
+        {
+            // The rules governing the tenant, both layers: its view reads them.
+            _editorOpen = false;
+            return;
+        }
+
         _editorOpen = string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         await LoadFirstPageAsync().ConfigureAwait(true);

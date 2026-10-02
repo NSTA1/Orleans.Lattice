@@ -1,14 +1,17 @@
 @*
-    The subject picker: a User / Group choice and the id as a type-ahead
-    combobox over the cluster's identity directory, listing matching principals
-    by id with their display name (rendered as text) beside it. With a
-    directory only a listed principal is accepted; without one the picker is a
-    plain id box and says the id is not validated.
+    The subject picker: a kind choice and the id as a type-ahead combobox,
+    listing matching principals by id with their display name (rendered as text)
+    beside it. Cluster-wide the kinds are User and Group, over the identity
+    directory; with a directory only a listed principal is accepted, and without
+    one the picker is a plain id box and says the id is not validated. On a
+    tenant page the kinds are three labelled sources - the tenant's own groups,
+    and the cluster's groups and users - and a chosen group's provenance is shown
+    with its full id.
 *@
 <div class="lt-access-form__row">
     @if (AllowKindChange)
     {
-        <LtSelect Label="@($"{Label} kind")" Options="KindOptions" Value="@KindValue" ValueChanged="OnKindChangedAsync" />
+        <LtSelect Label="@($"{Label} kind")" Options="Options" Value="@KindValue" ValueChanged="OnKindChangedAsync" />
     }
     <LtComboBox @ref="_box"
                 Label="@Label"
@@ -16,9 +19,16 @@
                 ValueChanged="OnIdChangedAsync"
                 OnChoose="OnChooseAsync"
                 Source="@Source"
-                Mode="@(DirectoryAvailable ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest)"
+                Mode="@Mode"
                 Noun="@KindWord"
-                Error="@Error"
+                Error="@(_sourceError ?? Error)"
                 Hint="@IdHint"
                 Disabled="Disabled" />
 </div>
+@if (Provenance is { } provenance)
+{
+    <p class="lt-access-provenance" data-lt-provenance="@(IsTenantGroup ? "tenant" : "cluster")">
+        <span class="lt-access-provenance__source">@provenance.Source</span>
+        <span class="lt-access-provenance__id">@provenance.FullId</span>
+    </p>
+}

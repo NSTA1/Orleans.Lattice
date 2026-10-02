@@ -1,0 +1,38 @@
+@inherits TenantAccessView
+
+@*
+    The rules governing the tenant (/t/{tenant}/access/rules): its own
+    tenant-tier rules, which its administrators edit, and the platform rules
+    scoped to its trees, which are read-only and final. The page shell: title,
+    navigation, and the loading, error and empty states over the first page.
+*@
+
+<PageTitle>Rules of tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Who may do what on tenant @Tenant's trees. Platform rules are evaluated first and are final; the tenant's own rules decide only where no platform rule does.</p>
+<AccessNav Current="@AccessRoutes.RulesSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="rules" aria-label="Rules of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Rules could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_page is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading rules" />
+    }
+    else if (_page.Entries.Count == 0)
+    {
+        <LtEmptyState Title="No rules yet">
+            <ChildContent>No rules govern tenant @Tenant's trees yet, so every request is decided by the default.</ChildContent>
+        </LtEmptyState>
+    }
+    else
+    {
+        <p class="lt-access-count" role="status">@CountText</p>
+    }
+</section>

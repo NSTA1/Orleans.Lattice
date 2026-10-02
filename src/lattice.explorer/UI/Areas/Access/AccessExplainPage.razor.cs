@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Suggestions;
@@ -13,7 +14,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// <see cref="ILatticeAuthAdmin.EffectivePermissionsAsync"/> for a subject. The
 /// question is kept in the address (<c>?subject=&amp;kind=&amp;operation=&amp;tree=</c>
 /// plus <c>key</c> or <c>prefix</c>, and <c>view=permissions</c>), so an answer can
-/// be linked to and is asked again when the page opens at that address.
+/// be linked to and is asked again when the page opens at that address. At a
+/// tenant-rooted address whose access administration is delegated to the caller,
+/// the tenant's layer-aware explain instead.
 /// </summary>
 public partial class AccessExplainPage
 {
@@ -35,9 +38,14 @@ public partial class AccessExplainPage
     private AccessModelDescriptor? _model;
     private LtComboBox? _treeBox;
     private AccessSubjectPicker? _subjectPicker;
+    private bool _asked;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal ExplorerSuggestions Suggestions { get; set; } = default!;
@@ -54,8 +62,15 @@ public partial class AccessExplainPage
     ];
 
     /// <inheritdoc />
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        if (await _gate.ResolveAsync(TenantAccess, Address.Tenant).ConfigureAwait(true) || _asked)
+        {
+            // The tenant's layer-aware explain reads for itself; the question here is asked once.
+            return;
+        }
+
+        _asked = true;
         _model = await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         ReadQuestion(Address);
 

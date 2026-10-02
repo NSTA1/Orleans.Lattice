@@ -3,9 +3,17 @@
 @inherits ExplorerPage
 
 @*
-    The group catalogue, paged, with a validated, fail-closed create form.
+    The group catalogue, paged, with a validated, fail-closed create form. At a
+    tenant-rooted address whose access administration is delegated to the
+    caller, the tenant's own groups instead.
 *@
 
+@if (_gate.DelegatedTenant is { } delegatedTenant)
+{
+    <TenantGroupsView Tenant="@delegatedTenant" />
+}
+else
+{
 <PageTitle>Access groups - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Access</h1>
@@ -13,12 +21,19 @@
 <AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Scope" />
 <AccessPostureBanner Model="_model" />
 
-@if (Scope is { } tenant)
+@if (Scope is not null)
 {
-    <p class="lt-access-caveat" data-lt-cluster-wide-groups="true">Groups belong to the whole cluster, not to one tenant, so tenant @tenant's Access pages do not list them. The cluster's groups, and creating a group, are on <a href="@ClusterWideHref">the cluster's Groups page</a>.</p>
-    @if (CreateRequested && MembershipEditable)
+    @if (_gate.State is not { } state)
     {
-        <p class="lt-access-caveat" role="note" data-lt-create-group-elsewhere="true">A group is created for the whole cluster. <a href="@ClusterWideCreateHref">Create a group on the cluster's Groups page</a>.</p>
+        <LtSkeleton Lines="2" Label="Loading access" />
+    }
+    else
+    {
+        <p class="lt-access-caveat" data-lt-cluster-wide-groups="true" data-lt-tenant-access="@AccessTenantGate.StandingAttribute(state.Standing)">@TenantCaveat(state) The cluster's groups, and creating a group, are on <a href="@ClusterWideHref">the cluster's Groups page</a>.</p>
+        @if (CreateRequested && MembershipEditable)
+        {
+            <p class="lt-access-caveat" role="note" data-lt-create-group-elsewhere="true">A group is created for the whole cluster. <a href="@ClusterWideCreateHref">Create a group on the cluster's Groups page</a>.</p>
+        }
     }
 }
 else
@@ -100,3 +115,4 @@ else
         </form>
     }
 </LtDialog>
+}

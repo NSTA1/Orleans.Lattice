@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Membership;
@@ -34,9 +35,13 @@ public partial class AccessGroupsPage
     private string? _loadedScope;
     private LtNameInput? _idBox;
     private AccessGroupNameSource? _existingGroups;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -89,10 +94,30 @@ public partial class AccessGroupsPage
 
     /// <summary>
     /// The tenant the page's address is rooted at, or <see langword="null"/> on
-    /// the cluster-wide page. Groups belong to no tenant, so a tenant-rooted page
+    /// the cluster-wide page. Groups belong to no tenant unless the tenant's access
+    /// administration is delegated to the caller, so otherwise a tenant-rooted page
     /// lists none and says where they are.
     /// </summary>
     private string? Scope => Address.Tenant;
+
+    /// <summary>
+    /// The opening of the line a tenant-rooted page shows when the tenant's access
+    /// administration is not delegated to the caller: why it lists no groups.
+    /// </summary>
+    /// <param name="state">The caller's standing towards the tenant.</param>
+    /// <returns>The sentence.</returns>
+    internal static string TenantCaveat(TenantAccessState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return state.Standing switch
+        {
+            TenantAccessStanding.NotPermitted =>
+                $"Tenant {state.Tenant}'s own groups are administered by its administrators, and you are not one of them; cluster groups belong to the whole cluster, not to one tenant.",
+            TenantAccessStanding.Off =>
+                $"Delegated tenant access administration is off, so groups belong to the whole cluster, not to one tenant, and tenant {state.Tenant}'s Access pages do not list them.",
+            _ => $"Groups belong to the whole cluster, not to one tenant, so tenant {state.Tenant}'s Access pages do not list them.",
+        };
+    }
 
     private string ClusterWideHref => Navigator.Canonicalize(AccessRoutes.Groups.WithTenant(null)).ToHref();
 
@@ -125,6 +150,13 @@ public partial class AccessGroupsPage
 
         _loaded = true;
         _loadedScope = Scope;
+        if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
+        {
+            // The tenant's own groups: its view reads them.
+            _createOpen = false;
+            return;
+        }
+
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         _createOpen = Scope is null && MembershipEditable && string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
         if (Scope is null)

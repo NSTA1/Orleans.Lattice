@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
@@ -11,6 +12,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// One rule (<c>/access/rules/{id}</c>, with <c>?tree=</c> naming its governed
 /// tree). Without a tree the page finds the id across the rule store; an id used
 /// in several trees is offered as a choice, and an id used in none is not found.
+/// At a tenant-rooted address whose access administration is delegated to the
+/// caller, one of the tenant's tenant-tier rules, by local id.
 /// </summary>
 public partial class AccessRulePage
 {
@@ -24,9 +27,13 @@ public partial class AccessRulePage
     private AccessModelDescriptor? _model;
     private bool _editorOpen;
     private bool _confirmOpen;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -53,6 +60,12 @@ public partial class AccessRulePage
         }
 
         _loaded = Address;
+        if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
+        {
+            // One of the tenant's tenant-tier rules, by local id: its view reads it.
+            return;
+        }
+
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         await LoadAsync().ConfigureAwait(true);
     }

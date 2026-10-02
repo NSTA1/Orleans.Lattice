@@ -10,6 +10,12 @@
     trees. App-owned rules are attributed to their app and are read-only.
 *@
 
+@if (_gate.DelegatedTenant is { } delegatedTenant)
+{
+    <TenantRulesView Tenant="@delegatedTenant" />
+}
+else
+{
 <PageTitle>Access rules - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Access</h1>
@@ -71,3 +77,4 @@ else
         <AccessRuleEditor Tenant="@Address.Tenant" Model="_model" OnSaved="OnSavedAsync" OnCancel="@(() => _editorOpen = false)" />
     }
 </LtDialog>
+}
