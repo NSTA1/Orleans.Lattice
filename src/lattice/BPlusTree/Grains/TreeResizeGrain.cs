@@ -759,6 +759,17 @@ internal sealed class TreeResizeGrain(
         }
 
         // ---- Undo after swap. ----
+        // Step 5 rewrites the logical tree's registry row, and UpdateAsync is an
+        // unconditional upsert. A missing row here means the tree was purged or
+        // something has already gone wrong, so refuse before any compensation
+        // runs rather than recreate it as a bare row with no structural pins
+        // (issue #4270).
+        var registry = grainFactory.GetLatticeRegistry();
+        if (await registry.GetEntryAsync(TreeId) is null)
+        {
+            throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
+        }
+
         // Defensively abort any snapshot activation that may have been
         // resurrected by crash recovery - a no-op when the snapshot has
         // already completed or when the opId no longer matches.
@@ -796,7 +807,6 @@ internal sealed class TreeResizeGrain(
         await Task.WhenAll(undoTasks);
 
         // 3. Remove the alias so the logical tree maps back to the old physical tree.
-        var registry = grainFactory.GetLatticeRegistry();
         await registry.RemoveAliasAsync(TreeId);
 
         // 4. Discard the snapshot tree, releasing its WAL retention now
@@ -966,8 +976,14 @@ internal sealed class TreeResizeGrain(
         // a shard the copy never populated (issue 3880). The map is re-stamped
         // above the logical tree's current version so every cached router sees
         // the topology change.
+        //
+        // The logical row must already exist: UpdateAsync is an unconditional
+        // upsert, so building the entry from the captured one or from an empty
+        // default would recreate a purged tree's row and hide whatever removed
+        // it (issue #4270).
         var oldEntry = state.State.OldRegistryEntry;
-        var current = await registry.GetEntryAsync(TreeId) ?? oldEntry ?? new TreeRegistryEntry();
+        var current = await registry.GetEntryAsync(TreeId)
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, "the resize alias swap");
         var resized = await registry.GetEntryAsync(state.State.SnapshotTreeId!);
         var resizedMap = resized?.ShardMap is { } map
             ? new ShardMap

@@ -53,16 +53,20 @@ internal static class AliasCutoverShardMaps
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
         var registry = grainFactory.GetLatticeRegistry();
         var current = await registry.ResolveAsync(logicalTreeId);
-        var destination = await registry.GetEntryAsync(destinationPhysicalTreeId) ?? new TreeRegistryEntry();
+        var recorded = await registry.GetEntryAsync(destinationPhysicalTreeId);
 
         // The logical map is carried before the swap, so a cutover resumed after it
         // has nothing left to carry: the logical entry now describes the
         // destination, and splits since may have moved it on.
         if (string.Equals(current, destinationPhysicalTreeId, StringComparison.Ordinal))
         {
-            return destination.ReplacedShardMap;
+            return recorded?.ReplacedShardMap;
         }
 
+        // A destination with no row yet is normal: a restore's or remediation's
+        // copy can be addressed before its row is materialised, and this carry is
+        // what first records it.
+        var destination = recorded ?? new TreeRegistryEntry();
         var replaced = destination.ReplacedShardMap;
         if (replaced is null)
         {
@@ -93,6 +97,12 @@ internal static class AliasCutoverShardMaps
 
         var destinationRouting = await grainFactory.GetGrain<ILattice>(destinationPhysicalTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken);
+
+        // A shadow-cutover restore into a target that was never created has no
+        // logical row: this cutover is what creates it, as an alias of the restored
+        // copy, so an absent row is a genuine create and starts from an empty entry.
+        // It cannot be a lost row - the alias lives on that row, and the resolve
+        // above found none - unlike the revert read, which refuses.
         var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
         await registry.UpdateAsync(logicalTreeId, logical with
         {
@@ -150,7 +160,7 @@ internal static class AliasCutoverShardMaps
 
         var live = (await grainFactory.GetGrain<ILattice>(logicalTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken)).Map;
-        var logical = await registry.GetEntryAsync(logicalTreeId) ?? new TreeRegistryEntry();
+        var logical = await RequireEntryAsync(registry, logicalTreeId, RevertOperation);
 
         // A revert resumed after the map was carried back would read the restored
         // map here, so leave the shadow's entry as the first pass stamped it.
@@ -275,6 +285,18 @@ internal static class AliasCutoverShardMaps
     /// </summary>
     private static ShardMap Restamp(ShardMap map, ShardMap? existing) =>
         Copy(map, Math.Max(existing?.Version ?? 0L, map.Version) + 1);
+
+    private const string RevertOperation = "the alias-revert shard-map carry";
+
+    /// <summary>
+    /// Reads the row a carry is about to rewrite, refusing when there is none
+    /// (issue #4270). <see cref="ILatticeRegistry.UpdateAsync"/> is an
+    /// unconditional upsert, so defaulting a missing row to an empty entry would
+    /// create one with no structural pins and hide whatever removed it.
+    /// </summary>
+    private static async Task<TreeRegistryEntry> RequireEntryAsync(
+        ILatticeRegistry registry, string treeId, string operation) =>
+        await registry.GetEntryAsync(treeId) ?? throw new LatticeTreeNotRegisteredException(treeId, operation);
 
     private static ShardMap Copy(ShardMap map, long version) =>
         new() { Slots = (int[])map.Slots.Clone(), Version = version };
