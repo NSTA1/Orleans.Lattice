@@ -277,7 +277,10 @@ public sealed partial class LatticeBackupControlTenancyTests
         {
             Assert.That(restoreRequests, Is.Not.Empty);
             Assert.That(restoreRequests[0].TreeId, Is.EqualTo(Effective(Acme, "landing")));
-            Assert.That(restoreRequests[0].Key, Is.EqualTo("eu/"));
+            // A prefix scope is authorized as a range over the whole prefix (#4278).
+            Assert.That(restoreRequests[0].Key, Is.Null);
+            Assert.That(restoreRequests[0].RangeStart, Is.EqualTo("eu/"));
+            Assert.That(restoreRequests[0].RangeEnd, Is.EqualTo(LatticeKeyRange.PrefixUpperBound("eu/")));
         });
     }
 
