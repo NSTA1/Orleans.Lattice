@@ -2727,14 +2727,16 @@ internal sealed partial class ShardRootGrain(
             ?? optionsResolver.GetConfiguredOptions(TreeId).ActivationReadyTimeout;
         if (timeout == Timeout.InfiniteTimeSpan)
         {
-            return await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return await WarmOptionsIfRootedAsync(
+                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
 
         using var deadline = new CancellationTokenSource(timeout);
         try
         {
-            return await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).WaitAsync(deadline.Token)
-                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return await WarmOptionsIfRootedAsync(
+                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).WaitAsync(deadline.Token)
+                    .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
         {
@@ -2754,6 +2756,22 @@ internal sealed partial class ShardRootGrain(
                 TimeoutSeconds = timeout.TotalSeconds,
             };
         }
+    }
+
+    /// <summary>
+    /// Resolves and caches this tree's options once the shard has a root.
+    /// The synchronous readers of the cache - the leaf-retirement retry
+    /// deadline, the dirty-leaf flush interval, optimistic point reads - fall
+    /// back to defaults while it is empty, so a per-tree override would be
+    /// silently ignored. The seed above no longer resolves before it runs,
+    /// because a resolve of a purged id refuses (issue #4219); once the shard
+    /// has a root the tree is registered, so the resolve here is safe.
+    /// </summary>
+    private async Task<bool> WarmOptionsIfRootedAsync(bool rooted)
+    {
+        if (rooted && _cachedOptions is null)
+            await GetOptionsAsync();
+        return rooted;
     }
 
     private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty)
