@@ -17,6 +17,7 @@ public sealed class RepoContextIndexingOptionsTests
         RepoContextIndexingOptions.EmbeddingGapScanIntervalSecondsKey,
         RepoContextIndexingOptions.TokenizerProfileKey,
         RepoContextIndexingOptions.IndexingRoleKey,
+        RepoContextIndexingOptions.SourceIndexingKey,
         RepoContextIndexingOptions.SemanticRetrievalKey,
         RepoContextIndexingOptions.PacingKey,
         RepoContextIndexingOptions.PacingSliceSecondsKey,
@@ -269,6 +270,42 @@ public sealed class RepoContextIndexingOptionsTests
 
         var expected = expectHub ? RepoContextIndexingRole.Hub : RepoContextIndexingRole.Spoke;
         Assert.That(options.Role, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Source_indexing_is_on_by_default()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(new RepoContextIndexingOptions().SourceIndexing, Is.True);
+            Assert.That(RepoContextIndexingOptions.FromEnvironment().SourceIndexing, Is.True);
+        });
+    }
+
+    [Test]
+    [TestCase("off", false)]
+    [TestCase("false", false)]
+    [TestCase(" 0 ", false)]
+    [TestCase("DISABLED", false)]
+    [TestCase("on", true)]
+    [TestCase("true", true)]
+    public void FromEnvironment_resolves_a_recognised_source_indexing_switch(string raw, bool expected)
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.SourceIndexingKey, raw);
+
+        Assert.That(RepoContextIndexingOptions.FromEnvironment().SourceIndexing, Is.EqualTo(expected));
+    }
+
+    [Test]
+    [TestCase("")]
+    [TestCase("memory-only")]
+    [TestCase("of")]
+    public void FromEnvironment_fails_closed_to_source_indexing_on_for_an_unrecognised_value(string raw)
+    {
+        // A typo must never silently stop a repository being indexed.
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.SourceIndexingKey, raw);
+
+        Assert.That(RepoContextIndexingOptions.FromEnvironment().SourceIndexing, Is.True);
     }
 
     [Test]
