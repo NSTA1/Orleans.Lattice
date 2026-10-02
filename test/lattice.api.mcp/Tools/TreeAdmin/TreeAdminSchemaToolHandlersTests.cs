@@ -3,7 +3,8 @@ using NSubstitute;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Schema;
 
-// The deprecated blocking schema verbs (LATTICE0002) are exercised on purpose until their removal.
+// The deprecated blocking verbs (LATTICE0002) - the compliance scan (#4126) and the
+// remediation and migration verbs (#4123) - are exercised on purpose until their removal.
 #pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Mcp.Tests;

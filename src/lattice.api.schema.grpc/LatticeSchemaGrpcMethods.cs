@@ -24,9 +24,12 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// (<c>Remediate</c> / <c>GetRemediationStatus</c>), the read-only compliance
 /// audit (<c>ScanCompliance</c>), the capability probe (<c>ProbeCapabilities</c>),
 /// unauthenticated discovery (<c>GetAuthScheme</c>), and the accept-then-poll
-/// operation RPCs (<c>StartRemediation</c>, <c>StartMigration</c>,
-/// <c>StartAdvanceAndMigrate</c>, <c>GetSchemaOperationStatus</c>,
-/// <c>ListSchemaOperations</c>, <c>CancelSchemaOperation</c>). The blocking
+/// compliance-scan operation RPCs (<c>StartComplianceScan</c>,
+/// <c>GetComplianceScanStatus</c>, <c>ListComplianceScans</c>,
+/// <c>CancelComplianceScan</c>) and the remediation and migration operation RPCs
+/// (<c>StartRemediation</c>, <c>StartMigration</c>, <c>StartAdvanceAndMigrate</c>,
+/// <c>GetSchemaOperationStatus</c>, <c>ListSchemaOperations</c>,
+/// <c>CancelSchemaOperation</c>). The blocking <c>ScanCompliance</c>,
 /// <c>Remediate</c>, <c>MigrateToTargetVersion</c> and <c>AdvanceAndMigrate</c> RPCs
 /// are deprecated (diagnostic <c>LATTICE0002</c>) and will be removed in the next
 /// major version. Contract-versioning
@@ -87,6 +90,18 @@ internal sealed class LatticeSchemaGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
+    /// <summary>The unary accept-then-poll compliance-scan start RPC method name.</summary>
+    public const string StartComplianceScanMethodName = "StartComplianceScan";
+
+    /// <summary>The unary compliance-scan operation status RPC method name.</summary>
+    public const string GetComplianceScanStatusMethodName = "GetComplianceScanStatus";
+
+    /// <summary>The unary compliance-scan operation listing RPC method name.</summary>
+    public const string ListComplianceScansMethodName = "ListComplianceScans";
+
+    /// <summary>The unary compliance-scan operation cancellation RPC method name.</summary>
+    public const string CancelComplianceScanMethodName = "CancelComplianceScan";
+
     /// <summary>The unary accept-then-poll remediation start RPC method name.</summary>
     public const string StartRemediationMethodName = "StartRemediation";
 
@@ -124,7 +139,10 @@ internal sealed class LatticeSchemaGrpcMethods
         Serializer<LatticeSchemaCapabilities> capabilitiesSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
         Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
+        Serializer<SchemaComplianceScanStartRequest> complianceScanStartRequestSerializer,
         Serializer<LatticeOperationHandle> operationHandleSerializer,
+        Serializer<SchemaComplianceOperationRequest> complianceOperationRequestSerializer,
+        Serializer<SchemaComplianceOperationStatusResponse> complianceOperationStatusResponseSerializer,
         Serializer<SchemaMigrationStartRequest> migrationStartRequestSerializer,
         Serializer<SchemaOperationRequest> operationRequestSerializer,
         Serializer<SchemaOperationStatusResponse> operationStatusResponseSerializer,
@@ -148,7 +166,10 @@ internal sealed class LatticeSchemaGrpcMethods
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
+        ArgumentNullException.ThrowIfNull(complianceScanStartRequestSerializer);
         ArgumentNullException.ThrowIfNull(operationHandleSerializer);
+        ArgumentNullException.ThrowIfNull(complianceOperationRequestSerializer);
+        ArgumentNullException.ThrowIfNull(complianceOperationStatusResponseSerializer);
         ArgumentNullException.ThrowIfNull(migrationStartRequestSerializer);
         ArgumentNullException.ThrowIfNull(operationRequestSerializer);
         ArgumentNullException.ThrowIfNull(operationStatusResponseSerializer);
@@ -267,6 +288,27 @@ internal sealed class LatticeSchemaGrpcMethods
             requestMarshaller: LatticeSchemaGrpcMarshallers.Create(authSchemeRequestSerializer),
             responseMarshaller: LatticeSchemaGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
 
+        var complianceOperationRequestMarshaller = LatticeSchemaGrpcMarshallers.Create(complianceOperationRequestSerializer);
+        var complianceOperationStatusMarshaller = LatticeSchemaGrpcMarshallers.Create(complianceOperationStatusResponseSerializer);
+
+        StartComplianceScan = new Method<SchemaComplianceScanStartRequest, LatticeOperationHandle>(
+            MethodType.Unary, ServiceName, StartComplianceScanMethodName,
+            LatticeSchemaGrpcMarshallers.Create(complianceScanStartRequestSerializer),
+            LatticeSchemaGrpcMarshallers.Create(operationHandleSerializer));
+
+        GetComplianceScanStatus = new Method<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse>(
+            MethodType.Unary, ServiceName, GetComplianceScanStatusMethodName,
+            complianceOperationRequestMarshaller, complianceOperationStatusMarshaller);
+
+        ListComplianceScans = new Method<LatticeOperationListRequest, LatticeOperationPage>(
+            MethodType.Unary, ServiceName, ListComplianceScansMethodName,
+            LatticeSchemaGrpcMarshallers.Create(operationListRequestSerializer),
+            LatticeSchemaGrpcMarshallers.Create(operationPageSerializer));
+
+        CancelComplianceScan = new Method<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse>(
+            MethodType.Unary, ServiceName, CancelComplianceScanMethodName,
+            complianceOperationRequestMarshaller, complianceOperationStatusMarshaller);
+
         var handleMarshaller = LatticeSchemaGrpcMarshallers.Create(operationHandleSerializer);
         var operationRequestMarshaller = LatticeSchemaGrpcMarshallers.Create(operationRequestSerializer);
         var operationStatusMarshaller = LatticeSchemaGrpcMarshallers.Create(operationStatusResponseSerializer);
@@ -345,6 +387,18 @@ internal sealed class LatticeSchemaGrpcMethods
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
 
+    /// <summary>The unary <c>StartComplianceScan</c> accept-then-poll compliance-scan RPC.</summary>
+    public Method<SchemaComplianceScanStartRequest, LatticeOperationHandle> StartComplianceScan { get; }
+
+    /// <summary>The unary <c>GetComplianceScanStatus</c> RPC.</summary>
+    public Method<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse> GetComplianceScanStatus { get; }
+
+    /// <summary>The unary <c>ListComplianceScans</c> RPC.</summary>
+    public Method<LatticeOperationListRequest, LatticeOperationPage> ListComplianceScans { get; }
+
+    /// <summary>The unary <c>CancelComplianceScan</c> RPC.</summary>
+    public Method<SchemaComplianceOperationRequest, SchemaComplianceOperationStatusResponse> CancelComplianceScan { get; }
+
     /// <summary>The unary <c>StartRemediation</c> accept-then-poll RPC.</summary>
     public Method<RemediateRequest, LatticeOperationHandle> StartRemediation { get; }
 
@@ -390,7 +444,10 @@ internal sealed class LatticeSchemaGrpcMethods
             serializerProvider.GetRequiredService<Serializer<LatticeSchemaCapabilities>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
+            serializerProvider.GetRequiredService<Serializer<SchemaComplianceScanStartRequest>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationHandle>>(),
+            serializerProvider.GetRequiredService<Serializer<SchemaComplianceOperationRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<SchemaComplianceOperationStatusResponse>>(),
             serializerProvider.GetRequiredService<Serializer<SchemaMigrationStartRequest>>(),
             serializerProvider.GetRequiredService<Serializer<SchemaOperationRequest>>(),
             serializerProvider.GetRequiredService<Serializer<SchemaOperationStatusResponse>>(),

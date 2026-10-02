@@ -197,6 +197,10 @@ internal sealed class LatticeSchemaApiGrpcAuthInterceptor : Interceptor
             LatticeSchemaGrpcMethods.GetRemediationStatusMethodName => LatticeSchemaApiOperation.GetRemediationStatus,
             LatticeSchemaGrpcMethods.ScanComplianceMethodName => LatticeSchemaApiOperation.ScanCompliance,
             LatticeSchemaGrpcMethods.ProbeCapabilitiesMethodName => LatticeSchemaApiOperation.ProbeCapabilities,
+            LatticeSchemaGrpcMethods.StartComplianceScanMethodName => LatticeSchemaApiOperation.StartComplianceScan,
+            LatticeSchemaGrpcMethods.GetComplianceScanStatusMethodName => LatticeSchemaApiOperation.GetComplianceScanStatus,
+            LatticeSchemaGrpcMethods.ListComplianceScansMethodName => LatticeSchemaApiOperation.ListComplianceScans,
+            LatticeSchemaGrpcMethods.CancelComplianceScanMethodName => LatticeSchemaApiOperation.CancelComplianceScan,
             LatticeSchemaGrpcMethods.StartRemediationMethodName => LatticeSchemaApiOperation.StartRemediation,
             LatticeSchemaGrpcMethods.StartMigrationMethodName => LatticeSchemaApiOperation.StartMigration,
             LatticeSchemaGrpcMethods.StartAdvanceAndMigrateMethodName => LatticeSchemaApiOperation.StartAdvanceAndMigrate,
@@ -213,9 +217,12 @@ internal sealed class LatticeSchemaApiGrpcAuthInterceptor : Interceptor
             AdvanceVersionRequest a => a.TreeId,
             RemediateRequest r => r.TreeId,
             SchemaTreeRequest t => t.TreeId,
+            SchemaComplianceScanStartRequest s => s.TreeId,
             SchemaMigrationStartRequest m => m.TreeId,
-            // A tracked-operation status, listing or cancel names an operation, not a
-            // tree, so it carries no target; the facade scopes it to the caller.
+
+            // A tracked-operation status or cancel names an operation, not a tree,
+            // so it carries no target; the facade scopes it to the caller.
+            SchemaComplianceOperationRequest => null,
             SchemaOperationRequest => null,
             _ => null,
         };

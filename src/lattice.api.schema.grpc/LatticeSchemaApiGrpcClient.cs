@@ -280,6 +280,7 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The compliance report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    [Obsolete("ScanComplianceAsync calls a blocking RPC, so a large scan is cut off by the call deadline. Use StartComplianceScanAsync and poll GetComplianceScanStatusAsync instead. ScanComplianceAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-scan")]
     public async Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
         string treeId, CancellationToken cancellationToken = default)
     {
@@ -289,6 +290,70 @@ public sealed class LatticeSchemaApiGrpcClient
             new SchemaTreeRequest { TreeId = treeId },
             cancellationToken).ConfigureAwait(false);
         return response.Report;
+    }
+
+    /// <summary>
+    /// Starts an accept-then-poll compliance scan of <paramref name="treeId"/> and
+    /// returns its handle at once; poll <see cref="GetComplianceScanStatusAsync"/>
+    /// for progress and the outcome.
+    /// </summary>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency id; <see langword="null"/> lets the server generate one.</param>
+    /// <param name="cancellationToken">Cancels the start call only, never the started scan.</param>
+    /// <returns>The operation handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<LatticeOperationHandle> StartComplianceScanAsync(
+        string treeId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.StartComplianceScan,
+            new SchemaComplianceScanStartRequest { TreeId = treeId, OperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>Reads a compliance-scan operation's status.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public async Task<LatticeOperationStatus?> GetComplianceScanStatusAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.GetComplianceScanStatus,
+            new SchemaComplianceOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
+    }
+
+    /// <summary>Lists one page of the caller's compliance-scan operations, newest-first.</summary>
+    /// <param name="request">The page request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The page.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    public Task<LatticeOperationPage> ListComplianceScansAsync(
+        LatticeOperationListRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.ListComplianceScans, request, cancellationToken);
+    }
+
+    /// <summary>Requests cancellation of a compliance-scan operation.</summary>
+    /// <param name="operationId">The operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The status after the request, or <see langword="null"/> when no such operation is visible to the caller.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public async Task<LatticeOperationStatus?> CancelComplianceScanAsync(
+        string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var response = await UnaryAsync(
+            _methods.CancelComplianceScan,
+            new SchemaComplianceOperationRequest { OperationId = operationId },
+            cancellationToken).ConfigureAwait(false);
+        return response.Status;
     }
 
     /// <summary>

@@ -43,7 +43,7 @@ The control facade exposes these methods. Each method corresponds to one RPC in 
 | `ClearVersionConfigAsync` | `Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `RemediateAsync` | `Task<LatticeSchemaRemediationReport> RemediateAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, CancellationToken cancellationToken = default)` |
 | `GetRemediationStatusAsync` | `Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)` |
-| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` - deprecated (`LATTICE0002`); use `ILatticeSchemaComplianceOperations` |
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
 Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. Once authorized, `SetPolicyAsync` compiles the policy before storing it and refuses one it cannot compile - a rule incomplete for its kind, a regex the non-backtracking engine rejects, or a `MaxByteLength` encoding rule with a negative limit - with an `ArgumentException`, storing nothing. The policy type and its enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
@@ -67,9 +67,24 @@ Remediation operations apply or report a tree-wide repair. `RemediateAsync` requ
 
 See [Schema operations](operations.md) for the kinds, phases, outcomes, scoping and the migration from the blocking verbs.
 
-Scan compliance is read-only. It scans a tree's entries against the cached compiled policy and reports per-tree compliant and non-compliant counts plus a reason breakdown; when no policy is set, it returns the ungoverned report (`HasPolicy` is `false` and every count is zero). It never mutates values or policy.
+Scan compliance is read-only. It scans a tree's entries against the cached compiled policy and reports per-tree compliant and non-compliant counts plus a reason breakdown; when no policy is set, it returns the ungoverned report (`HasPolicy` is `false` and every count is zero). It never mutates values or policy. The blocking `ScanComplianceAsync` is deprecated (`LATTICE0002`, removed in the next major version) because a large scan outlasts the caller's timeout; start the scan with `ILatticeSchemaComplianceOperations` instead (below).
 
 Probe capabilities has no side effects. It performs two fail-closed probes, Read and SchemaAdmin, and maps them to capability flags. The result is advisory only: every real operation still performs its own authorization immediately before touching data.
+
+## Compliance-scan operations
+
+### `ILatticeSchemaComplianceOperations`
+
+The accept-then-poll compliance scan, published in `Orleans.Lattice.Api.Abstractions` under the `Orleans.Lattice.Api.Schema` namespace and registered by `AddLatticeSchemaApi`. It extends the shared `ILatticeOperations` read-and-cancel surface, scoped to the `schema.compliance-scan` kind, the caller's tenant and the trees the caller may read. See [Schema compliance operations](operations.md) for the phases, units, result keys and the migration from the blocking scan.
+
+| Method | Signature |
+|---|---|
+| `StartComplianceScanAsync` | `Task<LatticeOperationHandle> StartComplianceScanAsync(string treeId, string? operationId = null, CancellationToken cancellationToken = default)` |
+| `GetOperationStatusAsync` | `Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)` |
+| `ListOperationsAsync` | `Task<LatticeOperationPage> ListOperationsAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
+| `CancelOperationAsync` | `Task<LatticeOperationStatus?> CancelOperationAsync(string operationId, CancellationToken cancellationToken = default)` |
+
+The kind, phase and unit names are the `SchemaComplianceScanOperation` constants and the result keys and `TryReadReport` are on `SchemaComplianceScanResults`, both in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
 
 ## Model records
 

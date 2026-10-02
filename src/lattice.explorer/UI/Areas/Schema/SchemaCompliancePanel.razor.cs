@@ -77,7 +77,11 @@ public partial class SchemaCompliancePanel : IDisposable
         StateHasChanged();
         try
         {
+            // Still the deprecated blocking scan (LATTICE0002); the Explorer moves to
+            // ILatticeSchemaComplianceOperations in the second #4126 change.
+#pragma warning disable LATTICE0002
             var report = await Facades.RequireSchema().ScanComplianceAsync(workspace.TreeId, scan);
+#pragma warning restore LATTICE0002
             Ledger.Record(workspace.TreeId, report, Time.GetUtcNow());
             _result = Ledger.Find(workspace.TreeId);
         }

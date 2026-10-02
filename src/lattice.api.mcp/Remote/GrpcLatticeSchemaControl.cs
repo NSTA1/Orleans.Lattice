@@ -100,7 +100,9 @@ internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl
     /// <inheritdoc />
     public Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
         string treeId, CancellationToken cancellationToken = default)
+#pragma warning disable LATTICE0002 // Forwards the deprecated verb to the client's deprecated twin.
         => _client.ScanComplianceAsync(treeId, cancellationToken);
+#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(
