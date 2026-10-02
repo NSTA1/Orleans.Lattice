@@ -13,6 +13,7 @@ public sealed class AppsFailureMessagesTests
     [TestCase("Could not install app 'task-board' (TreeOwnershipConflict): " + Secret, "already owned")]
     [TestCase("The enable of app 'x' failed (CeilingNotPinned).", "not recorded for the installed version")]
     [TestCase("The enable of app 'x' failed (UnknownRoleBinding).", "Bind its roles again")]
+    [TestCase("The install of app 'x' failed (AppRoleBindingTenantMismatch): " + Secret, "bound to another tenant's group")]
     [TestCase("The install of app 'x' failed (InvalidManifest).", "did not validate")]
     [TestCase("The enable of app 'x' failed (SourceUnavailable).", "source could not supply")]
     [TestCase("The enable of app 'x' failed (VersionMismatch).", "different version")]
@@ -39,6 +40,22 @@ public sealed class AppsFailureMessagesTests
             Assert.That(sentence, Does.StartWith("Could not install Task board."));
             Assert.That(sentence, Does.Contain(expected));
             Assert.That(sentence, Does.Not.Contain(Secret), "raw exception text never reaches the page");
+        });
+    }
+
+    [Test]
+    public void The_registrys_refusal_of_another_tenants_group_is_given_the_tenant_mismatch_reason()
+    {
+        var refused = new ArgumentException(
+            "Role 'viewer' is bound to group 't/globex/ops', which is not a group of the installing tenant; a role may be bound only to a cluster group or one of the tenant's own groups.",
+            "request");
+
+        var sentence = AppsFailureMessages.Describe(refused, "install", "Task board");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sentence, Is.EqualTo("Could not install Task board. " + AppsFailureMessages.TenantMismatchSentence));
+            Assert.That(sentence, Does.Not.Contain("globex"));
         });
     }
 

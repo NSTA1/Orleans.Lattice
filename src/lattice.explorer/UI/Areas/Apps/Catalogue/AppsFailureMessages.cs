@@ -8,6 +8,16 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// </summary>
 internal static class AppsFailureMessages
 {
+    /// <summary>
+    /// The sentence for a role bound to a group of another tenant, which the cluster
+    /// refuses at install or re-binding, and again at activation for a stored one.
+    /// </summary>
+    public const string TenantMismatchSentence =
+        "A role is bound to another tenant's group. Bind each role to a cluster group or to one of this tenant's own groups.";
+
+    // How the apps registry words the same refusal when it rejects the request itself, before activation.
+    private const string TenantMismatchArgumentToken = "which is not a group of the installing tenant";
+
     private static readonly (string Token, string Sentence)[] Known =
     [
         ("(CeilingExceeded)", "It asks for more than the approved ceiling. Re-consent to a ceiling that covers what it needs."),
@@ -15,6 +25,7 @@ internal static class AppsFailureMessages
         ("(TreeOwnershipConflict)", "One of its trees is already owned by another app or by the cluster, so it cannot take ownership."),
         ("(CeilingNotPinned)", "Its consent was not recorded for the installed version. Re-consent, then try again."),
         ("(UnknownRoleBinding)", "A role binding names a role this version no longer declares. Bind its roles again."),
+        ("(AppRoleBindingTenantMismatch)", TenantMismatchSentence),
         ("(InvalidManifest)", "Its manifest did not validate, so nothing was changed."),
         ("(SourceUnavailable)", "Its source could not supply it. The source may be unreachable, or the app was withdrawn."),
         ("(VersionMismatch)", "Its source now offers a different version from the installed one."),
@@ -51,11 +62,15 @@ internal static class AppsFailureMessages
             KeyNotFoundException => $"{lead} It is not installed here, or that version is no longer offered by its source.",
             OperationCanceledException => $"{lead} The request was cancelled.",
             NotSupportedException => $"{lead} This cluster does not serve app management.",
+            ArgumentException argument when IsTenantMismatch(argument.Message) => $"{lead} {TenantMismatchSentence}",
             ArgumentException => $"{lead} The request was not valid: check its role bindings and ceiling.",
             InvalidOperationException invalid => $"{lead} {Recognise(invalid.Message)}",
             _ => $"{lead} The cluster could not be reached. Try again.",
         };
     }
+
+    private static bool IsTenantMismatch(string? message) =>
+        message is not null && message.Contains(TenantMismatchArgumentToken, StringComparison.Ordinal);
 
     private static string Recognise(string? message)
     {

@@ -1,8 +1,13 @@
+@using Orleans.Lattice.Explorer.UI.Areas.Access
 @*
     One tenant's admin subjects: who may administer it, with add and a
-    confirmed remove that never leaves the tenant without an admin.
+    confirmed remove that never leaves the tenant without an admin. When the
+    tenant's delegated access administration is open to the caller, an admin
+    subject may also be a group - one of the tenant's own, or a cluster group -
+    chosen through the tenant-aware subject picker, and each entry shows what it
+    names. Otherwise only users are offered, as before.
 *@
-<section class="lt-tenancy-section" aria-labelledby="@HeadingId">
+<section class="lt-tenancy-section" aria-labelledby="@HeadingId" data-lt-admin-set="@(_delegated ? "groups" : "users")">
     <div class="lt-tenancy-section__head">
         <h2 class="lt-tenancy-section__title" id="@HeadingId">Admin subjects</h2>
         @if (_subjects is not null)
@@ -28,10 +33,64 @@
     {
         <LtSkeleton Lines="4" Label="Loading admin subjects" />
     }
+    else if (_delegated && _entries is { } entries)
+    {
+        <link rel="stylesheet" href="@AccessAssets.Stylesheet" />
+        <p class="lt-tenancy-note">A user, a cluster group or one of the tenant's own groups can be an admin subject. A group counts as one admin subject, however many members it has.</p>
+        <form class="lt-toolbar lt-tenancy-add" @onsubmit="AddAsync" novalidate>
+            <AccessSubjectPicker @ref="_picker"
+                                 Label="Admin subject"
+                                 Tenant="@TenantId"
+                                 SubjectKind="_newKind"
+                                 SubjectKindChanged="@(kind => _newKind = kind)"
+                                 Id="@_newSubject"
+                                 IdChanged="@(value => _newSubject = value)"
+                                 Error="@_addError"
+                                 DirectoryAvailable="_directoryAvailable"
+                                 DirectoryExplanation="@_directoryExplanation" />
+            <LtButton Type="LtButtonType.Submit" Disabled="_busy">Add admin subject</LtButton>
+        </form>
+
+        <LtTable TItem="TenancyAdminEntry" Items="entries" Caption="@($"Admin subjects of tenant {TenantId}")" CaptionHidden="true" RowKey="@(entry => entry.SubjectId)" DetailTitle="@(entry => entry.SubjectId)">
+            <ChildContent>
+                <LtColumn TItem="TenancyAdminEntry" Title="Subject" RowHeader="true" Mono="true" SortBy="@(entry => entry.SubjectId)" Value="@(entry => entry.SubjectId)" />
+                <LtColumn TItem="TenancyAdminEntry" Title="Kind" SortBy="@(entry => entry.KindLabel)" Value="@(entry => entry.KindLabel)" />
+                <LtColumn TItem="TenancyAdminEntry" Title="Actions" Align="LtColumnAlign.End">
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_busy || IsLast)" OnClick="@(() => AskRemove(context.SubjectId))" aria-label="@($"Remove {context.SubjectId}")">Remove</LtButton>
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent>
+                <span>No admin subject is recorded. A platform operator can still administer the tenant.</span>
+            </EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context.SubjectId</Primary>
+                    <Secondary>@(IsLast ? $"{context.KindLabel}, the last admin subject" : context.KindLabel)</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <Detail>
+                <LtDefinitionList>
+                    <LtDefinition Term="Subject" Mono="true">@context.SubjectId</LtDefinition>
+                    <LtDefinition Term="Kind">@context.KindLabel</LtDefinition>
+                </LtDefinitionList>
+            </Detail>
+            <DetailActions>
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(_busy || IsLast)" OnClick="@(() => AskRemove(context.SubjectId))">Remove</LtButton>
+            </DetailActions>
+        </LtTable>
+        @if (_removeError is { } refusal)
+        {
+            <p class="lt-tenancy-warning" role="alert" data-lt-admin-refusal="true">@refusal</p>
+        }
+        else if (IsLast)
+        {
+            <p class="lt-tenancy-note">A tenant keeps at least one admin subject, and a group counts as one. Add the replacement before removing the last one.</p>
+        }
+    }
     else
     {
         <form class="lt-toolbar lt-tenancy-add" @onsubmit="AddAsync" novalidate>
-            <LtComboBox @ref="_subjectBox" Label="Subject id" Value="@_newSubject" ValueChanged="@(value => _newSubject = value)" Error="@_addError" Placeholder="user or group id" Source="@Suggestions.Principals" Noun="subject" />
+            <LtComboBox @ref="_subjectBox" Label="Subject id" Value="@_newSubject" ValueChanged="@(value => _newSubject = value)" Error="@_addError" Placeholder="user id" Source="@Suggestions.Users" Noun="subject" />
             <LtButton Type="LtButtonType.Submit" Disabled="_busy">Add admin subject</LtButton>
         </form>
 
