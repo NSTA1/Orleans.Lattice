@@ -84,6 +84,8 @@ public sealed class LeafCacheBudgetOverrideIntegrationTests
         var treeId = $"cache-budget-clear-{Guid.NewGuid():N}";
         var router = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
+        // The override verb refuses a tree with no registry row (issue #4230).
+        await Registry.RegisterAsync(treeId);
         await Registry.SetMaxCacheValueBytesAsync(treeId, 16);
         await router.SetAsync("a", Encoding.UTF8.GetBytes("alpha-payload"));
         await router.SetAsync("b", Encoding.UTF8.GetBytes("bravo-payload"));

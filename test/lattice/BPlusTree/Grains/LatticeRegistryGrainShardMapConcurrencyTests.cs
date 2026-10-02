@@ -53,6 +53,10 @@ public class LatticeRegistryGrainShardMapConcurrencyTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
 
+        // The tree is registered: the shard-map verbs refuse a tree with no row (issue #4230).
+        store[TreeId] = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+            new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { ShardCount = 1 });
+
         return new LatticeRegistryGrain(grainFactory, optionsMonitor);
     }
 
