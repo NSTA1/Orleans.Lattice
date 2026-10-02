@@ -40,13 +40,18 @@ public sealed class SqliteSchemaInitializer
 
     private readonly string _databasePath;
     private readonly string _connectionString;
+    private readonly SqliteAutoVacuumMode _autoVacuum;
 
     /// <summary>Creates an initializer for the SQLite database at <paramref name="databasePath"/>.</summary>
     /// <param name="databasePath">The absolute path to the SQLite database file on the data root.</param>
     /// <param name="requestTimeout">The enclosing Orleans request budget, or its default when omitted.</param>
+    /// <param name="autoVacuum">The <c>auto_vacuum</c> mode to apply; <see cref="SqliteAutoVacuumMode.Incremental"/> when omitted.</param>
     /// <exception cref="ArgumentException"><paramref name="databasePath"/> is null or whitespace.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The request budget is less than two seconds.</exception>
-    public SqliteSchemaInitializer(string databasePath, TimeSpan? requestTimeout = null)
+    public SqliteSchemaInitializer(
+        string databasePath,
+        TimeSpan? requestTimeout = null,
+        SqliteAutoVacuumMode autoVacuum = SqliteAutoVacuumMode.Incremental)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
         {
@@ -55,6 +60,7 @@ public sealed class SqliteSchemaInitializer
 
         _databasePath = databasePath;
         _connectionString = BuildConnectionString(databasePath, requestTimeout);
+        _autoVacuum = autoVacuum;
     }
 
     /// <summary>
@@ -98,14 +104,32 @@ public sealed class SqliteSchemaInitializer
     /// example a corrected <c>WriteToStorageKey</c>) rather than keeping the
     /// version first written. Configures <c>WAL</c> journal mode each start (a
     /// no-op once the file header records it).
+    /// <para>
+    /// It also applies the configured <c>auto_vacuum</c> mode. A new file adopts it
+    /// for free, because the mode is set before the first table is created. An
+    /// existing file whose mode differs can only adopt it by being rewritten, so it
+    /// is converted once with a <c>VACUUM</c> - a one-time cost proportional to the
+    /// live data (freelist pages are not copied), paid while nothing else holds the
+    /// database open. Later starts find the mode already recorded and do nothing.
+    /// </para>
     /// </summary>
+    /// <returns>What the start found and did about the <c>auto_vacuum</c> mode.</returns>
     /// <exception cref="InvalidOperationException">The data path is missing or not writable.</exception>
-    public void Initialize()
+    public SqliteAutoVacuumOutcome Initialize()
     {
         EnsureWritableDirectory();
+        var bytesBefore = FileLength();
 
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
+
+        var previous = ReadAutoVacuum(connection);
+        if (previous != _autoVacuum)
+        {
+            // Takes effect immediately on a file with no tables yet; on an existing
+            // file it only records the intent, which the VACUUM below applies.
+            Execute(connection, $"PRAGMA auto_vacuum={(int)_autoVacuum};");
+        }
 
         ExecutePragmas(connection);
 
@@ -113,16 +137,59 @@ public sealed class SqliteSchemaInitializer
         // concurrency, so wrapping the idempotent batch in one transaction is
         // safe here (unlike the per-write grain-storage query, which must not
         // manage transactions manually - see SQLite-Persistence.sql).
-        using var transaction = connection.BeginTransaction();
-        foreach (var script in LoadScripts())
+        using (var transaction = connection.BeginTransaction())
         {
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = script;
-            command.ExecuteNonQuery();
+            foreach (var script in LoadScripts())
+            {
+                using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = script;
+                command.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
         }
 
-        transaction.Commit();
+        var converted = false;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        if (ReadAutoVacuum(connection) != _autoVacuum)
+        {
+            Execute(connection, "VACUUM;");
+
+            // VACUUM writes through the WAL; checkpoint it so the shrunk size is the
+            // file's real size before anything else opens it.
+            Execute(connection, "PRAGMA wal_checkpoint(TRUNCATE);");
+            converted = true;
+        }
+
+        stopwatch.Stop();
+        return new SqliteAutoVacuumOutcome(
+            _autoVacuum,
+            previous,
+            converted,
+            bytesBefore,
+            FileLength(),
+            converted ? stopwatch.Elapsed : TimeSpan.Zero);
+    }
+
+    private long FileLength() => File.Exists(_databasePath) ? new FileInfo(_databasePath).Length : 0L;
+
+    private static SqliteAutoVacuumMode ReadAutoVacuum(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA auto_vacuum;";
+        return (SqliteAutoVacuumMode)Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void Execute(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        // A conversion VACUUM rewrites the whole live database; no busy window applies
+        // to it, so it must not inherit the connection's short default timeout.
+        command.CommandTimeout = 0;
+        command.ExecuteNonQuery();
     }
 
     private void EnsureWritableDirectory()
