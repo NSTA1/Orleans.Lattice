@@ -76,7 +76,7 @@ public sealed class BackupAccessAuthorizerTests
     }
 
     [Test]
-    public async Task AuthorizeRestore_prefix_scope_issues_a_point_request_at_the_prefix_root()
+    public async Task AuthorizeRestore_prefix_scope_issues_a_range_request_over_the_whole_prefix()
     {
         var gate = new CapturingAccessGate();
         var authorizer = Create(gate);
@@ -86,10 +86,88 @@ public sealed class BackupAccessAuthorizerTests
         Assert.Multiple(() =>
         {
             Assert.That(gate.Last.Operation, Is.EqualTo(LatticeOperation.Restore));
-            Assert.That(gate.Last.Key, Is.EqualTo("tenant-a/"),
-                "a prefix scope is authorized at its root as a point so a prefix-scoped grant matches cleanly");
-            Assert.That(gate.Last.RangeStart, Is.Null);
+            Assert.That(gate.Last.Key, Is.Null,
+                "a prefix scope drains a range, so it must not be authorized as a point at its root");
+            Assert.That(gate.Last.RangeStart, Is.EqualTo("tenant-a/"));
+            Assert.That(gate.Last.RangeEnd, Is.EqualTo(LatticeKeyRange.PrefixUpperBound("tenant-a/")),
+                "the request covers exactly the range the restore writes");
         });
+    }
+
+    [Test]
+    public async Task AuthorizeBackup_prefix_scope_issues_a_range_request_over_the_whole_prefix()
+    {
+        var gate = new CapturingAccessGate();
+        var authorizer = Create(gate);
+
+        await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Prefix(Tree, "x"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Last.Operation, Is.EqualTo(LatticeOperation.Backup));
+            Assert.That(gate.Last.Key, Is.Null);
+            Assert.That(gate.Last.RangeStart, Is.EqualTo("x"));
+            Assert.That(gate.Last.RangeEnd, Is.EqualTo("y"));
+        });
+    }
+
+    [Test]
+    public void AuthorizeBackup_key_grant_at_the_prefix_string_does_not_authorize_the_prefix_scope()
+    {
+        // A gate that admits exactly one point - the key that happens to spell the
+        // prefix - and nothing else, which is what an exact-key allow resolves to.
+        var gate = new CapturingAccessGate(static request =>
+            request.Key == "tenant-a/config"
+                ? LatticeAccessDecision.Allow()
+                : LatticeAccessDecision.Deny("no grant over the range"));
+        var authorizer = Create(gate);
+
+        Assert.Multiple(() =>
+        {
+            Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+                async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Prefix(Tree, "tenant-a/config")),
+                "a single-key grant must not certify every descendant of the key");
+            Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+                async () => await authorizer.AuthorizeRestoreAsync(BackupScopeSelector.Prefix(Tree, "tenant-a/config")),
+                "a single-key restore grant must not authorize overwriting the subtree");
+            Assert.That(
+                async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Key(Tree, "tenant-a/config")),
+                Throws.Nothing,
+                "the key grant still authorizes the key scope it names");
+        });
+    }
+
+    [Test]
+    public void AuthorizeBackup_prefix_scope_with_a_filtered_carve_out_fails_closed()
+    {
+        // Tree-wide allow with a deny carve-out: the range is only partially
+        // authorized, and a prefix drain running system-origin cannot be narrowed.
+        var gate = new CapturingAccessGate(static request =>
+            request.Key is not null
+                ? (request.Key == "x/ssn" ? LatticeAccessDecision.Deny("carve-out") : LatticeAccessDecision.Allow())
+                : LatticeAccessDecision.Filtered(static k => k != "x/ssn", "partial"));
+        var authorizer = Create(gate);
+
+        Assert.Multiple(() =>
+        {
+            Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+                async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Prefix(Tree, "x")),
+                "a prefix capture over a carve-out must be refused, not skip it");
+            Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+                async () => await authorizer.AuthorizeRestoreAsync(BackupScopeSelector.Prefix(Tree, "x")),
+                "a prefix restore over a carve-out must be refused");
+        });
+    }
+
+    [Test]
+    public void AuthorizeBackup_prefix_scope_filtered_allow_that_admits_everything_still_fails_closed()
+    {
+        var gate = new CapturingAccessGate(static _ => LatticeAccessDecision.Filtered(static _ => true, "partial"));
+        var authorizer = Create(gate);
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Prefix(Tree, "p/")),
+            "any key-filtered decision is refused: the drain cannot apply a filter per key");
     }
 
     [Test]

@@ -189,6 +189,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
+
 - **MCP - Rejected calls logged and echoed raw caller text.** Three repo-context and region-routing rejection paths composed a fault from an unvalidated argument and reached the log or the caller beneath, or outside, the sanitize-and-cap seam, so a value carrying newlines forged log records. ([#4277](https://github.com/NSTA1/Orleans.Lattice/issues/4277)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.Mcp`)
 
 - **Apps - An install consented to a manifest nobody reviewed.** The commit re-read the manifest, so a source could add a bridge operation after review. A description now reports `ManifestDigest`; an install sending it as `ExpectedManifestDigest` is refused if it changed. The Explorer sends it. ([#4021](https://github.com/NSTA1/Orleans.Lattice/issues/4021)) (`Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Explorer.UI`)

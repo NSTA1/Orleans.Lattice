@@ -288,6 +288,74 @@ public sealed class LatticeBackupRestoreCapturedSourceAuthorizationTests
         });
     }
 
+    // ---- Prefix-scoped restore authorization (issue #4278) --------------
+
+    [Test]
+    public async Task RestoreAsync_prefix_scope_over_a_restore_carve_out_is_refused_and_writes_nothing()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("x/name", Bytes("old-name"));
+        await source.SetAsync("x/ssn", Bytes("old-ssn"));
+        var backup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree(Source)));
+        await source.SetAsync("x/name", Bytes("new-name"));
+        await source.SetAsync("x/ssn", Bytes("new-ssn"));
+
+        // Restore is granted tree-wide with a carve-out on x/ssn. A prefix restore
+        // over the carve-out must be refused, not overwrite the carved-out key.
+        var gate = new CarveOutAccessGate("x/ssn");
+        var restore = _fixture.CreateRestoreServiceWith(new BackupAccessAuthorizer(gate, membership: null));
+
+        Assert.That(
+            async () => await restore.RestoreAsync(
+                new LatticeRestoreRequest(backup.BackupId, Source) { Scope = BackupScopeSelector.Prefix(Source, "x") }),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(Str((await source.GetAsync("x/ssn"))!), Is.EqualTo("new-ssn"));
+            Assert.That(Str((await source.GetAsync("x/name"))!), Is.EqualTo("new-name"));
+        });
+    }
+
+    [Test]
+    public async Task RestoreAsync_single_key_restore_grant_does_not_authorize_a_prefix_restore_of_its_subtree()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("cfg", Bytes("old"));
+        await source.SetAsync("cfg/db-password", Bytes("old-secret"));
+        var backup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree(Source)));
+        await source.SetAsync("cfg/db-password", Bytes("new-secret"));
+
+        // Restore is granted on the single key "cfg" only.
+        var gate = new KeyOnlyGate("cfg");
+        var restore = _fixture.CreateRestoreServiceWith(new BackupAccessAuthorizer(gate, membership: null));
+
+        Assert.That(
+            async () => await restore.RestoreAsync(
+                new LatticeRestoreRequest(backup.BackupId, Source) { Scope = BackupScopeSelector.Prefix(Source, "cfg") }),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>(),
+            "a key grant must not certify the subtree the key spells");
+
+        Assert.That(Str((await source.GetAsync("cfg/db-password"))!), Is.EqualTo("new-secret"));
+    }
+
+    /// <summary>
+    /// A gate that allows exactly one point key, as an exact-key allow rule
+    /// resolves, and denies every other request shape.
+    /// </summary>
+    private sealed class KeyOnlyGate(string key) : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request, CancellationToken cancellationToken = default) =>
+            new(string.Equals(request.Key, key, StringComparison.Ordinal)
+                ? LatticeAccessDecision.Allow()
+                : LatticeAccessDecision.Deny("only one key is granted"));
+    }
+
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
 
     private static string Str(byte[] b) => Encoding.UTF8.GetString(b);

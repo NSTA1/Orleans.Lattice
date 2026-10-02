@@ -155,7 +155,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `Operation` | `LatticeOperation` | The operation the verdict was resolved for. |
 | `Scope` | `LatticeScope` | The scope the verdict was resolved for. |
 | `Allowed` | `bool` | The gate's verdict (possibly partial - see `Filtered`). |
-| `Filtered` | `bool` | `true` when the allow is partial: a per-key filter applies to a tree- or prefix-scoped request. Always `false` for a point (key-scoped) request. |
+| `Filtered` | `bool` | `true` when the allow is partial: a per-key filter applies to a tree- or prefix-scoped request. A prefix-scoped request whose every key resolves to the same allowing rule (no narrower prefix or exact-key rule for the subject and operation inside the prefix) is a plain allow and reports `false`. Always `false` for a point (key-scoped) request. |
 | `Reason` | `string?` | A human-readable reason, or `null` for a plain unqualified allow. |
 | `DefaultEffect` | `LatticeEffect` | The closed-world default effect applied when no rule matches. |
 | `MatchedRules` | `IReadOnlyList<LatticeAuthorizationRule>` | The authored rules whose subject, operations, and scope overlap the request, from the target tree and the cluster-wide `*` bucket, capped at `MaxExplanationRules` (advisory; `Allowed` is authoritative). The list is assembled independently of the verdict: it is empty when no authored rule matches, but it can cite a rule that did not decide the verdict - for example one naming a bootstrap administrator, whose allow comes from the bypass, or a data-plane `Tree:*` rule that is inert while `AllTreesGrantsEnabled` is off (see `Posture`). |
