@@ -115,6 +115,7 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton(typeof(OrleansLatticeSerializer<>));
 
         builder.Services.TryAddSingleton<TenantRegistryInitializer>();
+        builder.Services.TryAddSingleton<ITenantAccessDataPurge>(TenantAccessDataPurge.FromServices);
         builder.Services.TryAddSingleton<ITenantRegistry, LatticeTenantRegistry>();
 
         // Delegated tenant access administration (epic #4154). One per-silo live

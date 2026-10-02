@@ -16,7 +16,8 @@ namespace Orleans.Lattice.Tenancy;
 internal sealed class LatticeTenantRegistry(
     IGrainFactory grainFactory,
     TenantRegistryInitializer initializer,
-    OrleansLatticeSerializer<TenantRecord> serializer) : ITenantRegistry
+    OrleansLatticeSerializer<TenantRecord> serializer,
+    ITenantAccessDataPurge accessDataPurge) : ITenantRegistry
 {
     /// <summary>
     /// The bounded optimistic-concurrency retry budget for a single
@@ -131,6 +132,7 @@ internal sealed class LatticeTenantRegistry(
     {
         var key = RequireTenantKey(tenant);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        await accessDataPurge.PurgeAsync(tenant, cancellationToken).ConfigureAwait(false);
         using (LatticeSystemOrigin.Enter())
         {
             return await Registry.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
