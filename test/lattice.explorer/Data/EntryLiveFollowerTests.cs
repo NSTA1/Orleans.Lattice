@@ -1,6 +1,7 @@
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Tests.History;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Explorer.Tests.Data;
 
@@ -110,7 +111,9 @@ public class EntryLiveFollowerTests
         });
 
         client.Push(NotificationFactory.Set("k", 10));
-        await WaitForAsync(() => seen.Count == 1);
+        await TestPoll.UntilAsync(
+            () => seen.Count == 1,
+            "the follower to surface the pushed signal before the token is cancelled");
 
         // Simulate a key change / tab dispose: cancelling the token must end the
         // subscription rather than leaking the loop.
@@ -165,15 +168,5 @@ public class EntryLiveFollowerTests
         }
 
         return signals;
-    }
-
-    private static async Task WaitForAsync(Func<bool> condition)
-    {
-        for (var i = 0; i < 200 && !condition(); i++)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.That(condition(), Is.True, "condition was not met within the timeout");
     }
 }

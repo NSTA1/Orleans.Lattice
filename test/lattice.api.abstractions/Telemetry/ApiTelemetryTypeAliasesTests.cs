@@ -150,10 +150,17 @@ public sealed class ApiTelemetryTypeAliasesTests
 
     private static IEnumerable<(string Name, string Value)> EnumerateConstants()
     {
-        return typeof(ApiTelemetryTypeAliases)
+        var constants = typeof(ApiTelemetryTypeAliases)
             .GetFields(BindingFlags.Static | BindingFlags.Public)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Where(f => f.Name != nameof(ApiTelemetryTypeAliases.AliasPrefix))
-            .Select(f => (f.Name, (string)f.GetValue(null)!));
+            .Select(f => (f.Name, (string)f.GetValue(null)!))
+            .ToList();
+
+        Assert.That(constants, Is.Not.Empty,
+            "Expected at least one string alias constant on ApiTelemetryTypeAliases; an empty table would "
+            + "satisfy every alias assertion in this fixture without testing anything.");
+
+        return constants;
     }
 }

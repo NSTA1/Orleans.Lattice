@@ -48,9 +48,17 @@ public class PublicApiNamespaceTests
         const string root = "Orleans.Lattice";
         var assembly = typeof(OrSet).Assembly;
 
-        var strays = assembly.GetExportedTypes()
+        var exported = assembly.GetExportedTypes()
             .Where(t => t.Namespace is null
                 || !t.Namespace.StartsWith("OrleansCodeGen", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.That(exported, Is.Not.Empty,
+            $"Expected at least one hand-written public type in {assembly.GetName().Name}; an "
+            + "assembly exporting nothing would satisfy the namespace assertion below without "
+            + "testing anything.");
+
+        var strays = exported
             .Where(t => t.Namespace != root)
             .Select(t => t.FullName)
             .OrderBy(name => name, StringComparer.Ordinal)
@@ -66,7 +74,13 @@ public class PublicApiNamespaceTests
     public void Public_crdt_primitives_are_no_longer_in_the_Primitives_namespace()
     {
         var assembly = typeof(OrSet).Assembly;
-        var stragglers = assembly.GetExportedTypes()
+        var exported = assembly.GetExportedTypes();
+
+        Assert.That(exported, Is.Not.Empty,
+            $"Expected at least one public type in {assembly.GetName().Name}; an assembly "
+            + "exporting nothing would satisfy the assertion below without testing anything.");
+
+        var stragglers = exported
             .Where(t => t.Namespace == "Orleans.Lattice.Primitives")
             .Select(t => t.FullName)
             .ToArray();

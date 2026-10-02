@@ -246,6 +246,27 @@ public sealed class TelemetryGrpcPackageGraphTests
     }
 
     [Test]
+    public void The_client_surface_walk_is_not_vacuous()
+    {
+        // The sibling of the closure battery test above, for the other population.
+        // ClientSurfaceTypes only yields members whose DeclaringType is the client
+        // itself, so hoisting the client's operations onto a base class - or a drift
+        // in its BindingFlags - would empty the walk and make every client-surface
+        // assertion below pass for the wrong reason.
+        var surface = ClientSurfaceTypes().ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(surface, Is.Not.Empty);
+            Assert.That(
+                surface.Select(type => type.Assembly.GetName().Name),
+                Has.Some.EqualTo(ContractPackage),
+                "The walk must reach at least one contract type, or it is not seeing the "
+                + "telemetry operations the client-surface assertions are about.");
+        });
+    }
+
+    [Test]
     public void The_mcp_detection_predicate_actually_flags_an_mcp_project()
     {
         // The smoke-detector battery test: prove the substring the closure assertion
