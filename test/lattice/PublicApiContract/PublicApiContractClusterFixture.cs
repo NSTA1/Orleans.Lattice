@@ -4,6 +4,7 @@ using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 
@@ -140,6 +141,7 @@ public sealed class PublicApiContractClusterFixture
         builder.AddClientBuilderConfigurator<ClientConfigurator>();
         var cluster = builder.Build();
         await cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(cluster);
         return cluster;
     }
 

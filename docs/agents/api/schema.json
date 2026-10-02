@@ -451,7 +451,7 @@
           "name": "StrictIngest",
           "type": "bool",
           "required": false,
-          "notes": "When true, trusted ingest is re-validated and non-compliant items are dead-lettered."
+          "notes": "When true, intercepted system-origin writes are re-validated and non-compliant items are dead-lettered; replicated typed-CRDT deltas and replicated atomic-batch entries are intercepted, but plain last-writer-wins replication apply, backup restore and tree merge bypass write interception."
         }
       ],
       "source": "src/lattice.schema/LatticeSchemaPolicy.cs#LatticeSchemaPolicy"

@@ -7,6 +7,7 @@ using Orleans.Runtime;
 using Orleans.TestingHost;
 using System.Diagnostics;
 using System.Text;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -81,9 +82,11 @@ public sealed class CoverageLagBoundIntegrationTests
     public async Task OneTimeSetUp()
     {
         var builder = new TestClusterBuilder();
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
 
         // Pin both trees to a single shard so each has exactly one leaf, which
         // is what makes the differential a comparison of two leaves rather than

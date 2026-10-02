@@ -3,6 +3,7 @@ using Orleans.Hosting;
 using Orleans.Lattice.Operations;
 using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.Operations;
 
@@ -30,9 +31,11 @@ public sealed class LatticeOperationSiloLossChaosTests
     public async Task OneTimeSetUp()
     {
         var builder = new TestClusterBuilder(2);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(_cluster);
     }
 
     [OneTimeTearDown]

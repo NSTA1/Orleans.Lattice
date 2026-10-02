@@ -218,6 +218,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary storage-usage refresh cancellation RPC method name.</summary>
     public const string CancelStorageUsageRefreshMethodName = "CancelStorageUsageRefresh";
 
+    /// <summary>The unary read-only WAL reclamation (floor-holder) RPC method name.</summary>
+    public const string GetWalReclamationMethodName = "GetWalReclamation";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -288,7 +291,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminOperationRequest> operationRequestSerializer,
         Serializer<TreeAdminOperationStatusResponse> operationStatusResponseSerializer,
         Serializer<LatticeOperationListRequest> operationListRequestSerializer,
-        Serializer<LatticeOperationPage> operationPageSerializer)
+        Serializer<LatticeOperationPage> operationPageSerializer,
+        Serializer<TreeWalReclamationReport> walReclamationSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -781,6 +785,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
         CancelTreeAdminOperation = new Method<TreeAdminOperationRequest, TreeAdminOperationStatusResponse>(
             MethodType.Unary, ServiceName, CancelTreeAdminOperationMethodName,
             operationRequestMarshaller, operationStatusMarshaller);
+
+        ArgumentNullException.ThrowIfNull(walReclamationSerializer);
+        GetWalReclamation = new Method<TreeAdminTreeRequest, TreeWalReclamationReport>(
+            MethodType.Unary, ServiceName, GetWalReclamationMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            LatticeTreeAdminGrpcMarshallers.Create(walReclamationSerializer));
     }
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     public Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities> ProbeCapabilities { get; }
@@ -973,6 +983,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>CancelStorageUsageRefresh</c> RPC.</summary>
     public Method<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse> CancelStorageUsageRefresh { get; }
 
+    /// <summary>The unary <c>GetWalReclamation</c> read-only WAL floor-holder RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeWalReclamationReport> GetWalReclamation { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -1051,7 +1064,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminOperationRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminOperationStatusResponse>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>());
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeWalReclamationReport>>());
     }
 }
 

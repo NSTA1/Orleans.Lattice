@@ -12,9 +12,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Core - Silos check that grain storage enforces ETags.** Lattice requires its grain storage provider to reject a write carrying a stale ETag. Each silo now probes this as it starts and warns, or fails start in `Reject` mode, when it does not. ([#4200](https://github.com/NSTA1/Orleans.Lattice/issues/4200)) (`Orleans.Lattice`)
+
 - **Admin - Compliance scans and fresh storage usage run in the background.** Start either and poll its progress in entries or trees; it outlives a caller timeout, and Explorer shows its progress. The blocking compliance scan is deprecated (`LATTICE0002`). ([#4126](https://github.com/NSTA1/Orleans.Lattice/issues/4126)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 - **Schema - Accept-then-poll remediation and migration.** Remediations and migrations return a handle at once and run on in the background; follow the dry run, build and cutover in values processed, cancel before cutover, and find a run again after closing the Explorer tab. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123)) (`Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Explorer.UI`)
+
+- **Admin - See when a tree's WAL reclamation is wedged.** A new read names the pin holding a tree's WAL floor, its leaf, pin offset and checkpoint, and flags a stranded pin that will not clear on its own. Explorer shows it on the WAL page and a tree's Storage tab. ([#4195](https://github.com/NSTA1/Orleans.Lattice/issues/4195)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Explorer.UI`)
 
 - **Backup - Accept-then-poll backup and restore.** Captures and restores return a handle at once and run on in the background; poll their phase and real progress in entries, shards, members or manifests. They outlive a caller timeout or closed tab, and a lost silo reads Failed. ([#4122](https://github.com/NSTA1/Orleans.Lattice/issues/4122)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 

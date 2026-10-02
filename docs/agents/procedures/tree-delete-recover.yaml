@@ -45,12 +45,14 @@ steps:
 postconditions:
   - check: "Soft-delete is reversible until the recovery window elapses or purge runs."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
-  - check: "Soft-delete, recover, and purge walk every physical shard index the tree has ever allocated, including split-added shards above the pinned shard count."
+  - check: "Soft-delete, recover, and purge walk shard indexes from 0 through the greatest registry-recorded pinned count, shard-map index, or split-allocation high-water mark; an empty-tree reshard that re-pins downward without raising the high-water mark leaves prior shards above the new count outside later delete, recovery, and purge walks."
     source: "docs/lattice/tree-deletion.md"
   - check: "Purge is irreversible."
     source: "docs/lattice.api.treeadmin/README.md"
   - check: "On an aliased tree, delete, recover and purge act on the live backing copy the delete pinned, and purge unregisters both that copy and the logical tree."
     source: "docs/lattice/tree-registry.md"
+  - check: "On an aliased tree, a shard that a split adds to the live copy after the alias is set is recorded against the logical tree, so delete, recover and purge do not reach it: its keys stay readable and writable after DeleteTreeAsync and its state stays in storage after purge."
+    source: "docs/lattice/tree-deletion.md"
 failure_modes:
   - id: not-deleted
     signal: "Recover rejects a tree that is not deleted, including a live resized tree."
@@ -88,7 +90,7 @@ concurrency:
     source: "docs/lattice.api.treeadmin/README.md"
   - rule: "Purge may be in progress or complete according to deletion status."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
-  - rule: "Shard enumeration uses the registry shard map or split allocation high-water mark rather than only the pinned ShardCount."
+  - rule: "Shard enumeration uses the greatest registry-recorded pinned ShardCount, shard map, or split allocation high-water mark, so it is not limited to the current pinned count."
     source: "docs/lattice/tree-deletion.md"
   - rule: "Alias-changing operations and logical deletion never overlap: a delete refuses while an alias-change reservation is held, and an alias change refuses while the tree is deleted or a delete is pending."
     source: "docs/lattice/tree-registry.md"

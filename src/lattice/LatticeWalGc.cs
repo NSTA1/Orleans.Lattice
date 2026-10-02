@@ -2033,11 +2033,26 @@ public sealed class LatticeWalGc(
     /// activation predating the offset contract, surfaced by a substitute in
     /// tests) contributes nothing rather than faulting the read.
     /// </summary>
-    private async Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
+    private Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
         IGrainFactory factory,
         string treeName)
+        => ReadDurablePinOffsetsAsync(
+            factory, treeName, WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor));
+
+    /// <summary>
+    /// As the instance overload, over an explicit pin shard count. Shared with the
+    /// on-demand floor-holder probe (issue #4195) so the floor it names is taken
+    /// over exactly the offsets the GC pass minimises.
+    /// </summary>
+    /// <param name="factory">The grain factory.</param>
+    /// <param name="treeName">The physical tree id.</param>
+    /// <param name="shardCount">The pin shard count.</param>
+    /// <returns>The union of durable pin offsets, keyed by consumer id.</returns>
+    internal static async Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
+        IGrainFactory factory,
+        string treeName,
+        int shardCount)
     {
-        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
         var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
         if (keys.Count == 1)
         {
