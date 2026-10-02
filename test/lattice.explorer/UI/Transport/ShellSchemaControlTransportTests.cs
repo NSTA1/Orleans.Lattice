@@ -7,6 +7,7 @@ using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Transport;
 
+#pragma warning disable LATTICE0002 // Transport contract test must cover the legacy ILatticeSchemaControl members it still implements.
 /// <summary>The Shell's <see cref="ILatticeSchemaControl"/> transport adapter.</summary>
 [TestFixture]
 public sealed class ShellSchemaControlTransportTests : ShellTransportAdapterContractTests<ILatticeSchemaControl>
@@ -79,3 +80,4 @@ public sealed class ShellSchemaControlTransportTests : ShellTransportAdapterCont
         });
     }
 }
+#pragma warning restore LATTICE0002

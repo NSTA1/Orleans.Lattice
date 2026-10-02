@@ -70,9 +70,7 @@ internal sealed class LatticeSchemaVersionAdmin(
         var advanced = await AdvanceTargetVersionAsync(treeId, newTargetVersion, cancellationToken)
             .ConfigureAwait(false);
 
-        return await grainFactory.GetGrain<ILatticeSchemaRemediationGrain>(treeId)
-            .StartVersionMigrationAsync(advanced.SchemaId, advanced.TargetVersion, cancellationToken)
-            .ConfigureAwait(false);
+        return await MigrateCoreAsync(treeId, advanced.SchemaId, advanced.TargetVersion).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -85,12 +83,29 @@ internal sealed class LatticeSchemaVersionAdmin(
         var current = await store.GetConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
         if (current is not { } config)
         {
-            throw new InvalidOperationException(
-                $"Tree '{treeId}' is not versioned; call {nameof(SetVersionConfigAsync)} to opt it in before migrating.");
+            throw NotVersioned(treeId);
         }
 
-        return await grainFactory.GetGrain<ILatticeSchemaRemediationGrain>(treeId)
-            .StartVersionMigrationAsync(config.SchemaId, config.TargetVersion, cancellationToken)
+        return await MigrateCoreAsync(treeId, config.SchemaId, config.TargetVersion).ConfigureAwait(false);
+    }
+
+    /// <summary>The exception a migration of an unversioned tree fails with.</summary>
+    /// <param name="treeId">The tree id.</param>
+    /// <returns>The exception.</returns>
+    internal static InvalidOperationException NotVersioned(string treeId) =>
+        new($"Tree '{treeId}' is not versioned; call {nameof(SetVersionConfigAsync)} to opt it in before migrating.");
+
+    /// <summary>
+    /// Accepts the migration on the tree's coordinator, then drives it one bounded
+    /// slice at a time, so no single grain call runs for the whole migration.
+    /// </summary>
+    private async Task<LatticeSchemaRemediationReport> MigrateCoreAsync(string treeId, uint schemaId, uint targetVersion)
+    {
+        var grain = grainFactory.GetGrain<ILatticeSchemaRemediationGrain>(treeId);
+        var accepted = await grain
+            .AcceptVersionMigrationAsync(schemaId, targetVersion, Guid.NewGuid().ToString("N"))
+            .ConfigureAwait(false);
+        return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress: null, CancellationToken.None)
             .ConfigureAwait(false);
     }
 

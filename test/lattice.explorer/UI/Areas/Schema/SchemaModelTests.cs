@@ -228,7 +228,7 @@ public sealed class SchemaModelTests
         {
             Assert.That(Enum.GetValues<LatticeSchemaRemediationPhase>().Select(SchemaFormat.Phase), Is.EqualTo(new[]
             {
-                "Idle", "Checking every value", "Building the remediated copy", "Cutting over", "Completed", "Aborted",
+                "Idle", "Checking every value", "Building the remediated copy", "Cutting over", "Completed", "Aborted", "Cancelled",
             }));
             Assert.That(Enum.GetValues<LatticeSchemaDeadLetterSource>().Select(SchemaFormat.Source), Is.EqualTo(new[]
             {

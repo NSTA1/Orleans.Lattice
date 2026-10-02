@@ -190,7 +190,7 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
 
         cut.WaitUntil(() =>
         {
-            Assert.That(Schema.CountOf("MigrateToTargetVersion"), Is.EqualTo(1));
+            Assert.That(Schema.CountOf("StartMigration"), Is.EqualTo(1));
             Assert.That(Operations.Find("orders")!.Summary, Is.EqualTo("Migrating every value to version 3"));
             Assert.That(Navigation.Uri, Does.EndWith("schema/orders?tab=remediation"));
         });
@@ -200,7 +200,14 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
     public void A_running_operation_is_named_with_a_link_to_its_status_and_blocks_another()
     {
         UseEstate();
-        Operations.Start("orders", SchemaOperationKind.Migrate, "Migrating every value to version 3", _ => new TaskCompletionSource<LatticeSchemaRemediationReport>().Task);
+        Schema.OperationStatuses["op-running"] = FakeSchemaControl.RunningOperation("op-running", SchemaOperationKinds.Migration, "orders");
+        Operations.Start("orders", SchemaOperationKind.Migrate, "Migrating every value to version 3", _ => Task.FromResult(new Orleans.Lattice.Api.Operations.LatticeOperationHandle
+        {
+            OperationId = "op-running",
+            Kind = SchemaOperationKinds.Migration,
+            Scope = Schema.OperationStatuses["op-running"].Scope,
+            Created = true,
+        }));
 
         var cut = Open();
 

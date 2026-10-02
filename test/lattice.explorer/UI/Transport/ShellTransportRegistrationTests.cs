@@ -25,6 +25,7 @@ public sealed class ShellTransportRegistrationTests
         [typeof(Orleans.Lattice.Api.Backup.ILatticeBackupControl)] = typeof(ShellBackupControlTransport),
         [typeof(Orleans.Lattice.Api.Backup.ILatticeBackupOperations)] = typeof(ShellBackupControlTransport),
         [typeof(Orleans.Lattice.Api.Schema.ILatticeSchemaControl)] = typeof(ShellSchemaControlTransport),
+        [typeof(Orleans.Lattice.Api.Schema.ILatticeSchemaOperations)] = typeof(ShellSchemaControlTransport),
         [typeof(Orleans.Lattice.Api.Schema.ILatticeSchemaComplianceOperations)] = typeof(ShellSchemaComplianceOperationsTransport),
         [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantAdmin)] = typeof(ShellTenantAdminTransport),
         [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantAccessAdmin)] = typeof(ShellTenantAccessAdminTransport),

@@ -9,7 +9,13 @@ namespace Orleans.Lattice.Schema;
 internal sealed class LatticeSchemaRemediationAdmin(IGrainFactory grainFactory) : ILatticeSchemaRemediationAdmin
 {
     /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> RemediateAsync(
+    /// <remarks>
+    /// Accepts the remediation on the tree's coordinator, then drives it one bounded
+    /// slice at a time, so no single grain call runs for the whole remediation and
+    /// none is cut off by the response timeout. The call still returns only once the
+    /// remediation is terminal.
+    /// </remarks>
+    public async Task<LatticeSchemaRemediationReport> RemediateAsync(
         string treeId,
         LatticeValueTransform transform,
         LatticeSchemaPolicy targetPolicy,
@@ -19,8 +25,10 @@ internal sealed class LatticeSchemaRemediationAdmin(IGrainFactory grainFactory) 
         ArgumentNullException.ThrowIfNull(targetPolicy);
         SchemaConstants.ThrowIfReservedTree(treeId, nameof(treeId));
 
-        return grainFactory.GetGrain<ILatticeSchemaRemediationGrain>(treeId)
-            .StartAsync(transform, targetPolicy, cancellationToken);
+        var grain = grainFactory.GetGrain<ILatticeSchemaRemediationGrain>(treeId);
+        var accepted = await grain.AcceptAsync(transform, targetPolicy, Guid.NewGuid().ToString("N")).ConfigureAwait(false);
+        return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress: null, CancellationToken.None)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />

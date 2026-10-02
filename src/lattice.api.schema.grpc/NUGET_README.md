@@ -13,6 +13,14 @@ inspecting remediation; a read-only per-tree **compliance audit**; and a
 fail-closed **capability probe**. Every wire message rides the Orleans
 serializer, so the contract stays versioned and additive-only.
 
+Remediation and migration run as tracked operations: `StartRemediationAsync`,
+`StartMigrationAsync` and `StartAdvanceAndMigrateAsync` return a handle as soon
+as the cluster accepts the run, and `GetSchemaOperationStatusAsync`,
+`ListSchemaOperationsAsync` and `CancelSchemaOperationAsync` follow, page and
+cancel it. The blocking `RemediateAsync`, `MigrateToTargetVersionAsync` and
+`AdvanceAndMigrateAsync` calls (and their RPCs) raise warning `LATTICE0002` and
+**will be removed in the next major version**.
+
 Wiring is two calls on the co-hosting silo:
 
 ```csharp

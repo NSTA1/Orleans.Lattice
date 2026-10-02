@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Schema;
@@ -238,7 +239,7 @@ public partial class SchemaVersionsPanel : IDisposable
         return StartAsync(
             SchemaOperationKind.AdvanceAndMigrate,
             $"Advancing to version {target} and migrating every value",
-            (schema, tree, ct) => schema.AdvanceAndMigrateAsync(tree, target, ct));
+            (schema, tree, ct) => schema.StartAdvanceAndMigrateAsync(tree, target, cancellationToken: ct));
     }
 
     private Task MigrateAsync()
@@ -247,13 +248,13 @@ public partial class SchemaVersionsPanel : IDisposable
         return StartAsync(
             SchemaOperationKind.Migrate,
             $"Migrating every value to version {_config?.TargetVersion}",
-            (schema, tree, ct) => schema.MigrateToTargetVersionAsync(tree, ct));
+            (schema, tree, ct) => schema.StartMigrationAsync(tree, cancellationToken: ct));
     }
 
     private Task StartAsync(
         SchemaOperationKind kind,
         string summary,
-        Func<Orleans.Lattice.Api.Schema.ILatticeSchemaControl, string, CancellationToken, Task<LatticeSchemaRemediationReport>> run)
+        Func<Orleans.Lattice.Api.Schema.ILatticeSchemaOperations, string, CancellationToken, Task<LatticeOperationHandle>> run)
     {
         if (Workspace is not { } workspace)
         {
@@ -262,7 +263,7 @@ public partial class SchemaVersionsPanel : IDisposable
 
         try
         {
-            var schema = Facades.RequireSchema();
+            var schema = Facades.RequireSchemaOperations();
             var tree = workspace.TreeId;
             Operations.Start(tree, kind, summary, ct => run(schema, tree, ct));
         }

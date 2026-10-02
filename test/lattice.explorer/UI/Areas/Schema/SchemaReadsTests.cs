@@ -1,6 +1,8 @@
+using Orleans.Lattice.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -262,19 +264,40 @@ public sealed class SchemaReadsTests : SchemaTestContext
     [Test]
     public async Task An_operation_runs_in_the_background_and_keeps_its_outcome()
     {
-        var gate = new TaskCompletionSource<LatticeSchemaRemediationReport>();
+        var accepted = new TaskCompletionSource<LatticeOperationHandle>(TaskCreationOptions.RunContinuationsAsynchronously);
         var changes = new List<string>();
         Operations.Changed += changes.Add;
+        Schema.OperationStatuses["op-7"] = FakeSchemaControl.RunningOperation("op-7", SchemaOperationKinds.Migration, "orders");
 
-        var started = Operations.Start("orders", SchemaOperationKind.Migrate, "Migrating", _ => gate.Task);
+        var started = Operations.Start("orders", SchemaOperationKind.Migrate, "Migrating", _ => accepted.Task);
 
         Assert.Multiple(() =>
         {
             Assert.That(started.Stage, Is.EqualTo(SchemaOperationStage.Starting));
-            Assert.That(Operations.Find("orders")!.Stage, Is.EqualTo(SchemaOperationStage.Running));
             Assert.That(Operations.Find("orders")!.IsActive, Is.True);
-            Assert.That(() => Operations.Start("orders", SchemaOperationKind.Migrate, "Again", _ => gate.Task), Throws.InvalidOperationException);
+            Assert.That(() => Operations.Start("orders", SchemaOperationKind.Migrate, "Again", _ => accepted.Task), Throws.InvalidOperationException);
         });
+
+        accepted.SetResult(new LatticeOperationHandle
+        {
+            OperationId = "op-7",
+            Kind = SchemaOperationKinds.Migration,
+            Scope = Schema.OperationStatuses["op-7"].Scope,
+            Created = true,
+        });
+        var firstRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.Changed += tree =>
+        {
+            if (Operations.Find(tree) is { Status: not null })
+            {
+                firstRead.TrySetResult();
+            }
+        };
+        if (Operations.Find("orders") is not { Status: not null })
+        {
+            await firstRead.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        Assert.That(Operations.Find("orders")!.Stage, Is.EqualTo(SchemaOperationStage.Running));
 
         Operations.Dismiss("orders");
         Assert.That(Operations.Find("orders"), Is.Not.Null, "a running operation is kept");
@@ -287,16 +310,32 @@ public sealed class SchemaReadsTests : SchemaTestContext
                 ended.TrySetResult();
             }
         };
-        gate.SetResult(LatticeSchemaRemediationReport.Completed(12, "shadow", "op-7"));
+        // The follower arms its re-read timer just after the first read raises
+        // Changed; advance the clock only once it has, so the tick is not lost.
+        await TestPoll.UntilAsync(
+            () => Task.FromResult(Operations.IsFollowing("orders")),
+            "the tracker to follow the accepted operation on the circuit's clock");
+        Schema.MoveOperation("op-7", status => status with
+        {
+            State = LatticeOperationState.Succeeded,
+            Phase = SchemaOperationPhases.Cutover,
+            PhaseIndex = 2,
+            CompletedUnits = 12,
+            TotalUnits = 12,
+            UnitName = SchemaOperationPhases.ValuesUnit,
+            FinishedAtUtc = Time.GetUtcNow().Add(SchemaOperationStatus.PollInterval),
+        });
+        Time.Advance(SchemaOperationStatus.PollInterval);
+
         await ended.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var finished = Operations.Find("orders")!;
         Assert.Multiple(() =>
         {
             Assert.That(finished.Stage, Is.EqualTo(SchemaOperationStage.Completed));
-            Assert.That(finished.Report!.Value.ScannedCount, Is.EqualTo(12));
-            Assert.That(finished.FinishedAt, Is.EqualTo(Time.GetUtcNow()));
-            Assert.That(changes, Is.EqualTo(new[] { "orders", "orders", "orders" }));
+            Assert.That(finished.Status!.CompletedUnits, Is.EqualTo(12));
+            Assert.That(finished.FinishedAt, Is.EqualTo(finished.Status!.FinishedAtUtc));
+            Assert.That(changes, Has.Member("orders"));
         });
 
         Operations.Dismiss("orders");
@@ -306,12 +345,18 @@ public sealed class SchemaReadsTests : SchemaTestContext
     [Test]
     public async Task An_operation_that_aborts_or_is_refused_says_so()
     {
+        Schema.OperationStatuses["op-a"] = FakeSchemaControl.RunningOperation("op-a", SchemaOperationKinds.Remediation, "a") with
+        {
+            State = LatticeOperationState.Failed,
+            Result = new Dictionary<string, string> { [SchemaOperationResultKeys.Outcome] = SchemaOperationResultKeys.Aborted },
+            FinishedAtUtc = Time.GetUtcNow(),
+        };
         Operations.Start("a", SchemaOperationKind.Remediate, "Remediating", _ =>
-            Task.FromResult(LatticeSchemaRemediationReport.Aborted(3, "k", "bad", [1], "op")));
+            Task.FromResult(new LatticeOperationHandle { OperationId = "op-a", Kind = SchemaOperationKinds.Remediation, Scope = Schema.OperationStatuses["op-a"].Scope, Created = true }));
         Operations.Start("b", SchemaOperationKind.AdvanceAndMigrate, "Advancing", _ =>
-            Task.FromException<LatticeSchemaRemediationReport>(new LatticeAuthorizationDeniedException("denied")));
+            Task.FromException<LatticeOperationHandle>(new LatticeAuthorizationDeniedException("denied")));
         Operations.Start("c", SchemaOperationKind.Migrate, "Migrating", _ =>
-            Task.FromException<LatticeSchemaRemediationReport>(new InvalidOperationException("unversioned")));
+            Task.FromException<LatticeOperationHandle>(new InvalidOperationException("unversioned")));
         await Task.Yield();
 
         Assert.Multiple(() =>
@@ -326,9 +371,15 @@ public sealed class SchemaReadsTests : SchemaTestContext
     [Test]
     public void An_operation_the_circuit_abandons_is_left_to_the_cluster()
     {
-        var operations = new SchemaOperations(Time);
-        var gate = new TaskCompletionSource<LatticeSchemaRemediationReport>();
-        operations.Start("orders", SchemaOperationKind.Migrate, "Migrating", ct => gate.Task.WaitAsync(ct));
+        var operations = Services.GetRequiredService<SchemaOperations>();
+        Schema.OperationStatuses["op-abandoned"] = FakeSchemaControl.RunningOperation("op-abandoned", SchemaOperationKinds.Migration, "orders");
+        operations.Start("orders", SchemaOperationKind.Migrate, "Migrating", _ => Task.FromResult(new LatticeOperationHandle
+        {
+            OperationId = "op-abandoned",
+            Kind = SchemaOperationKinds.Migration,
+            Scope = Schema.OperationStatuses["op-abandoned"].Scope,
+            Created = true,
+        }));
 
         operations.Dispose();
 

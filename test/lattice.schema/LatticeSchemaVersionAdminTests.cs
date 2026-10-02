@@ -131,18 +131,22 @@ public sealed class LatticeSchemaVersionAdminTests
         store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
             .Returns(new LatticeSchemaVersionConfig(schemaId: 7, targetVersion: 2));
         var terminal = LatticeSchemaRemediationReport.Completed(3, "orders/remediated/op", "op");
-        grain.StartVersionMigrationAsync(7, 5, Arg.Any<CancellationToken>()).Returns(terminal);
+        grain.AcceptVersionMigrationAsync(7, 5, Arg.Any<string>())
+            .Returns(LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.DryRun, 0, "orders/remediated/op", "op"));
+        grain.RunSliceAsync().Returns(new SchemaRemediationSlice(terminal, null));
 
         var report = await admin.AdvanceAndMigrateAsync("orders", 5);
 
         // Config advanced and cache invalidated (the lazy path), then the eager
-        // migration re-stamped to the newly advanced target.
+        // migration re-stamped to the newly advanced target, accepted and then
+        // driven a slice at a time.
         await store.Received(1).SetConfigAsync(
             "orders",
             Arg.Is<LatticeSchemaVersionConfig>(c => c.TargetVersion == 5 && c.SchemaId == 7),
             Arg.Any<CancellationToken>());
         provider.Received(1).Invalidate("orders");
-        await grain.Received(1).StartVersionMigrationAsync(7, 5, Arg.Any<CancellationToken>());
+        await grain.Received(1).AcceptVersionMigrationAsync(7, 5, Arg.Any<string>());
+        await grain.Received(1).RunSliceAsync();
         Assert.That(report, Is.EqualTo(terminal));
     }
 
@@ -175,14 +179,17 @@ public sealed class LatticeSchemaVersionAdminTests
         store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
             .Returns(new LatticeSchemaVersionConfig(schemaId: 7, targetVersion: 4));
         var terminal = LatticeSchemaRemediationReport.Completed(2, "orders/remediated/op", "op");
-        grain.StartVersionMigrationAsync(7, 4, Arg.Any<CancellationToken>()).Returns(terminal);
+        // A tree already migrated to the target accepts nothing: its completed
+        // report comes straight back and no slice runs.
+        grain.AcceptVersionMigrationAsync(7, 4, Arg.Any<string>()).Returns(terminal);
 
         var report = await admin.MigrateToTargetVersionAsync("orders");
 
         // No config advance: re-stamp to the tree's current target.
         await store.DidNotReceive().SetConfigAsync(
             Arg.Any<string>(), Arg.Any<LatticeSchemaVersionConfig>(), Arg.Any<CancellationToken>());
-        await grain.Received(1).StartVersionMigrationAsync(7, 4, Arg.Any<CancellationToken>());
+        await grain.Received(1).AcceptVersionMigrationAsync(7, 4, Arg.Any<string>());
+        await grain.DidNotReceive().RunSliceAsync();
         Assert.That(report, Is.EqualTo(terminal));
     }
 
