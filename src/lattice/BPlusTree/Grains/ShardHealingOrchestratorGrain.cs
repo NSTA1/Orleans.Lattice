@@ -252,7 +252,18 @@ internal sealed class ShardHealingOrchestratorGrain(
         // bounded registry path: this orchestrator is birthed once per tree, so
         // an un-gated read here is one of the two terms in the cold-start fan-in
         // product that RegistryFanInGate exists to bound.
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        //
+        // The resolve never registers (issue #4219): a sweep observes a tree and
+        // must not recreate one. A purged tree stops this orchestrator instead of
+        // being swept; a tree that was never created is merely skipped, because
+        // its first write still needs a running orchestrator.
+        var resolved = await optionsResolver.ResolveIfRegisteredAsync(TreeId);
+        if (resolved is null)
+        {
+            if (await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).HoldsCompletedPurgeAsync())
+                await StopAsync();
+            return;
+        }
         var map = await optionsResolver.RegistryReads.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();

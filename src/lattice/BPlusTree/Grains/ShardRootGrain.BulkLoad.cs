@@ -321,7 +321,9 @@ internal sealed partial class ShardRootGrain
 
         if (sortedEntries.Count == 0) return;
 
-        await EnsureRootAsync();
+        // A bulk load writes data, so its seed may register a tree that has no
+        // row (issue #4219); see PrepareForWriteAsync.
+        await EnsureRootAsync(forWrite: true);
         await ResumePendingPromotionAsync();
 
         var shardKey = context.GrainId.Key.ToString()!;
