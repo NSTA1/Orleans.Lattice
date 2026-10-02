@@ -45,6 +45,18 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// stuck in a read never reaches the wait at all; the two gates are load-bearing
 /// together.
 /// </para>
+/// <para>
+/// A BOUND NOBODY READS IS NO BOUND. <c>WaitForExit(milliseconds)</c> whose
+/// <see langword="bool"/> is discarded - written as a bare statement, or assigned
+/// to <c>_</c> - is also a finding (issue #4211). When the wait overruns, the
+/// next <c>Process.ExitCode</c> read throws an
+/// <see cref="InvalidOperationException"/> that names neither the timeout nor
+/// the child, and the still-running child is never killed. That is the hung-child
+/// failure this gate exists to prevent, in a different costume: a diagnosis of
+/// the wrong condition plus a leaked process. Only the statement forms are
+/// detected; a call whose result flows into a condition, a variable, an argument,
+/// or a <c>return</c> is assumed to be acted on.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class ChildProcessWaitBoundHygieneTests
@@ -68,6 +80,19 @@ public sealed class ChildProcessWaitBoundHygieneTests
         + @"\.WaitForExit(?<async>Async)?\s*\(\s*\)",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Matches a bounded synchronous wait used as a whole statement - at the start
+    /// of a line or directly after <c>;</c>, <c>{</c> or <c>}</c>, optionally as
+    /// a discard <c>_ = </c> - so its <see langword="bool"/> return reaches nothing.
+    /// The argument list is matched with balanced parentheses so a computed
+    /// timeout such as <c>(int)t.TotalMilliseconds</c> is captured whole.
+    /// </summary>
+    private static readonly Regex DiscardedBoundedWaitPattern = new(
+        @"(?<=^|[;{}])[ \t]*(?:_[ \t]*=[ \t]*)?"
+        + @"(?<receiver>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+        + @"\.WaitForExit\s*\((?<args>(?>[^()]+|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!)))\)\s*;",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
     [Test]
     public void No_code_waits_on_a_child_process_without_a_timeout_or_cancellation_token()
     {
@@ -89,7 +114,8 @@ public sealed class ChildProcessWaitBoundHygieneTests
             }
 
             var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
-            var findings = FindUnboundedWaits(Encoding.UTF8.GetString(bytes));
+            var text = Encoding.UTF8.GetString(bytes);
+            var findings = FindUnboundedWaits(text).Concat(FindDiscardedBoundedWaits(text)).ToList();
 
             lock (gate)
             {
@@ -119,7 +145,9 @@ public sealed class ChildProcessWaitBoundHygieneTests
             "Bound every wait on a child process. Pass a timeout to WaitForExit(milliseconds) and act on "
             + "a false return by killing the process tree and failing with a diagnosis, or pass a "
             + "cancellation token to WaitForExitAsync(token). An unbounded wait cannot fail - it hangs, "
-            + "and CI reports that as a --blame-hang abort naming no fixture and no assertion:\n"
+            + "and CI reports that as a --blame-hang abort naming no fixture and no assertion. A bounded "
+            + "wait whose bool is discarded is no better: the overrun surfaces as an ExitCode "
+            + "InvalidOperationException naming neither the timeout nor the child, and the child leaks:\n"
             + string.Join("\n", violations));
     }
 
@@ -151,6 +179,40 @@ public sealed class ChildProcessWaitBoundHygieneTests
             findings.Add(
                 $":{LineOf(code, match.Index)}: {match.Groups["receiver"].Value}.{call} "
                 + $"is unbounded - {remedy}.");
+        }
+
+        return findings;
+    }
+
+    /// <summary>
+    /// Reports every place in <paramref name="text"/> that waits on a child
+    /// process with a timeout but discards the <see langword="bool"/> saying
+    /// whether the child exited.
+    /// </summary>
+    /// <param name="text">The C# source to analyse.</param>
+    /// <returns>
+    /// One entry per violation, each beginning with <c>:</c> and the 1-based line
+    /// number so a caller can prefix it with the file path. Ordered by position.
+    /// </returns>
+    internal static IReadOnlyList<string> FindDiscardedBoundedWaits(string text)
+    {
+        var code = ChildProcessPipeDrainHygieneTests.StripCommentsAndStringLiterals(text);
+
+        var findings = new List<string>();
+        foreach (Match match in DiscardedBoundedWaitPattern.Matches(code))
+        {
+            // An empty argument list is the unbounded defect, reported by
+            // FindUnboundedWaits; reporting it here too would double-count it.
+            if (string.IsNullOrWhiteSpace(match.Groups["args"].Value))
+            {
+                continue;
+            }
+
+            var receiver = match.Groups["receiver"];
+            findings.Add(
+                $":{LineOf(code, receiver.Index)}: {receiver.Value}.WaitForExit(...) discards its result - "
+                + "act on a false return by killing the process tree and failing with a diagnosis "
+                + "naming the child.");
         }
 
         return findings;
@@ -296,5 +358,85 @@ public sealed class ChildProcessWaitBoundHygieneTests
         const string source = "var total = values.Sum();";
 
         Assert.That(FindUnboundedWaits(source), Is.Empty);
+    }
+
+    [Test]
+    public void AnalyseDiscarded_reports_a_bounded_wait_used_as_a_bare_statement()
+    {
+        // The exact shape of issue #4211: the bound is passed, its bool is dropped,
+        // and the next ExitCode read throws on a child that is still running.
+        const string source = """
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            process.WaitForExit(timeoutMilliseconds);
+            return process.ExitCode;
+            """;
+
+        Assert.That(FindDiscardedBoundedWaits(source),
+            Has.Exactly(1).Contains(":2:").And.Contains("process.WaitForExit(...) discards its result"));
+    }
+
+    [Test]
+    public void AnalyseDiscarded_reports_a_named_argument_a_computed_timeout_and_an_explicit_discard()
+    {
+        const string source = """
+            first.WaitForExit(milliseconds: 120_000);
+            second.WaitForExit((int)Timeout.TotalMilliseconds);
+            _ = third.WaitForExit(5000);
+            { fourth.WaitForExit(
+                5000); }
+            """;
+
+        var findings = FindDiscardedBoundedWaits(source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings, Has.Count.EqualTo(4),
+                "a named argument, a nested-parenthesis timeout, an explicit discard, and a call spread "
+                + "across lines are all the same defect.");
+            Assert.That(findings[0], Does.Contain(":1:").And.Contains("first"));
+            Assert.That(findings[1], Does.Contain(":2:").And.Contains("second"));
+            Assert.That(findings[2], Does.Contain(":3:").And.Contains("third"));
+            Assert.That(findings[3], Does.Contain(":4:").And.Contains("fourth"));
+        });
+    }
+
+    [Test]
+    public void AnalyseDiscarded_accepts_a_bounded_wait_whose_result_is_consumed()
+    {
+        const string source = """
+            if (!process.WaitForExit(5000)) { Kill(process); }
+            var exited = process.WaitForExit(5000);
+            Assert.That(process.WaitForExit(5000), Is.True);
+            return process.WaitForExit(5000);
+            await process.WaitForExitAsync(cts.Token);
+            """;
+
+        Assert.That(FindDiscardedBoundedWaits(source), Is.Empty,
+            "a result that flows into a condition, a variable, an argument or a return is acted on, and "
+            + "WaitForExitAsync returns no bool at all.");
+    }
+
+    [Test]
+    public void AnalyseDiscarded_leaves_an_unbounded_wait_to_the_unbounded_analyser()
+    {
+        const string source = "process.WaitForExit();";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FindDiscardedBoundedWaits(source), Is.Empty,
+                "an empty argument list is the unbounded defect; reporting it twice would double-count it.");
+            Assert.That(FindUnboundedWaits(source), Has.Exactly(1).Items);
+        });
+    }
+
+    [Test]
+    public void AnalyseDiscarded_ignores_the_defective_shape_inside_a_comment_or_literal()
+    {
+        const string source = """
+            // process.WaitForExit(5000);
+            var advice = "process.WaitForExit(5000);";
+            """;
+
+        Assert.That(FindDiscardedBoundedWaits(source), Is.Empty);
     }
 }
