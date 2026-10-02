@@ -27,7 +27,7 @@ The read-bounding knobs the control facade honours for its paged catalog listing
 
 Every tree name these operations accept is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another. This covers a `BackupScopeSelector`'s tree, a catalog listing's `TreeId` filter, a restore's or cold restore's `TargetTreeId`, and the `TargetTreeId` of a `LatticeRestoreResult` handed back to revert. A `BackupId` is **not** composed - it is already a recorded, effective id, so scoping it again would double-scope it or re-attribute another tenant's backup to the caller. With the tenancy add-on absent - or registered, but with no active tenant asserted, which resolves the default tenant - the bare name is returned unchanged, so behaviour is byte-for-byte as before. Under an asserted non-default tenant an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, and an already-qualified `t/` id or a `_lattice_` system-tree name passes through unchanged (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate, which refuses it unless the owning tenant has issued a matching cross-tenant grant). The call fails closed with a `LatticeTenantAccessDeniedException` when the asserted tenant fails validation against the caller's own membership (an anonymous caller can never act as a tenant), or - outside a system-origin scope - when it names a `sys-` tree or a malformed `t/` id that belongs to no tenant. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md).
 
-The facade exposes the blocking `ILatticeBackupControl` surface and the accept-then-poll `ILatticeBackupOperations` surface on the same singleton. The [gRPC binding](../lattice.api.backup.grpc/api.md) projects the remote-safe subset as RPCs; inventory and catalog rebuild / scrub are in-process-only today. Operations that touch backup data authorize their scope fail-closed before touching data; advisory capability and availability probes report state without mutating data.
+The facade exposes the blocking `ILatticeBackupControl` surface and the accept-then-poll `ILatticeBackupOperations` surface on the same singleton. The [gRPC binding](../lattice.api.backup.grpc/api.md) projects the remote-safe subset as RPCs; inventory and the blocking catalog rebuild / scrub are in-process-only, while their tracked operations are served over the wire. Operations that touch backup data authorize their scope fail-closed before touching data; advisory capability and availability probes report state without mutating data.
 
 | Operation | Shape | Returns |
 |---|---|---|
@@ -36,6 +36,9 @@ The facade exposes the blocking `ILatticeBackupControl` surface and the accept-t
 | Start backup set (`StartBackupSetAsync`) | takes a `LatticeBackupSetCaptureRequest` and optional operation id | `LatticeOperationHandle` |
 | Start restore (`StartRestoreAsync`) | takes a `LatticeRestoreRequest` and optional operation id | `LatticeOperationHandle` |
 | Start cold restore (`StartColdRestoreAsync`) | takes a `LatticeRestoreRequest` and optional operation id | `LatticeOperationHandle` |
+| Start backup health check (`StartBackupHealthCheckAsync`) | takes a backup id and optional operation id | `LatticeOperationHandle` |
+| Start catalog rebuild (`StartCatalogRebuildAsync`) | takes an optional operation id | `LatticeOperationHandle` |
+| Start catalog scrub (`StartCatalogScrubAsync`) | takes a `bool pruneOrphans` and optional operation id | `LatticeOperationHandle` |
 | Get operation status (`GetOperationStatusAsync`) | takes an operation id | `LatticeOperationStatus?` |
 | List operations (`ListOperationsAsync`) | takes a `LatticeOperationListRequest` | `LatticeOperationPage` |
 | Cancel operation (`CancelOperationAsync`) | takes an operation id | `LatticeOperationStatus?` |
@@ -51,10 +54,10 @@ The facade exposes the blocking `ILatticeBackupControl` surface and the accept-t
 | Revert restore (`RevertRestoreAsync`) | takes a `LatticeRestoreResult` | (void) |
 | Export artifact (`ExportArtifactAsync`) | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory (`GetInventoryAsync`) | (none) | `BackupInventoryReport` |
-| Rebuild catalog from sink (`RebuildCatalogFromSinkAsync`) | (none) | `BackupCatalogRebuildReport` |
-| Scrub catalog against sink (`ScrubCatalogAgainstSinkAsync`) | takes a `bool pruneOrphans` | `BackupCatalogScrubReport` |
+| Rebuild catalog from sink (`RebuildCatalogFromSinkAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `BackupCatalogRebuildReport` |
+| Scrub catalog against sink (`ScrubCatalogAgainstSinkAsync`) | deprecated `LATTICE0002` blocking wrapper taking a `bool pruneOrphans`; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `BackupCatalogScrubReport` |
 | Is health monitoring available (`IsHealthMonitoringAvailableAsync`) | (none) | `bool` (true when the sink is durable) |
-| Check backup health (`CheckBackupHealthAsync`) | takes a backup id | `BackupHealthReport` (verifies and persists) |
+| Check backup health (`CheckBackupHealthAsync`) | deprecated `LATTICE0002` blocking wrapper taking a backup id; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `BackupHealthReport` (verifies and persists) |
 | Get backup health (`GetBackupHealthAsync`) | takes a backup id | `BackupHealthReport?` (last stored, null when none/absent) |
 | Configure backup health (`ConfigureBackupHealthAsync`) | takes a backup id and a `BackupHealthConfig` | (void) |
 | Get scope status (`GetScopeStatusAsync`) | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
@@ -62,7 +65,7 @@ The facade exposes the blocking `ILatticeBackupControl` surface and the accept-t
 | Schedule backup (`ScheduleBackupAsync`) | takes a `LatticeBackupScheduleRequest` | (void) |
 | Cancel schedule (`CancelScheduleAsync`) | takes a `BackupScopeSelector` and `bool incremental` | (void) |
 
-The five deprecated blocking verbs are thin wrappers over the matching start operation that wait for in-process completion, so existing callers still see the same results and exceptions while the tracked operation also appears in `ListOperationsAsync`. New code should call a start verb, poll `GetOperationStatusAsync`, and read the operation's `ResultReference` / `Result` map. See [Backup operations](operations.md) for kind names, progress phases, result keys, cancellation, retention, and migration details.
+The eight deprecated blocking verbs are thin wrappers over the matching start operation that wait for in-process completion, so existing callers still see the same results and exceptions while the tracked operation also appears in `ListOperationsAsync`. New code should call a start verb, poll `GetOperationStatusAsync`, and read the operation's `ResultReference` / `Result` map. See [Backup operations](operations.md) for kind names, progress phases, result keys, cancellation, retention, and migration details.
 
 Create backup set captures one full backup per distinct tree scope under a single set manifest, so an operator can back up several trees as one unit; it authorizes every member scope fail-closed before any capture, so a set that names one forbidden scope is rejected whole. When cross-tree consistency is requested the members share one consistency fence. The returned `BackupSetManifest.SetId` is the value each member's `BackupCatalogIndexRow.SetId` carries, so a consumer can group the `ListBackupsAsync` rows of one set by it; a **single-scope** capture stamps no membership and so reports `SetId` as `null`, matching the `null` its catalog row reports. The `LatticeBackupSetCaptureRequest` / `LatticeBackupSetCaptureResult` and `BackupSetManifest` types are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 

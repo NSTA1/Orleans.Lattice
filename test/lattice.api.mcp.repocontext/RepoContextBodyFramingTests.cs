@@ -33,7 +33,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class RepoContextBodyFramingTests
+public sealed partial class RepoContextBodyFramingTests
 {
     private const char Lt = '<';
     private const char Gt = '>';

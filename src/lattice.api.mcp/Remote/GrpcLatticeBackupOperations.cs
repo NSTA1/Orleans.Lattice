@@ -45,6 +45,18 @@ internal sealed class GrpcLatticeBackupOperations : ILatticeBackupOperations
         => _client.StartColdRestoreAsync(request, operationId, cancellationToken);
 
     /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartBackupHealthCheckAsync(string backupId, string? operationId = null, CancellationToken cancellationToken = default)
+        => _client.StartBackupHealthCheckAsync(backupId, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartCatalogRebuildAsync(string? operationId = null, CancellationToken cancellationToken = default)
+        => _client.StartCatalogRebuildAsync(operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<LatticeOperationHandle> StartCatalogScrubAsync(bool pruneOrphans = false, string? operationId = null, CancellationToken cancellationToken = default)
+        => _client.StartCatalogScrubAsync(pruneOrphans, operationId, cancellationToken);
+
+    /// <inheritdoc />
     public Task<LatticeOperationStatus?> GetOperationStatusAsync(string operationId, CancellationToken cancellationToken = default)
         => _client.GetBackupOperationStatusAsync(operationId, cancellationToken);
 

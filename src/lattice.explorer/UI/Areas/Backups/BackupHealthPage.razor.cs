@@ -217,7 +217,11 @@ public partial class BackupHealthPage : IDisposable
         _checkError = null;
         try
         {
+            // Still the deprecated blocking verb (LATTICE0002); #4125 PR-2 moves this
+            // page onto StartBackupHealthCheckAsync and the shared progress follower.
+#pragma warning disable LATTICE0002
             _focusReport = await Control.CheckBackupHealthAsync(manifest.Id, _load.Token);
+#pragma warning restore LATTICE0002
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
         {

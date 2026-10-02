@@ -44,12 +44,9 @@ namespace Orleans.Lattice.Api.Backup;
 internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILatticeBackupOperations
 {
     private readonly ILatticeBackupCatalogStore _catalog;
-    private readonly ILatticeBackupCatalogRebuildService _catalogRebuild;
-    private readonly ILatticeBackupCatalogScrubService _catalogScrub;
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
     private readonly BackupOperationService _operations;
-    private readonly ILatticeBackupHealthService _health;
     private readonly ILatticeBackupHealthStore _healthStore;
     private readonly BackupAccessAuthorizer _authorizer;
     private readonly IGrainFactory _grainFactory;
@@ -117,13 +114,18 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         ArgumentNullException.ThrowIfNull(services);
 
         _catalog = catalog;
-        _catalogRebuild = catalogRebuild;
-        _catalogScrub = catalogScrub;
         _sink = sink;
         _restore = restore;
         _operations = new BackupOperationService(
-            services.GetRequiredService<LatticeOperationRunner>(), capture, incremental, restore, coldRestore);
-        _health = health;
+            services.GetRequiredService<LatticeOperationRunner>(),
+            capture,
+            incremental,
+            restore,
+            coldRestore,
+            health,
+            healthStore,
+            catalogRebuild,
+            catalogScrub);
         _healthStore = healthStore;
         _authorizer = authorizer;
         _grainFactory = grainFactory;
@@ -605,20 +607,15 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     public async Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
         CancellationToken cancellationToken = default)
     {
-        // Rebuilding the catalog re-registers manifests of every scope from the
-        // sink, so it is a cluster-wide administrative action rather than a
-        // per-scope one. Authorize it fail-closed at the reserved catalog tree
-        // with the high-privilege Restore (author / bulk-load) authority - the
-        // same grant a bulk restore into a tree requires - before any catalog
-        // write happens. Under the default no-op gate this short-circuits to
-        // allow at zero cost; a bootstrap administrator is always permitted.
-        // The catalog tree is a platform-owned constant, not a caller-supplied
-        // name, so it is never tenant-composed.
-        await _authorizer
-            .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(BackupConstants.CatalogTree), cancellationToken)
+        // Deprecated blocking verb (LATTICE0002): start, then wait. Rebuilding the
+        // catalog re-registers manifests of every scope from the sink, so it is a
+        // cluster-wide administrative action authorized fail-closed at the reserved
+        // catalog tree with the high-privilege Restore (author / bulk-load)
+        // authority before any catalog write happens; see StartCatalogRebuildCoreAsync.
+        cancellationToken.ThrowIfCancellationRequested();
+        var (tenantId, launch) = await StartCatalogRebuildCoreAsync(LatticeOperationKey.NewId(), cancellationToken)
             .ConfigureAwait(false);
-
-        return await _catalogRebuild.RebuildFromSinkAsync(cancellationToken).ConfigureAwait(false);
+        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -626,20 +623,15 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         bool pruneOrphans = false,
         CancellationToken cancellationToken = default)
     {
-        // Scrubbing reconciles rows of every scope against the sink and, when
-        // pruning, removes rows from the reserved catalog tree, so it is a
-        // cluster-wide administrative action rather than a per-scope one. Authorize
-        // it fail-closed at the catalog tree with the high-privilege Restore
-        // (author / bulk-load) authority - the same grant rebuild-from-sink requires
-        // - before any probe or delete happens. Under the default no-op gate this
-        // short-circuits to allow at zero cost; a bootstrap administrator is always
-        // permitted. The catalog tree is a platform-owned constant, not a
-        // caller-supplied name, so it is never tenant-composed.
-        await _authorizer
-            .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(BackupConstants.CatalogTree), cancellationToken)
-            .ConfigureAwait(false);
-
-        return await _catalogScrub.ScrubAsync(pruneOrphans, cancellationToken).ConfigureAwait(false);
+        // Deprecated blocking verb (LATTICE0002): start, then wait. Scrubbing
+        // reconciles rows of every scope against the sink and, when pruning, removes
+        // rows from the reserved catalog tree, so it is authorized fail-closed at the
+        // catalog tree with the Restore authority before any probe or delete happens;
+        // see StartCatalogScrubCoreAsync.
+        cancellationToken.ThrowIfCancellationRequested();
+        var (tenantId, launch) = await StartCatalogScrubCoreAsync(
+            pruneOrphans, LatticeOperationKey.NewId(), cancellationToken).ConfigureAwait(false);
+        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -730,17 +722,14 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         string backupId,
         CancellationToken cancellationToken = default)
     {
+        // Deprecated blocking verb (LATTICE0002): start, then wait. The start
+        // authorizes the manifest's own (already effective) scope fail-closed and
+        // the work persists the fresh report, exactly as before.
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-
-        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
-            ?? throw new KeyNotFoundException($"No backup with id '{backupId}' exists in the catalog.");
-
-        // Manifest-derived scope: already effective, never re-composed.
-        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
-
-        var report = await _health.VerifyAsync(backupId, cancellationToken).ConfigureAwait(false);
-        await _healthStore.SetReportAsync(report, cancellationToken).ConfigureAwait(false);
-        return report;
+        cancellationToken.ThrowIfCancellationRequested();
+        var (tenantId, launch) = await StartHealthCheckCoreAsync(backupId, LatticeOperationKey.NewId(), cancellationToken)
+            .ConfigureAwait(false);
+        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

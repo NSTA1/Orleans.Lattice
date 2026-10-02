@@ -139,7 +139,7 @@ If the cluster has not registered schema versioning, the tab says **Versioning i
 
 The Compliance tab runs a read-only scan of every value in the tree against the current policy. The scan changes nothing. It can be started from the tab, from the directory picker, or by the address `?tab=compliance&scan=start`.
 
-While a scan runs, the tab shows **Scanning every value of {tree}...** and a **Stop scanning** control. Stopping a scan reports that it was stopped before it finished. A finished scan shows scanned, compliant, and non-compliant counts, finish time, and a breakdown of non-compliance reasons. The last scan result is kept for this Explorer circuit and summarised in the directory.
+The scan runs on the cluster as a [tracked operation](../lattice.api.schema/operations.md) of kind `schema.compliance-scan`, so leaving the tab, closing it, or reloading does not stop it. While it runs, the tab shows **Scanning every value of {tree}...**, its progress in entries scanned against the tree's entry count, and a **Stop scanning** control that cancels the operation. Stopping a scan reports that it was stopped before it finished; a scan that fails on the cluster gives its reason. On arrival the tab picks up the tree's newest scan: it follows one still running rather than starting another, and shows a finished one when this circuit has no result yet. A finished scan shows scanned, compliant, and non-compliant counts, finish time, and a breakdown of non-compliance reasons. The last scan result is kept for this Explorer circuit and summarised in the directory.
 
 If the tree has no policy, the tab says there is nothing to scan against and links back to the Policy tab.
 
@@ -180,7 +180,7 @@ Address completions list governed trees from the remembered directory read. Sear
 - Per-tree grants are cached for 30 seconds unless a refresh is requested.
 - Dead-letter reads load 100 entries at a time.
 - Running operation status is re-read every 2 seconds while it is running.
-- Compliance scan results are remembered only in the current Explorer circuit.
+- Compliance scan results are remembered only in the current Explorer circuit; a scan still running on the cluster is picked up again on return.
 - The rule builder's sample is the first 100 values in key order, and its inferred shape stops at 8 levels, 64 members per object and 400 members in all.
 
 ## Server authority

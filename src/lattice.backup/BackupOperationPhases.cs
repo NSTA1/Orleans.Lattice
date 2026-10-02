@@ -27,4 +27,16 @@ public static class BackupOperationPhases
 
     /// <summary>Bulk-loading the read entries into the target's physical shards. Units: <see cref="BackupOperationUnits.Shards"/>.</summary>
     public const string Replaying = "Replaying";
+
+    /// <summary>Verifying a backup's artifacts against the durable sink. Units: <see cref="BackupOperationUnits.Artifacts"/>.</summary>
+    public const string Verifying = "Verifying";
+
+    /// <summary>Re-registering the sink's manifests into the catalog. Units: <see cref="BackupOperationUnits.Manifests"/>.</summary>
+    public const string RebuildingCatalog = "RebuildingCatalog";
+
+    /// <summary>Probing every catalog row against the sink. Units: <see cref="BackupOperationUnits.Manifests"/>.</summary>
+    public const string ScrubbingCatalog = "ScrubbingCatalog";
+
+    /// <summary>Removing the orphan rows a scrub found, when pruning was requested. Units: <see cref="BackupOperationUnits.Manifests"/>.</summary>
+    public const string PruningOrphans = "PruningOrphans";
 }
