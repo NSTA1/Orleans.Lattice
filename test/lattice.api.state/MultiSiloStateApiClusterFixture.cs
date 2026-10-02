@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Views;
 using Orleans.Runtime;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Api.State.Tests;
 
@@ -94,9 +95,11 @@ internal sealed class MultiSiloStateApiClusterFixture
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder(initialSilosCount: SiloCount);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
     }
 
     public async Task DisposeAsync()

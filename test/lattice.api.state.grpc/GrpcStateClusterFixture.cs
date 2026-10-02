@@ -11,6 +11,7 @@ using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Views;
 using Orleans.Serialization;
 using Orleans.TestingHost;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Api.State.Grpc.Tests;
 
@@ -51,9 +52,11 @@ internal sealed class GrpcStateClusterFixture
     public async Task InitializeAsync(int siloCount = 1)
     {
         var builder = new TestClusterBuilder(initialSilosCount: (short)siloCount);
+        builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
     }
 
     public async Task DisposeAsync()
