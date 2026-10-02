@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// the base coordinator's tick handling is exercised rather than simulated.
 /// </remarks>
 [TestFixture]
-public sealed class PurgedTreeSagaAbandonmentTests
+public sealed partial class PurgedTreeSagaAbandonmentTests
 {
     private const string TreeId = "purged-saga-tree";
 
@@ -41,6 +41,7 @@ public sealed class PurgedTreeSagaAbandonmentTests
         public required ITimerRegistry Timers { get; init; }
         public required IGrainTimer Timer { get; init; }
         public required ITreeDeletionGrain Deletion { get; init; }
+        public required IGrainFactory Factory { get; init; }
         public required Func<bool> InProgress { get; init; }
         public required Func<bool> RecordExists { get; init; }
     }
@@ -106,7 +107,7 @@ public sealed class PurgedTreeSagaAbandonmentTests
             monitor, TestOptionsResolver.ForFactory(factory, options), deletion);
     }
 
-    private static Harness SplitSaga()
+    private static Harness SplitSaga(string? boundPhysicalTreeId = null)
     {
         var w = Wire("split", $"{TreeId}/0");
         var state = new FakePersistentState<TreeShardSplitState>();
@@ -116,6 +117,7 @@ public sealed class PurgedTreeSagaAbandonmentTests
         state.State.TargetShardIndex = 2;
         state.State.MovedSlots = [1, 3];
         state.State.OperationId = "split-op";
+        state.State.PhysicalTreeId = boundPhysicalTreeId;
 
         var grain = new TreeShardSplitGrain(
             w.Context, w.Factory, w.Reminders, w.Options, w.Resolver,
@@ -124,7 +126,7 @@ public sealed class PurgedTreeSagaAbandonmentTests
         return Build(w, grain, "shard-split-keepalive", () => state.State.InProgress, () => state.RecordExists);
     }
 
-    private static Harness ConsolidationSaga()
+    private static Harness ConsolidationSaga(string? boundPhysicalTreeId = null)
     {
         var w = Wire("consolidation", $"{TreeId}/1");
         var state = new FakePersistentState<TreeShardConsolidationState>();
@@ -134,6 +136,7 @@ public sealed class PurgedTreeSagaAbandonmentTests
         state.State.SurvivorShardIndex = 0;
         state.State.DonorSlots = [1, 3];
         state.State.OperationId = "consolidation-op";
+        state.State.PhysicalTreeId = boundPhysicalTreeId;
 
         var grain = new TreeShardConsolidationGrain(
             w.Context, w.Factory, w.Reminders, w.Options, w.Resolver,
@@ -170,6 +173,7 @@ public sealed class PurgedTreeSagaAbandonmentTests
             Timers = w.Timers,
             Timer = w.Timer,
             Deletion = w.Deletion,
+            Factory = w.Factory,
             InProgress = inProgress,
             RecordExists = recordExists,
         };
