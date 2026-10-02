@@ -66,9 +66,17 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             var adds = delta.Adds;
             if (adds is { Count: > 0 })
             {
-                for (var j = 0; j < adds.Count; j++)
+                // The delta DTO declares IReadOnlyList<T> because it is
+                // serialised public surface, so the indexer below dispatches
+                // through an interface and copies each dot out by value.
+                // CrdtDeltaListSpan resolves the array and List<T> cases to a
+                // span; anything else keeps the interface walk. Nothing in this
+                // loop changes the scanned collection, so the span stays valid.
+                var addsSpanned = CrdtDeltaListSpan.TryGetSpan(adds, out var addsSpan);
+                var addCount = adds.Count;
+                for (var j = 0; j < addCount; j++)
                 {
-                    var dot = adds[j];
+                    var dot = addsSpanned ? addsSpan[j] : adds[j];
                     if (dot.Element is null) continue;
                     result.Add(new CrdtMemberChange
                     {
@@ -84,9 +92,11 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             var removes = delta.Removes;
             if (removes is { Count: > 0 })
             {
-                for (var j = 0; j < removes.Count; j++)
+                var removesSpanned = CrdtDeltaListSpan.TryGetSpan(removes, out var removesSpan);
+                var removeCount = removes.Count;
+                for (var j = 0; j < removeCount; j++)
                 {
-                    var dot = removes[j];
+                    var dot = removesSpanned ? removesSpan[j] : removes[j];
                     if (dot.Element is null) continue;
                     result.Add(new CrdtMemberChange
                     {
