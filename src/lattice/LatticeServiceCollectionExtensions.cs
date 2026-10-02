@@ -35,6 +35,23 @@ public static class LatticeServiceCollectionExtensions
     /// installs the baseline. See <see cref="AddWalStorage"/> for the
     /// full registration-order contract.
     /// </para>
+    /// <para>
+    /// <b>The grain storage provider must enforce ETags on write.</b> A write
+    /// that presents an ETag other than the stored row's current one must fail
+    /// with <c>InconsistentStateException</c>. Lattice writes some grain state
+    /// directly through the provider, bypassing <c>IPersistentState</c> and in
+    /// one case from outside any grain, reading a row and
+    /// writing it back with the ETag it read, and during membership changes it
+    /// relies on the provider rejecting a stale duplicate activation's write.
+    /// With a provider that accepts stale writes, an older checkpoint can
+    /// overwrite a newer one while the write-ahead-log pin keeps the newer
+    /// offset, so the log can be trimmed past entries a later rebuild needs.
+    /// Orleans' memory, Azure Table, Azure Blob, Cosmos DB and ADO.NET providers
+    /// all enforce ETags. Each silo checks this once as it becomes active and,
+    /// by default, logs a warning when the provider does not; see
+    /// <see cref="LatticeGrainStorageFencingOptions"/> and
+    /// <see cref="ConfigureLatticeGrainStorageFencing"/>.
+    /// </para>
     /// <para>Example:</para>
     /// <code>
     /// silo.AddLattice((silo, name) =&gt; silo.AddMemoryGrainStorage(name));
@@ -70,6 +87,16 @@ public static class LatticeServiceCollectionExtensions
 
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<IValidateOptions<LatticeTagIndexReconciliationOptions>, LatticeTagIndexReconciliationOptionsValidator>();
+
+        // Start-up check that the grain storage provider registered above
+        // enforces ETags, which Lattice requires (see
+        // LatticeGrainStorageFencingOptions). It runs once as the silo becomes
+        // active; in Disabled mode it subscribes to nothing. TryAdd so a
+        // repeated AddLattice call registers it once.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<LatticeGrainStorageFencingOptions>, LatticeGrainStorageFencingOptionsValidator>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, GrainStorageFencingCheck>());
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddOptions<Operations.LatticeOperationOptions>();
         builder.Services.TryAddSingleton<Operations.ILatticeOperationSiloLiveness, Operations.ClusterMembershipOperationSiloLiveness>();
@@ -380,6 +407,24 @@ public static class LatticeServiceCollectionExtensions
         Action<LatticeOptions> configure)
     {
         builder.Services.Configure(treeName, configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the start-up check that the grain storage provider registered
+    /// by <see cref="AddLattice"/> enforces ETags on write. See
+    /// <see cref="LatticeGrainStorageFencingOptions"/>.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">Configures the check.</param>
+    /// <returns>The same <paramref name="builder"/>.</returns>
+    public static ISiloBuilder ConfigureLatticeGrainStorageFencing(
+        this ISiloBuilder builder,
+        Action<LatticeGrainStorageFencingOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(configure);
         return builder;
     }
 
