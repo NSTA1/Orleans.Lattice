@@ -1351,7 +1351,7 @@
       "nodes": [
         {
           "id": "all-trees-deny",
-          "check": "All-trees grants are enabled and the * bucket has a matching deny.",
+          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching deny.",
           "on_true": "deny",
           "on_false": "specific-tree",
           "source": "src/lattice.auth/PolicyEvaluator.cs"
@@ -1365,7 +1365,7 @@
         },
         {
           "id": "all-trees-allow",
-          "check": "All-trees grants are enabled and the * bucket has a matching allow.",
+          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching allow.",
           "on_true": "allow",
           "on_false": "default-effect",
           "source": "src/lattice.auth/PolicyEvaluator.cs"
