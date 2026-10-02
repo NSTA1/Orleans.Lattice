@@ -495,7 +495,7 @@ internal sealed class SharedMetricsSampler(
             // deferred iterator, so the signature is canonical (order-insensitive)
             // without the extra LINQ sort-buffer allocation.
             var distinct = treeIds.Distinct(StringComparer.Ordinal).ToArray();
-            Array.Sort(distinct, StringComparer.Ordinal);
+            Array.Sort(distinct, OrdinalStringOrder.Comparison);
 
             // Length-prefix each id so the tree-id component is injective. A bare
             // ',' join would alias one tree literally named "a,b" with two trees
@@ -562,7 +562,7 @@ internal sealed class SharedMetricsSampler(
         if (resolved.GroupIds.Count > 0)
         {
             var groups = resolved.GroupIds.ToArray();
-            Array.Sort(groups, StringComparer.Ordinal);
+            Array.Sort(groups, OrdinalStringOrder.Comparison);
             foreach (var group in groups)
             {
                 AppendLengthPrefixed(builder, group);

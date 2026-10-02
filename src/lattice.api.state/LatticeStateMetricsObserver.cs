@@ -95,7 +95,7 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
                     }
                 }
 
-                removed?.Sort(StringComparer.Ordinal);
+                removed?.Sort(OrdinalStringOrder.Comparison);
 
                 yield return new TreeMetricsSnapshot
                 {
@@ -138,7 +138,7 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
             ordered[next++] = value;
         }
 
-        Array.Sort(ordered, TreeMetricsByTreeId.Instance);
+        Array.Sort(ordered, TreeMetricsByTreeId);
         return ordered;
     }
 
@@ -149,22 +149,24 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
     /// </summary>
     private static IReadOnlyList<TreeMetrics> Ordered(List<TreeMetrics> metrics)
     {
-        metrics.Sort(TreeMetricsByTreeId.Instance);
+        metrics.Sort(TreeMetricsByTreeId);
         return metrics;
     }
 
     /// <summary>
     /// Ordinal comparison of two <see cref="TreeMetrics"/> by
-    /// <see cref="TreeMetrics.TreeId"/>. A single cached instance replaces the
+    /// <see cref="TreeMetrics.TreeId"/>. A single cached delegate replaces the
     /// per-call key selector delegate the LINQ ordering allocated.
+    /// <para>
+    /// Held as a <see cref="Comparison{T}"/> rather than an
+    /// <see cref="IComparer{T}"/> singleton: it is only ever handed to
+    /// <c>Sort</c>, and the <see cref="IComparer{T}"/> overload re-converts
+    /// <c>Compare</c> to a delegate internally, allocating one per call however
+    /// well cached the comparer itself is. See <c>OrdinalStringOrder</c>.
+    /// </para>
     /// </summary>
-    private sealed class TreeMetricsByTreeId : IComparer<TreeMetrics>
-    {
-        internal static readonly TreeMetricsByTreeId Instance = new();
-
-        public int Compare(TreeMetrics? x, TreeMetrics? y) =>
-            string.CompareOrdinal(x?.TreeId, y?.TreeId);
-    }
+    private static readonly Comparison<TreeMetrics> TreeMetricsByTreeId =
+        static (x, y) => string.CompareOrdinal(x?.TreeId, y?.TreeId);
 
     private static bool SameMetrics(TreeMetrics a, TreeMetrics b)
     {

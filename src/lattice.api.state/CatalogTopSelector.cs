@@ -130,7 +130,7 @@ internal sealed class CatalogTopSelector
         // The backing array is handed out directly when it is exactly full, so a
         // full page costs no copy; a short selection is trimmed to its width.
         var ordered = _count == _heap.Length ? _heap : _heap[.._count];
-        Array.Sort(ordered, StringComparer.Ordinal);
+        Array.Sort(ordered, OrdinalStringOrder.Comparison);
         return ordered;
     }
 }

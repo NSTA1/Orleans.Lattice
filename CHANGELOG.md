@@ -73,6 +73,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - WAL batch buffer pooling.** The two leaf merge paths staged their record batch in a list, and the CRDT apply path copied its list to a fresh array before dispatch. All three take a threshold-gated pooled rental now: 82 KB to zero on a 256-record batch. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
+
+- **Performance - Set accessor key probes.** Two set accessors materialised a base64 string purely to probe a dictionary, then dropped it. Both encode into a stack or pooled span and probe through an alternate lookup now, allocating nothing on either side of the stack threshold. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`)
+
+- **Performance - Sort comparer sweep completed.** Sorting with an `IComparer<T>` still minted a delegate per call at the sites #4184 left behind. Two hot streaming scan paths, sixteen downstream ordinal sites and two custom comparers pass a cached comparison now. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Tenancy`)
+
 - **Performance - Sort comparer delegate trims.** Sorting with an `IComparer<T>` minted a fresh `Comparison<T>` delegate per call, as the runtime converts its method group rather than caching it. Thirty-six CRDT, primitive and grain sort sites pass a cached comparison now and allocate nothing. ([#4184](https://github.com/NSTA1/Orleans.Lattice/pull/4184)) (`Orleans.Lattice`)
 
 - **Performance - Leaf digest field appends.** The per-entry digest contribution made four separate hash appends for one contiguous field block, and a vector clock appended its two fields separately per replica. Both stage into one buffer and append once now: 62% faster on the isolating lane. ([#4181](https://github.com/NSTA1/Orleans.Lattice/pull/4181)) (`Orleans.Lattice`)

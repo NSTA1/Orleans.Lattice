@@ -233,8 +233,8 @@ internal sealed partial class RepoContextStore
             }
         }
 
-        stale?.Sort(StringComparer.Ordinal);
-        dangling?.Sort(StringComparer.Ordinal);
+        stale?.Sort(OrdinalStringOrder.Comparison);
+        dangling?.Sort(OrdinalStringOrder.Comparison);
         return view with
         {
             Stale = stale is { Count: > 0 },
