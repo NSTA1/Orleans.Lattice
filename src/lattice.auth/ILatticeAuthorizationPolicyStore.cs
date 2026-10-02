@@ -19,10 +19,21 @@ public interface ILatticeAuthorizationPolicyStore
     /// <param name="rule">The rule to persist. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="rule"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException">The rule's scope targets the reserved <c>sys-auth-*</c> namespace.</exception>
+    /// <exception cref="ArgumentException">
+    /// The rule's scope targets the reserved <c>sys-auth-*</c> namespace; or the rule breaks tenant
+    /// confinement: a tenant-tier rule outside its own tenant's non-app trees or tenant-wide scope, or
+    /// with operations outside <see cref="LatticeAuthOperations.All"/>, or naming another tenant's group;
+    /// a tenant-wide scope on a rule that is not tenant-tier; or a tenant group (<c>t/{tenant}/{name}</c>)
+    /// named on a scope its tenant does not own.
+    /// </exception>
     /// <exception cref="LatticeAppOwnedRuleException">
     /// The rule id is in the app-owned namespace (<see cref="LatticeAppRuleIds.Prefix"/>) and the
     /// caller is not running under system origin. App-owned rules are written only by the app compiler.
+    /// </exception>
+    /// <exception cref="LatticeTenantOwnedRuleException">
+    /// The rule id is in the tenant-tier namespace (<see cref="LatticeTenantRuleIds.Prefix"/>) and the
+    /// caller is not running under system origin. Tenant-tier rules are written only by the tenant
+    /// policy administration surface.
     /// </exception>
     Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default);
 
@@ -48,6 +59,10 @@ public interface ILatticeAuthorizationPolicyStore
     /// <paramref name="ruleId"/> is in the app-owned namespace (<see cref="LatticeAppRuleIds.Prefix"/>) and
     /// the caller is not running under system origin. Raised before any lookup, so it does not disclose
     /// whether the rule exists.
+    /// </exception>
+    /// <exception cref="LatticeTenantOwnedRuleException">
+    /// <paramref name="ruleId"/> is in the tenant-tier namespace (<see cref="LatticeTenantRuleIds.Prefix"/>)
+    /// and the caller is not running under system origin. Raised before any lookup.
     /// </exception>
     Task<bool> RemoveRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default);
 

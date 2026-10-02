@@ -40,11 +40,22 @@ namespace Orleans.Lattice.Auth;
 /// library, so the guard cannot be sidestepped by writing the tree around the
 /// store.
 /// </para>
+/// <para>
+/// The tenant-tier namespace (<see cref="LatticeTenantRuleIds.Prefix"/>) is
+/// guarded identically, raising <see cref="LatticeTenantOwnedRuleException"/> off
+/// system origin before anything is read. Independently of origin, every write is
+/// checked by <see cref="TenantRuleConfinement.EnsureConfined"/>: a tenant-tier
+/// rule must be confined to its own tenant (D7), a tenant-wide scope is accepted
+/// only on a tenant-tier rule (D9), and a tenant group subject only on its tenant's
+/// trees (D4), for operators and system-origin writers alike. The internal
+/// <see cref="ITenantPolicyRuleStore.PurgeTenantRulesAsync"/> removes a deleted
+/// tenant's tenant-tier rules.
+/// </para>
 /// </remarks>
 internal sealed class LatticeAuthorizationPolicyStore(
     IGrainFactory grainFactory,
     AuthInitializer initializer,
-    IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAuthorizationPolicyStore
+    IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAuthorizationPolicyStore, ITenantPolicyRuleStore
 {
     private ILattice Policy => grainFactory.GetGrain<ILattice>(AuthConstants.PolicyTree);
 
@@ -53,6 +64,12 @@ internal sealed class LatticeAuthorizationPolicyStore(
     {
         ArgumentNullException.ThrowIfNull(rule);
         EnsureAppOwnedRuleWritable(rule.RuleId, nameof(rule));
+        EnsureTenantOwnedRuleWritable(rule.RuleId, nameof(rule));
+
+        // Tenant confinement (D4, D7, D9): where a tenant-tier rule, a tenant-wide
+        // scope, and a tenant group subject may appear. Applies to every caller,
+        // system origin included, and reads nothing.
+        TenantRuleConfinement.EnsureConfined(rule);
 
         // Authoring guard (the single seam that decides whether a reserved-namespace
         // rule may be persisted): an ordinary tree is always authorable; the reserved
@@ -87,6 +104,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
         EnsureAppOwnedRuleWritable(ruleId, nameof(ruleId));
+        EnsureTenantOwnedRuleWritable(ruleId, nameof(ruleId));
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
@@ -170,6 +188,29 @@ internal sealed class LatticeAuthorizationPolicyStore(
             throw LatticeAppOwnedRuleException.Rejected(ruleId, paramName);
         }
     }
+
+    /// <summary>
+    /// Tenant-tier rule write guard, mirroring <see cref="EnsureAppOwnedRuleWritable"/>:
+    /// a rule id in the <see cref="LatticeTenantRuleIds.Prefix"/> namespace may be
+    /// written or deleted only from inside a system-origin scope (the tenant policy
+    /// facade, after it has confined the rule to its tenant), and is rejected
+    /// fail-closed otherwise, before any read or write, so a rejected delete does not
+    /// disclose whether the rule exists. Allocation-free on the ordinary path.
+    /// </summary>
+    /// <param name="ruleId">The targeted rule id.</param>
+    /// <param name="paramName">The store parameter the id came from.</param>
+    /// <exception cref="LatticeTenantOwnedRuleException">The id is tenant-tier and the caller is not system-origin.</exception>
+    private static void EnsureTenantOwnedRuleWritable(string ruleId, string paramName)
+    {
+        if (LatticeTenantRuleIds.IsTenantOwned(ruleId) && !LatticeAccessGateContext.IsSystemOrigin)
+        {
+            throw LatticeTenantOwnedRuleException.Rejected(ruleId, paramName);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<int> PurgeTenantRulesAsync(TenantId tenant, CancellationToken cancellationToken = default) =>
+        TenantRulePurge.PurgeAsync(this, tenant, cancellationToken);
 
     private static string RuleKey(string treeId, string ruleId) =>
         string.Create(
