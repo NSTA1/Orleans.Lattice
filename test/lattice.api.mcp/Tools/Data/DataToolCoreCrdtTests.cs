@@ -76,6 +76,29 @@ public sealed class DataToolCoreCrdtTests
     }
 
     [Test]
+    public async Task OrFlag_disable_then_get_reports_disabled()
+    {
+        // The OR-flag disable verb is the one arm of the four flag mappings that
+        // had no test: its RW-flag twin below is covered, so the asymmetry read
+        // as coverage of both. The two facade verbs differ in signature - the
+        // observed-remove disable takes no replica id - so the mapping is not
+        // interchangeable with its twin's.
+        var api = new FakeDataApi();
+        await DataToolCore.OrFlagWriteAsync(api, Tree, "f", CrdtFlagOp.Enable, "r1", CancellationToken.None);
+
+        var write = await DataToolCore.OrFlagWriteAsync(api, Tree, "f", CrdtFlagOp.Disable, "r1", CancellationToken.None);
+        var read = await DataToolCore.OrFlagGetAsync(api, Tree, "f", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write.Committed, Is.True);
+            Assert.That(write.TreeId, Is.EqualTo(Tree));
+            Assert.That(write.Key, Is.EqualTo("f"));
+            Assert.That(read.Enabled, Is.False);
+        });
+    }
+
+    [Test]
     public async Task RwFlag_disable_then_get_reports_disabled()
     {
         var api = new FakeDataApi();
