@@ -270,6 +270,8 @@ internal abstract class CoordinatorGrain<TSelf>(
         // series with the exact tag set a later failure will carry and cannot
         // perturb the value.
         LatticeMetrics.CoordinatorPhaseTickFailures.Add(0, PhaseTickFailureTags());
+        if (AbandonsSagaOnPurgedTree)
+            LatticeMetrics.CoordinatorPurgedTreeAbandonments.Add(0, PhaseTickFailureTags());
 
         // Enrol at a run length of zero for the same reason, and at the same
         // moment. A gauge that reported only coordinators currently failing would
@@ -293,6 +295,67 @@ internal abstract class CoordinatorGrain<TSelf>(
         WithdrawFromPhaseTickCensus();
         await UnregisterKeepaliveAsync();
         this.DeactivateOnIdle();
+    }
+
+    /// <summary>
+    /// Whether this coordinator abandons its in-flight saga when a phase tick
+    /// faults and the tree it serves turns out to be purged (issue #4271).
+    /// Defaults to <c>false</c>; a coordinator that opts in must also override
+    /// <see cref="IsTreePurgedAsync"/> and
+    /// <see cref="ClearSagaStateForPurgedTreeAsync"/>.
+    /// </summary>
+    protected virtual bool AbandonsSagaOnPurgedTree => false;
+
+    /// <summary>
+    /// Whether the tree this coordinator serves holds a completed purge. Consulted
+    /// only after a phase tick has faulted and only when
+    /// <see cref="AbandonsSagaOnPurgedTree"/> is <c>true</c>, so a healthy saga
+    /// pays nothing for it. A fault reading the verdict leaves the saga retrying.
+    /// </summary>
+    protected virtual Task<bool> IsTreePurgedAsync() => Task.FromResult(false);
+
+    /// <summary>
+    /// Clears the coordinator's persisted saga state when it abandons a saga on a
+    /// purged tree, so the keepalive reminder finds no work if it fires again.
+    /// </summary>
+    protected virtual Task ClearSagaStateForPurgedTreeAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// Called after a phase step faulted. When the coordinator opts in and its
+    /// tree is purged, clears the saga's state, counts the abandonment, and
+    /// retires the coordinator (timer disposed, keepalive unregistered). A tree
+    /// that is deleted but not purged, or a verdict or state clear that faults,
+    /// leaves the saga retrying exactly as before. Derived coordinators whose
+    /// <see cref="ProcessNextPhaseAsync"/> swallows its own faults call this from
+    /// their catch; the base phase tick calls it for faults that reach it.
+    /// </summary>
+    /// <returns><c>true</c> when the saga was abandoned.</returns>
+    protected async Task<bool> TryAbandonSagaOnPurgedTreeAsync()
+    {
+        if (!AbandonsSagaOnPurgedTree) return false;
+
+        try
+        {
+            if (!await IsTreePurgedAsync()) return false;
+            await ClearSagaStateForPurgedTreeAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Coordinator {ReminderName} could not establish or act on whether the tree for {Context} is purged; "
+                + "the saga keeps retrying.",
+                KeepaliveReminderName, LogContext);
+            return false;
+        }
+
+        LatticeMetrics.CoordinatorPurgedTreeAbandonments.Add(1, PhaseTickFailureTags());
+        logger.LogWarning(
+            "Coordinator {ReminderName} abandoned its in-flight saga for {Context}: a phase tick faulted and the tree "
+            + "has been purged, so the saga can never complete.",
+            KeepaliveReminderName, LogContext);
+
+        await CompleteCoordinatorAsync();
+        return true;
     }
 
     /// <summary>
@@ -368,6 +431,9 @@ internal abstract class CoordinatorGrain<TSelf>(
 
             _consecutiveTickFailures++;
             RecordPhaseTickRun();
+            if (await TryAbandonSagaOnPurgedTreeAsync())
+                return;
+
             if (_consecutiveTickFailures >= PhaseTickFailureEscalationThreshold)
             {
                 logger.LogError(ex,

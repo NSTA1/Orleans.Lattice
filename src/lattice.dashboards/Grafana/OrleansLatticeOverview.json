@@ -1595,6 +1595,22 @@
       ]
     },
     {
+      "id": 82,
+      "title": "Coordinator sagas abandoned on a purged tree",
+      "description": "In-flight shard-split, shard-consolidation and reshard sagas abandoned because a phase tick faulted and the tree they serve turned out to be purged (orleans_lattice_coordinator_purged_tree_abandonments_total, issue #4271), split by coordinator kind and tree. Before this, such a saga faulted on every tick and kept its keepalive reminder for as long as the cluster ran; it now clears its state, stops its timer and unregisters its reminder. Each increment is therefore a saga correctly retired, not a fault - read it to confirm that a purge mid-flight left nothing ticking. The counter is zero-primed when a split, consolidation or reshard coordinator arms its phase timer, so this panel deliberately OMITS the 'or vector(0)' fallback: a flat zero is a MEASURED zero and 'No data' means no such coordinator has run. A tree deleted but not yet purged never counts here, because its saga keeps retrying while the tree can still be recovered.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1070 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, kind) (increase(orleans_lattice_coordinator_purged_tree_abandonments_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1h]))",
+          "legendFormat": "{{tree}} {{kind}}"
+        }
+      ]
+    },
+    {
       "id": 69,
       "title": "Leaf division fast path forfeited (rate)",
       "description": "Rate of leaf splits that could not place their pivot from the snapshot frame and fell back to the ordered key view (orleans_lattice_leaf_bisect_refusals_total), split by the refusal reason and by the cache surface that had already released the frame. What the fallback costs is decided by whether a frame is still attached at the refusal (issue #2856). reason=no_snapshot_attached is reported exactly when no frame is attached, so every row is already resident and the fallback materialises nothing: with detach_seam=none no frame was ever attached (a leaf replayed from the WAL); with any other detach_seam a frame WAS attached and the named surface had already materialised or discarded it, earlier and typically on the read path - the cost was paid there, not by the split. reason=too_few_rows also refuses with a frame still attached, but that frame holds fewer than two rows, so the fallback materialises at most one row from it. reason=frame_key_unreadable and reason=no_key_sorts_below_pivot are the expensive refusals: a frame is still attached, so the fallback itself materialises the whole remainder of the leaf and detaches the frame, resident and unsheddable for the life of the activation - on precisely the oversized leaf that can least afford the allocation. Any sustained non-zero rate carrying a detach_seam other than 'none' is operator-actionable and names the read-path seam that forfeited the frame; any non-zero rate of the two expensive reasons is a division paying for the whole leaf.",
