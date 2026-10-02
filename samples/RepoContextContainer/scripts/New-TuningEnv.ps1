@@ -168,7 +168,19 @@ $HOST_MEMORY_SHARE = 0.45
 # this is headroom against a burst rather than a working limit.
 $REPOCONTEXT_CPU_SHARE = 0.375
 
-# POLICY. The same for the embedder: 4 of 16 (25%) on the reference host.
+# POLICY. The same for the embedder: 4 of 16 (25%) as a conservative starting grant,
+# NOT a ceiling and not a claim about what any given deployment currently runs with. The
+# embedder is the throughput bottleneck during vectorising, so an operator who has
+# measured that bottleneck on their own host may deliberately raise EMBEDDER_CPUS well
+# past what this share derives (#4188: a reference-host deployment ran this at 6/16 for
+# repocontext and a measured 12/16 for the embedder - three times this default - and that
+# was the considered value, not drift). This constant is the floor new deployments start
+# from; it is not re-asserted as current fact for every deployment, and it must not be
+# raised to match one host's measured value, because doing so would just bake a different
+# host-specific number in as a new universal default with the same staleness problem.
+# Raising -Force to re-derive against an existing .env warns before it discards a value
+# like that - see Get-TuningEnvDrift below - specifically so this number is never the
+# only source of truth for what a live deployment should run.
 $EMBEDDER_CPU_SHARE = 0.25
 
 # MEASURED, workload-derived. The embedder's footprint is dominated by the ONNX model
@@ -852,6 +864,57 @@ EMBEDDER_INTRA_THREADS=$embedderIntraThreads
 # REPOCONTEXT_MEMORY_ARCHIVE_PATH=
 "@
 
+function Get-TuningEnvDrift {
+    <#
+        Compare the VALUE of every derived key between an existing .env and what this
+        run just derived, returning only the keys whose value actually differs.
+
+        #4188: a key this script derives always takes the freshly derived value when it
+        is present in both files - that is what Merge-TuningEnvContent's "Replaced" list
+        already reports, and it is true whether or not the value moved. It cannot say
+        whether an existing derived value was a deliberate operator override (a CPU or
+        memory grant raised past this script's default because a measurement justified
+        it) rather than a plain re-derivation landing on the same number it always would.
+        This is the narrower, more useful question: which specific numbers differ, and to
+        what. Both the non-Force report path and the -Force write path call this so
+        neither one stays silent about a hand-tuned grant it is about to leave behind (or,
+        on -Force, about to discard outright).
+
+        Pure: takes and returns strings/objects, touches no disk.
+    #>
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Existing,
+        [Parameter(Mandatory)] [string] $Derived
+    )
+
+    function Get-TuningEnvAssignments([string] $Text) {
+        $values = [ordered]@{}
+
+        foreach ($line in ($Text -split "`r?`n")) {
+            if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+                $values[$Matches[1]] = $Matches[2].TrimEnd()
+            }
+        }
+
+        return $values
+    }
+
+    $existingValues = Get-TuningEnvAssignments $Existing
+    $derivedValues = Get-TuningEnvAssignments $Derived
+
+    $drift = @(foreach ($key in $derivedValues.Keys) {
+        if ($existingValues.Contains($key) -and $existingValues[$key] -ne $derivedValues[$key]) {
+            [pscustomobject]@{
+                Key      = $key
+                Existing = $existingValues[$key]
+                Derived  = $derivedValues[$key]
+            }
+        }
+    })
+
+    return $drift
+}
+
 function Merge-TuningEnvContent {
     <#
         Fold freshly derived content into an existing .env, preserving every key the
@@ -880,6 +943,7 @@ function Merge-TuningEnvContent {
 
     $derivedKeys = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
+
 
     foreach ($line in ($Derived -split "`r?`n")) {
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') {
@@ -955,6 +1019,29 @@ happened. Re-run with -Force to replace the derived keys while carrying those ac
 or merge the values above by hand.
 "@
 
+    # #4188: a derived key already on disk with a DIFFERENT value is not covered by the
+    # REPO_PATH-style warning above - that one is about keys this script never derives at
+    # all. A differing derived key (EMBEDDER_CPUS raised from a 4-core default to a
+    # measured 12, say) is silent today: nothing here or in Assert-TuningEnv.ps1 reports
+    # it, so an operator can run this script, see no refusal, and reasonably conclude the
+    # .env on disk already matches what would be derived.
+    $existingTextForDrift = [System.IO.File]::ReadAllText($OutFile)
+    $drift = Get-TuningEnvDrift -Existing $existingTextForDrift -Derived $content
+
+    if ($drift.Count -gt 0) {
+        Write-Host ''
+        Write-Warning (
+            "$OutFile already differs from what this run would derive for " +
+            "$(@($drift).Count) key(s) this script derives:`n" +
+            (($drift | ForEach-Object { "  $($_.Key): existing=$($_.Existing) derived=$($_.Derived)" }) -join "`n") +
+            "`n`nThis is informational only - the file on disk is untouched. A differing " +
+            "existing value may be a deliberate, measured operator override rather than " +
+            "drift to correct; verify before changing it by hand. -Force would silently " +
+            "replace every one of these with the derived value above and would NOT print " +
+            "this comparison again."
+        )
+    }
+
     # The EXISTING file is what a deploy would use, so it is the one worth adjudicating.
     # Returning silently here would mean the one path that touches nothing is also the
     # one path that checks nothing, and an operator who ran this script and saw no
@@ -967,8 +1054,27 @@ or merge the values above by hand.
 $carriedNames = @()
 
 if (Test-Path $OutFile) {
+    $existingTextForMerge = [System.IO.File]::ReadAllText($OutFile)
+
+    # #4188: run the same comparison here, before the merge, because -Force is the path
+    # that actually overwrites a differing derived value - Merge-TuningEnvContent's own
+    # "Replaced" count below reports only which derived keys existed in the old file, not
+    # whether their value is about to change, so it cannot by itself tell an operator a
+    # hand-tuned grant is being discarded.
+    $drift = Get-TuningEnvDrift -Existing $existingTextForMerge -Derived $content
+
+    if ($drift.Count -gt 0) {
+        Write-Host ''
+        Write-Warning (
+            "-Force is about to replace $(@($drift).Count) derived key(s) whose existing " +
+            "value differs from what this run derived - this may discard a deliberate, " +
+            "measured operator override rather than correct drift:`n" +
+            (($drift | ForEach-Object { "  $($_.Key): existing=$($_.Existing) -> derived=$($_.Derived)" }) -join "`n")
+        )
+    }
+
     $merge = Merge-TuningEnvContent `
-        -Existing ([System.IO.File]::ReadAllText($OutFile)) `
+        -Existing $existingTextForMerge `
         -Derived $content
 
     $content = $merge.Content

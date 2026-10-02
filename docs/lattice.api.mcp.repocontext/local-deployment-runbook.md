@@ -924,22 +924,43 @@ REPOCONTEXT_CPUSET=0-5
 EMBEDDER_CPUSET=6-9
 ```
 
+This worked example is sized to `New-TuningEnv.ps1`'s own derived defaults
+(`REPOCONTEXT_CPU_SHARE = 0.375`, `EMBEDDER_CPU_SHARE = 0.25` -> 6 and 4 CPUs on a
+16-core host) **at the time it was written**. It is illustrative, not a value to copy:
+see point 1 below.
+
 Derive the values rather than copying them:
 
-1. **One range per service, sized to the ceiling of that service's `cpus` grant.**
-   `cpus: 6.0` wants six CPUs, `cpus: 4.0` wants four.
+1. **One range per service, sized to the ceiling of that service's *actual* `cpus`
+   grant in your `.env` - not the example above.** `cpus: 6.0` wants six CPUs,
+   `cpus: 4.0` wants four. An operator who raises `EMBEDDER_CPUS` above the script's
+   derived default (the embedder is the throughput bottleneck during vectorising, so
+   this is a reasonable override) must size `EMBEDDER_CPUSET` to that raised grant, not
+   to whichever number this document happens to show; a cpuset copied from here against
+   a different grant either starves the service (pinned to fewer CPUs than its quota
+   allows) or - worse - is silently inconsistent with the quota. #4188 is exactly this:
+   a live `.env` with a 12-core embedder grant next to cpuset guidance sized to 4.
 2. **The ranges must not overlap**, or you have traded throttling for contention,
    which is a worse deal than the one you started with. The two services are busy
    simultaneously by construction, since the reconcile pass is what feeds the embedder.
-3. **Leave headroom** for the host and for any service with no grant.
+3. **Confirm the ranges fit the host before adopting them.** Non-overlapping ranges
+   sized to the *grants*, not the example, must sum to no more than the host's logical
+   CPU count. A 6-core repocontext range plus a 12-core embedder range needs 18 CPUs
+   and cannot be pinned on a 16-core host at all - at that point the grants themselves,
+   not just the cpuset, exceed what the host can give two services simultaneously, and
+   pinning is not the fix.
+4. **Leave headroom** for the host and for any service with no grant.
    `azurite-backup-sink` declares no `cpus`, so it has no quota to be throttled
    against and is deliberately left unpinned.
 
-The values above are for the 16-CPU host the tuning overlay was measured on and are
-**not portable**. Docker refuses to start a container whose `cpuset` names a CPU the
-host does not have, so a copied value fails loudly at `up` on a smaller machine rather
-than silently - that is the good case. The bad case is a host where the ranges are
-valid but no longer disjoint from what else runs there.
+The worked example above is for the 16-CPU host the tuning overlay was measured on,
+at the CPU grants `New-TuningEnv.ps1` derived at the time, and is **not portable** on
+either axis - a different host CPU count or different `cpus` grants both invalidate
+it. Docker refuses to start a container whose `cpuset` names a CPU the host does not
+have, so a copied value fails loudly at `up` on a smaller machine rather than silently
+- that is the good case. The bad case is a host where the ranges are valid but no
+longer disjoint from what else runs there, or - per point 3 above - no longer sized to
+the grants actually in force.
 
 ### When not to enable it
 
