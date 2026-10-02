@@ -77,4 +77,13 @@ public enum AppActivationFailure
     /// consent is updated, and any rules left from an earlier activation are withdrawn.
     /// </summary>
     BridgeConsentRequired = 19,
+
+    /// <summary>
+    /// A stored role binding names a group in the reserved tenant-group namespace (<c>t/...</c>) that is
+    /// not a group of the installing tenant - another tenant's group, or an id that is not a well-formed
+    /// tenant group id. Bindings may name only cluster groups or the installing tenant's own groups. The
+    /// app cannot activate until the role is bound again, and any rules left from an earlier activation
+    /// are withdrawn.
+    /// </summary>
+    AppRoleBindingTenantMismatch = 20,
 }

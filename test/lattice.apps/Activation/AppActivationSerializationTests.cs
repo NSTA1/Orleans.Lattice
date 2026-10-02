@@ -122,7 +122,8 @@ public sealed class AppActivationSerializationTests
         Assert.That((int)AppActivationFailure.ReplicationEnrolmentFailed, Is.EqualTo(17));
         Assert.That((int)AppActivationFailure.TreeOwnershipConflict, Is.EqualTo(18));
         Assert.That((int)AppActivationFailure.BridgeConsentRequired, Is.EqualTo(19));
-        Assert.That(Enum.GetValues<AppActivationFailure>(), Has.Length.EqualTo(20));
+        Assert.That((int)AppActivationFailure.AppRoleBindingTenantMismatch, Is.EqualTo(20));
+        Assert.That(Enum.GetValues<AppActivationFailure>(), Has.Length.EqualTo(21));
     }
 
     [Test]

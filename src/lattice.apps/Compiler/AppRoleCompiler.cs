@@ -57,6 +57,14 @@ namespace Orleans.Lattice.Apps;
 /// compilation and is reported in <see cref="AppRuleCompilation.UnknownRoleBindings"/>.
 /// </para>
 /// <para>
+/// <b>Tenant confinement.</b> A binding may name a cluster group or a tenant group
+/// (<see cref="LatticeTenantGroupId"/>) of the installing tenant only. A binding naming another
+/// tenant's group, or any other id in the reserved <c>t/</c> namespace, fails compilation and is
+/// reported in <see cref="AppRuleCompilation.TenantMismatchBindings"/>. A compiled rule naming the
+/// tenant's own group is scoped to the tenant-composed app trees above, so it never reaches beyond
+/// that tenant. Cluster groups are unaffected.
+/// </para>
+/// <para>
 /// <b>Rule ids.</b> Every id is <c>app:{slug}:{role}:{hash}</c>, where <c>{hash}</c> is the
 /// lowercase hex of the first 16 bytes of SHA-256 over the canonical encoding of the fields
 /// <c>app-rule-id/v1</c>, slug, role, group id, scope kind name, effective (tenant-composed) tree
@@ -176,12 +184,15 @@ public static class AppRoleCompiler
 
         HashSet<string>? boundRoles = null;
         List<AppRoleBinding>? unknownBindings = null;
+        List<AppRoleBinding>? mismatchedBindings = null;
         foreach (var binding in bindings)
         {
             if (binding is null)
                 throw new ArgumentException("A role binding cannot be null.", nameof(bindings));
             if (string.IsNullOrEmpty(binding.GroupId))
                 throw new ArgumentException($"The binding for role '{binding.RoleName}' has no group id.", nameof(bindings));
+            if (!IsBindableGroup(tenant, binding.GroupId))
+                (mismatchedBindings ??= []).Add(binding);
             if (compiledRoles.ContainsKey(binding.RoleName))
                 (boundRoles ??= new(StringComparer.Ordinal)).Add(binding.RoleName);
             else
@@ -193,8 +204,11 @@ public static class AppRoleCompiler
             if (boundRoles is null || !boundRoles.Contains(role.Name))
                 (unboundRoles ??= []).Add(role.Name);
 
-        if (excesses is not null || unknownBindings is not null)
-            return new(Array.Empty<LatticeAuthorizationRule>(), OrEmpty(excesses), OrEmpty(unknownBindings), OrEmpty(unboundRoles));
+        if (excesses is not null || unknownBindings is not null || mismatchedBindings is not null)
+        {
+            return new(Array.Empty<LatticeAuthorizationRule>(), OrEmpty(excesses), OrEmpty(unknownBindings), OrEmpty(unboundRoles),
+                OrEmpty(mismatchedBindings));
+        }
 
         var rules = new List<LatticeAuthorizationRule>();
         var ruleIds = new HashSet<string>(StringComparer.Ordinal);
@@ -211,7 +225,30 @@ public static class AppRoleCompiler
         }
 
         rules.Sort(static (x, y) => string.CompareOrdinal(x.RuleId, y.RuleId));
-        return new(rules, Array.Empty<AppCeilingExcess>(), Array.Empty<AppRoleBinding>(), OrEmpty(unboundRoles));
+        return new(rules, Array.Empty<AppCeilingExcess>(), Array.Empty<AppRoleBinding>(), OrEmpty(unboundRoles), Array.Empty<AppRoleBinding>());
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when an install in <paramref name="tenant"/> may bind a role to
+    /// <paramref name="groupId"/>: a cluster group (any id outside the reserved <c>t/</c> namespace), or a
+    /// well-formed tenant group id owned by <paramref name="tenant"/>. Every other id in the <c>t/</c>
+    /// namespace - another tenant's group, <c>t/default/...</c>, or a malformed id - is refused, because
+    /// the whole namespace is reserved to the tenant tier. Allocates nothing.
+    /// </summary>
+    /// <param name="tenant">The install's tenant.</param>
+    /// <param name="groupId">The bound group id.</param>
+    /// <returns>Whether the binding is confined to the installing tenant or the cluster.</returns>
+    internal static bool IsBindableGroup(TenantId tenant, string groupId)
+    {
+        if (!groupId.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal))
+            return true;
+        if (tenant.Value is not { } owner || !LatticeTenantGroupId.IsTenantGroupId(groupId))
+            return false;
+
+        // The shape test above proved t/{tenant}/{name} with a slash-free tenant segment, so the
+        // segment belongs to the install exactly when the remainder starts with "{owner}/".
+        var rest = groupId.AsSpan(LatticeTenantTrees.SegmentPrefix.Length);
+        return rest.Length > owner.Length && rest[owner.Length] == '/' && rest.StartsWith(owner, StringComparison.Ordinal);
     }
 
     /// <summary>
