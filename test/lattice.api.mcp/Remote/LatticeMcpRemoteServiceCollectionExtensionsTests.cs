@@ -66,6 +66,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.TypeOf<GrpcLatticeBackupControl>());
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.TypeOf<GrpcLatticeReplicationControl>());
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.TypeOf<GrpcLatticeTreeAdmin>());
+            Assert.That(provider.GetService<ILatticeWalReclamation>(), Is.TypeOf<GrpcLatticeWalReclamation>());
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.TypeOf<GrpcLatticeSchemaControl>());
             Assert.That(
                 provider.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaOperations>(),
@@ -109,6 +110,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeWalReclamation>(), Is.Null);
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.Null);
             Assert.That(provider.GetService<Orleans.Lattice.Api.Schema.ILatticeSchemaOperations>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.Null);
