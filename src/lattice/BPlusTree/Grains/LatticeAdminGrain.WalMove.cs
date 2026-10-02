@@ -29,7 +29,9 @@ internal sealed partial class LatticeAdminGrain
         string treeId, CancellationToken cancellationToken)
     {
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
+        // Forced: a WAL move names a partition, not a key, so a cached alias would
+        // plan or move the retired physical tree's log after a resize (#4180).
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var walPartitions = await RequireResolver().GetWalPartitionsAsync(routing.PhysicalTreeId);
         return (routing.PhysicalTreeId, walPartitions);

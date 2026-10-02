@@ -519,14 +519,18 @@ internal sealed class TagIndexReconcileGrain(
     /// subject tree into a 16-byte fingerprint. Returns <see langword="null"/>
     /// when the tree is unresolvable or its projection digest is disabled, in
     /// which case the caller treats the tree as divergent (it cannot be gated).
+    /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    private async Task<byte[]?> ComputeFingerprintAsync(string treeId, CancellationToken cancellationToken)
+    internal async Task<byte[]?> ComputeFingerprintAsync(string treeId, CancellationToken cancellationToken)
     {
         var tree = grainFactory.GetGrain<ILattice>(treeId);
         IReadOnlyList<int> shards;
         try
         {
-            var routing = await tree.GetRoutingAsync(cancellationToken);
+            // Forced: the fingerprint enumerates shards and routes no key, so the
+            // tree's cached map would fold a pre-reshard shard set and gate a sweep
+            // off a tree whose changes landed on a shard it no longer lists (#4180).
+            var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken);
             shards = routing.Map.GetPhysicalShardIndices();
         }
         catch

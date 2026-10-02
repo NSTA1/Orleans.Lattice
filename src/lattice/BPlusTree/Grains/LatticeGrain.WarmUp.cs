@@ -45,7 +45,10 @@ internal sealed partial class LatticeGrain
         await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var (physicalTreeId, shardMap) = await GetRoutingAsync(cancellationToken);
+        // Forced: warm-up enumerates shards and routes no key, so a map or alias
+        // cached before a reshard or resize would warm retired shards and miss
+        // new ones (issue #4180). Once per call, never on a write path.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         var physicalIndices = shardMap.GetPhysicalShardIndices();
         var shardCount = physicalIndices.Count;
         if (shardCount == 0)

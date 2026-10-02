@@ -701,11 +701,13 @@ internal sealed class ReplicationDigestProbeGrain(
     /// can repoint the logical tree to a new
     /// physical tree underneath a live probe, and a cached physical id would
     /// leave the Merkle walk descending the retired tree's frozen structure.
-    /// The read is read-only and cheap relative to the walk it precedes.
+    /// The read is read-only and cheap relative to the walk it precedes. It must
+    /// force a refresh: the tree's stateless worker caches the alias per
+    /// activation and nothing on this path would ever invalidate it (#4180).
     /// </summary>
     private static async Task<string> EnsurePhysicalTreeIdAsync(ILattice lattice)
     {
-        var routing = await lattice.GetRoutingAsync(CancellationToken.None).ConfigureAwait(true);
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true, CancellationToken.None).ConfigureAwait(true);
         return routing.PhysicalTreeId;
     }
 

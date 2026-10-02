@@ -44,7 +44,7 @@ public sealed class LatticeStateQueryStructureRoutingTests
 
         var lattice = Substitute.For<ILattice>();
         lattice.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo(PhysicalTree, map)));
         grainFactory.GetGrain<ILattice>(Tree).Returns(lattice);
 
@@ -119,6 +119,7 @@ public sealed class LatticeStateQueryStructureRoutingTests
 
         Assert.That(result.Roots.Select(r => r.ShardIndex), Is.EqualTo(new[] { 5 }));
         _ = h.Lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
+        _ = h.Lattice.DidNotReceive().GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
         await h.Shards[0].DidNotReceive().GetTopologySnapshotAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 }

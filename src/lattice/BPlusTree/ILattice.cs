@@ -1015,12 +1015,15 @@ public interface ILattice : IGrainWithStringKey
     /// without re-implementing alias resolution and shard-map fetching.
     /// <para>
     /// The snapshot is cached per activation and is not invalidated when a
-    /// reshard, split or fold changes the map: a routed operation corrects it on
-    /// its first stale-routing refusal, but a read that only enumerates the
-    /// shards never meets one. A caller that reports the tree's topology, or
-    /// whose correctness depends on seeing a just-landed map, must use
+    /// reshard, split or fold changes the map, or when a resize, snapshot or
+    /// restore swaps the alias: a routed operation corrects it on its first
+    /// stale-routing refusal, but a read that only enumerates the shards, names a
+    /// shard by index or resolves the physical tree for a non-routed read never
+    /// meets one. Such a caller, or one whose correctness depends on seeing a
+    /// just-landed map, must use
     /// <see cref="GetRoutingAsync(bool, CancellationToken)"/> with
-    /// <c>forceRefresh: true</c>.
+    /// <c>forceRefresh: true</c>. Every unforced caller in the library is listed,
+    /// with its reason, by a structural guard test.
     /// </para>
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
