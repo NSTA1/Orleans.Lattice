@@ -15,9 +15,17 @@ public sealed class PublicApiNamespaceTests
         const string root = "Orleans.Lattice.Caching.AzureBlob";
         var assembly = typeof(LatticeAzureBlobCacheOptions).Assembly;
 
-        var strays = assembly.GetExportedTypes()
+        var exported = assembly.GetExportedTypes()
             .Where(t => t.Namespace is null
                 || !t.Namespace.StartsWith("OrleansCodeGen", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.That(exported, Is.Not.Empty,
+            $"Expected at least one hand-written public type in {assembly.GetName().Name}; an "
+            + "assembly exporting nothing would satisfy the namespace assertion below without "
+            + "testing anything.");
+
+        var strays = exported
             .Where(t => t.Namespace != root)
             .Select(t => t.FullName)
             .OrderBy(name => name, StringComparer.Ordinal)

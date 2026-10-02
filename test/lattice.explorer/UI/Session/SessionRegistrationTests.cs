@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
@@ -44,10 +45,15 @@ public sealed class SessionRegistrationTests
             Assert.That(Lifetime(services, typeof(IConnectionTester)), Is.EqualTo(ServiceLifetime.Scoped));
             Assert.That(Lifetime(services, typeof(SessionSignInOptions)), Is.EqualTo(ServiceLifetime.Singleton));
             Assert.That(
-                typeof(SessionSignInOptions).GetProperties().Where(property => property.SetMethod is { IsPublic: true } setter
-                    && !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsExternalInit))),
+                MutableProperties(typeof(SessionSignInOptions)),
                 Is.Empty,
                 "the one singleton must be immutable once registered");
+            Assert.That(
+                InitOnlyProperties(typeof(SessionSignInOptions)),
+                Is.Not.Empty,
+                "the immutability scan must actually reach this type's settable properties; "
+                + "a type the scan sees no setters on would satisfy the assertion above without "
+                + "testing anything");
         });
     }
 
@@ -106,13 +112,43 @@ public sealed class SessionRegistrationTests
             Assert.That(opted.GetRequiredService<SessionEndpointConfigurationOptions>(), Is.SameAs(head));
             Assert.That(Lifetime(new ServiceCollection().AddLatticeExplorerShell(), typeof(SessionEndpointConfigurationOptions)), Is.EqualTo(ServiceLifetime.Singleton));
             Assert.That(
-                typeof(SessionEndpointConfigurationOptions).GetProperties().Where(property => property.SetMethod is { IsPublic: true } setter
-                    && !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsExternalInit))),
+                MutableProperties(typeof(SessionEndpointConfigurationOptions)),
                 Is.Empty,
                 "the singleton must be immutable once registered");
+            Assert.That(
+                InitOnlyProperties(typeof(SessionEndpointConfigurationOptions)),
+                Is.Not.Empty,
+                "the immutability scan must actually reach this type's settable properties; "
+                + "a type the scan sees no setters on would satisfy the assertion above without "
+                + "testing anything");
         });
     }
 
     private static ServiceLifetime Lifetime(IServiceCollection services, Type type) =>
         services.Single(descriptor => descriptor.ServiceType == type).Lifetime;
+
+    /// <summary>
+    /// The public properties of <paramref name="type"/> carrying an ordinary setter -
+    /// the shape a head could mutate after the singleton was registered.
+    /// </summary>
+    private static string[] MutableProperties(Type type) =>
+        type.GetProperties()
+            .Where(property => property.SetMethod is { IsPublic: true } setter
+                && !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(IsExternalInit)))
+            .Select(property => property.Name)
+            .ToArray();
+
+    /// <summary>
+    /// The public properties of <paramref name="type"/> carrying an <c>init</c>-only
+    /// setter. Asserting this is non-empty is the positive control for
+    /// <see cref="MutableProperties"/>: it proves the modifier test can tell the two
+    /// setter shapes apart, so an empty mutable set means "all init-only" rather than
+    /// "the scan matched nothing".
+    /// </summary>
+    private static string[] InitOnlyProperties(Type type) =>
+        type.GetProperties()
+            .Where(property => property.SetMethod is { IsPublic: true } setter
+                && setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(IsExternalInit)))
+            .Select(property => property.Name)
+            .ToArray();
 }

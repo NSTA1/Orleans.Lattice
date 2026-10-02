@@ -85,12 +85,18 @@ public sealed class AppPagesRegistrationTests
         var fromThisFolder = services
             .Where(descriptor => descriptor.ServiceType == typeof(IExplorerArea) || descriptor.ServiceType == typeof(IAddressCompletionSource))
             .Where(descriptor => descriptor.ImplementationType?.Namespace == typeof(AppPage).Namespace);
+        var thisFolder = typeof(AppPage).Assembly.GetTypes()
+            .Where(type => type.Namespace == typeof(AppPage).Namespace)
+            .ToArray();
 
         Assert.Multiple(() =>
         {
+            // Battery: both sweeps key on this folder's namespace, so a move would
+            // empty them and satisfy the assertions below without testing anything.
+            Assert.That(thisFolder, Is.Not.Empty,
+                $"no type was found in '{typeof(AppPage).Namespace}'; the sweeps below would pass vacuously");
             Assert.That(fromThisFolder, Is.Empty);
-            Assert.That(typeof(AppPage).Assembly.GetTypes()
-                .Where(type => type.Namespace == typeof(AppPage).Namespace)
+            Assert.That(thisFolder
                 .Where(type => typeof(IExplorerArea).IsAssignableFrom(type) || typeof(IAddressCompletionSource).IsAssignableFrom(type)),
                 Is.Empty);
         });

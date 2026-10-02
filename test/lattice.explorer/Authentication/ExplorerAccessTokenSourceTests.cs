@@ -64,11 +64,13 @@ public class ExplorerAccessTokenSourceTests
         var time = new MutableTimeProvider(Origin);
         var acquireCount = 0;
         var release = new TaskCompletionSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new ExplorerAccessTokenSource(
             Token(Origin.AddMinutes(10), "first"),
             async _ =>
             {
                 Interlocked.Increment(ref acquireCount);
+                entered.TrySetResult();
                 await release.Task;
                 return Token(time.GetUtcNow().AddMinutes(10), "renewed");
             },
@@ -76,7 +78,18 @@ public class ExplorerAccessTokenSourceTests
 
         time.Advance(TimeSpan.FromMinutes(9));
         var callers = Enumerable.Range(0, 16).Select(_ => source.GetAuthorizationHeaderAsync().AsTask()).ToArray();
-        await Task.Delay(100);
+
+        // Wait for the fact the assertion depends on - the acquire delegate has been
+        // entered, so one caller holds the gate - rather than sleeping and hoping. A
+        // fixed sleep makes the single-flight claim vacuous in the quiet direction:
+        // had the callers not actually contended, a late one would observe the token
+        // the first already stored, skip its own acquire, and leave acquireCount at 1
+        // without any sharing having been exercised. Asserting that all sixteen are
+        // still pending at the moment of release is what rules that out.
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.That(callers.Any(c => c.IsCompleted), Is.False,
+            "every caller must still be queued behind the one in-flight renewal when it is released");
+
         release.SetResult();
         var headers = await Task.WhenAll(callers);
 
@@ -90,18 +103,28 @@ public class ExplorerAccessTokenSourceTests
         var time = new MutableTimeProvider(Origin);
         var acquireCount = 0;
         var release = new TaskCompletionSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new ExplorerAccessTokenSource(
             Token(Origin.AddMinutes(10), "first"),
             async _ =>
             {
                 Interlocked.Increment(ref acquireCount);
+                entered.TrySetResult();
                 await release.Task;
                 return Token(time.GetUtcNow().AddMinutes(10), "renewed");
             },
             time);
 
         var callers = Enumerable.Range(0, 16).Select(_ => source.RefreshAsync().AsTask()).ToArray();
-        await Task.Delay(100);
+
+        // As above: wait for the acquire delegate to have been entered, then assert
+        // the other fifteen are still queued. A forced refresh adopts the generation
+        // a previous caller bumped, so an uncontended burst would also leave
+        // acquireCount at 1 - this is what distinguishes sharing from serialisation.
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.That(callers.Any(c => c.IsCompleted), Is.False,
+            "every forced refresh must still be queued behind the one in-flight renewal when it is released");
+
         release.SetResult();
         var results = await Task.WhenAll(callers);
 

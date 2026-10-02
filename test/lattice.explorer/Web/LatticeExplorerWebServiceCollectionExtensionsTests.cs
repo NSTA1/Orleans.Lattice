@@ -227,8 +227,22 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
             .Where(d => d.Lifetime == ServiceLifetime.Scoped)
             .Select(d => d.ServiceType)
             .ToHashSet();
-        var captives = services
+        var inspected = services
             .Where(d => d.Lifetime == ServiceLifetime.Singleton && !d.IsKeyedService && d.ImplementationType is { IsGenericTypeDefinition: false } && d.ImplementationType.Assembly.GetName().Name!.StartsWith("Orleans.Lattice.Explorer", StringComparison.Ordinal))
+            .ToArray();
+
+        // Battery test, inline: the sweep compares two populations, and an empty one
+        // on either side leaves `captives` empty for the wrong reason - no scoped
+        // services to capture, or no Explorer singleton the filter could see.
+        Assert.Multiple(() =>
+        {
+            Assert.That(scoped, Is.Not.Empty,
+                "the registration must contribute circuit-scoped services, or there is nothing a singleton could capture");
+            Assert.That(inspected, Is.Not.Empty,
+                "the singleton filter must reach at least one Explorer implementation type, or the assertion below is vacuous");
+        });
+
+        var captives = inspected
             .SelectMany(d => d.ImplementationType!.GetConstructors().SelectMany(c => c.GetParameters())
                 .Where(p => scoped.Contains(p.ParameterType))
                 .Select(p => $"{d.ImplementationType!.Name} -> {p.ParameterType.Name}"))
