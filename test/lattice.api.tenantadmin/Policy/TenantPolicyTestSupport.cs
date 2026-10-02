@@ -106,7 +106,9 @@ internal static class TenantPolicyTestSupport
     {
         private readonly SortedDictionary<string, LatticeAuthorizationRule> _rules = new(StringComparer.Ordinal);
 
-        public int FullScans { get; private set; }
+        private int _fullScans;
+
+        public int FullScans => Volatile.Read(ref _fullScans);
 
         public int Writes { get; private set; }
 
@@ -116,14 +118,58 @@ internal static class TenantPolicyTestSupport
 
         public void Seed(LatticeAuthorizationRule rule) => _rules[Key(rule.Scope.TreeId, rule.RuleId)] = rule;
 
-        public Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// When set, every tenant-tier write waits on this task before it lands, so a
+        /// test can hold several concurrent puts after their checks and before their
+        /// writes, then release them together.
+        /// </summary>
+        public Task? WriteGate { get; set; }
+
+        /// <summary>Completes once <paramref name="count"/> tenant-tier writes are waiting on <see cref="WriteGate"/>.</summary>
+        public Task WaitForHeldWritesAsync(int count)
+        {
+            lock (_held)
+            {
+                _heldTarget = count;
+                _heldReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (_heldCount >= count)
+                {
+                    _heldReached.SetResult();
+                }
+
+                return _heldReached.Task;
+            }
+        }
+
+        public async Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(rule);
             RecordOrigin(rule.RuleId);
-            Writes++;
-            Seed(rule);
-            return Task.CompletedTask;
+            if (WriteGate is { } gate && LatticeTenantRuleIds.IsTenantOwned(rule.RuleId))
+            {
+                lock (_held)
+                {
+                    _heldCount++;
+                    if (_heldCount >= _heldTarget)
+                    {
+                        _heldReached?.TrySetResult();
+                    }
+                }
+
+                await gate.ConfigureAwait(false);
+            }
+
+            lock (_rules)
+            {
+                Writes++;
+                Seed(rule);
+            }
         }
+
+        private readonly object _held = new();
+        private int _heldCount;
+        private int _heldTarget = int.MaxValue;
+        private TaskCompletionSource? _heldReached;
 
         public Task<LatticeAuthorizationRule?> GetRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default) =>
             Task.FromResult(_rules.TryGetValue(Key(treeId, ruleId), out var rule) ? rule : null);
@@ -131,15 +177,24 @@ internal static class TenantPolicyTestSupport
         public Task<bool> RemoveRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default)
         {
             RecordOrigin(ruleId);
-            Writes++;
-            return Task.FromResult(_rules.Remove(Key(treeId, ruleId)));
+            lock (_rules)
+            {
+                Writes++;
+                return Task.FromResult(_rules.Remove(Key(treeId, ruleId)));
+            }
         }
 
         public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesForTreeAsync(
             string treeId, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             var prefix = treeId + "\u001f";
-            foreach (var pair in _rules.ToArray())
+            KeyValuePair<string, LatticeAuthorizationRule>[] pairs;
+            lock (_rules)
+            {
+                pairs = _rules.ToArray();
+            }
+
+            foreach (var pair in pairs)
             {
                 if (pair.Key.StartsWith(prefix, StringComparison.Ordinal))
                 {
@@ -153,8 +208,14 @@ internal static class TenantPolicyTestSupport
         public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            FullScans++;
-            foreach (var rule in _rules.Values.ToArray())
+            Interlocked.Increment(ref _fullScans);
+            LatticeAuthorizationRule[] rules;
+            lock (_rules)
+            {
+                rules = _rules.Values.ToArray();
+            }
+
+            foreach (var rule in rules)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return rule;
@@ -167,7 +228,10 @@ internal static class TenantPolicyTestSupport
         {
             if (LatticeTenantRuleIds.IsTenantOwned(ruleId))
             {
-                TenantWriteOrigins.Add(LatticeAccessGateContext.IsSystemOrigin);
+                lock (TenantWriteOrigins)
+                {
+                    TenantWriteOrigins.Add(LatticeAccessGateContext.IsSystemOrigin);
+                }
             }
         }
 

@@ -37,6 +37,19 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// the store (the store has no tenant-prefix scan); the policy is bounded by the
 /// tenant's <c>MaxTenantRules</c> cap and the cluster's operator rules.
 /// </para>
+/// <para>
+/// <b>Concurrency.</b> Puts are not serialised (no grain or lock): the cap and the
+/// one-copy-per-local-id invariant are kept optimistically by verify-and-compensate
+/// in <see cref="PutRuleAsync"/>. Concurrent puts that each pass the cap check
+/// re-count after writing and withdraw their own new rule when the count is over
+/// the cap, so an overshoot self-corrects and at worst every racer is refused (fail
+/// closed). Concurrent puts of one local id to different trees settle on a single
+/// copy by a deterministic tie-break. The residual window is the time between a
+/// racer's write and its re-count, during which the store can briefly hold more
+/// rules than the cap or two copies of one id; and in a pathological interleaving
+/// of concurrent moves of one id, every copy can be withdrawn, which also fails
+/// closed (the rule grants nothing until re-put).
+/// </para>
 /// </remarks>
 internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdmin
 {
