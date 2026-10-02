@@ -282,4 +282,20 @@ internal sealed record TreeRegistryEntry
     /// captured, so a revert restores both together.
     /// </summary>
     [Id(18)] public int? ReplacedNextShardIndex { get; init; }
+
+    /// <summary>
+    /// On a logical entry: the physical tree an alias cutover (resize swap,
+    /// shadow-cutover restore, schema remediation, or a restore revert) is moving
+    /// the alias to, set when the cutover carries that tree's routing map onto
+    /// this entry and cleared when the alias itself is written
+    /// (issue #4264). <see langword="null"/> at every other time.
+    /// <para>
+    /// The map carry and the alias swap are two registry calls, so between them
+    /// this entry's <see cref="ShardMap"/> already describes the destination
+    /// while <see cref="PhysicalTreeId"/> still names the replaced tree. A split
+    /// or fold bound to the replaced tree must not apply its slot diff in that
+    /// gap; <see cref="ShardMapCommitFence"/> reads this marker to refuse it.
+    /// </para>
+    /// </summary>
+    [Id(19)] public string? AliasCutoverTarget { get; init; }
 }

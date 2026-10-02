@@ -159,12 +159,34 @@ internal sealed class TreeShardConsolidationGrain(
     private IShardRootGrain? _donorCache;
     private IShardRootGrain? _survivorCache;
 
+    /// <summary>
+    /// The physical tree this fold drains and swaps. An in-flight fold stays
+    /// bound to the tree it started on, even across a reactivation, so a
+    /// cutover that re-points the logical id is detected rather than followed
+    /// (issue #4264); a new fold resolves the logical id afresh.
+    /// </summary>
     private async Task<string> GetPhysicalTreeIdAsync()
     {
         if (_physicalTreeId is not null) return _physicalTreeId;
+        if (state.State.InProgress && state.State.PhysicalTreeId is { } bound)
+        {
+            _physicalTreeId = bound;
+            return bound;
+        }
+
         var registry = grainFactory.GetLatticeRegistry();
         _physicalTreeId = await registry.ResolveAsync(TreeId);
         return _physicalTreeId;
+    }
+
+    /// <summary>
+    /// Whether the logical tree's registry entry still describes the physical
+    /// tree this fold is bound to. See <see cref="ShardMapCommitFence"/>.
+    /// </summary>
+    private async Task<bool> IsBoundTreeCurrentAsync()
+    {
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+        return ShardMapCommitFence.Admits(entry, TreeId, await GetPhysicalTreeIdAsync());
     }
 
     private int[] DonorSlots
@@ -228,6 +250,9 @@ internal sealed class TreeShardConsolidationGrain(
     /// </summary>
     internal async Task InitiateConsolidationStateAsync(int donorShardIndex, int survivorShardIndex)
     {
+        // A new fold binds to the physical tree the logical id resolves to now,
+        // not to whichever one an earlier fold on this coordinator used.
+        _physicalTreeId = null;
         var registry = grainFactory.GetLatticeRegistry();
         var resolved = await optionsResolver.ResolveAsync(TreeId);
 
@@ -267,6 +292,15 @@ internal sealed class TreeShardConsolidationGrain(
         }
 
         var physicalTreeId = await GetPhysicalTreeIdAsync();
+
+        // Refuse while an alias cutover has carried another tree's map onto the
+        // logical entry but not yet swapped the alias: the plan above would then
+        // describe the copy while the shards below belong to the replaced tree
+        // (issue #4264).
+        if (!ShardMapCommitFence.Admits(await registry.GetEntryAsync(TreeId), TreeId, physicalTreeId))
+            throw new InvalidOperationException(
+                $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while an alias cutover of the tree is in progress.");
+
         var donor = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{donorShardIndex}");
         var survivor = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{survivorShardIndex}");
 
@@ -296,6 +330,7 @@ internal sealed class TreeShardConsolidationGrain(
         state.State.SurvivorShardIndex = survivorShardIndex;
         state.State.DonorSlots = new List<int>(plan.DonorSlots);
         state.State.OriginalShardMap = currentMap;
+        state.State.PhysicalTreeId = physicalTreeId;
         state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
         state.State.EntriesDrained = 0;
@@ -480,6 +515,15 @@ internal sealed class TreeShardConsolidationGrain(
             return true;
         }
 
+        // A fold whose tree was cut over before it committed is abandoned
+        // rather than driven on against the replaced tree (issue #4264).
+        // SwapAsync makes the same check for itself.
+        if (IsCancellable(state.State.Phase) && !await IsBoundTreeCurrentAsync())
+        {
+            await AbandonRetargetedAsync(donorFrozen: false);
+            return true;
+        }
+
         switch (state.State.Phase)
         {
             case ShardConsolidationPhase.BeginShadowWrite:
@@ -572,6 +616,16 @@ internal sealed class TreeShardConsolidationGrain(
         var slots = DonorSlots;
         var vsc = VirtualShardCount;
 
+        // Abandon before anything irreversible when the tree was cut over to
+        // another physical tree since this fold started (issue #4264): the seal,
+        // freeze and survivor reclaim below cannot be undone, and the diff could
+        // not be applied.
+        if (!await IsBoundTreeCurrentAsync())
+        {
+            await AbandonRetargetedAsync(donorFrozen: false);
+            return;
+        }
+
         // Seal the donor's leaves first so no read crosses the freeze
         // observing an unsealed leaf under a frozen shard.
         await donor.MarkLeavesMovedAwayAsync(slots, vsc);
@@ -600,12 +654,23 @@ internal sealed class TreeShardConsolidationGrain(
         // them, so a split persisting in the gap would be clobbered by the
         // write below and its moved slots would keep routing to the source it
         // had already migrated away from.
+        //
+        // The fenced overload also refuses, inside that same call, a diff for a
+        // tree an alias cutover has re-pointed since the check above: the diff's
+        // shard indices describe the replaced tree, not the copy whose map the
+        // cutover carried onto the logical entry (issue #4264).
         var registry = grainFactory.GetLatticeRegistry();
-        await registry.ReassignSlotsAsync(
+        var reassigned = await registry.ReassignSlotsAsync(
             TreeId,
             slots,
             state.State.SurvivorShardIndex,
-            state.State.OriginalShardMap!);
+            state.State.OriginalShardMap!,
+            await GetPhysicalTreeIdAsync());
+        if (reassigned is null)
+        {
+            await AbandonRetargetedAsync(donorFrozen: true);
+            return;
+        }
 
         await AdvancePhaseAsync(ShardConsolidationPhase.Reject);
     }
@@ -792,6 +857,63 @@ internal sealed class TreeShardConsolidationGrain(
         Logger.LogInformation(
             "Consolidation {OperationId} on tree {TreeId} abandoned before the routing swap; shard {Donor} is unchanged.",
             state.State.OperationId, TreeId, state.State.DonorShardIndex);
+
+        await CompleteCoordinatorAsync();
+    }
+
+    /// <summary>
+    /// Abandons a fold whose logical tree was cut over to another physical tree
+    /// before the fold committed (issue #4264). Nothing is written to the routing
+    /// map: the folding slots keep routing to the donor in the map the cutover
+    /// carried, and that map describes the copy, which holds the donor's entries
+    /// on its own donor shard. The donor's migration record on the replaced tree
+    /// is cleared when it is still reversible (<paramref name="donorFrozen"/>
+    /// false). Unlike a cancel, the fold reports neither complete nor cancelled.
+    /// </summary>
+    private async Task AbandonRetargetedAsync(bool donorFrozen)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        Logger.LogWarning(
+            "Consolidation {OperationId} of shard {Donor} into shard {Survivor} on tree {TreeId} abandoned in phase {Phase}: the tree no longer resolves to physical tree {PhysicalTreeId}, whose shards the fold migrated.",
+            state.State.OperationId, state.State.DonorShardIndex, state.State.SurvivorShardIndex, TreeId,
+            state.State.Phase, physicalTreeId);
+
+        if (!donorFrozen)
+        {
+            var donor = await GetDonorAsync();
+            try
+            {
+                await donor.AbortSplitAsync();
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The donor already entered reject (a Swap interrupted after its
+                // freeze); that is no longer reversible, and the replaced tree no
+                // longer serves the logical id.
+                Logger.LogWarning(ex,
+                    "Consolidation {OperationId} on tree {TreeId} left the donor shard's migration record in place on physical tree {PhysicalTreeId}.",
+                    state.State.OperationId, TreeId, physicalTreeId);
+            }
+        }
+
+        var previous = Snapshot();
+        state.State.InProgress = false;
+        state.State.Complete = false;
+        state.State.Cancelled = false;
+        state.State.CancelRequested = false;
+        state.State.Phase = ShardConsolidationPhase.None;
+        state.State.DrainCursorKey = null;
+        state.State.DrainSweepComplete = false;
+        state.State.UpdatedAtTicks = Clock.GetUtcNow().UtcTicks;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            Restore(previous);
+            throw;
+        }
 
         await CompleteCoordinatorAsync();
     }

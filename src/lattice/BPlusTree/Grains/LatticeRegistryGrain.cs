@@ -526,7 +526,9 @@ internal sealed class LatticeRegistryGrain(
                 ownership.Reason ?? "The ownership provider did not allow this alias.");
 
         var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
-        var updated = existing with { PhysicalTreeId = physicalTreeId };
+        // Writing the alias completes any cutover that carried the target's map
+        // onto this entry first, so its in-progress marker is cleared with it.
+        var updated = existing with { PhysicalTreeId = physicalTreeId, AliasCutoverTarget = null };
         await UpdateAsync(treeId, updated);
 
         // Fire the alias-change observer only on an effective physical-identity
@@ -556,7 +558,7 @@ internal sealed class LatticeRegistryGrain(
         if (existing?.PhysicalTreeId is null) return;
 
         var oldPhysical = existing.PhysicalTreeId;
-        var updated = existing with { PhysicalTreeId = null };
+        var updated = existing with { PhysicalTreeId = null, AliasCutoverTarget = null };
         await UpdateAsync(treeId, updated);
 
         // Removing an alias repoints the logical tree back to itself; the new
@@ -628,6 +630,31 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(slots);
         ArgumentNullException.ThrowIfNull(fallbackMap);
 
+        return (await ReassignSlotsCoreAsync(treeId, slots, targetShardIndex, fallbackMap, boundPhysicalTreeId: null))!;
+    }
+
+    public Task<ShardMap?> ReassignSlotsAsync(
+        string treeId,
+        int[] slots,
+        int targetShardIndex,
+        ShardMap fallbackMap,
+        string boundPhysicalTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(fallbackMap);
+        ArgumentNullException.ThrowIfNull(boundPhysicalTreeId);
+
+        return ReassignSlotsCoreAsync(treeId, slots, targetShardIndex, fallbackMap, boundPhysicalTreeId);
+    }
+
+    private async Task<ShardMap?> ReassignSlotsCoreAsync(
+        string treeId,
+        int[] slots,
+        int targetShardIndex,
+        ShardMap fallbackMap,
+        string? boundPhysicalTreeId)
+    {
         // Atomic read-modify-write: this grain is a singleton (keyed by
         // RegistryTreeId) and this method carries no [AlwaysInterleave], so the
         // entire method body runs without another mutator interleaving. Both
@@ -640,6 +667,15 @@ internal sealed class LatticeRegistryGrain(
         // terminal SetAsync below, so a reader sees it wholly before or wholly
         // after.
         var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(ReassignSlotsAsync));
+
+        // The same exclusivity makes the fence a real check-and-write: no alias
+        // cutover can carry another tree's map onto this entry between the check
+        // and the persist below (issue #4264).
+        if (boundPhysicalTreeId is not null && !ShardMapCommitFence.Admits(existing, treeId, boundPhysicalTreeId))
+        {
+            return null;
+        }
+
         var currentMap = existing.ShardMap ?? fallbackMap;
         var newSlots = (int[])currentMap.Slots.Clone();
         foreach (var slot in slots)

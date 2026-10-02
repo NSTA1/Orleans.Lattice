@@ -985,6 +985,9 @@ internal sealed class TreeResizeGrain(
             NextShardIndex = resized?.NextShardIndex,
             WalPartitions = null,
             WalPlacement = null,
+            // Fences a split or fold bound to the old physical tree off the
+            // resized copy's map until SetAliasAsync below clears it (#4264).
+            AliasCutoverTarget = state.State.SnapshotTreeId,
         };
         await registry.UpdateAsync(TreeId, entry);
 

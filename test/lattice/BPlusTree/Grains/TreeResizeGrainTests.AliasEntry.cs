@@ -144,6 +144,27 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
+    public async Task SwapAlias_marks_the_map_carry_so_an_in_flight_split_cannot_commit_onto_it()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var snapshotTreeId = $"{TreeId}/resized/op1";
+        PrepareSwap(state, snapshotTreeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { ShardCount = ShardCount }));
+
+        await grain.SwapAliasAsync();
+
+        // The map carry and the alias flip are two registry calls; the marker
+        // fences the gap between them (issue #4264). The flip clears it.
+        Received.InOrder(() =>
+        {
+            registry.UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e => e.AliasCutoverTarget == snapshotTreeId));
+            registry.SetAliasAsync(TreeId, snapshotTreeId);
+        });
+    }
+
+    [Test]
     public async Task SwapAlias_falls_back_to_the_captured_entry_when_the_registry_has_none()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();

@@ -65,6 +65,9 @@ public class TreeShardSplitGrainBoundedDrainTests
         registry.GetShardMapAsync(TreeId).Returns(map);
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
+        // The swap commits through the fenced reassignment; admit it.
+        registry.ReassignSlotsAsync(TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>(), Arg.Any<string>())
+            .Returns(ci => Task.FromResult<ShardMap?>((ShardMap)ci[3]));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var sourceShard = Substitute.For<IShardRootGrain>();
