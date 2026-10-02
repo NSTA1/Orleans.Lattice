@@ -7,7 +7,10 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests.Security;
 /// tenant over it. Each cap is a read-check-write kept by verify-and-compensate, so the
 /// invariant under test holds for every interleaving: once the racers finish, the count
 /// is within the cap and equals the prefill plus exactly the additions that reported
-/// success (a refused racer withdrew its own write, and no admitted one was lost).
+/// success (a refused racer withdrew its own write, and no admitted one was lost). The
+/// member-set cap writes the tenant registry record, whose bounded optimistic-concurrency
+/// retry can be exhausted by eight writers to one record; such a racer fails closed with
+/// nothing written and is counted as refused.
 /// </summary>
 public sealed partial class TenantAccessConformanceTests
 {
@@ -27,7 +30,7 @@ public sealed partial class TenantAccessConformanceTests
             }
         }
 
-        var admitted = await RaceAsync(Admin, i => _fixture.Directory.UpsertGroupAsync(t.Value, new TenantGroupDescriptor { Name = $"race{i}" }));
+        var admitted = (await RaceAsync(Admin, i => _fixture.Directory.UpsertGroupAsync(t.Value, new TenantGroupDescriptor { Name = $"race{i}" }))).Admitted;
 
         await AssertWithinCapAsync(Admin, t, admitted, posture => posture.Groups);
     }
@@ -46,7 +49,7 @@ public sealed partial class TenantAccessConformanceTests
             }
         }
 
-        var admitted = await RaceAsync(Admin, i => _fixture.Directory.AddGroupMemberAsync(t.Value, "eng", $"cap-e-race{i}"));
+        var admitted = (await RaceAsync(Admin, i => _fixture.Directory.AddGroupMemberAsync(t.Value, "eng", $"cap-e-race{i}"))).Admitted;
 
         await AssertWithinCapAsync(Admin, t, admitted, posture => posture.MembershipEdges);
     }
@@ -64,9 +67,27 @@ public sealed partial class TenantAccessConformanceTests
             }
         }
 
-        var admitted = await RaceAsync(Admin, i => _fixture.Directory.AddMemberAsync(t.Value, $"cap-m-race{i}"));
+        var outcome = await RaceAsync(
+            Admin, i => _fixture.Directory.AddMemberAsync(t.Value, $"cap-m-race{i}"), registryRetryExhaustionRefuses: true);
 
-        await AssertWithinCapAsync(Admin, t, admitted, posture => posture.MemberSubjects);
+        // A racer refused by registry retry exhaustion counts as refused only if its
+        // write never landed. PutMergeAsync throws only after every conditional write
+        // lost, so an exhaustion on the add itself leaves nothing; an exhaustion on the
+        // compensating withdrawal would leave the entry behind, which is not a refusal,
+        // and is named here rather than folded into the count.
+        TenantRecord record;
+        using (LatticeSystemOrigin.Enter())
+        {
+            record = (await _fixture.Registry.GetAsync(t))!;
+        }
+
+        Assert.That(
+            outcome.Exhausted.Where(i => record.HasMemberSubject($"cap-m-race{i}")),
+            Is.Empty,
+            "a racer that failed with TenantRegistryConcurrencyException left its entry in the member set "
+            + "(its compensating withdrawal, not its add, exhausted the registry retry budget)");
+
+        await AssertWithinCapAsync(Admin, t, outcome.Admitted, posture => posture.MemberSubjects);
     }
 
     [Test]
@@ -82,16 +103,23 @@ public sealed partial class TenantAccessConformanceTests
             }
         }
 
-        var admitted = await RaceAsync(Admin, i => _fixture.Policy.PutRuleAsync(t.Value, TreeRule($"race{i}", Admin, $"race{i}")));
+        var admitted = (await RaceAsync(Admin, i => _fixture.Policy.PutRuleAsync(t.Value, TreeRule($"race{i}", Admin, $"race{i}")))).Admitted;
 
         await AssertWithinCapAsync(Admin, t, admitted, posture => posture.TenantRules);
     }
 
     /// <summary>
     /// Starts <see cref="Racers"/> additions together as <paramref name="admin"/> and
-    /// returns how many were admitted. A refusal must be the cap's; anything else fails.
+    /// reports how many were admitted. A refusal must be the cap's; anything else fails.
+    /// When <paramref name="registryRetryExhaustionRefuses"/> is set, a racer that throws
+    /// <see cref="TenantRegistryConcurrencyException"/> (the tenant registry's bounded
+    /// optimistic-concurrency retry, exhausted by competing writes to one tenant record)
+    /// is also counted as refused, and its index is reported so the caller can confirm
+    /// its write did not land. Only the member-set cap writes the tenant record; the
+    /// group, edge and rule caps write the membership and policy trees, which have no
+    /// bounded retry, so they leave the flag off and such an exception fails the test.
     /// </summary>
-    private static async Task<int> RaceAsync(string admin, Func<int, Task> add)
+    private static async Task<RaceOutcome> RaceAsync(string admin, Func<int, Task> add, bool registryRetryExhaustionRefuses = false)
     {
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var racers = Enumerable.Range(0, Racers).Select(i => Task.Run(async () =>
@@ -102,18 +130,24 @@ public sealed partial class TenantAccessConformanceTests
                 try
                 {
                     await add(i);
-                    return true;
+                    return RacerResult.Admitted;
                 }
                 catch (LatticeQuotaExceededException)
                 {
-                    return false;
+                    return RacerResult.Refused;
+                }
+                catch (TenantRegistryConcurrencyException) when (registryRetryExhaustionRefuses)
+                {
+                    return RacerResult.Exhausted;
                 }
             }
         })).ToArray();
 
         start.SetResult();
-        var outcomes = await Task.WhenAll(racers);
-        return outcomes.Count(admittedOne => admittedOne);
+        var results = await Task.WhenAll(racers);
+        return new RaceOutcome(
+            results.Count(r => r == RacerResult.Admitted),
+            Enumerable.Range(0, Racers).Where(i => results[i] == RacerResult.Exhausted).ToArray());
     }
 
     private async Task AssertWithinCapAsync(
@@ -134,4 +168,14 @@ public sealed partial class TenantAccessConformanceTests
             Assert.That(admitted, Is.LessThan(Racers), "the cap refused at least one racer");
         });
     }
+
+    private enum RacerResult
+    {
+        Admitted,
+        Refused,
+        Exhausted,
+    }
+
+    /// <summary>A race's admitted count, and the indices of racers refused by registry retry exhaustion.</summary>
+    private sealed record RaceOutcome(int Admitted, IReadOnlyList<int> Exhausted);
 }
