@@ -127,6 +127,12 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
 
         ThrowIfReservedTenant(tenant, "add-admin-subject");
 
+        // D4: an admin-set entry names a user, a cluster group, or one of this
+        // tenant's own groups. The reserved t/ namespace belongs to tenant groups, so
+        // another tenant's group (or a malformed t/ id) is refused for every caller,
+        // operators included, before anything is read or written.
+        var isOwnTenantGroup = EnsureAdmissibleAdminEntry(tenant, subjectId);
+
         // Idempotent no-op: the subject already holds tenant-admin authority, so no
         // new membership reference is created and none needs validating.
         if (record.HasAdminSubject(subjectId))
@@ -140,8 +146,13 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // typo'd, retired, or not-yet-provisioned id must never be recorded as a
         // live grant that whoever later registers it would inherit. The registered
         // tenant-create path applies the same directory validation to explicitly
-        // seeded admin subjects before it writes the tenant.
-        await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
+        // seeded admin subjects before it writes the tenant. A tenant group lives in
+        // the membership directory, not the identity directory, so it is not
+        // resolved upstream.
+        if (!isOwnTenantGroup)
+        {
+            await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
+        }
 
         record.AddAdminSubject(subjectId, _clock.Next(), _writerId);
 
@@ -261,6 +272,36 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
             throw LatticeDirectoryValidationException.Unresolved(
                 subjectId, DirectoryPrincipalKind.User, "subjectId");
         }
+    }
+
+    /// <summary>
+    /// Applies the D4 admin-set confinement: an entry outside the reserved
+    /// <see cref="LatticeTenantTrees.SegmentPrefix"/> namespace (a user or a cluster
+    /// group) is admissible, and so is a well-formed group of
+    /// <paramref name="tenant"/> itself; another tenant's group and every malformed
+    /// <c>t/</c> id are refused. Allocation-free on the accepted paths.
+    /// </summary>
+    /// <returns><see langword="true"/> when the entry names one of the tenant's own groups.</returns>
+    /// <exception cref="TenantAccessConfinementException">The entry is in the reserved namespace but is not one of the tenant's own groups.</exception>
+    internal static bool EnsureAdmissibleAdminEntry(TenantId tenant, string subjectId)
+    {
+        if (!subjectId.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (TenantAccessEntries.IsAdmissible(subjectId, tenant))
+        {
+            return true;
+        }
+
+        throw new TenantAccessConfinementException(
+            tenant.Value,
+            TenantAccessConfinementRule.ForeignTenantGroup,
+            $"'{subjectId}' is in the reserved '{LatticeTenantTrees.SegmentPrefix}' tenant group namespace but is not "
+                + $"a group of tenant '{tenant}'. A tenant's admin set may name users, cluster groups, and the "
+                + "tenant's own groups only.",
+            nameof(subjectId));
     }
 
     /// <summary>
