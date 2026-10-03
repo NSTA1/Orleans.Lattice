@@ -2436,8 +2436,8 @@ internal sealed partial class BPlusLeafGrain(
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = MaxOrdinal(windowStart, scanStart);
-            var to = MinOrdinal(windowEnd, scanEnd);
+            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
+            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
             if (from is not null && to is not null &&
                 string.CompareOrdinal(from, to) >= 0)
                 continue;
@@ -3692,16 +3692,16 @@ internal sealed partial class BPlusLeafGrain(
         //
         // Issue #3918: no clip at an in-flight division's SplitKey, for the
         // reason CountAsync documents at length.
-        var scanStart = MaxOrdinal(startInclusive, afterExclusive);
-        var scanEnd = MinOrdinal(endExclusive, beforeExclusive);
+        var scanStart = OrdinalStrings.MaxBound(startInclusive, afterExclusive);
+        var scanEnd = OrdinalStrings.MinBound(endExclusive, beforeExclusive);
         foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
             if (scanEnd is not null && windowStart is not null &&
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = MaxOrdinal(windowStart, scanStart);
-            var to = MinOrdinal(windowEnd, scanEnd);
+            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
+            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
             if (from is not null && to is not null &&
                 string.CompareOrdinal(from, to) >= 0)
                 continue;
@@ -3821,16 +3821,16 @@ internal sealed partial class BPlusLeafGrain(
         //
         // Issue #3918: no clip at an in-flight division's SplitKey, for the
         // reason CountAsync documents at length.
-        var scanStart = MaxOrdinal(startInclusive, afterExclusive);
-        var scanEnd = MinOrdinal(endExclusive, beforeExclusive);
+        var scanStart = OrdinalStrings.MaxBound(startInclusive, afterExclusive);
+        var scanEnd = OrdinalStrings.MinBound(endExclusive, beforeExclusive);
         foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
             if (scanEnd is not null && windowStart is not null &&
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = MaxOrdinal(windowStart, scanStart);
-            var to = MinOrdinal(windowEnd, scanEnd);
+            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
+            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
             if (from is not null && to is not null &&
                 string.CompareOrdinal(from, to) >= 0)
                 continue;

@@ -10,7 +10,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     public async Task<TenantGroupPage> ListGroupsAsync(
         string tenantId, TenantAccessPageRequest page, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentNullException.ThrowIfNull(page);
 
         // The page token is the local name of the previous page's last group, so it
@@ -49,7 +49,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     public async Task<TenantGroupDescriptor?> GetGroupAsync(
         string tenantId, string groupName, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateGroupName(groupName, nameof(groupName));
 
         await AuthorizeAsync(tenant, "get-group", cancellationToken).ConfigureAwait(false);
@@ -65,7 +65,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     public async Task<TenantGroupDescriptor> UpsertGroupAsync(
         string tenantId, TenantGroupDescriptor group, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentNullException.ThrowIfNull(group);
         ValidateGroupName(group.Name, nameof(group));
 
@@ -112,7 +112,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     public async Task<TenantGroupRemovalResult> RemoveGroupAsync(
         string tenantId, string groupName, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateGroupName(groupName, nameof(groupName));
 
         var record = await AuthorizeAsync(tenant, "remove-group", cancellationToken).ConfigureAwait(false);

@@ -121,7 +121,7 @@ internal sealed class ReplicationMaintenanceGrain(
         // next phase tick rather than waiting a full cadence; the
         // backstop is the keepalive reminder so a deterministically-
         // failing GC cannot stall the activation indefinitely.
-        if (ShouldRunCadence(nowTicks, state.State.LastGcTicks, options.MaintenanceGcInterval))
+        if (ReplicationCadence.IsDue(nowTicks, state.State.LastGcTicks, options.MaintenanceGcInterval))
         {
             var prevGcTicks = state.State.LastGcTicks;
             try
@@ -154,7 +154,7 @@ internal sealed class ReplicationMaintenanceGrain(
         // cadence stamp advances only on a clean sweep so a thrown
         // sweep retries on the next phase tick.
         var orphanCadence = TimeSpan.FromTicks(Math.Max(1L, options.MaintenanceGcInterval.Ticks / 2));
-        if (ShouldRunCadence(nowTicks, state.State.LastOrphanSweepTicks, orphanCadence))
+        if (ReplicationCadence.IsDue(nowTicks, state.State.LastOrphanSweepTicks, orphanCadence))
         {
             // Reserved orphan-sweep cadence stamp - retained so the
             // durable maintenance state's [Id(2)] LastOrphanSweepTicks
@@ -185,7 +185,7 @@ internal sealed class ReplicationMaintenanceGrain(
         // Fall-off-the-log probe - independent cadence. Same retry
         // contract: the cadence stamp advances only on a clean
         // probe pass.
-        if (ShouldRunCadence(nowTicks, state.State.LastFallOffCheckTicks, options.MaintenanceFallOffCheckInterval))
+        if (ReplicationCadence.IsDue(nowTicks, state.State.LastFallOffCheckTicks, options.MaintenanceFallOffCheckInterval))
         {
             var prevFallOffTicks = state.State.LastFallOffCheckTicks;
             try
@@ -257,14 +257,5 @@ internal sealed class ReplicationMaintenanceGrain(
                     peer, LogContext);
             }
         }
-    }
-
-    private static bool ShouldRunCadence(long nowTicks, long lastTicks, TimeSpan interval)
-    {
-        if (lastTicks == 0)
-        {
-            return true; // Never run before - fire on first tick.
-        }
-        return nowTicks - lastTicks >= interval.Ticks;
     }
 }

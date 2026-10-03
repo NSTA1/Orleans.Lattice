@@ -44,7 +44,7 @@ public readonly record struct MvRegisterEntry
     /// </summary>
     /// <param name="other">The entry to compare against.</param>
     public bool Equals(MvRegisterEntry other) =>
-        BytesEqual(Value, other.Value)
+        ByteArrayEquality.ContentEquals(Value, other.Value)
         && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
         && Counter == other.Counter;
 
@@ -61,8 +61,4 @@ public readonly record struct MvRegisterEntry
         hash.Add(Counter);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

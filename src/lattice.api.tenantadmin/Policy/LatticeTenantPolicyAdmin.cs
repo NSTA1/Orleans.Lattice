@@ -192,15 +192,4 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
             subject.SubjectId,
             subject.GroupIds,
             record.Id);
-
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException($"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
-    }
 }

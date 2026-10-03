@@ -106,7 +106,7 @@ internal static class SystemLatticeScanExtensions
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
+            var (s, e) = ResilientScanResume.Bounds(startInclusive, endExclusive, lastKey, reverse);
             using var originScope = reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null;
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
@@ -165,7 +165,7 @@ internal static class SystemLatticeScanExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = ResilientScanResume.ReconnectDelayMs(attempt);
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -231,7 +231,7 @@ internal static class SystemLatticeScanExtensions
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
+            var (s, e) = ResilientScanResume.Bounds(startInclusive, endExclusive, lastKey, reverse);
             using var originScope = reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null;
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
@@ -287,7 +287,7 @@ internal static class SystemLatticeScanExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = ResilientScanResume.ReconnectDelayMs(attempt);
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -295,31 +295,4 @@ internal static class SystemLatticeScanExtensions
             }
         }
     }
-
-    /// <summary>
-    /// Computes the resume bounds for a resilient scan given the last successfully
-    /// yielded key. Forward scans tighten the lower bound to the successor of
-    /// <paramref name="lastKey"/> (<c>lastKey + "\u0000"</c>); reverse scans
-    /// tighten the upper bound to <paramref name="lastKey"/> (exclusive).
-    /// </summary>
-    private static (string? Start, string? End) ComputeScanBounds(
-        string? originalStart, string? originalEnd, string? lastKey, bool reverse)
-    {
-        if (lastKey is null)
-        {
-            return (originalStart, originalEnd);
-        }
-
-        return reverse
-            ? (originalStart, lastKey)
-            : (lastKey + "\u0000", originalEnd);
-    }
-
-    /// <summary>
-    /// Computes the inter-reconnect backoff, matching
-    /// <see cref="ILattice"/>'s wrappers: the first reconnect is immediate and
-    /// subsequent attempts apply a small linear ramp capped at 100&#160;ms.
-    /// </summary>
-    private static int ComputeReconnectDelayMs(int attempt) =>
-        attempt <= 1 ? 0 : Math.Min(100, 10 * attempt);
 }

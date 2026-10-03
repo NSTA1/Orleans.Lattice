@@ -46,10 +46,6 @@ internal static class RepoTreeWalker
     private const string GitDirectorySegment = ".git";
     private const string GitignoreFileName = ".gitignore";
 
-    // The leading window scanned for a NUL byte to classify a file as binary. This
-    // matches the size Git samples (its FIRST_FEW_BYTES) for the same decision.
-    private const int BinarySniffByteCount = 8000;
-
     /// <summary>
     /// Walks <paramref name="rootPath"/> and returns the included files in
     /// ascending ordinal path order.
@@ -186,7 +182,7 @@ internal static class RepoTreeWalker
                 // Drop a non-text file before it is hashed, embedded, or indexed:
                 // a NUL byte in the leading window is the same cheap, language- and
                 // extension-agnostic heuristic Git uses to classify a blob as binary.
-                if (excludeBinary && IsProbablyBinary(content))
+                if (excludeBinary && RepoBinaryContent.IsProbablyBinary(content))
                 {
                     return;
                 }
@@ -258,20 +254,6 @@ internal static class RepoTreeWalker
         Array.Sort(ordered, static (left, right) =>
             string.CompareOrdinal(left.RelativePath, right.RelativePath));
         return ordered;
-    }
-
-    /// <summary>
-    /// Reports whether <paramref name="content"/> looks like a binary (non-text)
-    /// blob: a <c>NUL</c> byte anywhere in the leading window is treated as the
-    /// signal, matching the classic heuristic Git applies. This deliberately reads
-    /// only a bounded prefix so a large file costs a fixed scan.
-    /// </summary>
-    private static bool IsProbablyBinary(ReadOnlySpan<byte> content)
-    {
-        var window = content.Length <= BinarySniffByteCount
-            ? content
-            : content[..BinarySniffByteCount];
-        return window.IndexOf((byte)0) >= 0;
     }
 
     /// <summary>

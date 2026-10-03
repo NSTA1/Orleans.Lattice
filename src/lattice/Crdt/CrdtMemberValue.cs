@@ -64,7 +64,7 @@ public readonly record struct CrdtMemberValue
     /// </summary>
     /// <param name="other">The member to compare against.</param>
     public bool Equals(CrdtMemberValue other) =>
-        BytesEqual(Element, other.Element)
+        ByteArrayEquality.ContentEquals(Element, other.Element)
         && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
         && Ordinal == other.Ordinal;
 
@@ -81,8 +81,4 @@ public readonly record struct CrdtMemberValue
         hash.Add(Ordinal);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
