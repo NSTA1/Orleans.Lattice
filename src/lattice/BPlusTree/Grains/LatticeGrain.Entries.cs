@@ -175,6 +175,12 @@ internal sealed partial class LatticeGrain
                 pq.Enqueue(i, cursors[i].Current.Key);
         }
 
+        // The map the live shard cursors were opened under, and the shard each
+        // one reads: a row is taken only from the shard that map routes its key
+        // to (issue #4361). See ScanOwnership.
+        var routedMap = shardMap0;
+        var liveShards = physicalShards;
+
         HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(capacity: pageSize, comparer: StringComparer.Ordinal);
         // Frontier of the k-way merge: the last key emitted to the caller.
         // Used only on predicate scans to suppress reconciliation entries the
@@ -299,7 +305,11 @@ internal sealed partial class LatticeGrain
             var idx = pq.Dequeue();
             var entry = cursors[idx].Current;
 
-            if (yielded is null || yielded.Add(entry.Key))
+            // A row on a shard the map does not route its key to - a copy left by a
+            // migration's backstop - is never the key's value: the owner yields it,
+            // or the moved-slot reconciliation drains it (issue #4361).
+            if ((isSystemTree || ScanOwnership.IsRoutedRow(routedMap, liveShards, idx, entry.Key))
+                && (yielded is null || yielded.Add(entry.Key)))
             {
                 // Advance the merge frontier for every key the merge passes,
                 // independently of the access-gate visibility prune, so

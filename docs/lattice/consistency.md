@@ -84,6 +84,17 @@ exception surfaces rather than a silently wrong result.
 | Durable cursor steps - **point-in-time mode** (opened with `pointInTime: true`) | **Strongly consistent, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reads against the saga-decision view captured at `OpenAsync` time. A `SetManyAtomicAsync` that commits between two pages is observed identically on every page (either all of its keys, or none). A stalled cursor whose pin lifetime is exceeded surfaces `LatticeCursorSnapshotExpiredException` on its next call and must be reopened. Not available for `DeleteRangeStepAsync`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors). |
 | Snapshot cursor steps - **zero-observable-writes mode** (`OpenSnapshotKeyCursorAsync`, `OpenSnapshotEntryCursorAsync`) | **Snapshot-isolated, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reflects the tree state captured at open time. No write committed after open - foreground `SetAsync` / `DeleteAsync`, saga `SetManyAtomicAsync`, `DeleteRangeAsync`, or replication apply - is ever visible to the cursor on any page. The captured `LatticeSnapshotCoordinate` is deterministic across silo failover. Open-time capture cost (the materialised per-shard baseline row count) is bounded by `LatticeOptions.MaxSnapshotReplayEntries`; exceeding the budget throws `LatticeSnapshotReplayBudgetExceededException`. Pages are served from a per-cursor frozen baseline captured at open - held in memory, and persisted durably before the first page that reports more results - so a later WAL GC that trims the committed prefix cannot empty or partial-fill the snapshot. Across an adaptive shard split the snapshot pins the `ShardMap` at open and resolves each key's owning shard by virtual slot under that pinned map, so every key is surfaced exactly once at its last-writer-wins value as of the pinned point in time - a donor shard's retained orphan copies of moved keys are not re-surfaced, and post-split writes shadow-forwarded through the donor are still observed. See [Snapshot Cursors](snapshot-cursors.md). |
 
+### Scans read each key from the shard that owns it
+
+`ScanKeysAsync` and `ScanEntriesAsync` open a cursor on every physical shard,
+but they take a key's row only from the shard that the shard map they opened under
+routes the key to. That is the same ownership a point read or `GetManyAsync` uses,
+and the same one a count uses once the tree has split. A shard can hold rows for
+slots it does not own: an atomic write that overlaps an online reshard writes its
+committed values into every split shard that might be receiving them. Those rows are
+never a key's value, and a scan does not return them. A slot that moves while the
+scan runs is still read from its new owner by the reconciliation below.
+
 ### Retry exhaustion
 
 `CountAsync`, `CountPerShardAsync`, `ScanKeysAsync`, and

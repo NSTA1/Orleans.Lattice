@@ -1484,8 +1484,10 @@ internal sealed class AtomicWriteGrain(
             // TerminalFanOutResolver pass below BFS-expands the
             // OLD owner's MovedAwaySlots / SplitInProgress into the
             // broadcast's destination set).
-            routing = _preDecisionRouting ?? await lattice.GetRoutingAsync(forceRefresh: true);
-            _preDecisionRouting = null;
+            // Resolved here, after the commit decision, and never reused from an
+            // earlier resolve: a split that swaps between the two moves a slot
+            // to an owner this pass must reach (issue #4361).
+            routing = await lattice.GetRoutingAsync(forceRefresh: true);
             physicalTreeId = routing.PhysicalTreeId;
             HashSet<int>? union = null;
             if (state.State.BoundPhysicalTreeId is { } bound
@@ -2602,13 +2604,6 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// The routing <see cref="RebindAcrossAliasSwapAsync"/> resolved immediately
-    /// before the commit decision, handed to the broadcast that follows so its
-    /// drift correction does not resolve routing a second time. Consumed once.
-    /// </summary>
-    private RoutingInfo? _preDecisionRouting;
-
-    /// <summary>
     /// Keeps a committed batch on one physical copy across an alias swap (issue
     /// #4336). Called once Execute has dispatched every prepared write and
     /// before the commit decision is recorded: when the logical tree no longer
@@ -2622,7 +2617,6 @@ internal sealed class AtomicWriteGrain(
     private async Task RebindAcrossAliasSwapAsync()
     {
         const int MaxRebinds = 3;
-        _preDecisionRouting = null;
         for (var rebind = 0; rebind < MaxRebinds; rebind++)
         {
             if (state.State.Phase != AtomicWritePhase.Execute
@@ -2636,14 +2630,6 @@ internal sealed class AtomicWriteGrain(
                 .GetRoutingAsync(forceRefresh: true);
             if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
             {
-                // The broadcast's drift correction reuses this resolve rather than
-                // paying a second one. A cross-tree sub-saga parks instead and
-                // broadcasts later, against routing it resolves then.
-                if (state.State.ExternalAuthorityKey is null)
-                {
-                    _preDecisionRouting = routing;
-                }
-
                 return;
             }
 
