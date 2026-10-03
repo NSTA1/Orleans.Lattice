@@ -4400,6 +4400,13 @@ internal sealed partial class BPlusLeafGrain(
         return stranded;
     }
 
+    /// <summary>
+    /// Set once <see cref="ClearGrainStateAsync"/> has deleted this leaf's row.
+    /// From then on <see cref="PersistAsync"/> refuses, so nothing on this
+    /// activation can write the row back (issue #4419).
+    /// </summary>
+    private bool _leafStateCleared;
+
     public async Task ClearGrainStateAsync()
     {
         using var routingMutation = EnterLeafRoutingMutation();
@@ -4426,6 +4433,19 @@ internal sealed partial class BPlusLeafGrain(
         await WaitForSnapshotCaptureToDrainAsync();
 
         await state.ClearStateAsync();
+
+        // Nothing may write the row back now (issue #4419). The deactivation
+        // below runs the checkpoint-flush barrier, which used to persist an
+        // advance still pending from before the clear onto the cleared, default
+        // state: a row holding only the checkpoint, with no tree id, that nothing
+        // references and nothing ever clears. The pending advance describes rows
+        // that no longer exist, so it is discarded, and the latch makes any other
+        // persist on this activation fail instead of re-creating the row. Both
+        // are set only once the clear has succeeded: a failed clear leaves the
+        // leaf intact and still able to persist.
+        _pendingCheckpointOffsetsByPartition = null;
+        _leafStateCleared = true;
+
         try
         {
             // The leaf's snapshot lives in separate grain-state rows keyed by the

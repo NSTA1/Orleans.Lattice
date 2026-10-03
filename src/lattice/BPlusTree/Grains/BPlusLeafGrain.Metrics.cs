@@ -102,6 +102,14 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task PersistAsync([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
+        if (_leafStateCleared)
+        {
+            // Issue #4419: writing now would re-create the cleared row as a stub
+            // with no tree id that nothing references and nothing clears again.
+            throw new InvalidOperationException(
+                $"Leaf {context.GrainId} was cleared; refusing the write from {caller}, which would re-create its row.");
+        }
+
         if (_tracePersist)
         {
             var etag = state.Etag is null
