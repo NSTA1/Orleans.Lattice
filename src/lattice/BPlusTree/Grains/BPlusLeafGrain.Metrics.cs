@@ -70,6 +70,15 @@ internal sealed partial class BPlusLeafGrain
     private ILogger<BPlusLeafGrain>? _logger;
 
     /// <summary>
+    /// <c>true</c> while <c>InitializeSiblingAsync</c> persists a freshly
+    /// minted split sibling. The sibling is a topology seed, like
+    /// <c>SetTreeIdAsync</c>, and must persist even when its donor is
+    /// unbound (TreeId <c>null</c>, #1744), so the #4419 stub-row guard in
+    /// <see cref="PersistAsync"/> stands aside for it.
+    /// </summary>
+    private bool _seedingSibling;
+
+    /// <summary>
     /// Diagnostic gate for the c2-vi etag-race probe. Set
     /// <c>LATTICE_BENCH_TRACE_PERSIST=1</c> in the silo environment to
     /// emit one stdout line per <see cref="PersistAsync"/> call with
@@ -99,6 +108,12 @@ internal sealed partial class BPlusLeafGrain
     /// The tree-id tag is sourced from persisted state and may be empty
     /// when the tree has not yet been registered with this leaf
     /// (pre-<c>SetTreeIdAsync</c>).
+    /// A persist on an activation with no stored row, no TreeId, and nothing
+    /// to lose (no entries, moved-away slots, or unresolved replay work, and
+    /// not seeding a split sibling) is refused as a no-op (#4419), so a stray
+    /// call reaching a cleared or never-seeded leaf cannot create an
+    /// unreclaimable stub row while an unbound leaf holding data still
+    /// persists it.
     /// </summary>
     private async Task PersistAsync([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
@@ -117,6 +132,37 @@ internal sealed partial class BPlusLeafGrain
                 : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
             Console.WriteLine($"[diag persist] kind=leaf caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' shard={state.State.ShardIndex} recordExists={state.RecordExists} etag={etag}");
         }
+
+        // #4419: an activation with no stored row and no TreeId is a leaf that
+        // was never seeded or has been cleared (ClearGrainStateAsync). A stray
+        // call reaching it - a sibling-pointer splice, a checkpoint flush, a
+        // digest publication - must not create a TreeId-less stub row, because
+        // nothing ever reclaims one.
+        //
+        // The refusal is deliberately narrowed to a leaf with NOTHING TO LOSE.
+        // An unbound (TreeId-less) leaf is a tolerated state (#1744): an
+        // unbound donor mints its split sibling with TreeId=null, and a rowless
+        // unbound leaf can accept data writes. Refusing those persists would
+        // acknowledge data and then drop it, so the guard stands aside when the
+        // activation is seeding a split sibling or holds any entries, moved-away
+        // slots, or unresolved replay work. It reads counts and flags only and
+        // allocates nothing (the entry cache is read through its field, never
+        // the lazily-allocating Cache property).
+        if (!state.RecordExists
+            && state.State.TreeId is null
+            && !_seedingSibling
+            && (_entryCache is null || _entryCache.Count == 0)
+            && (state.State.MovedAwaySlots is null || state.State.MovedAwaySlots.Length == 0)
+            && (state.State.UnresolvedReplayWork is null || state.State.UnresolvedReplayWork.Count == 0))
+        {
+            if (_tracePersist)
+            {
+                Console.WriteLine($"[diag persist] kind=leaf refused caller={caller} gid={context.GrainId} reason=no-row-no-treeid-empty");
+            }
+
+            return;
+        }
+
         // #2312: resolve the histogram's tree tag HERE, before the write, and
         // never let resolving it fail the persist. `state.State` throws
         // `InvalidOperationException: Attempt to access an invalid activation`
