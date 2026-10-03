@@ -16,7 +16,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
         TenantSubjectKind subjectKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentException.ThrowIfNullOrEmpty(subjectId);
         ArgumentException.ThrowIfNullOrEmpty(treeName);
         if (key is { Length: 0 })
@@ -93,7 +93,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
         TenantSubjectKind subjectKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentException.ThrowIfNullOrEmpty(subjectId);
         if (treeName is { Length: 0 })
         {

@@ -69,53 +69,14 @@ public readonly record struct RgaDelta
     /// </summary>
     /// <param name="other">The delta to compare against.</param>
     public bool Equals(RgaDelta other) =>
-        ListEqual(Inserts, other.Inserts) && ListEqual(Tombstones, other.Tombstones);
+        CrdtDeltaListEquality.ListEqual(Inserts, other.Inserts) && CrdtDeltaListEquality.ListEqual(Tombstones, other.Tombstones);
 
     /// <inheritdoc />
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        AddList(ref hash, Inserts);
-        AddList(ref hash, Tombstones);
+        CrdtDeltaListEquality.AddList(ref hash, Inserts);
+        CrdtDeltaListEquality.AddList(ref hash, Tombstones);
         return hash.ToHashCode();
-    }
-
-    private static bool ListEqual<T>(IReadOnlyList<T>? left, IReadOnlyList<T>? right)
-        where T : IEquatable<T>
-    {
-        if (ReferenceEquals(left, right))
-        {
-            return true;
-        }
-
-        if (left is null || right is null || left.Count != right.Count)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < left.Count; i++)
-        {
-            if (!left[i].Equals(right[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static void AddList<T>(ref HashCode hash, IReadOnlyList<T>? list)
-    {
-        if (list is null)
-        {
-            hash.Add(0);
-            return;
-        }
-
-        hash.Add(list.Count);
-        foreach (var element in list)
-        {
-            hash.Add(element);
-        }
     }
 }

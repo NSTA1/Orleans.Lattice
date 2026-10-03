@@ -54,8 +54,8 @@ public readonly record struct BoundedRegisterDelta
     /// <param name="other">The delta to compare against.</param>
     public bool Equals(BoundedRegisterDelta other) =>
         HasValue == other.HasValue
-        && BytesEqual(Value, other.Value)
-        && BytesEqual(OrderKey, other.OrderKey);
+        && ByteArrayEquality.ContentEquals(Value, other.Value)
+        && ByteArrayEquality.ContentEquals(OrderKey, other.OrderKey);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -74,8 +74,4 @@ public readonly record struct BoundedRegisterDelta
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

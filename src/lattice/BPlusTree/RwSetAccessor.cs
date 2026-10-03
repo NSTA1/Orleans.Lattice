@@ -149,16 +149,16 @@ public readonly record struct RwSetAccessor
         EnsureInitialised();
         return MutateAsync(_ => new RwSetDelta
         {
-            Adds = FlattenDots(other.Adds),
-            Removes = FlattenDots(other.Removes),
-            Tombstones = FlattenDots(other.Tombstones),
+            Adds = ObservedRemoveDots.FlattenToDeltaDots(other.Adds),
+            Removes = ObservedRemoveDots.FlattenToDeltaDots(other.Removes),
+            Tombstones = ObservedRemoveDots.FlattenToDeltaDots(other.Tombstones),
         }, cancellationToken, maxAttempts);
     }
 
     /// <summary>Mints the remove-wins add delta for <paramref name="element"/> from <paramref name="replicaId"/> against <paramref name="set"/>.</summary>
     private static RwSetDelta AddDelta(RwSet set, byte[] element, string replicaId)
     {
-        var counter = NextCounter(set, replicaId);
+        var counter = ObservedRemoveDots.NextCounter(set, replicaId);
         return new RwSetDelta
         {
             Adds = new[] { new OrSetDeltaDot { Element = element, ReplicaId = replicaId, Counter = counter } },
@@ -170,7 +170,7 @@ public readonly record struct RwSetAccessor
     /// <summary>Mints the remove-wins remove delta for <paramref name="element"/> from <paramref name="replicaId"/> against <paramref name="set"/>.</summary>
     private static RwSetDelta RemoveDelta(RwSet set, byte[] element, string replicaId)
     {
-        var counter = NextCounter(set, replicaId);
+        var counter = ObservedRemoveDots.NextCounter(set, replicaId);
         return new RwSetDelta
         {
             Adds = Array.Empty<OrSetDeltaDot>(),
@@ -210,52 +210,6 @@ public readonly record struct RwSetAccessor
                 ArrayPool<char>.Shared.Return(rented);
             }
         }
-    }
-
-    private static OrSetDeltaDot[] FlattenDots(Dictionary<string, List<OrSetDot>> map)
-    {
-        if (map.Count == 0) return Array.Empty<OrSetDeltaDot>();
-        var total = 0;
-        foreach (var dots in map.Values) total += dots.Count;
-        if (total == 0) return Array.Empty<OrSetDeltaDot>();
-        var result = new OrSetDeltaDot[total];
-        var i = 0;
-        foreach (var (key, dots) in map)
-        {
-            var element = Convert.FromBase64String(key);
-            foreach (var d in dots)
-            {
-                result[i++] = new OrSetDeltaDot { Element = element, ReplicaId = d.ReplicaId, Counter = d.Counter };
-            }
-        }
-        return result;
-    }
-
-    private static long NextCounter(RwSet set, string replicaId)
-    {
-        long max = 0;
-        foreach (var dots in set.Adds.Values)
-        {
-            foreach (var d in dots)
-            {
-                if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-            }
-        }
-        foreach (var dots in set.Removes.Values)
-        {
-            foreach (var d in dots)
-            {
-                if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-            }
-        }
-        foreach (var dots in set.Tombstones.Values)
-        {
-            foreach (var d in dots)
-            {
-                if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-            }
-        }
-        return max + 1;
     }
 
     private async Task MutateAsync(

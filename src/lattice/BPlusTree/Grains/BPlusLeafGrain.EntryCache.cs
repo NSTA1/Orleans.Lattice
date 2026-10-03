@@ -65,28 +65,4 @@ internal sealed partial class BPlusLeafGrain
     /// snapshot to materialise the way <see cref="EntriesForTest"/> does.
     /// </summary>
     internal LeafEntryCache CacheForTest => Cache;
-
-    /// <summary>
-    /// Ordinal maximum of two optional range bounds, treating
-    /// <see langword="null"/> as "unbounded on this side". Used to fold a scan's
-    /// inclusive-start and exclusive-after bounds into the single lower bound a
-    /// bounded hydration seeks to. Using the exclusive bound as an inclusive one
-    /// is deliberately conservative: it can only widen the hydrated range by the
-    /// boundary row, which the caller's own filter then skips.
-    /// </summary>
-    private static string? MaxOrdinal(string? left, string? right)
-        => left is null ? right
-            : right is null ? left
-            : string.CompareOrdinal(left, right) >= 0 ? left : right;
-
-    /// <summary>
-    /// Ordinal minimum of two optional range bounds, treating
-    /// <see langword="null"/> as "unbounded on this side". Used to fold a scan's
-    /// exclusive-end, exclusive-before and split-key bounds into the single
-    /// upper bound a bounded hydration stops at.
-    /// </summary>
-    private static string? MinOrdinal(string? left, string? right)
-        => left is null ? right
-            : right is null ? left
-            : string.CompareOrdinal(left, right) <= 0 ? left : right;
 }

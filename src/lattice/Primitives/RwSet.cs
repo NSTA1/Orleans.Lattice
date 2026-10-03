@@ -31,14 +31,6 @@ namespace Orleans.Lattice;
 [Alias(TypeAliases.RwSet)]
 public sealed class RwSet : ICrdt<RwSet>
 {
-    // Below this many already-present dots a linear scan over the small list
-    // beats allocating and populating a HashSet for the membership checks. An
-    // element carries one dot per concurrent add / remove, overwhelmingly 1-2
-    // in practice, so the linear path is the common case; the set is only built
-    // once a key genuinely accumulates many concurrent dots. Mirrors
-    // OrSet.DotLinearScanThreshold and RwFlag.DotLinearScanThreshold.
-    private const int DotLinearScanThreshold = 4;
-
     // Elements whose base64 encoding fits in this many chars are keyed through
     // a stack buffer; larger elements rent from the shared pool. 256 chars
     // covers elements up to 192 bytes with no allocation.
@@ -342,9 +334,9 @@ public sealed class RwSet : ICrdt<RwSet>
     public void MergeFrom(RwSet other)
     {
         ArgumentNullException.ThrowIfNull(other);
-        MergeMap(Adds, other.Adds);
-        MergeMap(Removes, other.Removes);
-        MergeMap(Tombstones, other.Tombstones);
+        OrSetDotUnion.MergeDotMaps(Adds, other.Adds);
+        OrSetDotUnion.MergeDotMaps(Removes, other.Removes);
+        OrSetDotUnion.MergeDotMaps(Tombstones, other.Tombstones);
         Compact();
     }
 
@@ -476,38 +468,6 @@ public sealed class RwSet : ICrdt<RwSet>
     /// </summary>
     private static bool HasLiveDot(List<OrSetDot> dots, List<OrSetDot>? tomb)
         => tomb is null ? dots.Count > 0 : OrSetDotCompaction.AnyLive(dots, tomb);
-
-    private static void MergeMap(Dictionary<string, List<OrSetDot>> target, Dictionary<string, List<OrSetDot>> source)
-    {
-        foreach (var (key, dots) in source)
-        {
-            if (!target.TryGetValue(key, out var existing))
-            {
-                target[key] = [.. dots];
-                continue;
-            }
-            if (dots.Count <= DotLinearScanThreshold)
-            {
-                // Small incoming dot list (the steady-state delta / replication
-                // fold case): at most DotLinearScanThreshold appends, so the
-                // linear Contains stays O(existing) and never grows quadratic.
-                // Only the incoming side must be small - the previous guard also
-                // required the accumulated list to be small, allocating a
-                // HashSet over the whole existing list every time a churned key
-                // with a long dot history absorbed even a 1-2-dot delta.
-                foreach (var d in dots)
-                {
-                    if (!existing.Contains(d)) existing.Add(d);
-                }
-                continue;
-            }
-            var seen = OrSetDotSet.Build(existing, dots.Count);
-            foreach (var d in dots)
-            {
-                if (seen.Add(d)) existing.Add(d);
-            }
-        }
-    }
 
     /// <summary>
     /// Folds a delta's per-element dots into the accumulated map. Two trims

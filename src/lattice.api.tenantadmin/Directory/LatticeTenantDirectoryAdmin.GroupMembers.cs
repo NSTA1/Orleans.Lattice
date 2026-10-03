@@ -9,7 +9,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     public async Task<IReadOnlyList<TenantGroupMember>> ListGroupMembersAsync(
         string tenantId, string groupName, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateGroupName(groupName, nameof(groupName));
 
         await AuthorizeAsync(tenant, "list-group-members", cancellationToken).ConfigureAwait(false);
@@ -42,7 +42,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         TenantSubjectKind memberKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateGroupName(groupName, nameof(groupName));
         ValidateEntry(memberId, memberKind, nameof(memberId), nameof(memberKind));
 
@@ -116,7 +116,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         TenantSubjectKind memberKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateGroupName(groupName, nameof(groupName));
         ValidateEntry(memberId, memberKind, nameof(memberId), nameof(memberKind));
 

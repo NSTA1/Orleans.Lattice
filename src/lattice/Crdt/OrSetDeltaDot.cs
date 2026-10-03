@@ -42,7 +42,7 @@ public readonly record struct OrSetDeltaDot
     /// </summary>
     /// <param name="other">The dot to compare against.</param>
     public bool Equals(OrSetDeltaDot other) =>
-        BytesEqual(Element, other.Element)
+        ByteArrayEquality.ContentEquals(Element, other.Element)
         && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
         && Counter == other.Counter;
 
@@ -59,8 +59,4 @@ public readonly record struct OrSetDeltaDot
         hash.Add(Counter);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

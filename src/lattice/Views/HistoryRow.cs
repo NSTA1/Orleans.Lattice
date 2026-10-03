@@ -116,8 +116,8 @@ public readonly record struct HistoryRow
         && Mode == other.Mode
         && RetentionShape == other.RetentionShape
         && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
-        && BytesEqual(Value, other.Value)
-        && BytesEqual(Delta, other.Delta);
+        && ByteArrayEquality.ContentEquals(Value, other.Value)
+        && ByteArrayEquality.ContentEquals(Delta, other.Delta);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -144,8 +144,4 @@ public readonly record struct HistoryRow
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

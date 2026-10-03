@@ -1971,7 +1971,7 @@ internal sealed partial class TxRegistryGrain(
                 // Saturating, because a caller-supplied retention can be large
                 // enough to overflow the sum and a throwing probe on the reader
                 // path would be a far worse outcome than a conservative horizon.
-                var expiresAtTicks = SaturatingAddTicks(ts.UtcTicks, retention.Ticks);
+                var expiresAtTicks = TickArithmetic.SaturatingAdd(ts.UtcTicks, retention.Ticks);
                 var becomesExpiredAt = expiresAtTicks == long.MaxValue
                     ? long.MaxValue
                     : expiresAtTicks + 1;
@@ -1991,21 +1991,6 @@ internal sealed partial class TxRegistryGrain(
         _expiryMemoValidBeforeTicks = validBefore;
         _expiryMemoCount = expired;
         return expired;
-    }
-
-    /// <summary>
-    /// <c>a + b</c> in ticks, clamped to <see cref="long.MaxValue"/> /
-    /// <see cref="long.MinValue"/> instead of wrapping.
-    /// </summary>
-    private static long SaturatingAddTicks(long a, long b)
-    {
-        var sum = unchecked(a + b);
-        // Overflow iff the operands share a sign that the result does not.
-        if (((a ^ sum) & (b ^ sum)) < 0)
-        {
-            return b < 0 ? long.MinValue : long.MaxValue;
-        }
-        return sum;
     }
 
     /// <summary>

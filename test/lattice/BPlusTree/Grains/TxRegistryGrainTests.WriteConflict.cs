@@ -63,15 +63,15 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public void IsWriteConflict_recognises_a_conflict_wrapped_by_another_exception()
+    public void Registry_write_conflict_classification_recognises_a_conflict_wrapped_by_another_exception()
     {
         var wrapped = new InvalidOperationException("outer", new InconsistentStateException("etag mismatch"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(TxRegistryGrain.IsWriteConflict(new InconsistentStateException("etag mismatch")), Is.True);
-            Assert.That(TxRegistryGrain.IsWriteConflict(wrapped), Is.True);
-            Assert.That(TxRegistryGrain.IsWriteConflict(new IOException("disk")), Is.False);
+            Assert.That(GrainStateWriteFaults.IsConflict(new InconsistentStateException("etag mismatch")), Is.True);
+            Assert.That(GrainStateWriteFaults.IsConflict(wrapped), Is.True);
+            Assert.That(GrainStateWriteFaults.IsConflict(new IOException("disk")), Is.False);
         });
     }
 

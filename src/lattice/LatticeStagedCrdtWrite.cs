@@ -85,8 +85,8 @@ public readonly record struct LatticeStagedCrdtWrite
     /// <param name="other">The staged write to compare against.</param>
     public bool Equals(LatticeStagedCrdtWrite other) =>
         string.Equals(Key, other.Key, StringComparison.Ordinal)
-        && BytesEqual(Value, other.Value)
-        && BytesEqual(Delta, other.Delta);
+        && ByteArrayEquality.ContentEquals(Value, other.Value)
+        && ByteArrayEquality.ContentEquals(Delta, other.Delta);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -105,8 +105,4 @@ public readonly record struct LatticeStagedCrdtWrite
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
