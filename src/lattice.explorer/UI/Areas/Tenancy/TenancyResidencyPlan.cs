@@ -6,8 +6,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// A tenant's residency being edited: the committed set as the cluster reported
 /// it, the set the caller is composing, and the two invariants the cluster
 /// enforces, applied at the control so they are legible before anything is
-/// sent. Residency stays inside the allowed set, and a tenant stays resident in
-/// at least one region. The cluster still enforces both.
+/// sent. Residency stays inside the allowed set, and a tenant resident in a
+/// region now stays resident in at least one. A tenant resident nowhere (no
+/// residency set, or every region gone) may plan none, as the cluster accepts an
+/// empty set for it. The cluster still enforces both.
 /// </summary>
 internal sealed class TenancyResidencyPlan
 {
@@ -37,6 +39,13 @@ internal sealed class TenancyResidencyPlan
 
     /// <summary>Whether the tenant has residency set; with none set the tenant is served in every region.</summary>
     public bool HasResidency => _regions.Any(region => region.Status != TenantRegionLifecycleStatus.None);
+
+    /// <summary>
+    /// Whether the committed residency holds any region (Provisioning, Backfilling or
+    /// Online), as the cluster counts a resident region. Only then is emptying the
+    /// residency refused.
+    /// </summary>
+    public bool IsResidentNow => _regions.Any(region => TenancyFormat.IsResident(region.Status));
 
     /// <summary>Whether any of the tenant's regions is Online now, so a plan can keep serving it by keeping that region.</summary>
     public bool HasOnlineRegion => _regions.Any(region => region.Status == TenantRegionLifecycleStatus.Online);
@@ -151,7 +160,9 @@ internal sealed class TenancyResidencyPlan
     {
         if (_planned.Contains(region.RegionId))
         {
-            return _planned.Count <= 1 ? LastRegionRefusal : null;
+            // The cluster refuses an empty residency only while the tenant is resident
+            // in some region, so the last planned region is held only then (#4412).
+            return _planned.Count <= 1 && IsResidentNow ? LastRegionRefusal : null;
         }
 
         return region.IsAllowed ? null : NotAllowedRefusal;

@@ -189,6 +189,44 @@ public sealed class BackupCapturePageTests : BackupsTestContext
     }
 
     [Test]
+    public void A_blank_tree_is_not_carried_into_a_set_so_capture_asks_for_one()
+    {
+        // #4413: the kind switch judged the untrimmed text, so spaces became an
+        // empty tree and Capture threw from BackupScopeSelector.WholeTree("").
+        var cut = RenderAt<BackupCapturePage>("backups/new");
+
+        Input(cut, "Tree", "   ");
+        Select(cut, "Kind", "set");
+        Input(cut, "Name", "quarter");
+        cut.Find("form").Submit();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-backups-trees__item"), Is.Empty);
+            Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Add at least one tree."));
+            Assert.That(Operations.Recent, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_tree_already_in_the_set_is_not_carried_in_again_when_padded_with_spaces()
+    {
+        var cut = RenderAt<BackupCapturePage>("backups/new?tree=orders");
+        Select(cut, "Kind", "set");
+        Select(cut, "Kind", "full");
+
+        Input(cut, "Tree", " orders ");
+        Select(cut, "Kind", "set");
+        Assert.That(cut.FindAll(".lt-backups-trees__item"), Has.Count.EqualTo(1), "orders is listed once");
+        Input(cut, "Name", "quarter");
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartBackupSetAsync)), Is.EqualTo(1)));
+        var request = Backups.LastOf<LatticeBackupSetCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupSetAsync));
+        Assert.That(request.Scopes.Select(scope => scope.TreeId), Is.EqualTo(new[] { "orders" }));
+    }
+
+    [Test]
     public void Cancel_returns_to_the_catalogue()
     {
         var cut = RenderAt<BackupCapturePage>("backups/new");

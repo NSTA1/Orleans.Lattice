@@ -279,6 +279,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - The highest schema target version is not advanced to 0.** At target version 4,294,967,295 the Versions tab no longer offers to advance to version 0; Advance is turned off and the tab says no higher version exists. ([#4390](https://github.com/NSTA1/Orleans.Lattice/issues/4390)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Explorer - A region planned for a tenant resident nowhere can be unchecked.** The Regions page locked the last planned region even when the tenant had no committed residency, which the cluster lets it empty; it is now held only while the tenant is resident in some region. ([#4412](https://github.com/NSTA1/Orleans.Lattice/issues/4412)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Switching a backup to Set of trees adds no blank or repeated tree.** The tree carried into the set is trimmed first, so spaces add nothing and a padded name already in the set is not added twice, and Capture asks for a tree instead of failing. ([#4413](https://github.com/NSTA1/Orleans.Lattice/issues/4413)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - An app settles only for the caller who changed it.** After an install or enable, only the same sign-in, endpoint and tenant treat an unready read of that app as settling; another tenant or identity gets its answer at once. ([#4414](https://github.com/NSTA1/Orleans.Lattice/issues/4414)) (`Orleans.Lattice.Explorer.UI`)
+
 ### Security
 
 - **Explorer - A web sign-in minted a token for whatever resource the endpoint asked for.** The advertised OAuth audience became the requested scope unchecked, so a hostile endpoint harvested a delegated Graph token. An audience must now be bound to the endpoint or listed in `AllowedAudiences`. ([#4394](https://github.com/NSTA1/Orleans.Lattice/issues/4394)) (`Orleans.Lattice.Explorer.Entra.Web`)
