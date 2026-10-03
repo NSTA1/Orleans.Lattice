@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using Orleans.Lattice.BPlusTree;
 
@@ -35,12 +36,22 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// (read-your-writes), which pins a lost committed batch to the round that lost it
 /// rather than leaving it to a reader to happen upon.
 /// </para>
+/// <para>
+/// A read that times out observed nothing, so it can neither prove nor refute
+/// atomicity. By default such a timeout is still recorded as a failure; a test that
+/// opts in with <c>classifyTimeoutsAsLiveness</c> records it in
+/// <see cref="LivenessFaults"/> instead (with how long the read waited), so a starved
+/// test host reads as a liveness fault and never as an atomic-visibility violation.
+/// The caller then asserts liveness separately (#4407).
+/// </para>
 /// </summary>
 internal sealed class AtomicRoundProbe
 {
     private readonly ILattice _tree;
     private readonly List<string> _keys;
     private readonly ConcurrentQueue<string> _failures = new();
+    private readonly ConcurrentQueue<string> _livenessFaults = new();
+    private readonly bool _classifyTimeoutsAsLiveness;
     private readonly ConcurrentDictionary<string, int> _toleratedReadFaults = new();
     private readonly List<Task> _readers = [];
     private readonly Func<Exception, bool> _isToleratedWriteFault;
@@ -73,17 +84,25 @@ internal sealed class AtomicRoundProbe
     /// leaving the cluster, say), beyond the documented transient read faults that are
     /// always tolerated. Every other read fault is a failure.
     /// </param>
+    /// <param name="classifyTimeoutsAsLiveness">
+    /// When <c>true</c>, a read that throws <see cref="TimeoutException"/> is recorded
+    /// in <see cref="LivenessFaults"/> rather than <see cref="Failures"/>: it observed
+    /// nothing, so it says nothing about atomicity. The caller must then assert
+    /// liveness itself. Defaults to <c>false</c>, which records it as a failure.
+    /// </param>
     public AtomicRoundProbe(
         ILattice tree,
         string keyPrefix,
         int keyCount = 16,
         Func<Exception, bool>? isToleratedWriteFault = null,
-        Func<Exception, bool>? isToleratedReadFault = null)
+        Func<Exception, bool>? isToleratedReadFault = null,
+        bool classifyTimeoutsAsLiveness = false)
     {
         _tree = tree;
         _keys = Enumerable.Range(0, keyCount).Select(i => $"{keyPrefix}-{i:D2}").ToList();
         _isToleratedWriteFault = isToleratedWriteFault ?? (_ => false);
         _isToleratedReadFault = isToleratedReadFault ?? (_ => false);
+        _classifyTimeoutsAsLiveness = classifyTimeoutsAsLiveness;
     }
 
     /// <summary>The fixed key universe.</summary>
@@ -94,6 +113,13 @@ internal sealed class AtomicRoundProbe
 
     /// <summary>Every recorded violation, in the order observed.</summary>
     public IReadOnlyCollection<string> Failures => _failures;
+
+    /// <summary>
+    /// Reads that timed out and observed nothing, with how long each waited. Populated
+    /// only when the probe was built with <c>classifyTimeoutsAsLiveness</c>; these are
+    /// liveness faults, never atomicity violations.
+    /// </summary>
+    public IReadOnlyCollection<string> LivenessFaults => _livenessFaults;
 
     /// <summary>Total successful reader polls.</summary>
     public long Polls => Interlocked.Read(ref _polls);
@@ -335,7 +361,7 @@ internal sealed class AtomicRoundProbe
     /// <summary>A one-line summary of the run, for the test log.</summary>
     public string Summary() =>
         $"rounds={RoundsCommitted} polls={Polls} uniform={UniformPolls} hidden={HiddenPolls} " +
-        $"toleratedWriteFaults={ToleratedWriteFaults} toleratedReadFaults=[{string.Join(", ", _toleratedReadFaults.Select(kv => $"{kv.Key}={kv.Value}"))}]";
+        $"toleratedWriteFaults={ToleratedWriteFaults} livenessFaults={_livenessFaults.Count} toleratedReadFaults=[{string.Join(", ", _toleratedReadFaults.Select(kv => $"{kv.Key}={kv.Value}"))}]";
 
     private List<KeyValuePair<string, byte[]>> BatchFor(int round)
     {
@@ -370,12 +396,20 @@ internal sealed class AtomicRoundProbe
                 : committedAtStart);
 
         Dictionary<string, byte[]> snapshot;
+        var start = Stopwatch.GetTimestamp();
         try
         {
             snapshot = await _tree.GetManyAsync(_keys, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            return;
+        }
+        catch (TimeoutException ex) when (_classifyTimeoutsAsLiveness)
+        {
+            // Nothing was observed, so this is neither a uniform nor a torn view.
+            _livenessFaults.Enqueue(
+                $"[{_phase}] {context}: GetManyAsync timed out after {Stopwatch.GetElapsedTime(start).TotalMilliseconds:F0} ms: {ex.Message}");
             return;
         }
         catch (Exception ex) when (IsDocumentedTransientRead(ex) || _isToleratedReadFault(ex))
