@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Backup.Tests;
 ///   <see cref="LatticeRestoreValidationException"/>.
 /// - Unknown backup scope kind (line 1111): a scope with an invalid
 ///   <see cref="BackupScopeKind"/> value throws
-///   <see cref="ArgumentOutOfRangeException"/> from ResolveRange.
+///   <see cref="ArgumentOutOfRangeException"/> from BackupScopeRange.Resolve.
 /// </summary>
 [TestFixture]
 public sealed class LatticeBackupRestoreServiceUnitTests
@@ -202,7 +202,7 @@ public sealed class LatticeBackupRestoreServiceUnitTests
     [Test]
     public async Task RestoreAsync_throws_on_unknown_backup_scope_kind()
     {
-        // Line 1111: ResolveRange throws ArgumentOutOfRangeException when the
+        // Line 1111: BackupScopeRange.Resolve throws ArgumentOutOfRangeException when the
         // scope's Kind does not match any known BackupScopeKind value.
         var dispatcher = Substitute.For<IRestoreSagaDispatcher>();
         dispatcher.TryDispatchAsync(Arg.Any<LatticeRestoreRequest>(), Arg.Any<CancellationToken>())
@@ -214,7 +214,7 @@ public sealed class LatticeBackupRestoreServiceUnitTests
         catalog.GetAsync("unknown-kind-backup", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BackupManifest?>(manifest));
 
-        // An invalid enum value reaches the ResolveRange switch's default arm.
+        // An invalid enum value reaches the BackupScopeRange.Resolve switch's default arm.
         var unknownKindScope = new BackupScopeSelector((BackupScopeKind)99, "orders", null);
         var request = new LatticeRestoreRequest("unknown-kind-backup")
         {

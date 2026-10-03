@@ -100,10 +100,94 @@ public sealed class RepoContextAnnIndexUnavailableReadTests
         });
     }
 
-    private static List<string> Warnings(ILogger logger) =>
+    [Test]
+    public async Task A_record_that_stays_unavailable_through_the_deferral_bound_faults_the_open_and_keeps_the_durable_index()
+    {
+        const int Cap = RepoContextAnnIndexHandle.MaxRecordUnavailableDeferrals;
+        var (store, source) = await BuiltAsync();
+        var records = store.Inner.Count;
+        store.HiddenFromBatchReads.Add(VectorChunkKeys(store.Inner)[^1]);
+
+        using var reporter = new RepoContextAnnIndexLoadReporter();
+        var logger = Substitute.For<ILogger>();
+        using var handle = NewHandle(source, store, reporter, logger);
+
+        for (var i = 1; i < Cap; i++)
+        {
+            Assert.DoesNotThrowAsync(async () => await handle.AdvanceAsync(Ct), $"Deferral {i} is under the bound.");
+            Assert.That(reporter.Snapshot().Deferred, Is.EqualTo(i));
+        }
+
+        var fault = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await handle.AdvanceAsync(Ct),
+            "Issue #4092: a record that stays inconsistent must not defer the open forever.");
+
+        var faulted = reporter.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(fault!.InnerException, Is.TypeOf<VectorIndexRecordUnavailableException>());
+            Assert.That(faulted.Faulted, Is.EqualTo(1), "The wedged open must page as a fault.");
+            Assert.That(faulted.Deferred, Is.EqualTo(Cap - 1), "The faulting attempt is not also a deferral.");
+            Assert.That(faulted.Discarded, Is.Zero, "The #3905 guarantee: the converged index is never discarded.");
+            Assert.That(store.Inner.Count, Is.EqualTo(records), "Every durable record must survive the fault.");
+            Assert.That(handle.IsServing, Is.False);
+            Assert.That(Errors(logger).Single(), Does.Contain("kept, not discarded"));
+        });
+
+        store.HiddenFromBatchReads.Clear();
+        await handle.EnsureBuiltAsync(Ct);
+
+        var converged = reporter.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(handle.IsServing, Is.True);
+            Assert.That(handle.RestoredFromDurableState, Is.True,
+                "Once the store answers, the durable index is adopted, not rebuilt from source.");
+            Assert.That(handle.Progress.VectorsIndexed, Is.EqualTo(Vectors));
+            Assert.That(converged.Discarded, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task The_deferral_bound_restarts_after_a_fault_so_a_retry_defers_again_before_it_faults_again()
+    {
+        const int Cap = RepoContextAnnIndexHandle.MaxRecordUnavailableDeferrals;
+        var (store, source) = await BuiltAsync();
+        store.HiddenFromBatchReads.Add(VectorChunkKeys(store.Inner)[^1]);
+
+        using var reporter = new RepoContextAnnIndexLoadReporter();
+        var logger = Substitute.For<ILogger>();
+        using var handle = NewHandle(source, store, reporter, logger);
+
+        for (var round = 1; round <= 2; round++)
+        {
+            for (var i = 1; i < Cap; i++)
+            {
+                Assert.DoesNotThrowAsync(async () => await handle.AdvanceAsync(Ct));
+            }
+
+            Assert.ThrowsAsync<InvalidOperationException>(async () => await handle.AdvanceAsync(Ct));
+
+            var snapshot = reporter.Snapshot();
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.Faulted, Is.EqualTo(round));
+                Assert.That(snapshot.Deferred, Is.EqualTo(round * (Cap - 1)),
+                    "Each fault restarts the bound, so the next attempts defer rather than fault immediately.");
+            });
+        }
+
+        Assert.That(Errors(logger), Has.Count.EqualTo(2));
+    }
+
+    private static List<string> Warnings(ILogger logger) => Messages(logger, LogLevel.Warning);
+
+    private static List<string> Errors(ILogger logger) => Messages(logger, LogLevel.Error);
+
+    private static List<string> Messages(ILogger logger, LogLevel level) =>
         [.. logger.ReceivedCalls()
             .Where(call => call.GetMethodInfo().Name == nameof(ILogger.Log)
-                && Equals(call.GetArguments()[0], LogLevel.Warning))
+                && Equals(call.GetArguments()[0], level))
             .Select(call => call.GetArguments()[2]!.ToString()!)];
 
     private async Task<(GapStore Store, InMemoryRepoContextVectorSource Source)> BuiltAsync()

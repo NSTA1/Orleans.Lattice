@@ -69,7 +69,7 @@ public sealed record DataReadResult
         && Found == other.Found
         && MergeMode == other.MergeMode
         && Raw == other.Raw
-        && BytesEqual(Value, other.Value);
+        && ByteArrayEquality.ContentEquals(Value, other.Value);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -87,8 +87,4 @@ public sealed record DataReadResult
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

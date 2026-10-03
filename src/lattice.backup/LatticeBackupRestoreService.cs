@@ -71,7 +71,7 @@ internal sealed class LatticeBackupRestoreService(
             // target tree) or the whole captured scope. A requested sub-scope must fall
             // within the captured scope.
             var effectiveScope = ResolveEffectiveScope(request.Scope, target.Scope, targetTreeId);
-            var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
+            var (rangeStart, rangeEnd) = BackupScopeRange.Resolve(effectiveScope);
 
             // Fail-closed authorization with the real caller identity, before any
             // system-origin scope is entered. Two identifiers are in play whenever
@@ -712,7 +712,7 @@ internal sealed class LatticeBackupRestoreService(
         BackupConstants.ThrowIfReservedTree(targetTreeId, nameof(request));
 
         var effectiveScope = ResolveEffectiveScope(request.Scope, target.Scope, targetTreeId);
-        var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
+        var (rangeStart, rangeEnd) = BackupScopeRange.Resolve(effectiveScope);
 
         await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
         await AuthorizeCapturedSourcesAsync([target], effectiveScope, targetTreeId, cancellationToken)
@@ -1467,8 +1467,8 @@ internal sealed class LatticeBackupRestoreService(
             return Retarget(captured, targetTreeId);
         }
 
-        var (capturedStart, capturedEnd) = ResolveRange(captured);
-        var (requestedStart, requestedEnd) = ResolveRange(requested);
+        var (capturedStart, capturedEnd) = BackupScopeRange.Resolve(captured);
+        var (requestedStart, requestedEnd) = BackupScopeRange.Resolve(requested);
         if (!RangeContains(capturedStart, capturedEnd, requestedStart, requestedEnd))
         {
             throw new LatticeRestoreValidationException(
@@ -1542,20 +1542,6 @@ internal sealed class LatticeBackupRestoreService(
                 .ConfigureAwait(false);
         }
     }
-
-    /// <summary>
-    /// Maps a scope to its half-open key range: whole-tree is unbounded, a prefix is
-    /// [prefix, prefixUpperBound), a single key is [key, key + separator). Mirrors
-    /// the capture engine's range resolution so restore filters symmetrically.
-    /// </summary>
-    private static (string? startInclusive, string? endExclusive) ResolveRange(BackupScopeSelector scope) =>
-        scope.Kind switch
-        {
-            BackupScopeKind.WholeTree => (null, null),
-            BackupScopeKind.Prefix => (scope.KeyOrPrefix, BackupConstants.PrefixUpperBound(scope.KeyOrPrefix!)),
-            BackupScopeKind.Key => (scope.KeyOrPrefix, scope.KeyOrPrefix + "\0"),
-            _ => throw new ArgumentOutOfRangeException(nameof(scope), scope.Kind, "Unknown backup scope kind."),
-        };
 
     private static bool RangeContains(string? outerStart, string? outerEnd, string? innerStart, string? innerEnd)
     {

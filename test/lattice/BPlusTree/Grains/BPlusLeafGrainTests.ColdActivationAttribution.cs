@@ -255,7 +255,6 @@ public partial class BPlusLeafGrainTests
     {
         const int Leaves = 200;
         var serviceTime = TimeSpan.FromMilliseconds(5);
-        var deadline = TimeSpan.FromMilliseconds(300);
         var treeId = $"tree-cold-storm-{Guid.NewGuid():N}";
 
         // One non-reentrant registry singleton: every GetEntryAsync takes a
@@ -302,10 +301,9 @@ public partial class BPlusLeafGrainTests
 
                 tasks.Add(Task.Run(async () =>
                 {
-                    using var cts = new CancellationTokenSource(deadline);
                     try
                     {
-                        await LeafActivationHarness.ActivateAsync(grain, cts.Token);
+                        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
                         Interlocked.Increment(ref succeeded);
                     }
                     catch (Exception)
@@ -315,19 +313,30 @@ public partial class BPlusLeafGrainTests
                 }));
             }
 
-            await Task.WhenAll(tasks);
+            // No per-leaf deadline: issue #4133. A fixed wall-clock race here
+            // made the verdict a function of scheduler contention rather than
+            // of the coalescing behaviour under test - the test cancelled
+            // leaves under load with the production code unchanged, and (per
+            // the issue's own evidence) activated as few as 11 of 200 on a
+            // sufficiently contended box. The safety net below exists only to
+            // fail a genuine hang; it is many multiples of what even a heavily
+            // loaded CI runner needs and is never the load-bearing check.
+            await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(60));
         }
 
         Assert.Multiple(() =>
         {
             Assert.That(succeeded, Is.EqualTo(Leaves),
-                $"Every leaf must activate inside its deadline. Uncoalesced, {Leaves} leaves cost "
-                + $"{Leaves} serialised registry turns and all but a handful were cancelled.");
+                $"Every leaf must activate. With the per-tree coalescing in place none of the "
+                + $"{Leaves} concurrent cold activations should fail or be cancelled.");
 
             Assert.That(registryCalls, Is.LessThan(Leaves / 4),
                 $"{Leaves} concurrent cold activations of one tree must not cost one registry turn "
-                + "each. The bound is how many round trips fit inside the storm rather than a fitted "
-                + "constant, so it is asserted as a fraction and not an exact number.");
+                + "each. This is the regression gate: it is a structural count, not a timing, so it "
+                + "stays load-independent and still fails deterministically if the per-tree "
+                + "coalescing in LatticeOptionsResolver is bypassed. The bound is how many round "
+                + "trips fit inside the storm rather than a fitted constant, so it is asserted as a "
+                + "fraction and not an exact number.");
 
             Assert.That(records, Is.Empty,
                 "No activation may be cancelled once the serialisation point is removed.");

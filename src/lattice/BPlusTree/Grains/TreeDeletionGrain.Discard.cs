@@ -63,7 +63,7 @@ internal sealed partial class TreeDeletionGrain
         // Released only after the shard marks, which is what stops any further
         // append from landing in the log this trims.
         await DeregisterLeafCursorsAsync();
-        await TrimDiscardedWalAsync();
+        await TrimPurgedWalAsync();
     }
 
     /// <inheritdoc />
@@ -134,16 +134,24 @@ internal sealed partial class TreeDeletionGrain
     }
 
     /// <summary>
-    /// Trims every partition of a discarded copy's write-ahead log through its
-    /// head. Its leaf materialiser pins are gone and its shards reject every
-    /// write, so nothing will ever replay or append to the log again, and with no
-    /// consumer left the WAL GC reports no cursor and trims nothing on its own.
-    /// Best-effort per partition: a failure is logged and leaves that partition's
-    /// log retained, exactly as it was before the discard, and the purge that
-    /// follows trims again.
+    /// Trims every partition of a purge-completing tree's write-ahead log
+    /// through its head: eagerly, for a discarded copy whose shards already
+    /// reject every write, and again at the end of an ordinary purge
+    /// (<see cref="FinishCompletedPurgeAsync"/>). Either way its leaf
+    /// materialiser pins are gone, so nothing will ever replay or append to the
+    /// log again, and with no consumer left the WAL GC reports no cursor and
+    /// trims nothing on its own. Self-gates via <see cref="PurgeUnregistersTree"/>:
+    /// a copy that retains its registry entry shares its id with a live logical
+    /// tree, whose WAL this must not touch. Best-effort per partition: a failure
+    /// is logged and leaves that partition's log retained, exactly as it was
+    /// before, and a later call (the discard's own purge, or a reminder-driven
+    /// retry) trims again.
     /// </summary>
-    private async Task TrimDiscardedWalAsync()
+    private async Task TrimPurgedWalAsync()
     {
+        if (!PurgeUnregistersTree)
+            return;
+
         int partitions;
         try
         {

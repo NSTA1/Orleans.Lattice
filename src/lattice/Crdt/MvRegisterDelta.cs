@@ -73,7 +73,7 @@ public readonly record struct MvRegisterDelta
     /// </summary>
     /// <param name="other">The delta to compare against.</param>
     public bool Equals(MvRegisterDelta other) =>
-        EntriesEqual(Entries, other.Entries) && ContextEqual(Context, other.Context);
+        CrdtDeltaListEquality.ListEqual(Entries, other.Entries) && ContextEqual(Context, other.Context);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -108,29 +108,6 @@ public readonly record struct MvRegisterDelta
 
         hash.Add(contextHash);
         return hash.ToHashCode();
-    }
-
-    private static bool EntriesEqual(IReadOnlyList<MvRegisterEntry>? left, IReadOnlyList<MvRegisterEntry>? right)
-    {
-        if (ReferenceEquals(left, right))
-        {
-            return true;
-        }
-
-        if (left is null || right is null || left.Count != right.Count)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < left.Count; i++)
-        {
-            if (!left[i].Equals(right[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static bool ContextEqual(IReadOnlyDictionary<string, long>? left, IReadOnlyDictionary<string, long>? right)

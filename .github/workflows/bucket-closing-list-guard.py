@@ -76,6 +76,16 @@ than the defect it fixes. That is what the exclusion block is for, and why an
 exclusion MUST carry a reason: a deliberately-held-open issue becomes a stated
 decision rather than an omission, and the two stop being indistinguishable.
 
+SOFT REFERENCES ARE CLAIMS TOO
+------------------------------
+A member that writes `Relates to #N` (PR #3183 did exactly that for #3180),
+`Related to`, `Addresses`, `Part of` or `Towards` instead of `Refs` has made
+the same deferral in different words. Counting only `Refs` left such an issue
+invisible to this guard, so it could stay open with no signal anywhere (#4121).
+A soft reference is therefore a claim: the bucket must close it or hold it open
+with a stated reason, exactly like a `Refs`. A bare `#N` with no keyword is
+still not a claim, and neither is one inside a code span, fence or blockquote.
+
 Run standalone (it self-reports when the pull-request shape is not a bucket):
   python3 .github/workflows/bucket-closing-list-guard.py
 """
@@ -101,6 +111,10 @@ MIN_REASON_CHARS = 12
 MAX_PAGES = 100
 
 EXCLUSION_HEADING = "Deliberately held open"
+
+# The keywords that make a member's issue reference a claim. `Refs` is the
+# documented form; the rest are the soft forms members actually write (#4121).
+CLAIM_KEYWORDS = r"(?:refs?|relates?[ \t]+to|related[ \t]+to|addresse[sd]|part[ \t]+of|towards?)"
 
 
 class GuardError(RuntimeError):
@@ -157,16 +171,18 @@ def _reference_pattern(repo: str) -> str:
 
 
 def claimed_issues(body: str, repo: str) -> set[int]:
-    """Every number a member body claims with `Refs`.
+    """Every number a member body claims with `Refs` or a soft reference.
 
     Accepts `Refs #1`, `Ref: #1` and the comma continuation `Refs #1, #2, #3`,
-    which is how a member citing several items actually writes it.
+    which is how a member citing several items actually writes it, and the same
+    shapes after any soft keyword in `CLAIM_KEYWORDS` (`Relates to #1`,
+    `Part of #1, #2`, `Addresses: #1`).
     """
     text = visible_text(body)
     pattern = _reference_pattern(repo)
     run = rf"{pattern}(?:[ \t]*,[ \t]*{pattern})*"
     found: set[int] = set()
-    for match in re.finditer(rf"(?i)\brefs?\b[ \t]*:?[ \t]*({run})", text):
+    for match in re.finditer(rf"(?i)\b{CLAIM_KEYWORDS}\b[ \t]*:?[ \t]*({run})", text):
         found.update(int(n) for n in re.findall(r"#(\d+)", match.group(1)))
     return found
 
@@ -355,6 +371,13 @@ def self_test() -> None:
         ("> Refs #1", set()),
         ("```\nRefs #1\n```", set()),
         ("mentions #1 without the keyword", set()),
+        ("Relates to #5", {5}),
+        ("Related to #5", {5}),
+        ("Part of #6, #7", {6, 7}),
+        ("Addresses: #8", {8}),
+        ("Towards #9", {9}),
+        ("`Relates to #5`", set()),
+        ("> Part of #6", set()),
     ]
     broken = [text for text, want in probes if claimed_issues(text, repo) != want]
     if broken:
@@ -450,7 +473,7 @@ def main() -> int:
                 claims.setdefault(issue, []).append(member["number"])
         if not claims:
             print(f"::error::NON-VACUITY: {len(members)} merged member pull request(s) were "
-                  f"read and NOT ONE carries a 'Refs #N' reference, so there is nothing to "
+                  f"read and NOT ONE carries a 'Refs #N' (or soft) reference, so there is nothing to "
                   "reconcile and this guard would pass over any closing list at all. Member "
                   "pull requests give up their closing keyword and record the deferral as "
                   "'Refs #N'; a bucket whose members record nothing cannot be checked, so "
@@ -501,7 +524,7 @@ def main() -> int:
         return 1
 
     summary = (f"{len(members)} merged member pull request(s), {len(claims)} issue(s) "
-               f"claimed by 'Refs', {len(closing)} in the computed closing set, "
+               f"claimed by 'Refs' or a soft reference, {len(closing)} in the computed closing set, "
                f"{len(excluded)} explicitly held open")
     for kind, label in (("PR", "name a pull request, not an issue"),
                         ("CLOSED", "are already closed"),

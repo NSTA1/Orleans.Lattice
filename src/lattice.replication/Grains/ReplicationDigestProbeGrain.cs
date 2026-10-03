@@ -164,7 +164,7 @@ internal sealed class ReplicationDigestProbeGrain(
 
         var nowTicks = DateTime.UtcNow.Ticks;
         var interval = TimeSpan.FromTicks(EnsureJitteredInterval(options));
-        if (!ShouldRunCadence(nowTicks, state.State.LastProbeTicks, interval))
+        if (!ReplicationCadence.IsDue(nowTicks, state.State.LastProbeTicks, interval))
         {
             return;
         }
@@ -719,14 +719,5 @@ internal sealed class ReplicationDigestProbeGrain(
     {
         var routing = await lattice.GetRoutingAsync(forceRefresh: true, CancellationToken.None).ConfigureAwait(true);
         return routing.PhysicalTreeId;
-    }
-
-    private static bool ShouldRunCadence(long nowTicks, long lastTicks, TimeSpan interval)
-    {
-        if (lastTicks == 0)
-        {
-            return true; // Never run before - fire on first tick.
-        }
-        return nowTicks - lastTicks >= interval.Ticks;
     }
 }

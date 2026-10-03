@@ -10,7 +10,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
     public async Task<TenantAccessPosture> GetPostureAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
 
         // The one call that answers while the feature is off: it is how a caller
         // tells "off" from "denied". It is still authorized first.

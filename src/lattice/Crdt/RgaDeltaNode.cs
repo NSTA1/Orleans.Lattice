@@ -56,7 +56,7 @@ public readonly record struct RgaDeltaNode
     /// </summary>
     /// <param name="other">The node to compare against.</param>
     public bool Equals(RgaDeltaNode other) =>
-        BytesEqual(Value, other.Value)
+        ByteArrayEquality.ContentEquals(Value, other.Value)
         && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
         && Counter == other.Counter
         && ParentDot.Equals(other.ParentDot);
@@ -75,8 +75,4 @@ public readonly record struct RgaDeltaNode
         hash.Add(ParentDot);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

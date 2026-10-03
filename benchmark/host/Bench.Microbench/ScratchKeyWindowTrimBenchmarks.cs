@@ -812,7 +812,7 @@ public class ScratchKeyWindowTrimBenchmarks
         Span<byte> lenPrefix = stackalloc byte[4];
         foreach (var p in participants)
         {
-            LatticeCrossTreeTxGrain.AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
+            IncrementalHashFraming.AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
             var keys = new string[p.Entries.Count];
             for (var i = 0; i < p.Entries.Count; i++) keys[i] = p.Entries[i].Key;
             Array.Sort(keys, OrdinalStringOrder.Comparison);
@@ -820,7 +820,7 @@ public class ScratchKeyWindowTrimBenchmarks
             hash.AppendData(lenPrefix);
             foreach (var key in keys)
             {
-                LatticeCrossTreeTxGrain.AppendLengthPrefixed(hash, key, lenPrefix);
+                IncrementalHashFraming.AppendLengthPrefixed(hash, key, lenPrefix);
             }
         }
         return hash.GetHashAndReset();

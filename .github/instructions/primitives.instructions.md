@@ -23,7 +23,7 @@ Although these types live in the `Primitives/` folder, **public** CRDT primitive
 > different subset of the primitives, so all three were wrong. Edit this
 > paragraph in place when a primitive is added; do not append another copy.
 
-Area-internal helpers in the same folder (`LwwValue<T>`, `LeafDeliveryCursor`, `SplitState`, `SplitStateExtensions`, `StateDelta`) stay `internal` in `namespace Orleans.Lattice.Primitives`. The exceptions are the dot-history helpers `OrSetDotCompaction` and `OrSetDotSet`: they are `internal static` classes too, but declare `namespace Orleans.Lattice`, beside the observed-remove primitives they serve.
+Area-internal helpers in the same folder (`LwwValue<T>`, `LeafDeliveryCursor`, `SplitState`, `SplitStateExtensions`, `StateDelta`) stay `internal` in `namespace Orleans.Lattice.Primitives`. The exceptions are the dot-history helpers `OrSetDotCompaction`, `OrSetDotSet`, and `OrSetDotUnion`: they are `internal static` classes too, but declare `namespace Orleans.Lattice`, beside the observed-remove primitives they serve.
 
 ## Type Shape
 

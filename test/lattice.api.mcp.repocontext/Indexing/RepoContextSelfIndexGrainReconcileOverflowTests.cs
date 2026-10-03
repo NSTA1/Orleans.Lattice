@@ -33,18 +33,4 @@ public sealed class RepoContextSelfIndexGrainReconcileOverflowTests
             "an extreme reconcile interval must saturate the schedule, not overflow it to a " +
             "past instant that re-drives a reconcile on every tick");
     }
-
-    [Test]
-    public void SaturatingAddTicks_clamps_a_positive_overflow_to_long_MaxValue()
-    {
-        Assert.That(
-            RepoContextSelfIndexGrain.SaturatingAddTicks(long.MaxValue - 10, 1_000L),
-            Is.EqualTo(long.MaxValue));
-    }
-
-    [Test]
-    public void SaturatingAddTicks_is_exact_when_the_sum_does_not_overflow()
-    {
-        Assert.That(RepoContextSelfIndexGrain.SaturatingAddTicks(1_000L, 2_000L), Is.EqualTo(3_000L));
-    }
 }

@@ -67,7 +67,7 @@ internal sealed class LatticeTenantQuotaUsage : ILatticeTenantQuotaUsage
     public async Task<TenantQuotaUsageReport> GetQuotaUsageAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
 
         TenantRecord record;
         try
@@ -97,17 +97,5 @@ internal sealed class LatticeTenantQuotaUsage : ILatticeTenantQuotaUsage
         // silently qualified as global.
         return TenantQuotaUsageMapping.ToUnmeasuredReport(
             tenant, record.Quotas, _usageReader.ResolveScope(tenant));
-    }
-
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException(
-                $"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
     }
 }

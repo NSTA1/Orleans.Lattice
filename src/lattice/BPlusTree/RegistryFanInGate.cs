@@ -305,6 +305,47 @@ internal sealed class RegistryFanInGate(
     private int _inFlight;
 
     /// <summary>
+    /// Counts the <see cref="Pump"/> early-returns that found the budget already
+    /// exhausted (<c>_inFlight &gt;= CurrentBudget()</c>) with at least one
+    /// arrival still queued - that is, a pump that left genuine work behind for
+    /// lack of budget, rather than one that returned merely because nothing had
+    /// arrived yet. Incremented inside the same lock <see cref="Pump"/> already
+    /// holds for that check, so it shares that check's atomicity: no caller can
+    /// observe an admission state between the budget test and the count, and no
+    /// second lock acquisition is introduced on the arrival path.
+    /// <para>
+    /// This is a count of an event, not a duration, so unlike
+    /// <see cref="LatticeMetrics.RegistryAdmissionWait"/> it carries no wall-clock
+    /// component and is immune to scheduler load: a pump either found budget
+    /// exhausted with work queued or it did not, and that fact does not depend on
+    /// how long the surrounding machine took to get there. It exists specifically
+    /// so a test can assert "no genuine queuing occurred" (or the reverse)
+    /// without reading a clock at all. See <c>RegistryFanInRegimeTests</c> for
+    /// why a wall-clock floor on <see cref="LatticeMetrics.RegistryAdmissionWait"/>
+    /// could not fill that role under CI scheduler jitter.
+    /// </para>
+    /// </summary>
+    private int _deferredAdmissions;
+
+    /// <summary>
+    /// The live value of <see cref="_deferredAdmissions"/>. Internal and
+    /// test-only: production code has no use for this count, only for the bound
+    /// it reflects. Read under <see cref="_sync"/>, matching every other access
+    /// to the field, rather than introducing a second synchronization style for
+    /// one member.
+    /// </summary>
+    internal int DeferredAdmissionCount
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _deferredAdmissions;
+            }
+        }
+    }
+
+    /// <summary>
     /// Reads <paramref name="treeId"/>'s registry entry under the gate's
     /// concurrency bound, joining a read already waiting or already in flight for
     /// the same id rather than adding another.
@@ -406,6 +447,14 @@ internal sealed class RegistryFanInGate(
             {
                 if (_inFlight >= CurrentBudget() || _arrivals.Count == 0)
                 {
+                    // Budget exhausted with at least one arrival still queued is
+                    // genuine deferral; an empty queue is merely "nothing to do"
+                    // and must not count.
+                    if (_arrivals.Count > 0)
+                    {
+                        _deferredAdmissions++;
+                    }
+
                     return;
                 }
 

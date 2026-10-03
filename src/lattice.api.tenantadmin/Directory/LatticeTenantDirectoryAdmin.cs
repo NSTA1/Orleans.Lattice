@@ -256,17 +256,6 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
         }
     }
 
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException($"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
-    }
-
     private static void ValidateGroupName(string groupName, string paramName)
     {
         ArgumentException.ThrowIfNullOrEmpty(groupName, paramName);

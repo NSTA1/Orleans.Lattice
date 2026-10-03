@@ -97,7 +97,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         IReadOnlyCollection<string>? adminSubjects = null,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ThrowIfReservedTenantId(tenant);
 
         // Authorize first, then validate, then perform the system-origin write -
@@ -163,7 +163,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     public async Task<TenantDeletionResult> DeleteTenantAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
 
         // The reserved default tenant names the cluster's own legacy state and can
@@ -208,7 +208,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     public async Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(
         string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
 
         // The reserved default tenant names the cluster's own legacy state and is
@@ -241,7 +241,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     private async Task<TenantStatusChangeResult> TransitionAsync(
         string tenantId, TenantStatus target, string operation, CancellationToken cancellationToken)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
 
         // The reserved default tenant can never be suspended (and, symmetrically,
@@ -261,8 +261,8 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             return new TenantStatusChangeResult
             {
                 TenantId = tenant.Value,
-                PreviousStatus = Map(previous),
-                NewStatus = Map(target),
+                PreviousStatus = TenantLifecycleMapping.ToLifecycleStatus(previous),
+                NewStatus = TenantLifecycleMapping.ToLifecycleStatus(target),
                 Changed = false,
             };
         }
@@ -273,8 +273,8 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         return new TenantStatusChangeResult
         {
             TenantId = tenant.Value,
-            PreviousStatus = Map(previous),
-            NewStatus = Map(target),
+            PreviousStatus = TenantLifecycleMapping.ToLifecycleStatus(previous),
+            NewStatus = TenantLifecycleMapping.ToLifecycleStatus(target),
             Changed = true,
         };
     }
@@ -399,18 +399,6 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             : [subject.SubjectId];
     }
 
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException(
-                $"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
-    }
-
     /// <summary>
     /// The reserved system-data tree prefix (<c>sys-</c>) and system tree prefix
     /// (<c>_lattice_</c>), kept as local literals because the core constants class
@@ -448,11 +436,4 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
                 paramName: "tenantId");
         }
     }
-
-    private static TenantLifecycleStatus Map(TenantStatus status) => status switch
-    {
-        TenantStatus.Active => TenantLifecycleStatus.Active,
-        TenantStatus.Suspended => TenantLifecycleStatus.Suspended,
-        _ => TenantLifecycleStatus.Active,
-    };
 }

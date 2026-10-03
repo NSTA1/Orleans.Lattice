@@ -24,11 +24,6 @@ internal sealed class LibGit2SharpRepoContextGitFetcher : IRepoContextGitFetcher
     /// <summary>The remote name the staging clone tracks.</summary>
     private const string RemoteName = "origin";
 
-    // The leading window scanned for a NUL byte to classify a blob as binary. It
-    // matches RepoTreeWalker's window (and Git's own FIRST_FEW_BYTES) so a file is
-    // classified identically whichever source indexed it.
-    private const int BinarySniffByteCount = 8000;
-
     /// <inheritdoc />
     public RepoContextGitFetchResult Fetch(RepoContextGitFetchRequest request, CancellationToken cancellationToken)
     {
@@ -334,7 +329,7 @@ internal sealed class LibGit2SharpRepoContextGitFetcher : IRepoContextGitFetcher
             }
 
             var content = buffer.AsSpan(0, length);
-            if (excludeBinary && LooksBinary(content))
+            if (excludeBinary && RepoBinaryContent.IsProbablyBinary(content))
             {
                 return null;
             }
@@ -349,11 +344,5 @@ internal sealed class LibGit2SharpRepoContextGitFetcher : IRepoContextGitFetcher
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
-    }
-
-    private static bool LooksBinary(ReadOnlySpan<byte> content)
-    {
-        var window = content.Length <= BinarySniffByteCount ? content : content[..BinarySniffByteCount];
-        return window.IndexOf((byte)0) >= 0;
     }
 }

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
@@ -43,7 +45,10 @@ namespace Orleans.Lattice.Tenancy;
 /// </remarks>
 internal sealed class TenantContextResolver(
     ITenantPolicyEngine engine,
-    ILatticeMembershipContext membership) : ITenantContextResolver
+    ILatticeMembershipContext membership,
+    CompiledTenantPolicySnapshotMaintainer policy,
+    ITenantRegistry registry,
+    ILogger<TenantContextResolver> logger) : ITenantContextResolver
 {
     private static readonly ValueTask<TenantId> DefaultResult = new(TenantId.Default);
 
@@ -52,6 +57,15 @@ internal sealed class TenantContextResolver(
 
     private readonly ILatticeMembershipContext _membership =
         membership ?? throw new ArgumentNullException(nameof(membership));
+
+    private readonly CompiledTenantPolicySnapshotMaintainer _policy =
+        policy ?? throw new ArgumentNullException(nameof(policy));
+
+    private readonly ITenantRegistry _registry =
+        registry ?? throw new ArgumentNullException(nameof(registry));
+
+    private readonly ILogger<TenantContextResolver> _logger =
+        logger ?? throw new ArgumentNullException(nameof(logger));
 
     /// <inheritdoc />
     public bool TryResolveCurrent(out TenantId tenant)
@@ -62,6 +76,16 @@ internal sealed class TenantContextResolver(
         {
             tenant = TenantId.Default;
             return true;
+        }
+
+        // While the compiled snapshot is not authoritative it cannot be trusted
+        // to answer synchronously - confirming against the registry needs I/O -
+        // so defer to the async path rather than validate against a snapshot
+        // known to be stale.
+        if (!_policy.IsSnapshotAuthoritative)
+        {
+            tenant = default;
+            return false;
         }
 
         // An assertion must be validated against the caller's membership, which
@@ -84,7 +108,7 @@ internal sealed class TenantContextResolver(
             return DefaultResult;
         }
 
-        if (_membership.TryResolveCurrent(out var subject))
+        if (_membership.TryResolveCurrent(out var subject) && _policy.IsSnapshotAuthoritative)
         {
             return new ValueTask<TenantId>(Validate(subject, asserted));
         }
@@ -98,7 +122,32 @@ internal sealed class TenantContextResolver(
         // runs system-origin; the warm path above never needs it.
         using (LatticeSystemOrigin.Enter())
         {
-            var subject = await _membership.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var subject = _membership.TryResolveCurrent(out var warm)
+                ? warm
+                : await _membership.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+
+            if (subject.IsAnonymous)
+            {
+                return default;
+            }
+
+            // The warm/sync paths above already deferred here whenever the
+            // snapshot is not authoritative, but a cold subject resolution can
+            // still land in this branch while it is, so re-check: confirm
+            // against the registry directly rather than trust a stale snapshot.
+            if (!_policy.IsSnapshotAuthoritative)
+            {
+                var confirmed = await ActiveTenantRegistryConfirmation.ConfirmAsync(
+                    _registry,
+                    _policy.IsDelegatedAccessEnabled,
+                    subject.SubjectId,
+                    subject.GroupIds,
+                    asserted,
+                    _logger,
+                    cancellationToken).ConfigureAwait(false);
+                return confirmed ?? default;
+            }
+
             return Validate(subject, asserted);
         }
     }

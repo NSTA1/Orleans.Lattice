@@ -70,7 +70,7 @@ public sealed record VersionedValue
         && Version.Equals(other.Version)
         && ExpiresAtTicks == other.ExpiresAtTicks
         && MergeMode == other.MergeMode
-        && BytesEqual(Value, other.Value);
+        && ByteArrayEquality.ContentEquals(Value, other.Value);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -86,8 +86,4 @@ public sealed record VersionedValue
         hash.Add(MergeMode);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

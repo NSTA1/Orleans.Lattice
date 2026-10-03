@@ -121,7 +121,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             }
             foreach (var (key, entries) in Adds)
             {
-                if (LiveEntryCount(key, entries) > 0) return false;
+                if (HasLiveEntry(key, entries)) return false;
             }
             return true;
         }
@@ -153,7 +153,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             }
             foreach (var (key, entries) in Adds)
             {
-                if (LiveEntryCount(key, entries) > 0) n++;
+                if (HasLiveEntry(key, entries)) n++;
             }
             return n;
         }
@@ -303,7 +303,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         // No key has ever been removed: the stored entries are all live, so
         // skip the per-key tombstone probe entirely.
         if (Tombstones.Count == 0) return entries.Count > 0;
-        return LiveEntryCount(key, entries) > 0;
+        return HasLiveEntry(key, entries);
     }
 
     /// <summary>
@@ -421,7 +421,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
                 if (entries.Count > 0) live.Add(key);
                 continue;
             }
-            if (LiveEntryCount(key, entries) > 0) live.Add(key);
+            if (HasLiveEntry(key, entries)) live.Add(key);
         }
         if (live.Count == 0) return Array.Empty<TKey>();
         SortKeys(live);
@@ -534,21 +534,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             }
 
             // Small list: linear dedup avoids the HashSet alloc.
-            if (existing.Count + dots.Count <= LinearDedupThreshold)
-            {
-                foreach (var d in dots)
-                {
-                    if (!ListContainsDot(existing, d)) existing.Add(d);
-                }
-                continue;
-            }
-
-            var seen = new HashSet<OrSetDot>(existing.Count + dots.Count);
-            foreach (var d in existing) seen.Add(d);
-            foreach (var d in dots)
-            {
-                if (seen.Add(d)) existing.Add(d);
-            }
+            FoldTombstones(existing, dots);
         }
 
         foreach (var (key, otherEntries) in other.Adds)
@@ -575,52 +561,136 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             // Small lists: linear scan avoids the per-key dictionary
             // allocation. The crossover threshold matches the
             // tombstone dedup heuristic.
-            if (localEntries.Count + otherEntries.Count <= LinearDedupThreshold)
-            {
-                foreach (var e in otherEntries)
-                {
-                    var existing = FindByDot(localEntries, e.ReplicaId, e.Counter);
-                    if (existing is not null)
-                    {
-                        // Same dot from both sides: lattice-merge the
-                        // value snapshots so the result is
-                        // deterministic even if a transport or out-of-
-                        // band path produced divergent values under
-                        // the same author dot.
-                        existing.Value.MergeFrom(e.Value);
-                    }
-                    else
-                    {
-                        localEntries.Add(new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone()));
-                    }
-                }
-                continue;
-            }
-
-            // Large lists: index local by dot to make same-dot
-            // collision detection O(1).
-            var byDot = new Dictionary<OrSetDot, OrMapEntry<TValue>>(localEntries.Count);
-            foreach (var e in localEntries)
-            {
-                byDot[new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter }] = e;
-            }
-            foreach (var e in otherEntries)
-            {
-                var dot = new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter };
-                if (byDot.TryGetValue(dot, out var existing))
-                {
-                    existing.Value.MergeFrom(e.Value);
-                }
-                else
-                {
-                    var copy = new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone());
-                    localEntries.Add(copy);
-                    byDot[dot] = copy;
-                }
-            }
+            FoldEntries(localEntries, otherEntries);
         }
 
         MergeContextFrom(other);
+    }
+
+    /// <summary>
+    /// Folds <paramref name="dots"/> into <paramref name="existing"/>, deduping
+    /// by dot.
+    /// </summary>
+    /// <remarks>
+    /// The gate reads the <em>incoming</em> count alone. It previously read
+    /// <c>existing.Count + dots.Count</c>, which made the cost of the strategy
+    /// a function of history: a churned key that had accumulated a long
+    /// observed-remove list allocated a <see cref="HashSet{T}"/> over that whole
+    /// list every time it absorbed a one- or two-dot delta - an index built to
+    /// answer two probes, and then discarded. Only the incoming side has to be
+    /// small for the linear probe to stay bounded, at
+    /// <c>O(LinearDedupThreshold * existing.Count)</c> - the same asymptotic as
+    /// the set build it replaces, without the allocation.
+    /// <c>OrSet.MergeMap</c> and <c>OrFlag.UnionInto</c> already carry this
+    /// gate. The two strategies are sibling methods rather than branches in one
+    /// body so that neither pays for the other's compilation.
+    /// </remarks>
+    private static void FoldTombstones(List<OrSetDot> existing, List<OrSetDot> dots)
+    {
+        // A self-merge hands the same list in on both sides; every probe would
+        // hit and nothing would be appended, but taking a span over a list that
+        // is also the append target is not a shape worth relying on.
+        if (ReferenceEquals(existing, dots)) return;
+
+        if (dots.Count <= LinearDedupThreshold)
+        {
+            FoldTombstonesByScan(existing, dots);
+            return;
+        }
+
+        FoldTombstonesByIndex(existing, dots);
+    }
+
+    private static void FoldTombstonesByScan(List<OrSetDot> existing, List<OrSetDot> dots)
+    {
+        var span = CollectionsMarshal.AsSpan(dots);
+        for (var i = 0; i < span.Length; i++)
+        {
+            ref readonly var dot = ref span[i];
+            if (!ListContainsDot(existing, dot)) existing.Add(dot);
+        }
+    }
+
+    private static void FoldTombstonesByIndex(List<OrSetDot> existing, List<OrSetDot> dots)
+    {
+        var seen = OrSetDotSet.Build(existing, dots.Count);
+        var span = CollectionsMarshal.AsSpan(dots);
+        for (var i = 0; i < span.Length; i++)
+        {
+            ref readonly var dot = ref span[i];
+            if (seen.Add(dot)) existing.Add(dot);
+        }
+    }
+
+    /// <summary>
+    /// Folds <paramref name="otherEntries"/> into <paramref name="localEntries"/>,
+    /// lattice-merging the value snapshots of any dot both sides authored.
+    /// </summary>
+    /// <remarks>
+    /// Gated on the incoming count alone, for the reason given on
+    /// <see cref="FoldTombstones"/>: the dictionary index this avoids was being
+    /// built over the accumulated local list, so its cost grew with the key's
+    /// write history rather than with the size of the delta being applied.
+    /// </remarks>
+    private static void FoldEntries(List<OrMapEntry<TValue>> localEntries, List<OrMapEntry<TValue>> otherEntries)
+    {
+        if (ReferenceEquals(localEntries, otherEntries)) return;
+
+        if (otherEntries.Count <= LinearDedupThreshold)
+        {
+            FoldEntriesByScan(localEntries, otherEntries);
+            return;
+        }
+
+        FoldEntriesByIndex(localEntries, otherEntries);
+    }
+
+    private static void FoldEntriesByScan(
+        List<OrMapEntry<TValue>> localEntries,
+        List<OrMapEntry<TValue>> otherEntries)
+    {
+        foreach (var e in otherEntries)
+        {
+            var existing = FindByDot(localEntries, e.ReplicaId, e.Counter);
+            if (existing is not null)
+            {
+                // Same dot from both sides: lattice-merge the value snapshots so
+                // the result is deterministic even if a transport or out-of-band
+                // path produced divergent values under the same author dot.
+                existing.Value.MergeFrom(e.Value);
+            }
+            else
+            {
+                localEntries.Add(new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone()));
+            }
+        }
+    }
+
+    private static void FoldEntriesByIndex(
+        List<OrMapEntry<TValue>> localEntries,
+        List<OrMapEntry<TValue>> otherEntries)
+    {
+        // Wide delta: index local by dot to make same-dot collision detection
+        // O(1).
+        var byDot = new Dictionary<OrSetDot, OrMapEntry<TValue>>(localEntries.Count);
+        foreach (var e in localEntries)
+        {
+            byDot[new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter }] = e;
+        }
+        foreach (var e in otherEntries)
+        {
+            var dot = new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter };
+            if (byDot.TryGetValue(dot, out var existing))
+            {
+                existing.Value.MergeFrom(e.Value);
+            }
+            else
+            {
+                var copy = new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone());
+                localEntries.Add(copy);
+                byDot[dot] = copy;
+            }
+        }
     }
 
     private static OrMapEntry<TValue>? FindByDot(List<OrMapEntry<TValue>> entries, string replicaId, long counter)
@@ -829,9 +899,29 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         }
     }
 
-    private int LiveEntryCount(TKey key, List<OrMapEntry<TValue>> entries)
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="key"/> holds at least one live
+    /// (un-tombstoned) entry.
+    /// </summary>
+    /// <remarks>
+    /// Every caller - <see cref="IsEmpty"/>, <see cref="Count"/>,
+    /// <see cref="ContainsKey"/> and <see cref="Keys"/> - only ever asked
+    /// whether the live count was non-zero, so this asks "any" rather than "how
+    /// many" and stops at the first live entry. On the linear arm that turns an
+    /// unconditional <c>O(entries.Count * tomb.Count)</c> walk into
+    /// <c>O(tomb.Count)</c> whenever an early entry survives, which is the
+    /// steady state: a key is usually read while it still holds a live write.
+    /// Only a fully tombstoned key pays the whole walk, and that is the same
+    /// walk the count did. <c>OrSet.HasLiveDot</c> already carries this shape.
+    /// The two width strategies are sibling methods rather than branches in one
+    /// body, because the JIT compiles a method as a unit: fusing them makes the
+    /// arm that is taken pay for the register pressure and live ranges of the
+    /// arm that is not.
+    /// </remarks>
+    private bool HasLiveEntry(TKey key, List<OrMapEntry<TValue>> entries)
     {
-        if (!Tombstones.TryGetValue(key, out var tomb) || tomb.Count == 0) return entries.Count;
+        if (entries.Count == 0) return false;
+        if (!Tombstones.TryGetValue(key, out var tomb) || tomb.Count == 0) return true;
 
         if (tomb.Count <= LinearDedupThreshold || entries.Count <= LinearDedupThreshold)
         {
@@ -839,28 +929,43 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             // scan beats allocating a HashSet. When the live-entry list is the
             // small side - the common case for a churned key that carries a
             // long observed-remove history but only a handful of live entries -
-            // the scan is O(entries.Count * tomb.Count), bounded by
-            // O(LinearDedupThreshold * tomb.Count): the same asymptotic as
-            // building the tomb-sized set, but allocation-free. The prior guard
-            // checked only the tombstone count and so built the HashSet on
-            // every read (IsEmpty / Count / Contains / Keys) of a
-            // heavily-tombstoned key even for a single live entry.
-            var n = 0;
-            foreach (var e in entries)
-            {
-                var dot = new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter };
-                if (!ListContainsDot(tomb, dot)) n++;
-            }
-            return n;
+            // the scan is bounded by O(LinearDedupThreshold * tomb.Count): the
+            // same asymptotic as building the tomb-sized set, but
+            // allocation-free.
+            return HasLiveEntryByScan(entries, tomb);
         }
 
-        var tombSet = new HashSet<OrSetDot>(tomb.Count);
-        foreach (var d in tomb) tombSet.Add(d);
-        var live = 0;
+        return HasLiveEntryByIndex(entries, tomb);
+    }
+
+    private static bool HasLiveEntryByScan(List<OrMapEntry<TValue>> entries, List<OrSetDot> tomb)
+    {
         foreach (var e in entries)
         {
-            if (!tombSet.Contains(new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter })) live++;
+            var dot = new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter };
+            if (!ListContainsDot(tomb, dot)) return true;
         }
-        return live;
+
+        return false;
+    }
+
+    private static bool HasLiveEntryByIndex(List<OrMapEntry<TValue>> entries, List<OrSetDot> tomb)
+    {
+        // An any-query needs the index only once the cheap probes are spent. One
+        // linear probe of the first entry costs O(tomb.Count) - no more than the
+        // set build it replaces - and answers the steady-state read outright,
+        // where the count had to index the tombstone list before it could start.
+        var first = entries[0];
+        var probe = new OrSetDot { ReplicaId = first.ReplicaId, Counter = first.Counter };
+        if (!ListContainsDot(tomb, probe)) return true;
+
+        var tombSet = OrSetDotSet.Build(tomb);
+        for (var i = 1; i < entries.Count; i++)
+        {
+            var e = entries[i];
+            if (!tombSet.Contains(new OrSetDot { ReplicaId = e.ReplicaId, Counter = e.Counter })) return true;
+        }
+
+        return false;
     }
 }

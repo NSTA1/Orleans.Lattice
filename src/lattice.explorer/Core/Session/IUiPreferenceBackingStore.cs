@@ -14,7 +14,12 @@ public interface IUiPreferenceBackingStore
     /// Reads the string stored under <paramref name="key"/>, or
     /// <see langword="null"/> when absent. May throw when the backing store is
     /// unreachable (for example, browser storage during server prerender); the
-    /// preference store treats that as "not yet loadable".
+    /// preference store treats that as "not yet loadable" and retries later. A
+    /// stored value that is permanently unreadable (for example, one that can no
+    /// longer be decrypted after a key-ring loss) should instead be discarded and
+    /// reported as <see langword="null"/>, because a retry can never succeed; the
+    /// preference store also treats a <see cref="System.Security.Cryptography.CryptographicException"/>
+    /// that does escape as permanently unreadable and starts from defaults.
     /// </summary>
     Task<string?> GetAsync(string key, CancellationToken cancellationToken = default);
 

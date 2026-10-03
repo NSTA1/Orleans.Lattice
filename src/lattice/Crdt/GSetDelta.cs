@@ -90,7 +90,7 @@ public readonly record struct GSetDelta
 
         for (var i = 0; i < left.Count; i++)
         {
-            if (!BytesEqual(left[i], right[i]))
+            if (!ByteArrayEquality.ContentEquals(left[i], right[i]))
             {
                 return false;
             }
@@ -98,8 +98,4 @@ public readonly record struct GSetDelta
 
         return true;
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

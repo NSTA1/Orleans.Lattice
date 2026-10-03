@@ -2436,8 +2436,8 @@ internal sealed partial class BPlusLeafGrain(
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = MaxOrdinal(windowStart, scanStart);
-            var to = MinOrdinal(windowEnd, scanEnd);
+            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
+            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
             if (from is not null && to is not null &&
                 string.CompareOrdinal(from, to) >= 0)
                 continue;
@@ -2926,6 +2926,10 @@ internal sealed partial class BPlusLeafGrain(
 
             if (changed)
             {
+                // A split sibling is a topology seed: an unbound donor (#1744) mints
+                // it with TreeId null and no row, then moves entries onto it, so the
+                // #4419 rowless-unbound persist refusal must not apply here.
+                _seedingSibling = true;
                 try
                 {
                     await PersistAsync();
@@ -2941,6 +2945,10 @@ internal sealed partial class BPlusLeafGrain(
                     state.State.MovedAwaySlots = prevMovedSlots;
                     state.State.MovedAwayVirtualShardCount = prevMovedVsc;
                     throw;
+                }
+                finally
+                {
+                    _seedingSibling = false;
                 }
             }
         }
@@ -3684,16 +3692,16 @@ internal sealed partial class BPlusLeafGrain(
         //
         // Issue #3918: no clip at an in-flight division's SplitKey, for the
         // reason CountAsync documents at length.
-        var scanStart = MaxOrdinal(startInclusive, afterExclusive);
-        var scanEnd = MinOrdinal(endExclusive, beforeExclusive);
+        var scanStart = OrdinalStrings.MaxBound(startInclusive, afterExclusive);
+        var scanEnd = OrdinalStrings.MinBound(endExclusive, beforeExclusive);
         foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
             if (scanEnd is not null && windowStart is not null &&
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = MaxOrdinal(windowStart, scanStart);
-            var to = MinOrdinal(windowEnd, scanEnd);
+            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
+            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
             if (from is not null && to is not null &&
                 string.CompareOrdinal(from, to) >= 0)
                 continue;
@@ -3813,16 +3821,16 @@ internal sealed partial class BPlusLeafGrain(
         //
         // Issue #3918: no clip at an in-flight division's SplitKey, for the
         // reason CountAsync documents at length.
-        var scanStart = MaxOrdinal(startInclusive, afterExclusive);
-        var scanEnd = MinOrdinal(endExclusive, beforeExclusive);
+        var scanStart = OrdinalStrings.MaxBound(startInclusive, afterExclusive);
+        var scanEnd = OrdinalStrings.MinBound(endExclusive, beforeExclusive);
         foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
             if (scanEnd is not null && windowStart is not null &&
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = MaxOrdinal(windowStart, scanStart);
-            var to = MinOrdinal(windowEnd, scanEnd);
+            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
+            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
             if (from is not null && to is not null &&
                 string.CompareOrdinal(from, to) >= 0)
                 continue;
@@ -4400,6 +4408,13 @@ internal sealed partial class BPlusLeafGrain(
         return stranded;
     }
 
+    /// <summary>
+    /// Set once <see cref="ClearGrainStateAsync"/> has deleted this leaf's row.
+    /// From then on <see cref="PersistAsync"/> refuses, so nothing on this
+    /// activation can write the row back (issue #4419).
+    /// </summary>
+    private bool _leafStateCleared;
+
     public async Task ClearGrainStateAsync()
     {
         using var routingMutation = EnterLeafRoutingMutation();
@@ -4426,6 +4441,19 @@ internal sealed partial class BPlusLeafGrain(
         await WaitForSnapshotCaptureToDrainAsync();
 
         await state.ClearStateAsync();
+
+        // Nothing may write the row back now (issue #4419). The deactivation
+        // below runs the checkpoint-flush barrier, which used to persist an
+        // advance still pending from before the clear onto the cleared, default
+        // state: a row holding only the checkpoint, with no tree id, that nothing
+        // references and nothing ever clears. The pending advance describes rows
+        // that no longer exist, so it is discarded, and the latch makes any other
+        // persist on this activation fail instead of re-creating the row. Both
+        // are set only once the clear has succeeded: a failed clear leaves the
+        // leaf intact and still able to persist.
+        _pendingCheckpointOffsetsByPartition = null;
+        _leafStateCleared = true;
+
         try
         {
             // The leaf's snapshot lives in separate grain-state rows keyed by the

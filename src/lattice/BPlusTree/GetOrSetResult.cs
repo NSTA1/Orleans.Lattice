@@ -36,7 +36,7 @@ internal sealed record GetOrSetResult
     /// <param name="other">The result to compare against.</param>
     public bool Equals(GetOrSetResult? other) =>
         other is not null
-        && BytesEqual(ExistingValue, other.ExistingValue)
+        && ByteArrayEquality.ContentEquals(ExistingValue, other.ExistingValue)
         && Split == other.Split;
 
     /// <inheritdoc />
@@ -55,8 +55,4 @@ internal sealed record GetOrSetResult
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

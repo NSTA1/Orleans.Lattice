@@ -45,7 +45,7 @@ internal static class ExpressionConstantReader
     /// </summary>
     internal static bool TryRead(Expression expression, out object? value)
     {
-        switch (Unwrap(expression))
+        switch (ExpressionTreeShapes.StripConversions(expression))
         {
             case ConstantExpression constant:
                 value = constant.Value;
@@ -81,13 +81,5 @@ internal static class ExpressionConstantReader
 
         value = null;
         return false;
-    }
-
-    private static Expression Unwrap(Expression expression)
-    {
-        while (expression is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary)
-            expression = unary.Operand;
-
-        return expression;
     }
 }

@@ -117,7 +117,7 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     public async Task<TenantAdminSubjectReport> ListAdminSubjectsAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
 
         // The authorizer returns the record, so the read that proved authority is
         // the same read the projection is built from - no second registry hit.
@@ -136,14 +136,14 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     public async Task<TenantAdminSubjectChangeResult> AddAdminSubjectAsync(
         string tenantId, string subjectId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateSubjectId(subjectId);
 
         var record = await _authorizer
             .AuthorizeTenantAdminAsync(tenant, AdminSubjectsAction, cancellationToken)
             .ConfigureAwait(false);
 
-        ThrowIfReservedTenant(tenant, "add-admin-subject");
+        TenantAdminArguments.ThrowIfReservedTenant(tenant, "add-admin-subject");
 
         // D4: an admin-set entry names a user, a cluster group, or one of this
         // tenant's own groups. The reserved t/ namespace belongs to tenant groups, so
@@ -199,14 +199,14 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     public async Task<TenantAdminSubjectChangeResult> RemoveAdminSubjectAsync(
         string tenantId, string subjectId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateSubjectId(subjectId);
 
         var record = await _authorizer
             .AuthorizeTenantAdminAsync(tenant, AdminSubjectsAction, cancellationToken)
             .ConfigureAwait(false);
 
-        ThrowIfReservedTenant(tenant, "remove-admin-subject");
+        TenantAdminArguments.ThrowIfReservedTenant(tenant, "remove-admin-subject");
 
         // Idempotent no-op: the subject holds no authority to revoke. Checked ahead
         // of the last-subject guard so removing an already-absent id can never be
@@ -345,20 +345,6 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
             nameof(subjectId));
     }
 
-    /// <summary>
-    /// Rejects a membership mutation against the reserved default tenant. It names
-    /// the cluster's own legacy state, so granting it a tenant admin would hand out
-    /// tenant-admin authority over the whole legacy keyspace. The reserved id is a
-    /// constant, so the refusal leaks nothing about registry contents.
-    /// </summary>
-    private static void ThrowIfReservedTenant(TenantId tenant, string operation)
-    {
-        if (tenant.IsDefault)
-        {
-            throw new ReservedTenantOperationException(tenant.Value, operation);
-        }
-    }
-
     private static void ValidateSubjectId(string subjectId)
     {
         if (string.IsNullOrWhiteSpace(subjectId))
@@ -366,17 +352,5 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
             throw new ArgumentException(
                 "An admin subject id must not be null, empty, or whitespace.", nameof(subjectId));
         }
-    }
-
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException(
-                $"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
     }
 }

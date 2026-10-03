@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - OrMap answers liveness without counting.** `IsEmpty`, `Count`, `ContainsKey` and `Keys` all consumed `LiveEntryCount` only as `> 0`. A new any-query exits on the first live entry and probes before indexing: 96-98% faster, and 2104 bytes removed per wide-tombstone read. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
+
+- **Performance - OrMap dedup gating reads the incoming side only.** Both merge folds gated on the combined count, so a churned key built a hash index over its whole accumulated history to absorb a two-dot delta. Gating on the incoming side alone: 82% faster, 2104 fewer bytes. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
+
+- **Performance - GSet copies preserve their source comparer.** `Merge` and `Clone` copied through a reference-distinct comparer, defeating `HashSet`'s bulk-copy path and rehashing every element; `Merge` also rehashed its left operand outright. Both 69-73% faster. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
+
 - **Performance - OrMap dot scans read each candidate once.** `OrMap`'s linear dot scan indexed the same list element twice per candidate and reloaded `Count` on every iteration. It now walks a span with a single `ref readonly` read per element: 35% faster on a full miss. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
 
 - **Performance - Liveness scans resolve their cover span once.** `OrSetDotCompaction.CountLive` and `AnyLive` re-resolved the cover list to a span for every dot they tested. Both walks hoist it now: 5-15% faster, with the isolating lane attributing 37% of the per-dot cost. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
@@ -285,6 +291,21 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - An app settles only for the caller who changed it.** After an install or enable, only the same sign-in, endpoint and tenant treat an unready read of that app as settling; another tenant or identity gets its answer at once. ([#4414](https://github.com/NSTA1/Orleans.Lattice/issues/4414)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Explorer - An undecryptable preference document no longer wedges the store.** A UI preference document the host can no longer decrypt, after a key-ring change, is logged, deleted and read as empty, so preference reads and writes resume instead of failing for the rest of the circuit. ([#4401](https://github.com/NSTA1/Orleans.Lattice/issues/4401)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.Web`)
+
+- **Shard - An empty-tree reshard fences the slots it moves.** The empty-tree fast path published the new shard map without fencing the old owners, so a router on the old map could strand a write on a shard that no longer owned the slot. It now fences them first, as the full path does. ([#4066](https://github.com/NSTA1/Orleans.Lattice/issues/4066)) (`Orleans.Lattice`)
+
+- **WAL - Purging a tree trims its write-ahead log.** An ordinary purge unregistered the tree without trimming its log, and WAL collection only visits registered trees, so the log leaked for good. Purge completion now trims the log first, as a resize discard already did. ([#3936](https://github.com/NSTA1/Orleans.Lattice/issues/3936)) (`Orleans.Lattice`)
+
+- **Leaf - A cleared leaf no longer writes an unreclaimable stub row.** A stray splice, setter or checkpoint flush on a cleared or never-seeded leaf persisted a row with no tree id that nothing reclaims. An empty unbound leaf now skips that write; a split sibling or a leaf holding data still persists. ([#4419](https://github.com/NSTA1/Orleans.Lattice/issues/4419)) (`Orleans.Lattice`)
+
+- **Retrieval - A persistently unavailable ANN record no longer defers the index forever.** The approximate index load retried an unavailable record without limit, so the index never opened. After eight consecutive deferrals it now faults as `unloadable_record` and keeps the durable index. ([#4092](https://github.com/NSTA1/Orleans.Lattice/issues/4092)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Tests - Vacuous and load-dependent fixtures.** WAL GC pin-retirement fixtures now use a partition-suffixed consumer id that reaches the path under test, a cold-start-storm fixture drops a 300ms deadline, and a registry fan-in fixture counts deferred admissions instead of timing them. ([#4258](https://github.com/NSTA1/Orleans.Lattice/issues/4258), [#4133](https://github.com/NSTA1/Orleans.Lattice/issues/4133), [#3939](https://github.com/NSTA1/Orleans.Lattice/issues/3939)) (`Orleans.Lattice`)
+
+- **Tests - A starved test host no longer reads as a torn atomic batch.** The shadow-cutover atomic-visibility fixtures report a read timeout as a separate liveness failure with its timing, so host starvation is not called a tear; a genuinely torn batch still fails the atomicity assertion. ([#4407](https://github.com/NSTA1/Orleans.Lattice/issues/4407)) (`repository-wide`)
+- **Gates - Two gates now see what they claim to.** The instrument priming enrolment gate compares each generator-owned row whole, so a stale row fails it, and the bucket closing-list guard counts soft references such as `Relates to #N` as claims. ([#4257](https://github.com/NSTA1/Orleans.Lattice/issues/4257), [#4121](https://github.com/NSTA1/Orleans.Lattice/issues/4121)) (`repository-wide`)
+
 ### Security
 
 - **Explorer - A web sign-in minted a token for whatever resource the endpoint asked for.** The advertised OAuth audience became the requested scope unchecked, so a hostile endpoint harvested a delegated Graph token. An audience must now be bound to the endpoint or listed in `AllowedAudiences`. ([#4394](https://github.com/NSTA1/Orleans.Lattice/issues/4394)) (`Orleans.Lattice.Explorer.Entra.Web`)
@@ -293,6 +314,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Tenancy - A subject id shaped like a tenant group was a tenant admin.** Group grants share a slot map with subject ids, so a `sub` of `t/{tenant}/{group}` exact-matched one. Authorization probes now refuse that namespace and the subject mapper rejects it; set inspection is unchanged. ([#4396](https://github.com/NSTA1/Orleans.Lattice/issues/4396)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Membership`)
 
+- **Tenancy - A removed admin kept reading a tenant's usage during a policy rebuild.** The observability view and context resolver validated the active tenant from a non-authoritative snapshot alone. Both now confirm it against the registry, failing closed to no tenant. ([#4065](https://github.com/NSTA1/Orleans.Lattice/issues/4065)) (`Orleans.Lattice.Tenancy`)
 - **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
 
 - **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

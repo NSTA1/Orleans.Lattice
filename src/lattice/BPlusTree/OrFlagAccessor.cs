@@ -168,7 +168,7 @@ public readonly record struct OrFlagAccessor
     /// </summary>
     internal static OrFlagDelta EnableDeltaFor(OrFlag flag, string replicaId)
     {
-        var counter = Math.Max(NextCounter(flag, replicaId), NextFreshCounter());
+        var counter = Math.Max(ObservedRemoveDots.NextCounter(flag, replicaId), NextFreshCounter());
         return new OrFlagDelta
         {
             Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
@@ -207,7 +207,7 @@ public readonly record struct OrFlagAccessor
 
     private static OrFlagDelta EnableDelta(OrFlag flag, string replicaId)
     {
-        var counter = NextCounter(flag, replicaId);
+        var counter = ObservedRemoveDots.NextCounter(flag, replicaId);
         return new OrFlagDelta
         {
             Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
@@ -252,20 +252,6 @@ public readonly record struct OrFlagAccessor
             Enables = other.Enables.ToArray(),
             Disables = other.Tombstones.ToArray(),
         }, cancellationToken, maxAttempts);
-    }
-
-    private static long NextCounter(OrFlag flag, string replicaId)
-    {
-        long max = 0;
-        foreach (var d in flag.Enables)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        foreach (var d in flag.Tombstones)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        return max + 1;
     }
 
     private async Task MutateAsync(

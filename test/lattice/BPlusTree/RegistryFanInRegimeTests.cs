@@ -96,6 +96,16 @@ public class RegistryFanInRegimeTests
     /// Carried alongside the call count precisely so a reader cannot mistake one
     /// for the other.
     /// </param>
+    /// <param name="DeferredAdmissionCount">
+    /// How many <c>Pump()</c> calls found the budget already exhausted with at
+    /// least one arrival still queued - genuine admission deferral, rather than
+    /// a pump that returned merely because nothing had arrived yet. This is a
+    /// count, not a duration: it is what <see cref="MaxWaitMs"/> cannot safely
+    /// be under CI scheduler load, because an event either happened or it did
+    /// not, with no wall clock to inflate under contention. See
+    /// <c>Below_the_bound_the_rig_cannot_see_the_bound_at_all</c> for why this
+    /// replaced a sub-millisecond <see cref="MaxWaitMs"/> assertion.
+    /// </param>
     private sealed record GateReading(
         int PeakRegistryCalls,
         int PeakRegistryKeys,
@@ -103,7 +113,8 @@ public class RegistryFanInRegimeTests
         int PeakOfferedDepth,
         int PeakBatchSize,
         double MaxWaitMs,
-        double BatchedProportion);
+        double BatchedProportion,
+        int DeferredAdmissionCount);
 
     private static TreeRegistryEntry Entry() => new()
     {
@@ -261,7 +272,8 @@ public class RegistryFanInRegimeTests
                     PeakOfferedDepth: depths.Count == 0 ? 0 : depths.Max(),
                     PeakBatchSize: total == 0 ? 0 : batches.Max(),
                     MaxWaitMs: waits.Count == 0 ? 0 : waits.Max(),
-                    BatchedProportion: total == 0 ? 0 : (double)batched / total);
+                    BatchedProportion: total == 0 ? 0 : (double)batched / total,
+                    DeferredAdmissionCount: gate.DeferredAdmissionCount);
             }
         }
 
@@ -273,6 +285,7 @@ public class RegistryFanInRegimeTests
             + $"| offeredDepth={reading.PeakOfferedDepth} gateWidth={reading.PeakGateWidth}/"
             + $"{RegistryFanInGate.GlobalMaxConcurrentReads} maxWait={reading.MaxWaitMs:F3}ms "
             + $"batched={reading.BatchedProportion:P1} peakBatch={reading.PeakBatchSize} "
+            + $"deferred={reading.DeferredAdmissionCount} "
             + $"| registryCalls={reading.PeakRegistryCalls} registryKeys={reading.PeakRegistryKeys}");
 
         return reading;
@@ -340,6 +353,16 @@ public class RegistryFanInRegimeTests
             Assert.That(reading.PeakBatchSize, Is.GreaterThan(1),
                 "at least one dispatch must carry more than one id, or the gate is queueing without "
                 + "coalescing and MaxBatchSize is dead weight");
+
+            // The counterpart of the zero asserted below the bound: a wave wide
+            // enough to saturate the gate must genuinely defer admissions, or
+            // DeferredAdmissionCount would only ever be exercised at zero and the
+            // assertion in Below_the_bound_the_rig_cannot_see_the_bound_at_all
+            // would be vacuously true regardless of whether the counter works.
+            Assert.That(reading.DeferredAdmissionCount, Is.GreaterThan(0),
+                "a wave this far past the bound must defer at least one admission to a later Pump(); "
+                + $"got {reading.DeferredAdmissionCount} deferred, which would make the zero asserted "
+                + "below the bound meaningless");
         });
     }
 
@@ -471,9 +494,19 @@ public class RegistryFanInRegimeTests
                 + "coupling, not coalescing - which is what the original run's 0.7% was, and why that "
                 + "figure could never have been evidence that the batching path ran.");
 
-            Assert.That(gated.MaxWaitMs, Is.LessThan(1.0),
-                "and the admission wait floor: microseconds, unreachable from below, and identical in "
-                + "shape to a bound that is comfortably wide");
+            // And the admission-wait floor itself - not MaxWaitMs, which is a
+            // wall-clock measurement and was the original flake (issue #3939):
+            // under CI scheduler load the gap between Stopwatch.GetTimestamp()
+            // at enqueue and the thread actually reaching Pump() can itself run
+            // past a millisecond with no queuing at all, so the assertion failed
+            // on load, not on a regression. DeferredAdmissionCount asserts the
+            // same fact - every arrival admitted by its own triggering Pump(),
+            // none left for a later one - as a count of an event that either
+            // happened or did not, with no clock in the middle for scheduler
+            // jitter to inflate.
+            Assert.That(gated.DeferredAdmissionCount, Is.Zero,
+                "below the bound every arrival must be admitted by its own triggering Pump() call, "
+                + $"none deferred to a later one; got {gated.DeferredAdmissionCount} deferred");
         });
     }
 
