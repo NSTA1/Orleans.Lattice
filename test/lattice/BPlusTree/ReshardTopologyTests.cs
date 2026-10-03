@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 [TestFixture]
 [NonParallelizable]
 [Category("Chaos")]
-public class ReshardTopologyTests
+public partial class ReshardTopologyTests
 {
     private FourShardClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
