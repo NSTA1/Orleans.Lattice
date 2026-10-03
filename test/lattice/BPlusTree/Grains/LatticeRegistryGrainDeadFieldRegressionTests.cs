@@ -16,11 +16,19 @@ public class LatticeRegistryGrainDeadFieldRegressionTests
     [Test]
     public void LatticeRegistryGrain_HasNoEmptyEntryField()
     {
-        var fields = typeof(LatticeRegistryGrain)
+        var declared = typeof(LatticeRegistryGrain)
             .GetFields(BindingFlags.NonPublic | BindingFlags.Public
-                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
-            .Where(f => f.Name == "EmptyEntry");
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
 
-        Assert.That(fields, Is.Empty);
+        // The claim is an absence, so the lookup needs a positive control: a
+        // BindingFlags drift that returned no field at all would satisfy the
+        // absence assertion while proving nothing about the removed field.
+        Assert.Multiple(() =>
+        {
+            Assert.That(declared, Is.Not.Empty,
+                "the field lookup must see this grain's own fields, or the absence check below "
+                + "passes for the wrong reason.");
+            Assert.That(declared.Where(f => f.Name == "EmptyEntry"), Is.Empty);
+        });
     }
 }

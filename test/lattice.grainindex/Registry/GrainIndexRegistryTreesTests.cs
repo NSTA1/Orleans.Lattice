@@ -56,13 +56,7 @@ public sealed class GrainIndexRegistryTreesTests
     [Test]
     public void No_public_type_in_the_assembly_exposes_the_registry_tree_name()
     {
-        var leaks = typeof(GrainIndexTreeNames).Assembly
-            .GetExportedTypes()
-            .SelectMany(type => type.GetFields(
-                System.Reflection.BindingFlags.Public
-                | System.Reflection.BindingFlags.Static
-                | System.Reflection.BindingFlags.FlattenHierarchy))
-            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+        var leaks = PublicStringConstants()
             .Where(field => string.Equals(
                 (string?)field.GetRawConstantValue(),
                 GrainIndexRegistryTrees.RegistryTree,
@@ -74,4 +68,35 @@ public sealed class GrainIndexRegistryTreesTests
             "The registry tree must not be resolvable or observable as a user tree. Offending "
             + "public constants: " + string.Join(", ", leaks));
     }
+
+    [Test]
+    public void The_public_constant_sweep_reaches_the_reserved_prefix()
+    {
+        // Battery test: the leak gate above is an absence assertion, so a sweep
+        // that saw no public constant at all would report the same clean result as
+        // one that saw every constant and found no leak. BindingFlags drift or a
+        // narrowing of the exported-type set would do exactly that silently.
+        var constants = PublicStringConstants()
+            .Select(field => (string?)field.GetRawConstantValue())
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(constants, Is.Not.Empty);
+            Assert.That(
+                constants,
+                Does.Contain(GrainIndexTreeNames.ReservedPrefix),
+                "the reserved prefix is a public constant of this assembly, so the sweep that "
+                + "looks for a leaked registry name must be able to see it.");
+        });
+    }
+
+    private static System.Reflection.FieldInfo[] PublicStringConstants() =>
+        [.. typeof(GrainIndexTreeNames).Assembly
+            .GetExportedTypes()
+            .SelectMany(type => type.GetFields(
+                System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.FlattenHierarchy))
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))];
 }
