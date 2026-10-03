@@ -2647,6 +2647,17 @@ internal sealed class AtomicWriteGrain(
                 return;
             }
 
+            if (await BoundCopyMirrorsIntoAsync(bound, routing.PhysicalTreeId))
+            {
+                // An online resize moved the tree off the bound copy, which still
+                // mirrors everything it takes into the copy the tree moved to.
+                // Staying bound commits the batch whole on both copies; re-binding
+                // would leave its prepares orphaned on the old copy, where a
+                // resize undo would expose them (issue #4369). The broadcast
+                // delivers the terminals to the bound copy, which mirrors them.
+                return;
+            }
+
             // The touched shards were indices of the bound copy; the new copy is
             // addressed by its own map.
             var prevBound = state.State.BoundPhysicalTreeId;
@@ -2665,6 +2676,32 @@ internal sealed class AtomicWriteGrain(
     /// failure, so a tree whose alias never settles still reaches a decision.
     /// </summary>
     private const int MaxBindingMovesPerDispatch = 3;
+
+    /// <summary>
+    /// Whether the bound copy mirrors every mutation it takes into
+    /// <paramref name="currentPhysicalTreeId"/> - the source of an online resize
+    /// whose destination the tree now resolves to (issue #4369). Asked of one
+    /// shard the batch touched; every shard of a resize source mirrors to the
+    /// same destination. A failed probe answers <see langword="false"/>, so the
+    /// saga re-binds as it would without one.
+    /// </summary>
+    private async Task<bool> BoundCopyMirrorsIntoAsync(string bound, string currentPhysicalTreeId)
+    {
+        var shardIndex = state.State.TouchedShards is { Count: > 0 } touched ? touched[0] : 0;
+        try
+        {
+            var destination = await grainFactory.GetGrain<IShardRootGrain>($"{bound}/{shardIndex}")
+                .GetMirrorDestinationAsync();
+            return string.Equals(destination, currentPhysicalTreeId, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (!GrainStateWriteFaults.IsTranslatedConflict(ex))
+        {
+            Logger.LogDebug(ex,
+                "Atomic-write saga {OperationKey}: could not ask bound copy {Bound} where it mirrors; re-binding instead.",
+                OperationKey, bound);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Called when the routing tier refused the prepared batch because the

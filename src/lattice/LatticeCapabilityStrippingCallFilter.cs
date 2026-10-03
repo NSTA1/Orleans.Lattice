@@ -104,6 +104,12 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// re-stamps it on its own routing paths; stripping it here keeps any path
     /// that does not from trusting a client-chosen attribution.
     /// </para>
+    /// <para>
+    /// The atomic-write saga's binding to a physical copy is included because a
+    /// shard fenced by an online resize admits a prepared batch that carries a
+    /// binding naming its own copy (issue #4369); only the saga and the routing
+    /// tier dispatching for it may assert one.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -117,6 +123,7 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.ApplyOffsetPartitionRequestContextKey,
         LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey,
         LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
+        LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
     ];
 
     /// <inheritdoc />

@@ -313,8 +313,13 @@ rather than write it to a copy the saga will not commit on. The saga then
 re-binds to the copy the tree resolves to now and re-dispatches the whole
 batch there, without spending its retry budget. Before it records the commit
 decision the saga checks the binding once more and re-binds the same way if
-the tree moved after the dispatch; a swap that lands after the decision is
-recorded leaves the batch on its bound copy, where the terminal broadcast
+the tree moved after the dispatch - except when the bound copy is the source of
+an online resize, which mirrors everything it takes into the copy the tree
+moved to: the saga then stays bound, and the fenced source still takes the
+saga's batch and its terminals and mirrors them, so the batch lands whole on
+both copies and a resize undo never restores a copy holding part of it
+([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)). A swap that
+lands after the decision is recorded leaves the batch on its bound copy, where the terminal broadcast
 delivers it whole. A batch therefore commits wholly on one copy - kept or
 discarded with it - and never in part on each
 ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).

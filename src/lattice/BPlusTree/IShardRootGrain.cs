@@ -1637,12 +1637,27 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <see cref="EnterRejectingAsync"/> fenced for did not happen - the
     /// registry refused or failed it - so the tree does not stay unavailable
     /// until the swap is retried. Safe because a rejecting shard accepts
-    /// nothing, so it and the destination still hold the same data. A no-op
+    /// nothing it does not also mirror, so it and the destination still hold
+    /// the same data. A no-op
     /// when the shard is not rejecting or has no shadow-forward state;
     /// refused with <see cref="InvalidOperationException"/> on an
     /// <paramref name="operationId"/> mismatch.
     /// </summary>
     Task ExitRejectingAsync(string operationId);
+
+    /// <summary>
+    /// Returns the physical tree this shard mirrors every mutation to while an
+    /// online resize copies its tree (draining, drained, or fenced - including
+    /// once the resize has soft-deleted the copy, until it is purged), or
+    /// <see langword="null"/> when it mirrors nowhere. An
+    /// atomic-write saga bound to this shard's copy asks it when the logical
+    /// tree has moved to another copy before the saga's decision: a copy that
+    /// mirrors into the copy the tree moved to keeps the saga bound, so its batch
+    /// commits whole on both copies, whereas re-binding would leave the batch's
+    /// prepares orphaned on this copy for a resize undo to re-expose (issue
+    /// #4369). Read-only, and answered whatever the shard's fence.
+    /// </summary>
+    Task<string?> GetMirrorDestinationAsync();
 
     /// <summary>
     /// Clears this shard's shadow-forward state entirely. Used by the
