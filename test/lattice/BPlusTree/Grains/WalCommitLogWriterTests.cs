@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class WalCommitLogWriterTests
+public partial class WalCommitLogWriterTests
 {
     private const string TreeId = "tree-x";
 

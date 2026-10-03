@@ -213,6 +213,19 @@ internal sealed class ChangeFeed(
                     // by the local `ICommitLogWriter` path and remain
                     // eligible; local-origin entries are governed by
                     // the optional `includeLocalOrigin` filter below.
+                    //
+                    // This deliberately differs from
+                    // `ReplicationShipperGrain.ShouldShip`, which drops an
+                    // empty-origin entry because the receiver's per-origin
+                    // high-water mark has nothing to key it on. A bootstrap
+                    // consumer wants every locally-authored record; a peer
+                    // can only dedup one with an origin. The divergence
+                    // cannot strand a saga terminal (issue #2324): on a
+                    // replicated tree `WalCommitLogWriter` fills an empty
+                    // origin from the configured cluster id before the
+                    // append, terminals included, so a terminal reaching
+                    // either drain carries the local origin. That is pinned
+                    // by WalCommitLogWriterTests' SagaTerminalOrigin cases.
                     if (entry.OriginClusterId is { Length: > 0 } applyOrigin
                         && !string.Equals(applyOrigin, localClusterId, StringComparison.Ordinal))
                     {
