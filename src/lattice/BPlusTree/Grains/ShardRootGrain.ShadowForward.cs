@@ -42,7 +42,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <c>LatticeGrain</c> to refresh its cached alias + shard-map snapshot and
 /// retry against the destination tree. A mutation that passed the gate before
 /// the phase was set is still mirrored, because the resize fences the old copy
-/// before it moves the alias.
+/// before it moves the alias. So is an atomic-write saga's own traffic for a
+/// saga bound to this copy - its prepared batch and its terminals - which the
+/// gate admits until the copy is purged, so the batch lands whole on both
+/// copies (issue #4369).
 /// </description></item>
 /// </list>
 /// </summary>
@@ -283,6 +286,15 @@ internal sealed partial class ShardRootGrain
 
         sf.Phase = ShadowForwardPhase.Drained;
         await WriteShardStateAsync();
+    }
+
+    /// <inheritdoc />
+    public Task<string?> GetMirrorDestinationAsync()
+    {
+        var destination = TryGetShadowTarget() is null
+            ? null
+            : state.State.ShadowForward!.DestinationPhysicalTreeId;
+        return Task.FromResult(destination);
     }
 
     /// <inheritdoc />

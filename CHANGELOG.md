@@ -90,6 +90,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - A resize undo no longer brings back a half-applied atomic batch.** A batch in flight when an online resize moved the alias could be left on only some shards of the old copy, which an undo then served torn. The old copy now still takes and mirrors a batch bound to it, so the batch lands whole on both copies. ([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)) (`Orleans.Lattice`)
+
 - **Core - Atomic batches stay whole when an alias swap catches one in flight.** During a resize undo, or any other alias swap, a batch's prepared writes could reach the copy being discarded while it committed on the copy kept. Readers then saw it torn and a committed batch could be lost. Its writes now land only on the copy it commits on, and follow that copy if it moves. ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)) (`Orleans.Lattice`)
 
 - **Core - Reshard under atomic writes no longer duplicates keys.** A grow or shrink raced by `SetManyAtomicAsync` could leave a key on two leaves of one shard, so `CountAsync` over-counted and `ScanKeysAsync` skipped keys while point reads were correct. A saga's commit now sends a key a leaf split moved away to the leaf that holds it. ([#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)) (`Orleans.Lattice`)
@@ -235,7 +237,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Value previews say when the value goes on.** A text value whose preview ends part-way through a character shows as text rather than a hex dump, and a key's one-line preview ends in `...` whenever the value continues, including a binary value's hex. ([#4353](https://github.com/NSTA1/Orleans.Lattice/issues/4353), [#4354](https://github.com/NSTA1/Orleans.Lattice/issues/4354)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Sizes never read 1024 of a unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry and Data areas. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Sizes never read 1024 of a unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry, Data and Tenancy areas. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355), [#4372](https://github.com/NSTA1/Orleans.Lattice/issues/4372)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A Data tab refresh no longer reports a failed read over loaded keys.** Switching tree, page size, prefix, tag or scan mode no longer shows a read error when the previous scan's cursor cannot be released; the new page stays in view and the server reaps the old cursor. ([#4371](https://github.com/NSTA1/Orleans.Lattice/issues/4371)) (`Orleans.Lattice.Explorer.Core`)
+
+- **Explorer - Route addresses with escapes that are not UTF-8 are reported, not misread.** `ExplorerRoutePath.Parse` now reports an id, tenant or parameter whose percent-escapes are not valid UTF-8, such as `%FF`, as malformed instead of resolving it to a differently named tree. ([#4373](https://github.com/NSTA1/Orleans.Lattice/issues/4373)) (`Orleans.Lattice.Explorer.Core`)
 
 ### Security
 

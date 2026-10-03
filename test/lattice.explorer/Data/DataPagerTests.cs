@@ -190,6 +190,51 @@ public class DataPagerTests
         Assert.That(reader.CancelCalls, Is.EqualTo(0), "a drained snapshot has no open cursor to release");
     }
 
+    // Regression: releasing the superseded cursor is best effort, but a failed
+    // release escaped ResetAsync after the new scan had already opened, so the
+    // Data tab reported "could not read this tree's keys" over a page that loaded.
+    [Test]
+    public async Task ResetAsync_WhenReleasingThePreviousCursorFails_StillOpensTheNewScan()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 3);
+        var pager = new DataPager(reader);
+        await pager.ResetAsync("tree-1", pageSize: 1); // cursor-1 live
+        await pager.NextAsync();                        // page 1 of cursor-1
+
+        reader.OnCancel = _ => throw new InvalidOperationException("the previous tree can no longer be reached");
+
+        Assert.DoesNotThrowAsync(async () => await pager.ResetAsync("tree-2", pageSize: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.CancelCalls, Is.EqualTo(1), "the release was still attempted");
+            Assert.That(reader.LastCancelToken, Is.EqualTo("cursor-1"));
+            Assert.That(pager.TreeId, Is.EqualTo("tree-2"));
+            Assert.That(pager.PageIndex, Is.EqualTo(0));
+            Assert.That(KeysOf(pager), Is.EqualTo(new[] { "k0" }));
+            Assert.That(pager.CanGoNext, Is.True, "the new scan remains usable");
+        });
+    }
+
+    [Test]
+    public async Task ResetAsync_WhenCancelledWhileReleasingThePreviousCursor_PropagatesTheCancellation()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 3);
+        var pager = new DataPager(reader);
+        await pager.ResetAsync("tree-1", pageSize: 1); // cursor-1 live
+
+        using var cancellation = new CancellationTokenSource();
+        reader.OnCancel = token =>
+        {
+            cancellation.Cancel();
+            token.ThrowIfCancellationRequested();
+        };
+
+        Assert.That(
+            async () => await pager.ResetAsync("tree-2", pageSize: 1, cancellationToken: cancellation.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
     [Test]
     public async Task CloseAsync_ReleasesTheLiveCursor_AndIsIdempotent()
     {
@@ -240,6 +285,8 @@ public class DataPagerTests
         public string? LastCancelToken { get; private set; }
 
         public bool FailNextScan { get; set; }
+
+        public Action<CancellationToken>? OnCancel { get; set; }
 
         public EntryScanMode LastScanMode { get; private set; } = EntryScanMode.Live;
 
@@ -296,6 +343,7 @@ public class DataPagerTests
         {
             CancelCalls++;
             LastCancelToken = continuationToken;
+            OnCancel?.Invoke(cancellationToken);
 
             // Emulate the server closing the named cursor: a later replay of this
             // token is then rejected. Cancelling a stale token is a tolerated
