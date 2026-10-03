@@ -113,4 +113,95 @@ public sealed class AtomicVisibilityGateTests
         var view = new TxDecisionView(null);
         Assert.That(view.Resolve(Guid.NewGuid()), Is.EqualTo(TxStatus.InFlight));
     }
+
+    private static HybridLogicalClock At(long ticks) => new() { WallClockTicks = ticks };
+
+    private static PreparedCandidate Candidate(
+        TxStatus status, long ticks, bool alreadyTerminal = false, bool supersededByRow = false) =>
+        new(status, alreadyTerminal, supersededByRow, At(ticks));
+
+    [Test]
+    public void SelectDecidingPrepare_returns_minus_one_for_no_candidates()
+    {
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare([]), Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_older_in_flight_never_shadows_a_newer_committed_prepare()
+    {
+        // The silo-restart tear: a saga parked by the restart keeps its prepare
+        // (InFlight) while the next saga prepares and commits the same key. The
+        // committed saga decides, whatever order the buckets are enumerated in.
+        PreparedCandidate[] olderFirst = [Candidate(TxStatus.InFlight, 1), Candidate(TxStatus.Committed, 2)];
+        PreparedCandidate[] newerFirst = [Candidate(TxStatus.Committed, 2), Candidate(TxStatus.InFlight, 1)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(olderFirst), Is.EqualTo(1));
+            Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(newerFirst), Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_newer_in_flight_never_shadows_an_older_committed_prepare()
+    {
+        // Picking the newest bucket alone is not enough: the older saga has
+        // committed but not yet drained here, so it decides the key's value.
+        PreparedCandidate[] candidates = [Candidate(TxStatus.Committed, 1), Candidate(TxStatus.InFlight, 2)];
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_prefers_the_newest_of_several_committed_prepares()
+    {
+        PreparedCandidate[] candidates =
+        [
+            Candidate(TxStatus.Committed, 1),
+            Candidate(TxStatus.Committed, 3),
+            Candidate(TxStatus.Committed, 2),
+        ];
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_an_indeterminate_prepare_decides_over_a_committed_one()
+    {
+        // The strictly weaker answer wins: the registry cannot say whether the
+        // indeterminate saga's value is the one the key settles on.
+        PreparedCandidate[] candidates = [Candidate(TxStatus.Committed, 2), Candidate(TxStatus.Indeterminate, 1)];
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_returns_minus_one_when_only_invisible_prepares_cover_the_key([Values] bool aborted)
+    {
+        var status = aborted ? TxStatus.Aborted : TxStatus.InFlight;
+        PreparedCandidate[] candidates = [Candidate(status, 1), Candidate(TxStatus.InFlight, 2)];
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_skips_an_already_terminal_committed_orphan()
+    {
+        PreparedCandidate[] candidates =
+        [
+            Candidate(TxStatus.Committed, 2, alreadyTerminal: true),
+            Candidate(TxStatus.InFlight, 1),
+        ];
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_skips_prepares_the_committed_row_already_supersedes([Values] bool indeterminate)
+    {
+        var status = indeterminate ? TxStatus.Indeterminate : TxStatus.Committed;
+        // The commit drain skips a prepare a newer non-migrated row dominates, so
+        // such a bucket can never become the key's value and must not decide.
+        PreparedCandidate[] candidates =
+        [
+            Candidate(status, 1, supersededByRow: true),
+            Candidate(TxStatus.InFlight, 2),
+        ];
+        Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(-1));
+    }
 }

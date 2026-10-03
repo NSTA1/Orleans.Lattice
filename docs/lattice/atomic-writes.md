@@ -758,6 +758,38 @@ same `operationId` once the signal returns to healthy (the keepalive
 reminder also resumes it); the saga continues from its persisted
 progress, and re-staging a write it already staged is idempotent.
 
+## Silo restarts
+
+A silo restart is where the shutdown fast path above meets live readers.
+The saga in flight on the departing silo is parked with its prepared
+writes staged, and the leaves that held them reactivate elsewhere and
+rebuild their pending saga state from the write-ahead log, so the parked
+saga's prepares come back still undecided. They stay undecided until the
+saga resumes, which may be long after the restart, and every later batch
+over the same keys prepares beside them.
+
+Atomic visibility does not wait for that resumption: it holds at every
+instant, with any number of parked sagas.
+
+- **A key covered by several sagas' prepares** resolves against the one
+  saga whose outcome actually decides it, on every read path alike: a
+  committed saga whose commit has not yet reached the leaf (the newest
+  one, if several have committed) surfaces its value; a saga whose
+  outcome is indeterminate hides the key; in-flight and aborted sagas
+  are invisible whatever their age; and a prepare a newer row has
+  already superseded never decides, because its commit would not
+  overwrite that row. A parked saga therefore never shadows a later
+  batch that has committed, and a later in-flight batch never shadows an
+  older one that has.
+- **A leaf rebuilt by activation replay** drains each replayed commit
+  with a stamp derived from the rows it writes and that saga's own
+  prepares, never from a clock that has already absorbed a later saga's
+  prepares. A batch that commits after the reactivation therefore lands
+  on that leaf like on every other.
+
+Neither depends on the parked saga's keepalive reminder firing: the
+reminder resumes the saga, but readers are atomic before it does.
+
 ## Caller-supplied idempotency keys
 
 The default `SetManyAtomicAsync(entries)` overload generates a fresh

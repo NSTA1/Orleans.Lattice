@@ -776,7 +776,11 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<byte[]?> GetWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
     {
-        var status = await ResolvePendingStatusAsync(txid, key);
+        // More than one saga may have prepared this key; resolve against the one
+        // that decides it (AtomicVisibilityGate.SelectDecidingPrepare).
+        TxStatus? selectedStatus;
+        (txid, pendingValue, selectedStatus) = await SelectPendingForKeyAsync(key, txid, pendingValue);
+        var status = selectedStatus ?? await ResolvePendingStatusAsync(txid, key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Single-key visibility decision, delegated to the shared, dependency-free
         // AtomicVisibilityGate so the production read path and the Coyote
@@ -842,7 +846,11 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<VersionedValue> GetWithVersionWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
     {
-        var status = await ResolvePendingStatusAsync(txid, key);
+        // More than one saga may have prepared this key; resolve against the one
+        // that decides it (AtomicVisibilityGate.SelectDecidingPrepare).
+        TxStatus? selectedStatus;
+        (txid, pendingValue, selectedStatus) = await SelectPendingForKeyAsync(key, txid, pendingValue);
+        var status = selectedStatus ?? await ResolvePendingStatusAsync(txid, key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Shared atomic-visibility gate (see GetWithPendingAsync / #1585).
         switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
@@ -893,7 +901,11 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<bool> ExistsWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
     {
-        var status = await ResolvePendingStatusAsync(txid, key);
+        // More than one saga may have prepared this key; resolve against the one
+        // that decides it (AtomicVisibilityGate.SelectDecidingPrepare).
+        TxStatus? selectedStatus;
+        (txid, pendingValue, selectedStatus) = await SelectPendingForKeyAsync(key, txid, pendingValue);
+        var status = selectedStatus ?? await ResolvePendingStatusAsync(txid, key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Shared atomic-visibility gate (see GetWithPendingAsync / #1585).
         switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))

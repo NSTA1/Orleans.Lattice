@@ -7,18 +7,18 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Read-path tests for the highest-HLC tie-break in
-/// <c>BPlusLeafGrain.TryFindPendingForKey</c>. When two independent
-/// sagas have prepared the same key (which can happen after a shard
-/// split's retroactive sweep installs a prepare for an already-
-/// terminalised saga whose terminal then arrives only at the source
-/// shard, leaving an orphan on the destination, while a later saga
-/// prepares the same key against the destination), the bucket with
-/// the strictly-greater <see cref="HybridLogicalClock"/> wins this
-/// lookup. The newer prepare always represents the saga whose
-/// terminal is most likely to be pending or recently delivered, so
-/// preferring it minimises stale-read exposure when an orphaned older
-/// prepare lingers in the pending map.
+/// Read-path tests for keys that more than one saga has prepared on one
+/// leaf. <c>BPlusLeafGrain.TryFindPendingForKey</c> finds the newest bucket
+/// (the bucket with the strictly-greater <see cref="HybridLogicalClock"/>),
+/// and when another bucket also covers the key the read resolves against the
+/// one that decides it, per
+/// <see cref="AtomicVisibilityGate.SelectDecidingPrepare"/>: a committed (or
+/// indeterminate) saga decides over an in-flight or aborted one whatever their
+/// ages, and the newest committed saga wins among several. Two sagas can
+/// prepare the same key after a shard split's retroactive sweep installs a
+/// prepare for an already-terminalised saga (leaving an orphan on the
+/// destination while a later saga prepares the same key), or after a silo
+/// restart parks a saga whose prepare reactivation replays.
 /// <para>
 /// These tests exercise the tie-break indirectly through
 /// <see cref="IBPlusLeafGrain.GetAsync(string)"/> +
@@ -69,7 +69,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task TryFindPending_returns_newer_pending_when_two_sagas_prepare_same_key_and_newer_is_in_flight()
+    public async Task TryFindPending_surfaces_an_older_committed_prepare_when_a_newer_prepare_is_in_flight()
     {
         // Arrange - two sagas prepare the same key in order. The leaf's
         // HLC ticks once per prepare, so saga B's bucket carries a
@@ -80,12 +80,12 @@ public partial class BPlusLeafGrainTests
         await PreparedSetAsync(grain, txidOlder, "k", [1]);   // older HLC
         await PreparedSetAsync(grain, txidNewer, "k", [2]);   // strictly-greater HLC
 
-        // Per-key tie-break is observable via GetAsync: the snapshot
-        // context resolves each txid to a known status. If the older
-        // bucket won (pre-fix), the registry would see txidOlder =
-        // Committed and surface [1]. With the newer-wins fix, the
-        // registry sees txidNewer = InFlight and the key is hidden
-        // (strict isolation).
+        // The older saga has committed but its terminal has not reached this
+        // leaf; the newer one is still in flight. Picking the newest bucket
+        // alone (the earlier tie-break) let the in-flight saga shadow the
+        // committed one, so this key fell through to its pre-saga value while
+        // the committed saga's other keys surfaced on sibling leaves - a torn
+        // read. The committed saga decides (AtomicVisibilityGate.SelectDecidingPrepare).
         var snapshot = new Dictionary<Guid, TxStatus>
         {
             [txidOlder] = TxStatus.Committed,
@@ -97,14 +97,9 @@ public partial class BPlusLeafGrainTests
         {
             var result = await grain.GetAsync("k");
 
-            // Assert - newer-wins: txidNewer is InFlight, so the
-            // prepared value is hidden; no pre-saga Entries value
-            // exists for "k", so GetAsync returns null. Pre-fix
-            // behaviour would have returned [1] (older's committed
-            // value).
-            Assert.That(result, Is.Null,
-                "Newer prepare's InFlight status must shadow the older prepare's Committed status. "
-                + "If this fails returning [1], the read path is picking the older bucket - the tie-break regressed.");
+            // Assert
+            Assert.That(result, Is.EqualTo(new byte[] { 1 }),
+                "An in-flight prepare must not shadow an older prepare whose saga has committed.");
         }
     }
 

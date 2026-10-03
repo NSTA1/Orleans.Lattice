@@ -181,6 +181,12 @@ across multiple grain calls:
 | Durable key/entry cursor (live mode) | Tree-wide *within* each step; not preserved across steps. A delete-range cursor step deletes with the per-key-only visibility of a one-shot `DeleteRangeAsync` (next row). |
 | `DeleteRangeAsync` (one-shot) | Per-key only; a concurrent saga may be observed as committed for some keys and pending for others. Use `SetManyAtomicAsync` to layer atomic deletion semantics on top. |
 
+These guarantees hold across silo restarts. A restart can park a saga
+mid-flight (its caller sees `LatticeShuttingDownException`) and leave its
+prepared writes undecided beside every later batch over the same keys;
+readers stay atomic throughout, without waiting for the parked saga to
+resume. See [Atomic Writes - Silo restarts](atomic-writes.md#silo-restarts).
+
 See [Atomic Writes](atomic-writes.md) for the saga primitive and
 [Durable Cursors](durable-cursors.md#point-in-time-cursors) for the
 point-in-time cursor mode.
