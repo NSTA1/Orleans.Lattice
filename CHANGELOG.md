@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Delta dot walks resolve a span once.** `OrFlag` and `RwFlag` walked each incoming delta's dot list through an interface indexer, paying a dispatch per dot. They now resolve it to a span once and split the narrow and wide walks: 19-58% faster on a re-delivered delta. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
+
+- **Performance - RwSet delta keys rent once per walk.** `RwSet.UnionDeltaDots` rented a pooled buffer and entered an exception-handling region for every element that overran its stack budget. Both are hoisted to the whole walk now: 10-17% faster on 512-byte elements. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
+
+- **Performance - OrSet delta merge hoists its pooled buffer.** `OrSet.MergeDelta` rented and returned an `ArrayPool` buffer per element in both its adds and its removes loop. Each loop takes one rental under one exception-handling region now: 17-20% faster. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
+
 - **Performance - Tag normalisation allocates once.** The tag-index write path normalised each write's tags through a `List` and then copied it out with `ToArray`. It now fills an exactly-sized array in a single pass, removing two allocations and 88 bytes per four-tag write. ([#4386](https://github.com/NSTA1/Orleans.Lattice/pull/4386)) (`Orleans.Lattice`)
 
 - **Performance - Tag row keys build in one pass.** Tag-index row keys and key-major prefixes were assembled with five- and six-operand `string.Concat`, which sizes the result in one pass and copies in another. They now use `string.Create`, cutting row-key construction time by about a third. ([#4386](https://github.com/NSTA1/Orleans.Lattice/pull/4386)) (`Orleans.Lattice`)
