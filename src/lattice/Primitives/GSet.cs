@@ -180,16 +180,58 @@ public sealed class GSet : ICrdt<GSet>
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
 
-        // Build the union presized to the combined element-count upper bound and
-        // fill it once, instead of cloning the left operand (a set sized to
-        // left.Count) and then growing it through UnionWith - which reallocates
-        // the backing store one or more times and discards the clone's arrays.
-        // A single presized allocation replaces that clone-then-grow churn; the
-        // resulting union is identical.
-        var union = new HashSet<string>(left.Elements.Count + right.Elements.Count, StringComparer.Ordinal);
-        union.UnionWith(left.Elements);
-        union.UnionWith(right.Elements);
-        return new GSet(union);
+        // Seed the union from the left operand through the HashSet copy
+        // constructor under an ordinally-equivalent comparer, so the runtime
+        // bulk-copies the backing bucket and entry arrays instead of hashing
+        // every element again. The previous form built an empty presized set and
+        // filled it with UnionWith(left), which re-hashed all of left's strings
+        // on every merge - work that is pure overhead, because the source set
+        // has already stored each element's hash code.
+        //
+        // That copy inherits the source set's capacity rather than sizing to the
+        // combined count, so it is only the cheaper shape while the right
+        // operand is narrow enough not to force the result to grow past it. The
+        // dominant replication case is exactly that: idempotent delivery, where
+        // right is a subset of left and nothing is appended at all. A wide
+        // right operand takes the verbatim presized arm below, which sizes the
+        // result once and allocates no more than it did before. Mirrors the same
+        // comparer-preserving copy in MvRegister.Clone.
+        var leftElements = left.Elements;
+        var rightElements = right.Elements;
+        return new GSet(
+            rightElements.Count * CopyMergeWidthRatio <= leftElements.Count
+                ? MergeByCopyThenUnion(leftElements, rightElements)
+                : MergeByPresizedUnion(leftElements, rightElements));
+    }
+
+    /// <summary>
+    /// How many times wider than the right operand the left operand must be for
+    /// the copy-then-union merge arm to be worth its inherited capacity. Below
+    /// it the union is built presized, exactly as every merge once was.
+    /// </summary>
+    private const int CopyMergeWidthRatio = 4;
+
+    /// <summary>
+    /// Narrow-right arm: bulk-copy the left operand's backing store, then append
+    /// the few elements the right operand contributes.
+    /// </summary>
+    private static HashSet<string> MergeByCopyThenUnion(HashSet<string> left, HashSet<string> right)
+    {
+        var union = new HashSet<string>(left, OrdinalEquivalent(left.Comparer));
+        if (right.Count > 0) union.UnionWith(right);
+        return union;
+    }
+
+    /// <summary>
+    /// Wide-right arm: size the union to the combined upper bound once and fill
+    /// it from both operands.
+    /// </summary>
+    private static HashSet<string> MergeByPresizedUnion(HashSet<string> left, HashSet<string> right)
+    {
+        var union = new HashSet<string>(left.Count + right.Count, StringComparer.Ordinal);
+        union.UnionWith(left);
+        union.UnionWith(right);
+        return union;
     }
 
     /// <summary>
@@ -205,14 +247,29 @@ public sealed class GSet : ICrdt<GSet>
 
     /// <summary>Creates a deep copy of this set.</summary>
     public GSet Clone() =>
-        // Rehash into a fresh ordinal-comparer set presized to the element count
-        // (the IEnumerable copy constructor sizes to the source ICollection's
-        // Count), matching the ordinal normalisation the merge factory applies.
-        // The direct-assign constructor takes the copy as-is, so the clone
-        // allocates exactly one set with no discarded empty-collection shell -
-        // the object initializer form allocated (and immediately overwrote) the
-        // parameterless constructor's empty backing set on every clone.
-        new(new HashSet<string>(Elements, StringComparer.Ordinal));
+        // Copy through the source set's own comparer when it is already
+        // ordinally equivalent, so the HashSet copy constructor bulk-copies the
+        // backing store instead of rehashing every element. Passing a
+        // reference-distinct comparer - which StringComparer.Ordinal is, against
+        // a set built with the default string comparer - defeats that fast path
+        // and costs one string hash per element on every clone. Anything that is
+        // not ordinally equivalent still normalises to StringComparer.Ordinal,
+        // so the clone's membership semantics are unchanged. The direct-assign
+        // constructor takes the copy as-is, so the clone allocates exactly one
+        // set with no discarded empty-collection shell.
+        new(new HashSet<string>(Elements, OrdinalEquivalent(Elements.Comparer)));
+
+    /// <summary>
+    /// The comparer to copy <paramref name="sourceComparer"/>'s set under:
+    /// itself when it is already ordinal (so the copy constructor's bulk-copy
+    /// fast path applies), otherwise the ordinal normalisation every GSet
+    /// factory applies. <see cref="EqualityComparer{T}.Default"/> for
+    /// <see cref="string"/> is ordinal, so preserving it changes no membership.
+    /// </summary>
+    private static IEqualityComparer<string> OrdinalEquivalent(IEqualityComparer<string> sourceComparer)
+        => ReferenceEquals(sourceComparer, EqualityComparer<string>.Default)
+            ? sourceComparer
+            : StringComparer.Ordinal;
 
     /// <summary>
     /// Folds a <see cref="GSetDelta"/> into this set: every element in
