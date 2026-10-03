@@ -88,7 +88,7 @@ that would go red if the production behaviour it abstracts regressed. Three
 decisions shaped that column, recorded here because each was a real fork.
 
 **Framing: a detector is a test over production code, never a TLA+ mutation.**
-Every property the base model checks already has a paired `spec/mutations` file,
+Every property the base model checks already has a paired `spec/atomic-commit/mutations` file,
 guaranteed by `SpecMutationCatalogueTests`. It is tempting to cite those here,
 and it would be wrong. A mutation perturbs the *spec*: if production regressed
 tomorrow, every mutation would still fail in exactly the same way and nothing
