@@ -273,7 +273,9 @@ public sealed class TenantRecord
         ArgumentNullException.ThrowIfNull(subjectId);
         ArgumentNullException.ThrowIfNull(groupIds);
 
-        if (Subjects.TryGetValue(subjectId, out var slot) && slot.Present)
+        if (!TenantAccessEntries.IsGroupShapedSubject(subjectId)
+            && Subjects.TryGetValue(subjectId, out var slot)
+            && slot.Present)
         {
             return true;
         }
@@ -309,7 +311,9 @@ public sealed class TenantRecord
             return false;
         }
 
-        return (MemberSlots.TryGetValue(subjectId, out var slot) && slot.Present)
+        return (!TenantAccessEntries.IsGroupShapedSubject(subjectId)
+                && MemberSlots.TryGetValue(subjectId, out var slot)
+                && slot.Present)
             || AnyGroupPresent(MemberSlots, groupIds, Id);
     }
 
