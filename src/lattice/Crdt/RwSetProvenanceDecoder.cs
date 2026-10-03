@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Orleans.Lattice.Primitives;
@@ -92,71 +93,99 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
         var adds = set.Adds;
         var removes = set.Removes;
 
-        var keys = new List<string>(adds.Count + removes.Count);
-        var total = 0;
-        foreach (var (key, dots) in adds)
-        {
-            keys.Add(key);
-            total += dots.Count;
-        }
-        foreach (var (key, dots) in removes)
-        {
-            total += dots.Count;
-            if (!adds.ContainsKey(key)) keys.Add(key);
-        }
-        if (total == 0) return Array.Empty<CrdtMemberChange>();
+        var keyCount = adds.Count + removes.Count;
+        if (keyCount == 0) return Array.Empty<CrdtMemberChange>();
 
-        keys.Sort(OrdinalStringOrder.Comparison);
-
-        var result = new List<CrdtMemberChange>(total);
-        foreach (var key in keys)
+        // Union of element keys across adds and removes (a pure-remove element
+        // appears only in removes), collected once and sorted for a
+        // deterministic cross-element order. The window is a pooled rental
+        // rather than a List<string>: it is scratch that never escapes the
+        // call, so the per-call array the list cost is avoidable outright -
+        // and, being unpresized, that list grew by doubling to roughly twice
+        // the union. The window holds the keys alone rather than pairing each
+        // with its add-dot list: the pair would spare the emit loop one
+        // dictionary probe, but it widens the sorted element from an 8-byte
+        // reference to a 16-byte pair, and the isolated lane for this call
+        // shape measured that sort costing more than the removed probe saves.
+        var window = ArrayPool<string>.Shared.Rent(keyCount);
+        var written = 0;
+        try
         {
-            var element = Convert.FromBase64String(key);
-            var start = result.Count;
-
-            if (adds.TryGetValue(key, out var addDots))
+            var total = 0;
+            foreach (var (key, dots) in adds)
             {
-                // Span walk - see the type remarks on the OR-set twin. The loop
-                // appends only to result, so the scanned list's length cannot
-                // change while the span is alive. The element is copied rather
-                // than held by reference: the body calls into result.Add, and a
-                // byref into the span held live across a call is pinned to a
-                // GC-tracked stack slot, which measured dearer than the copy.
-                var addSpan = CollectionsMarshal.AsSpan(addDots);
-                for (var i = 0; i < addSpan.Length; i++)
+                window[written++] = key;
+                total += dots.Count;
+            }
+            foreach (var (key, dots) in removes)
+            {
+                total += dots.Count;
+                if (!adds.ContainsKey(key))
                 {
-                    var dot = addSpan[i];
-                    result.Add(new CrdtMemberChange
-                    {
-                        Element = element,
-                        Kind = CrdtMemberChangeKind.Added,
-                        ReplicaId = dot.ReplicaId,
-                        Ordinal = dot.Counter,
-                        WallClock = null,
-                    });
+                    window[written++] = key;
                 }
             }
+            if (total == 0) return Array.Empty<CrdtMemberChange>();
 
-            if (removes.TryGetValue(key, out var removeDots))
+            var keys = window.AsSpan(0, written);
+            keys.Sort(OrdinalStringOrder.Comparison);
+
+            var result = new List<CrdtMemberChange>(total);
+            foreach (var key in keys)
             {
-                var removeSpan = CollectionsMarshal.AsSpan(removeDots);
-                for (var i = 0; i < removeSpan.Length; i++)
-                {
-                    var dot = removeSpan[i];
-                    result.Add(new CrdtMemberChange
-                    {
-                        Element = element,
-                        Kind = CrdtMemberChangeKind.Removed,
-                        ReplicaId = dot.ReplicaId,
-                        Ordinal = dot.Counter,
-                        WallClock = null,
-                    });
-                }
-            }
+                adds.TryGetValue(key, out var addDots);
+                var element = Convert.FromBase64String(key);
+                var start = result.Count;
 
-            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CausalOrderComparer.Comparison);
+                if (addDots is not null)
+                {
+                    // Span walk - see the type remarks on the OR-set twin. The loop
+                    // appends only to result, so the scanned list's length cannot
+                    // change while the span is alive. The element is copied rather
+                    // than held by reference: the body calls into result.Add, and a
+                    // byref into the span held live across a call is pinned to a
+                    // GC-tracked stack slot, which measured dearer than the copy.
+                    var addSpan = CollectionsMarshal.AsSpan(addDots);
+                    for (var i = 0; i < addSpan.Length; i++)
+                    {
+                        var dot = addSpan[i];
+                        result.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Added,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+
+                if (removes.TryGetValue(key, out var removeDots))
+                {
+                    var removeSpan = CollectionsMarshal.AsSpan(removeDots);
+                    for (var i = 0; i < removeSpan.Length; i++)
+                    {
+                        var dot = removeSpan[i];
+                        result.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Removed,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+
+                CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CausalOrderComparer.Comparison);
+            }
+            return result;
         }
-        return result;
+        finally
+        {
+            Array.Clear(window, 0, written);
+            ArrayPool<string>.Shared.Return(window);
+        }
     }
 
     /// <summary>
@@ -181,49 +210,73 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
         var adds = set.Adds;
         if (adds.Count == 0) return Array.Empty<CrdtMemberValue>();
 
-        var keys = new List<string>(adds.Count);
-        foreach (var key in adds.Keys) keys.Add(key);
-        keys.Sort(OrdinalStringOrder.Comparison);
-
-        var result = new List<CrdtMemberValue>(keys.Count);
-        foreach (var key in keys)
+        // Collect the element keys and sort them for a deterministic order. The
+        // window is scratch that never escapes the call, so it is rented rather
+        // than allocated: the key list it replaces cost one array per call -
+        // and, being unpresized, grew by doubling to roughly twice the key
+        // count - where this costs none once the pool is warm. The window holds
+        // the keys alone rather than pairing each with its add-dot list: the
+        // pair would spare the emit loop one dictionary probe, but it widens
+        // the sorted element from an 8-byte reference to a 16-byte pair, and
+        // the isolated lane for this call shape measured that sort costing more
+        // than the removed probe saves. Only the written prefix is cleared on
+        // return, because the rented array is at least the requested length and
+        // clearing the whole of it would memset past what was used.
+        var count = adds.Count;
+        var window = ArrayPool<string>.Shared.Rent(count);
+        try
         {
-            var addDots = adds[key];
-            if (addDots.Count == 0) continue;
+            var next = 0;
+            foreach (var key in adds.Keys) window[next++] = key;
 
-            // Remove-wins: the element is present only when no remove dot
-            // survives (every remove dot has been cancelled by an observed-add
-            // tombstone).
-            if (HasLiveRemove(set, key)) continue;
+            var keys = window.AsSpan(0, count);
+            keys.Sort(OrdinalStringOrder.Comparison);
 
-            var bestReplica = string.Empty;
-            var bestCounter = long.MinValue;
-            var hasLive = false;
-            // Span walk: the selection body only reads.
-            var addSpan = CollectionsMarshal.AsSpan(addDots);
-            for (var i = 0; i < addSpan.Length; i++)
+            var result = new List<CrdtMemberValue>(count);
+            foreach (var key in keys)
             {
-                ref readonly var dot = ref addSpan[i];
-                if (!hasLive
-                    || dot.Counter > bestCounter
-                    || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
+                var addDots = adds[key];
+                if (addDots.Count == 0) continue;
+
+                // Remove-wins: the element is present only when no remove dot
+                // survives (every remove dot has been cancelled by an observed-add
+                // tombstone).
+                if (HasLiveRemove(set, key)) continue;
+
+                var bestReplica = string.Empty;
+                var bestCounter = long.MinValue;
+                var hasLive = false;
+                // Span walk: the selection body only reads.
+                var addSpan = CollectionsMarshal.AsSpan(addDots);
+                for (var i = 0; i < addSpan.Length; i++)
                 {
-                    hasLive = true;
-                    bestReplica = dot.ReplicaId;
-                    bestCounter = dot.Counter;
+                    ref readonly var dot = ref addSpan[i];
+                    if (!hasLive
+                        || dot.Counter > bestCounter
+                        || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
+                    {
+                        hasLive = true;
+                        bestReplica = dot.ReplicaId;
+                        bestCounter = dot.Counter;
+                    }
                 }
+
+                if (!hasLive) continue;
+                result.Add(new CrdtMemberValue
+                {
+                    Element = Convert.FromBase64String(key),
+                    ReplicaId = bestReplica,
+                    Ordinal = bestCounter,
+                });
             }
 
-            if (!hasLive) continue;
-            result.Add(new CrdtMemberValue
-            {
-                Element = Convert.FromBase64String(key),
-                ReplicaId = bestReplica,
-                Ordinal = bestCounter,
-            });
+            return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
         }
-
-        return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
+        finally
+        {
+            Array.Clear(window, 0, count);
+            ArrayPool<string>.Shared.Return(window);
+        }
     }
 
     /// <summary>
@@ -245,8 +298,13 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
     /// The caller only asks whether any remove survives, so the walk stops at
     /// the first one rather than counting them all.
     /// </para>
+    /// <para>
+    /// Internal rather than private so the microbenchmark host's verbatim
+    /// <c>DecodeCurrentValue</c> baseline calls the same untouched helper the
+    /// shipped body does, keeping the pair differing only in the key window.
+    /// </para>
     /// </summary>
-    private static bool HasLiveRemove(RwSet set, string key)
+    internal static bool HasLiveRemove(RwSet set, string key)
     {
         if (!set.Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return false;
         set.Tombstones.TryGetValue(key, out var tomb);
@@ -352,8 +410,13 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
     /// then replica id, then kind (an add sorts before the remove that observed
     /// its own dot). Cached as a single shared instance so the per-element sort
     /// never allocates a comparison delegate.
+    /// <para>
+    /// Internal rather than private so the microbenchmark host's verbatim
+    /// pre-trim baseline sorts through the same cached comparison the shipped
+    /// body uses, leaving the key window as the pair's only difference.
+    /// </para>
     /// </summary>
-    private sealed class CausalOrderComparer : IComparer<CrdtMemberChange>
+    internal sealed class CausalOrderComparer : IComparer<CrdtMemberChange>
     {
         public static CausalOrderComparer Instance { get; } = new();
 

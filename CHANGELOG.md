@@ -64,6 +64,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - CRDT set provenance decode windows.** The `OrSet` and `RwSet` decoders each built an unsized `List<string>` per call purely to sort a key window. All four decode methods rent a right-sized pooled array now: 9-22% less allocated across state and current-value decodes. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
+
+- **Performance - Atomic and cross-tree fingerprint windows.** Both fingerprint paths allocated a scratch key array per call, the cross-tree one once per participant. They share a single pooled rental now: 192 bytes whatever the width, down from 4.3 KB and 16.3 KB at 512 keys. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
+
 - **Performance - Sequence copy-out walk.** `Rga.ToList` walked its cached projection through a read-only wrapper, two virtual calls per element. It caches the wrapper's backing list and walks a span now: 40-65% faster on the copy-out itself. ([#4316](https://github.com/NSTA1/Orleans.Lattice/pull/4316)) (`Orleans.Lattice`)
 
 - **Performance - CRDT provenance decode walks.** The version-vector current-value projection re-probed its dictionary once per replica; it sorts a pooled key/value window now, 11-22% less allocated. Five decoder delta walks resolve their dot lists to spans. ([#4316](https://github.com/NSTA1/Orleans.Lattice/pull/4316)) (`Orleans.Lattice`)
