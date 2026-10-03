@@ -17,11 +17,19 @@ public class OrFlagDeadMemberRegressionTests
     [Test]
     public void OrFlag_HasNoLiveEnableCountMember()
     {
-        var members = typeof(OrFlag)
+        var declared = typeof(OrFlag)
             .GetMembers(BindingFlags.NonPublic | BindingFlags.Public
-                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
-            .Where(m => m.Name == "LiveEnableCount");
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
 
-        Assert.That(members, Is.Empty);
+        // The claim is an absence, so the lookup needs a positive control: a
+        // BindingFlags drift that returned no member at all would satisfy the
+        // absence assertion while proving nothing about the removed helper.
+        Assert.Multiple(() =>
+        {
+            Assert.That(declared, Is.Not.Empty,
+                "the member lookup must see OrFlag's own members, or the absence check below "
+                + "passes for the wrong reason.");
+            Assert.That(declared.Where(m => m.Name == "LiveEnableCount"), Is.Empty);
+        });
     }
 }
