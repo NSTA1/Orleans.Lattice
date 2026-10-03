@@ -192,7 +192,7 @@ observes a fully consistent view of the tree.
 | Invariant | Mechanism under test |
 |---|---|
 | `CountAsync` returns the exact universe size, always | Per-slot count routing against the authoritative `ShardMap`, each shard counted in work-bounded batches, plus version stability check |
-| `ScanKeysAsync` / `ScanEntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge + `HashSet` dedup |
+| `ScanKeysAsync` / `ScanEntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge + `HashSet` dedup + the value of a key several shards hold taken from its owner |
 | `ScanKeysAsync(null, null, reverse: true)` yields the full universe in reverse | Reverse-scan path also reconciles |
 | `ScanKeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
 | `GetAsync` / `GetManyAsync` never return a corrupt value | Writes are atomic per-shard; CRDT LWW resolves concurrent rewrites |

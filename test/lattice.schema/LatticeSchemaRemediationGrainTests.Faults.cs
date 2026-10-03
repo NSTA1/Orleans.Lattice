@@ -190,6 +190,8 @@ public partial class LatticeSchemaRemediationGrainTests
         context.GrainId.Returns(GrainId.Create("remediation", TreeId));
         var source = Substitute.For<ILattice>();
         source.EntriesAsync().Returns(EntriesBytes(("k1", Env(1, "{\"a\":1}"))));
+        source.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci => PointReadsAsync(EntriesBytes(("k1", Env(1, "{\"a\":1}"))), ci.ArgAt<List<string>>(0)));
         source.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
             new RoutingInfo(TreeId, new ShardMap { Slots = new[] { 0 } })));
         var destination = Substitute.For<ILattice>();
