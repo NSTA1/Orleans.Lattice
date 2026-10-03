@@ -62,6 +62,8 @@ public sealed class TlcModelCheckTests
 {
     private const string CleanBanner = "Model checking completed. No error has been found.";
 
+    private const string DeadlockBanner = "Error: Deadlock reached.";
+
     /// <summary>
     /// TLC is fast on these bounded instances: the base model count was measured
     /// before the model changed in #2612, and a mutant usually trips in about
@@ -124,7 +126,8 @@ public sealed class TlcModelCheckTests
 
     /// <summary>
     /// The base specification holds against its own full model: all seven
-    /// invariants and all five temporal properties at once.
+    /// invariants and all six action and temporal properties at once, with
+    /// TLC's deadlock check on.
     /// <para>
     /// This is separate from the per-mutation control arms, and both are needed.
     /// A control arm checks one property in isolation; this checks that they
@@ -135,7 +138,7 @@ public sealed class TlcModelCheckTests
     [Test]
     public void The_base_specification_holds()
     {
-        var result = RunTlc(BaseSpecification, BaseConfig, "AtomicCommit");
+        var result = RunTlc(BaseSpecification, BaseConfig, "AtomicCommit", []);
 
         Assert.That(
             result.Output,
@@ -161,8 +164,16 @@ public sealed class TlcModelCheckTests
     /// fails here - during the audit a cfg that prepended a property instead of
     /// replacing it reported violations against the wrong properties, and a
     /// bare exit-code check would have accepted it. TLC does not name the
-    /// property for a true liveness violation, so for those the guard is the
+    /// property for a temporal violation, so for those the guard is the
     /// single-property cfg plus the violation count asserted below.
+    /// </para>
+    /// <para>
+    /// Arm 3 runs only for a mutation that declares <c>DEADLOCK: off</c>, and
+    /// is what keeps that declaration honest. Both arms above run with TLC's
+    /// deadlock check off for such a mutation; arm 3 runs the mutant again
+    /// with it on and requires TLC to report a deadlock. A declaration that
+    /// was not needed would otherwise silently weaken the check for no reason,
+    /// and one that stopped being needed would never be noticed.
     /// </para>
     /// </summary>
     [TestCaseSource(nameof(Mutations))]
@@ -171,7 +182,7 @@ public sealed class TlcModelCheckTests
         var baseSpec = BaseSpecification;
         var config = mutation.BuildConfig(BaseConfig);
 
-        var control = RunTlc(baseSpec, config, "AtomicCommit");
+        var control = RunTlc(baseSpec, config, "AtomicCommit", mutation.TlcOptions);
         Assert.That(
             control.Output,
             Does.Contain(CleanBanner),
@@ -180,7 +191,8 @@ public sealed class TlcModelCheckTests
             + "mutation. Either the base specification is broken or the generated cfg is wrong."
             + Environment.NewLine + control.Output);
 
-        var mutant = RunTlc(mutation.Apply(baseSpec), config, mutation.Module);
+        var mutantSpec = mutation.Apply(baseSpec);
+        var mutant = RunTlc(mutantSpec, config, mutation.Module, mutation.TlcOptions);
 
         Assert.That(
             mutant.ExitCode,
@@ -204,6 +216,18 @@ public sealed class TlcModelCheckTests
             + "property so that the violation is unambiguous; more than one means the cfg or the "
             + "mutation is doing something unintended."
             + Environment.NewLine + mutant.Output);
+
+        if (mutation.DeadlockCheckDisabled)
+        {
+            var withDeadlockCheck = RunTlc(mutantSpec, config, mutation.Module, []);
+            Assert.That(
+                withDeadlockCheck.Output,
+                Does.Contain(DeadlockBanner),
+                $"'{mutation.Name}' declares DEADLOCK: off, but with TLC's deadlock check left on the mutant "
+                + "does not deadlock. The declaration weakens the experiment's checking for no reason; remove "
+                + "it from the .mutation file."
+                + Environment.NewLine + withDeadlockCheck.Output);
+        }
     }
 
     /// <summary>
@@ -220,7 +244,7 @@ public sealed class TlcModelCheckTests
     /// <summary>
     /// Counts TLC's violation banners. Both wordings are matched because TLC
     /// names the property for invariants and action properties but not for
-    /// liveness.
+    /// temporal properties.
     /// </summary>
     private static int CountViolationLines(string output) =>
         Regex.Matches(
@@ -253,7 +277,11 @@ public sealed class TlcModelCheckTests
     /// TLC emits its state files beside the module it checks, so running in
     /// <c>spec/</c> would leave build output in the repository.
     /// </summary>
-    private TlcResult RunTlc(string moduleText, string configText, string moduleName)
+    private TlcResult RunTlc(
+        string moduleText,
+        string configText,
+        string moduleName,
+        IReadOnlyList<string> options)
     {
         var scratch = Path.Combine(Path.GetTempPath(), $"lattice-tlc-{Guid.NewGuid():N}");
         Directory.CreateDirectory(scratch);
@@ -276,6 +304,11 @@ public sealed class TlcModelCheckTests
             info.ArgumentList.Add("-cp");
             info.ArgumentList.Add(_jar);
             info.ArgumentList.Add("tlc2.TLC");
+            foreach (var option in options)
+            {
+                info.ArgumentList.Add(option);
+            }
+
             info.ArgumentList.Add("-config");
             info.ArgumentList.Add(config);
             info.ArgumentList.Add("-workers");

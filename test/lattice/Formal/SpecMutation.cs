@@ -16,7 +16,12 @@ public enum SpecPropertyClass
     /// <summary>A box-of-action formula: a safety property in PROPERTIES.</summary>
     Action,
 
-    /// <summary>A true liveness property, needing the fairness in Spec.</summary>
+    /// <summary>
+    /// A formula TLC checks over whole behaviours rather than single steps: a
+    /// liveness property needing the fairness in Spec, or a safety property
+    /// stated with nested <c>[]</c> (<c>MonotonicVisibility</c>). TLC reports a
+    /// violation of either without naming the property.
+    /// </summary>
     Temporal,
 }
 
@@ -81,18 +86,47 @@ public sealed record SpecMutation
     public IReadOnlyList<string> Perturbs { get; init; } = [];
 
     /// <summary>
+    /// Whether TLC's deadlock check is switched off for this mutation, from
+    /// the optional <c>DEADLOCK: off</c> header.
+    /// <para>
+    /// A mutant can be left with no enabled action, and TLC then reports
+    /// <c>Deadlock reached</c> before it ever evaluates a temporal target (it
+    /// checks those only after the state search completes), so the experiment
+    /// would be about the deadlock rather than the property. Switching the check
+    /// off lets TLC treat the stuck state as stuttering forever, which is the
+    /// behaviour the property then has to reject. It is a claim, and
+    /// <see cref="TlcModelCheckTests"/> checks it: a mutation that declares it
+    /// is also run once with the check left on and must report a deadlock, so
+    /// the switch cannot be left on a mutation that does not need it.
+    /// </para>
+    /// </summary>
+    public bool DeadlockCheckDisabled { get; init; }
+
+    /// <summary>
+    /// The extra command-line options TLC is run with for both arms of this
+    /// mutation's experiment: <c>-deadlock</c> when
+    /// <see cref="DeadlockCheckDisabled"/> is set, otherwise none. The control
+    /// arm uses the same options as the mutant so the two arms differ only in
+    /// the module.
+    /// </summary>
+    public IReadOnlyList<string> TlcOptions => DeadlockCheckDisabled ? [DeadlockSwitch] : [];
+
+    /// <summary>TLC's switch that turns its deadlock check off.</summary>
+    public const string DeadlockSwitch = "-deadlock";
+
+    /// <summary>
     /// The exact text TLC emits when <see cref="Target"/> is violated.
     /// <para>
     /// Note the asymmetry in the <see cref="SpecPropertyClass.Temporal"/> case:
-    /// TLC does NOT name the property for a true liveness violation, only for
-    /// invariants and action properties. So a liveness mutation cannot be
+    /// TLC does NOT name the property for a temporal violation, only for
+    /// invariants and action properties. So a temporal mutation cannot be
     /// checked against the property's name, and the guard against a
     /// misattributed violation has to come from elsewhere - specifically from
     /// the generated cfg naming exactly one property, which the caller also
     /// asserts by counting violation lines. Worth stating rather than leaving
     /// as a silent gap, because "assert the banner names the property" is the
     /// rule everywhere else here and it simply cannot be applied to the
-    /// liveness properties.
+    /// temporal properties.
     /// </para>
     /// </summary>
     public string ExpectedBanner => PropertyClass switch
@@ -296,10 +330,22 @@ public static class SpecMutationCatalogue
             .ToList();
     }
 
-    private static SpecMutation Parse(string path)
+    private static SpecMutation Parse(string path) =>
+        Parse(Path.GetFileNameWithoutExtension(path), File.ReadAllText(path));
+
+    /// <summary>
+    /// Parses one mutation from its text. Separate from the file overload so
+    /// the format's rules - in particular the ones that reject a malformed
+    /// header - can be exercised without writing files.
+    /// </summary>
+    /// <param name="name">The mutation's name, used in error messages.</param>
+    /// <param name="content">The full text of the <c>.mutation</c> file.</param>
+    public static SpecMutation Parse(string name, string content)
     {
-        var name = Path.GetFileNameWithoutExtension(path);
-        var lines = File.ReadAllText(path).ReplaceLineEndings("\n").Split('\n');
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(content);
+
+        var lines = content.ReplaceLineEndings("\n").Split('\n');
 
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var edits = new List<SpecEdit>();
@@ -358,7 +404,28 @@ public static class SpecMutationCatalogue
             Perturbs = metadata.TryGetValue("PERTURBS", out var perturbs)
                 ? perturbs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 : [],
+            DeadlockCheckDisabled = ParseDeadlock(metadata, name),
         };
+    }
+
+    /// <summary>
+    /// Reads the optional <c>DEADLOCK:</c> header. The only accepted value is
+    /// <c>off</c>: deadlock checking is on by default, so <c>on</c> would be a
+    /// no-op that reads like a decision, and anything else is a typo that must
+    /// not silently fall back to the default.
+    /// </summary>
+    private static bool ParseDeadlock(IDictionary<string, string> metadata, string name)
+    {
+        if (!metadata.TryGetValue("DEADLOCK", out var value))
+        {
+            return false;
+        }
+
+        return string.Equals(value, "off", StringComparison.Ordinal)
+            ? true
+            : throw new InvalidOperationException(
+                $"{name}.mutation declares 'DEADLOCK: {value}'. The only accepted value is 'off'; omit the "
+                + "header to keep TLC's deadlock check on.");
     }
 
     /// <summary>

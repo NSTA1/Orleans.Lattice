@@ -128,13 +128,19 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<(Guid TransactionId, int Partition), long>? _pendingTxOffsets;
 
     /// <summary>
-    /// Idempotency dedup set. Populated as terminal marks replay so a
+    /// Idempotency dedup set. Populated as terminal marks apply or replay so a
     /// re-applied <see cref="MutationKind.TxCommit"/> /
     /// <see cref="MutationKind.TxAbort"/> for the same transaction id is
     /// a no-op rather than crashing on a missing pending bucket.
-    /// Survives only as long as the activation; rebuilt by the replay
-    /// coordinator on next activation. Lazily allocated for the same
-    /// reason as <see cref="_pendingTx"/>.
+    /// Survives only as long as the activation. A new activation rebuilds it
+    /// only for the terminal marks its own replay window covers: a replay that
+    /// starts at a projection checkpoint past the mark, or at a WAL tail
+    /// trimmed past it, leaves the transaction out, and the set is not carried
+    /// in a leaf snapshot. It is also the orphan-guard input and the late-prepare
+    /// refusal's input (<see cref="IsLatePrepareForTerminalTransaction"/>), so
+    /// both are blind to a terminal the current activation does not know
+    /// (issue #4445). Lazily allocated for the same reason as
+    /// <see cref="_pendingTx"/>.
     /// </summary>
     private HashSet<Guid>? _recentlyTerminal;
 

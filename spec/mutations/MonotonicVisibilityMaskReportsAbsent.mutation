@@ -8,7 +8,7 @@
 # on the order of the mask relative to the broadcast.
 MODULE: MonotonicVisibilityMaskReportsAbsent
 TARGET: MonotonicVisibility
-CLASS: Action
+CLASS: Temporal
 SUMMARY: reports a masked registry row as absent rather than indeterminate, so a committed key reverts to pre-saga
 PERTURBS: RegistryMask
 

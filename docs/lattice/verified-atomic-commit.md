@@ -170,17 +170,28 @@ Liveness and temporal properties:
 - **DecisionDurability** - once terminal, the registry decision never flips to the
   other terminal, and its row is never retired while a participant still holds an
   undrained prepared bucket (an unset hides a committed value just as a flip does).
-- **MonotonicVisibility** - once a committed key is observed visible it never
-  reverts to its pre-saga value, even across a reshard or while the registry
-  declines to report the decision.
+- **MonotonicVisibility** - once a committed key has been observed visible it is
+  never observed at its pre-saga value at any later point, even across a reshard
+  or while the registry declines to report the decision. Being hidden in between
+  does not excuse a reversion, so the TLA+ form is stated over the whole
+  behaviour rather than over one step.
 - **RevisionMonotonic** - the registry revision counter never decreases.
 - **Termination** - every saga reaches a terminal decision under a bounded fault
   budget.
-- **EveryCommittedKeyReadable** - every committed saga's keys eventually all
-  become readable (or, in the TLA+ form, hidden while the registry reports
-  `Indeterminate`) - never settling at the pre-saga value.
+- **EveryCommittedKeyReadable** - every committed saga's keys are eventually all
+  materialised at their post-saga value on their own leaves, so they stay
+  readable once the registry forgets the decision.
 - **NoStrandedPrepare** - every participant of a decided saga eventually applies
   the saga's terminal, so no prepared bucket is stranded.
+
+In the TLA+ specification all three liveness properties fail on protocol
+defects under the fairness the specification asserts, not only when that
+fairness is removed. `Termination` alone catches a broadcast that never declares
+a fully told saga done; `NoStrandedPrepare` alone catches a compensation fan-out
+that skips participants whose prepare failed. `EveryCommittedKeyReadable`
+catches a commit fan-out that stops early, which `Termination` misses, but for a
+committed saga it coincides with `NoStrandedPrepare`, which catches that defect
+too.
 
 Each property has a live model home and a companion guard test. The full
 catalogue table - property, plain-language meaning, owning core, encoding, guard

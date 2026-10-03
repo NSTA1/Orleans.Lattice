@@ -110,9 +110,12 @@ public sealed class SpecActionMutationCoverageTests
 
     /// <summary>
     /// A <c>PERTURBS:</c> header is a claim, so it is checked against the
-    /// edits: at least one edit's anchor must lie inside the named action's
-    /// definition. A header naming an action the mutation never touches would
-    /// otherwise satisfy the rule above while proving nothing about it.
+    /// edits: at least one edit must anchor inside the named action's
+    /// definition AND change what TLC reads there, not merely its comments
+    /// (<see cref="SpecActions.MutationPerturbs"/>). A header naming an action
+    /// the mutation never touches, or touches only with a comment while its
+    /// real change lands elsewhere, would otherwise satisfy the rule above
+    /// while proving nothing about it.
     /// </summary>
     [Test]
     public void Every_declared_perturbation_edits_the_action_it_names()
@@ -137,45 +140,101 @@ public sealed class SpecActionMutationCoverageTests
                         continue;
                     }
 
-                    var definition = SpecActions.ReadDefinition(baseSpec, action);
                     Assert.That(
-                        mutation.Edits.Any(e => definition.Contains(e.Find, StringComparison.Ordinal)),
+                        SpecActions.MutationPerturbs(baseSpec, action, mutation),
                         Is.True,
-                        $"mutation '{mutation.Name}' declares PERTURBS: {action}, but none of its edits "
-                        + $"anchors inside {action}'s definition. The header is a claim about what the "
-                        + "mutation changes, and this one is false.");
+                        $"mutation '{mutation.Name}' declares PERTURBS: {action}, but none of its edits both "
+                        + $"anchors inside {action}'s definition and changes more than comments there. The "
+                        + "header is a claim about what the mutation changes, and this one is false.");
                 }
             }
         });
     }
 
     /// <summary>
-    /// The standing negative control for the containment check above: a
-    /// mutation whose only edit lies in a different action is refused. Without
-    /// it the check's green would be indistinguishable from one that accepts
+    /// The standing negative controls for the check above, exercising the
+    /// gate's own logic rather than only the definition reader beneath it.
+    /// Each rejected case is a way a <c>PERTURBS:</c> header could lie; the
+    /// accepted case stops the controls passing because the check rejects
     /// everything.
     /// </summary>
     [Test]
-    public void A_perturbation_anchored_in_a_different_action_is_not_accepted()
+    public void The_perturbation_check_rejects_comment_only_and_misplaced_edits()
     {
         var baseSpec = BaseSpecification.ReplaceLineEndings("\n");
-        var broadcastAnchor = Mutations()
-            .Single(m => m.Name == "NoStrandedPrepareEarlyCompletion")
-            .Edits[0].Find;
+        const string Anchor = "           allDone == \\A j \\in Written(t) : nterm[j] # \"none\"";
+        const string RealChange = "           allDone == \\E j \\in Written(t) : nterm[j] # \"none\"";
+
+        var broadcast = SpecActions.ReadDefinition(baseSpec, "BroadcastStep");
+        var decide = SpecActions.ReadDefinition(baseSpec, "DecideTx");
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                SpecActions.ReadDefinition(baseSpec, "BroadcastStep").Contains(broadcastAnchor, StringComparison.Ordinal),
-                Is.True,
-                "the control's anchor no longer lies in BroadcastStep, so the negative arm below would "
-                + "pass for the wrong reason.");
+                broadcast,
+                Does.Contain(Anchor),
+                "the controls' anchor no longer lies in BroadcastStep, so every arm below would pass or fail "
+                + "for the wrong reason. Re-derive it from spec/AtomicCommit.tla.");
 
             Assert.That(
-                SpecActions.ReadDefinition(baseSpec, "DecideTx").Contains(broadcastAnchor, StringComparison.Ordinal),
+                SpecActions.EditPerturbs(broadcast, new SpecEdit(Anchor, RealChange)),
+                Is.True,
+                "a real change anchored in BroadcastStep was refused, so the check rejects everything and the "
+                + "rejections below prove nothing.");
+
+            Assert.That(
+                SpecActions.EditPerturbs(broadcast, new SpecEdit(Anchor, "\\* MUTATION: a note only.\n" + Anchor)),
                 Is.False,
-                "an anchor inside BroadcastStep was accepted as editing DecideTx, so the containment "
-                + "check cannot tell one action from another.");
+                "an edit that adds only a line comment inside BroadcastStep was accepted as perturbing it.");
+
+            Assert.That(
+                SpecActions.EditPerturbs(broadcast, new SpecEdit(Anchor, Anchor + " (* note (* nested *) *)")),
+                Is.False,
+                "an edit that adds only a block comment inside BroadcastStep was accepted as perturbing it.");
+
+            Assert.That(
+                SpecActions.EditPerturbs(decide, new SpecEdit(Anchor, RealChange)),
+                Is.False,
+                "a real change anchored in BroadcastStep was accepted as perturbing DecideTx, so the check "
+                + "cannot tell one action from another.");
+
+            var splitClaim = SpecMutationCatalogue.Parse(
+                "SplitClaim",
+                "MODULE: SplitClaim\nTARGET: NoStrandedPrepare\nCLASS: Temporal\nSUMMARY: control\n"
+                + "PERTURBS: BroadcastStep\n\n"
+                + "--- FIND\n" + Anchor + "\n--- REPLACE\n\\* MUTATION: decorative.\n" + Anchor + "\n--- END\n"
+                + "--- FIND\n    /\\ phase[t] = \"prepared\"\n--- REPLACE\n    /\\ phase[t] = \"init\"\n--- END\n");
+
+            Assert.That(
+                SpecActions.MutationPerturbs(baseSpec, "BroadcastStep", splitClaim),
+                Is.False,
+                "a mutation whose only edit inside BroadcastStep is a comment, with its real change in another "
+                + "action, was accepted as perturbing BroadcastStep.");
+        });
+    }
+
+    /// <summary>
+    /// The comment stripper the check above depends on: line and nested block
+    /// comments go, a comment marker inside a string literal does not, and
+    /// line structure survives so a change of conjunct layout still counts.
+    /// </summary>
+    [Test]
+    public void StripComments_removes_TLA_comments_and_keeps_everything_TLC_reads()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SpecActions.StripComments("    /\\ x' = 1 \\* trailing\n\\* whole line\n    /\\ y' = 2"),
+                Is.EqualTo("    /\\ x' = 1\n    /\\ y' = 2"));
+            Assert.That(
+                SpecActions.StripComments("a (* one (* two *) still *) b"),
+                Is.EqualTo("a  b"));
+            Assert.That(
+                SpecActions.StripComments("x == \"\\* not a comment\""),
+                Is.EqualTo("x == \"\\* not a comment\""));
+            Assert.That(
+                SpecActions.StripComments("(* a\nb *)\nc"),
+                Is.EqualTo("c"));
         });
     }
 

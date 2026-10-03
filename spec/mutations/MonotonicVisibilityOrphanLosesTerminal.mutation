@@ -6,9 +6,18 @@
 # projection that never received the commit, and a key a reader saw post-saga
 # reverts. This is the stranded-prepare class (#2318) at design level, and why
 # the action's guard requires the terminal to be present.
+#
+# DEADLOCK: off is required, and only since MonotonicVisibility became a
+# behaviour-level property. Once the orphan has erased a leaf's terminal, the
+# saga can neither be forgotten nor drain the orphan, so the mutant always
+# reaches a state with no enabled action. The single-step form fired during the
+# state search, before TLC found that state; the nested-[] form is checked after
+# the search completes, so with the deadlock check on TLC reports the deadlock
+# first and the property is never evaluated.
 MODULE: MonotonicVisibilityOrphanLosesTerminal
 TARGET: MonotonicVisibility
-CLASS: Action
+CLASS: Temporal
+DEADLOCK: off
 SUMMARY: shadow-forwards an orphan onto a leaf with no record of the terminal, so a committed key reverts once the row is retired
 PERTURBS: ShadowForwardOrphan
 

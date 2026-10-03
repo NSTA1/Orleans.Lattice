@@ -1,0 +1,22 @@
+# Pairs with NoStrandedPrepare. The compensation fan-out treats a participant
+# whose prepare failed as having nothing to undo, and declares the aborted saga
+# done once every participant that ACKED has applied the abort. A failed
+# prepare is not proof that nothing was staged - a write that timed out after
+# staging its bucket also nacks - so those buckets are never told the outcome.
+# Every saga still reaches "done", so Termination stays green, and only aborted
+# sagas are affected, so EveryCommittedKeyReadable stays green too. Of the
+# three liveness properties only NoStrandedPrepare sees it (issue #2321).
+MODULE: NoStrandedPrepareCompensationSkipsNacked
+TARGET: NoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the compensation fan-out skips participants whose prepare failed, so their staged buckets are never told the abort
+PERTURBS: BroadcastStep
+
+--- FIND
+           allDone == \A j \in Written(t) : nterm[j] # "none"
+--- REPLACE
+\* MUTATION: during compensation a nacked participant counts as done whether
+\* or not it has applied the abort terminal.
+           allDone == \A j \in Written(t) :
+                        nterm[j] # "none" \/ (phase[t] = "aborting" /\ vote[t][j] = "nack")
+--- END

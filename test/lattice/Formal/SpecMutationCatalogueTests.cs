@@ -183,6 +183,61 @@ public sealed class SpecMutationCatalogueTests
     }
 
     /// <summary>
+    /// The <c>DEADLOCK: off</c> header is what licenses TLC's
+    /// <c>-deadlock</c> switch, and nothing else may. This pins the mapping
+    /// without a JVM: a mutation declaring the header gets exactly the switch,
+    /// every other mutation gets no extra options at all. Whether a declaring
+    /// mutation actually needs it is checked by <see cref="TlcModelCheckTests"/>,
+    /// which runs it once with the check left on.
+    /// </summary>
+    [Test]
+    public void Deadlock_declarations_map_to_the_TLC_switch_and_nothing_else()
+    {
+        var mutations = Mutations();
+
+        Assert.That(
+            mutations.Where(m => m.DeadlockCheckDisabled),
+            Is.Not.Empty,
+            "no mutation declares DEADLOCK: off, so this mapping is checked over nothing. If that is now "
+            + "intended, delete this test together with the header's support.");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in mutations)
+            {
+                Assert.That(
+                    mutation.TlcOptions,
+                    Is.EqualTo(mutation.DeadlockCheckDisabled ? new[] { SpecMutation.DeadlockSwitch } : Array.Empty<string>()),
+                    $"mutation '{mutation.Name}' would run TLC with options its header does not declare.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The header's parse rules: <c>off</c> is the only accepted value, an
+    /// absent header leaves the deadlock check on, and anything else - a typo,
+    /// or <c>on</c>, which is the default and so reads like a decision while
+    /// deciding nothing - is refused rather than quietly falling back.
+    /// </summary>
+    [Test]
+    public void A_deadlock_header_is_off_or_absent()
+    {
+        static SpecMutation ParseWith(string header) => SpecMutationCatalogue.Parse(
+            "DeadlockHeaderControl",
+            "MODULE: DeadlockHeaderControl\nTARGET: Termination\nCLASS: Temporal\nSUMMARY: control\n"
+            + header
+            + "\n--- FIND\nx\n--- REPLACE\ny\n--- END\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ParseWith("DEADLOCK: off\n").DeadlockCheckDisabled, Is.True);
+            Assert.That(ParseWith(string.Empty).DeadlockCheckDisabled, Is.False);
+            Assert.That(() => ParseWith("DEADLOCK: on\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("DEADLOCK: Off\n"), Throws.InvalidOperationException);
+        });
+    }
+
+    /// <summary>
     /// The drift gate, and deliberately cheap: it applies every mutation to the
     /// current base without running TLC, so an edit to
     /// <c>spec/AtomicCommit.tla</c> that invalidates an anchor fails in

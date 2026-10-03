@@ -103,4 +103,125 @@ internal static class SpecActions
         var match = Identifier.Match(row.Label.Trim().Trim('`'));
         return match.Success ? match.Groups[1].Value : string.Empty;
     }
+
+    /// <summary>
+    /// Whether <paramref name="mutation"/> really perturbs
+    /// <paramref name="action"/>: at least one of its edits anchors inside the
+    /// action's definition AND changes something other than TLA+ comments
+    /// there. This is the check behind every <c>PERTURBS:</c> header.
+    /// </summary>
+    public static bool MutationPerturbs(string specification, string action, SpecMutation mutation)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+
+        var definition = ReadDefinition(specification, action);
+        return mutation.Edits.Any(edit => EditPerturbs(definition, edit));
+    }
+
+    /// <summary>
+    /// Whether one edit perturbs the action whose definition text is
+    /// <paramref name="definition"/>.
+    /// <para>
+    /// Containment alone is not enough, and was once all this checked. An edit
+    /// whose anchor lies inside the action but whose replacement only adds a
+    /// comment there satisfies containment while changing nothing, so a
+    /// mutation could pair that edit with its real change somewhere else and
+    /// still claim the action. Comparing the two sides with comments stripped
+    /// closes that: the edit has to change what TLC actually reads.
+    /// </para>
+    /// </summary>
+    public static bool EditPerturbs(string definition, SpecEdit edit)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(edit);
+
+        var normalisedDefinition = definition.ReplaceLineEndings("\n");
+        var find = edit.Find.ReplaceLineEndings("\n");
+        return normalisedDefinition.Contains(find, StringComparison.Ordinal)
+            && !string.Equals(StripComments(find), StripComments(edit.Replace), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// TLA+ text with its comments removed - <c>\*</c> to end of line and
+    /// <c>(* ... *)</c> blocks, which TLA+ allows to nest - and then with
+    /// trailing whitespace and blank lines dropped, so that only what TLC
+    /// parses is compared. String literals are copied verbatim, so a comment
+    /// marker inside one is not mistaken for a comment.
+    /// </summary>
+    public static string StripComments(string tla)
+    {
+        ArgumentNullException.ThrowIfNull(tla);
+
+        var text = tla.ReplaceLineEndings("\n");
+        var output = new System.Text.StringBuilder(text.Length);
+        var depth = 0;
+        var i = 0;
+        while (i < text.Length)
+        {
+            var current = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (depth > 0)
+            {
+                if (current == '(' && next == '*')
+                {
+                    depth++;
+                    i += 2;
+                }
+                else if (current == '*' && next == ')')
+                {
+                    depth--;
+                    i += 2;
+                }
+                else
+                {
+                    // A newline inside a block comment is kept so line
+                    // structure, which TLA+ conjunction lists depend on,
+                    // survives the strip.
+                    if (current == '\n')
+                    {
+                        output.Append('\n');
+                    }
+
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (current == '"')
+            {
+                var end = i + 1;
+                while (end < text.Length && text[end] != '"' && text[end] != '\n')
+                {
+                    end += text[end] == '\\' ? 2 : 1;
+                }
+
+                end = Math.Min(end + 1, text.Length);
+                output.Append(text, i, end - i);
+                i = end;
+            }
+            else if (current == '\\' && next == '*')
+            {
+                while (i < text.Length && text[i] != '\n')
+                {
+                    i++;
+                }
+            }
+            else if (current == '(' && next == '*')
+            {
+                depth = 1;
+                i += 2;
+            }
+            else
+            {
+                output.Append(current);
+                i++;
+            }
+        }
+
+        return string.Join(
+            "\n",
+            output.ToString().Split('\n').Select(line => line.TrimEnd()).Where(line => line.Length > 0));
+    }
 }

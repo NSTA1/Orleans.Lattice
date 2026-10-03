@@ -6,7 +6,7 @@
 # input to the gate at all.
 MODULE: MonotonicVisibilityOrphanShadows
 TARGET: MonotonicVisibility
-CLASS: Action
+CLASS: Temporal
 SUMMARY: lets a late reshard orphan bucket shadow the committed projection, so a visible key reverts
 
 --- FIND
