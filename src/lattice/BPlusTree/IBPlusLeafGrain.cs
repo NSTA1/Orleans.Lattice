@@ -1024,8 +1024,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<SplitResult?> ApplyCrdtDeltaManyAsync(List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode);
 
     /// <summary>
-    /// Clears all persistent state for this grain and deactivates it.
-    /// Used during tree purge to permanently remove leaf data.
+    /// Clears all persistent state for this grain - its own leaf row, and the
+    /// separate snapshot manifest and segment rows keyed by its identity - and
+    /// deactivates it. Used by every path that permanently removes a leaf: tree
+    /// purge, shard retirement, empty-leaf reclaim and orphan repair.
+    /// <para>
+    /// Idempotent and resumable: a throw means the clear is still owed, and
+    /// calling it again on a leaf whose own row is already gone finishes the
+    /// snapshot clear (issue #4383).
+    /// </para>
     /// </summary>
     Task ClearGrainStateAsync();
 

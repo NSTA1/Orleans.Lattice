@@ -53,4 +53,17 @@ internal interface ILeafSnapshotSegmentGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancellation token observed before the clear.</param>
     Task ClearAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reports whether this segment holds a stored frame, without reading the
+    /// frame back or changing anything. This is what lets a purge discover
+    /// segment rows no manifest records - the frames of a staged capture that
+    /// never committed - by probing ascending indices until the first empty
+    /// one, BEFORE it deletes any of them (issue #4383). Discovery has to be
+    /// read-only: a probe that deleted as it went would, on a retry after a
+    /// failure, stop at an index it had already deleted and miss the rest.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token observed before the check.</param>
+    /// <returns><see langword="true"/> when a frame is stored.</returns>
+    Task<bool> HasFrameAsync(CancellationToken cancellationToken);
 }

@@ -92,6 +92,8 @@ public partial class BPlusLeafGrainTests
             Frame = null;
             return Task.CompletedTask;
         }
+
+        public Task<bool> HasFrameAsync(CancellationToken cancellationToken) => Task.FromResult(Frame is not null);
     }
 
     /// <summary>

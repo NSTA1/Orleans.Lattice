@@ -153,6 +153,15 @@ internal sealed partial class ShardRootGrain
     /// the shard on its seeded root, and the leaf is cleared only while it still
     /// holds nothing. A crash in between leaves an empty unreachable leaf whose
     /// pins the WAL GC's orphan sweep retires.
+    /// <para>
+    /// The clear goes through the shard root's owed-clear record rather than
+    /// being awaited directly (issue #4383). By now the bulk operation is
+    /// recorded as complete, so a retry of the same operation returns early and
+    /// would never come back here; a clear that failed - its snapshot rows being
+    /// the part most able to - would otherwise be stranded with nothing left
+    /// that names the leaf. Recorded as owed, it is retried by the next reclaim
+    /// or orphan-repair pass and swept by a purge.
+    /// </para>
     /// </remarks>
     private async Task RetireSeededRootLeafAsync(GrainId? seededRoot)
     {
@@ -161,7 +170,7 @@ internal sealed partial class ShardRootGrain
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         var stats = await leaf.GetStatsAsync();
         if (stats.LiveKeys == 0 && stats.Tombstones == 0)
-            await leaf.ClearGrainStateAsync();
+            await ClearRemovedLeafAsync(leafId, "replaced seeded root");
     }
 
     /// <summary>

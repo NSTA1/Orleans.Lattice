@@ -703,7 +703,8 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Immediately purges a soft-deleted tree without waiting for the
     /// <see cref="LatticeOptions.SoftDeleteDuration"/> window to elapse.
-    /// Permanently removes the tree's leaf and internal node state and unregisters
+    /// Permanently removes the tree's leaf and internal node state - including
+    /// every leaf's persisted snapshot, its manifest and segment rows - and unregisters
     /// it. On an aliased tree it purges the live copy the delete pinned and
     /// unregisters both that copy and the logical tree. Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted. Once the purge completes, a read or delete of the id answers as

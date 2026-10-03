@@ -91,4 +91,13 @@ internal sealed class LeafSnapshotSegmentGrain(
         await state.ClearStateAsync().ConfigureAwait(true);
         state.State = new LeafSnapshotSegment();
     }
+
+    /// <inheritdoc />
+    public Task<bool> HasFrameAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // SaveAsync never persists a null frame, so a null frame means no row.
+        return Task.FromResult(state.State.Frame is not null);
+    }
 }
