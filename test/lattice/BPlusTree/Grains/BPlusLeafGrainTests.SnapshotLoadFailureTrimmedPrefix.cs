@@ -49,6 +49,24 @@ public partial class BPlusLeafGrainTests
             .Returns(call => Task.FromResult(ReplaySliceStub.Filtered(
                 entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2), call.ArgAt<WalKeyFilter>(3))));
 
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = MaterialiserTreeId;
+        state.State.ProjectionCheckpointOffset = persistedCheckpoint;
+        state.State.ProjectionCheckpointOffsetAssigned = true;
+
+        return (ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid()), state, snapshot, coordinator);
+    }
+
+    /// <summary>
+    /// Builds a leaf grain over existing persisted state and stores, so a fixture
+    /// can drive a SECOND activation of the same leaf after a deactivation.
+    /// </summary>
+    private static BPlusLeafGrain ActivateTrimmedPrefixLeafOver(
+        FakePersistentState<LeafNodeState> state,
+        ILeafSnapshotStorageGrain snapshot,
+        ILeafReplayCoordinatorGrain coordinator,
+        Guid leafKey)
+    {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshot);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -58,13 +76,8 @@ public partial class BPlusLeafGrainTests
         services.AddSingleton(Substitute.For<ILeafCursorReporter>());
 
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString("N")));
+        context.GrainId.Returns(GrainId.Create("leaf", leafKey.ToString("N")));
         context.ActivationServices.Returns(services.BuildServiceProvider());
-
-        var state = new FakePersistentState<LeafNodeState>();
-        state.State.TreeId = MaterialiserTreeId;
-        state.State.ProjectionCheckpointOffset = persistedCheckpoint;
-        state.State.ProjectionCheckpointOffsetAssigned = true;
 
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions
@@ -76,9 +89,8 @@ public partial class BPlusLeafGrainTests
             shardCount: 1,
             factory: grainFactory);
 
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver,
+        return new BPlusLeafGrain(context, state, grainFactory, optionsResolver,
             TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
-        return (grain, state, snapshot, coordinator);
     }
 
     private static CommitLogSliceEntry TrimmedPrefixEntry(long offset) =>
@@ -296,5 +308,122 @@ public partial class BPlusLeafGrainTests
             Assert.That(grain.EntriesForTest.Keys,
                 Is.SupersetOf(new[] { "k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7" }));
         });
+    }
+
+    /// <summary>
+    /// A stored snapshot the stub serves until <c>ClearAsync</c> discards it, as the
+    /// storage grain does.
+    /// </summary>
+    private static Func<LeafSnapshotBlob?> StoreUntilCleared(ILeafSnapshotStorageGrain snapshot, LeafSnapshotBlob stored)
+    {
+        LeafSnapshotBlob? current = stored;
+        snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(current));
+        snapshot.ClearAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            current = null;
+            return Task.CompletedTask;
+        });
+        return () => current;
+    }
+
+    private static LeafSnapshotBlob UnreadableSnapshot(long coveredOffset) => new()
+    {
+        SnapshotOffset = coveredOffset,
+        EncodedRows = [1, 2, 3, 4, 5, 6, 7, 8],
+        CapturedAtTicks = 1L,
+        SnapshotOffsetsByPartition = [coveredOffset],
+    };
+
+    [Test]
+    public async Task Rebuild_discards_a_permanently_unreadable_snapshot_and_the_leaf_comes_back_accepting_the_loss()
+    {
+        // The operator path the fail-closed message names:
+        // ILattice.RebuildLeafProjectionAsync -> IShardRootGrain.RebuildShardProjectionAsync
+        // -> IBPlusLeafGrain.RebuildProjectionFromWalAsync, driven here at the leaf seam.
+        var (grain, state, snapshot, coordinator) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: [TrimmedPrefixEntry(6), TrimmedPrefixEntry(7)]);
+        var stored = StoreUntilCleared(snapshot, UnreadableSnapshot(5));
+
+        // 1. The unreadable snapshot fails the replay, and reads, closed.
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
+        Assert.ThrowsAsync<LeafSnapshotUnavailableException>(async () => await grain.GetAsync("k6"));
+
+        // 2. The explicit rebuild discards it, accepting the loss.
+        await grain.RebuildProjectionFromWalAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored(), Is.Null, "The unreadable snapshot must be cleared.");
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(-1L));
+        });
+
+        // 3. The next activation finds no snapshot and does not fail closed again:
+        //    it comes up from the WAL that survives.
+        var next = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid());
+        Assert.That(await ActivateCapturingFaultAsync(next), Is.Null);
+        var k7 = await next.GetAsync("k7");
+        Assert.Multiple(() =>
+        {
+            Assert.That(k7, Is.EqualTo(Encoding.UTF8.GetBytes("v7")));
+            Assert.That(next.EntriesForTest.Keys, Is.EquivalentTo(new[] { "k6", "k7" }),
+                "Offsets 0..5 lived only in the discarded snapshot; that is the loss the rebuild accepted.");
+        });
+    }
+
+    [Test]
+    public async Task Rebuild_discards_a_snapshot_with_a_missing_segment()
+    {
+        var (grain, _, snapshot, _) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: [TrimmedPrefixEntry(6), TrimmedPrefixEntry(7)]);
+        var stored = StoreUntilCleared(snapshot, new LeafSnapshotBlob
+        {
+            SnapshotOffset = 5,
+            SegmentCount = 2,
+            CapturedAtTicks = 1L,
+            SnapshotOffsetsByPartition = [5],
+        });
+        snapshot.LoadSegmentFrameAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<byte[]?>(null));
+
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
+        await grain.RebuildProjectionFromWalAsync();
+
+        Assert.That(stored(), Is.Null);
+    }
+
+    [Test]
+    public async Task Rebuild_leaves_a_readable_snapshot_in_place()
+    {
+        var (grain, _, snapshot, _) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: [TrimmedPrefixEntry(6), TrimmedPrefixEntry(7)]);
+        var stored = StoreUntilCleared(snapshot, TrimmedPrefixSnapshot(5));
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        await grain.RebuildProjectionFromWalAsync();
+
+        Assert.That(stored(), Is.Not.Null, "A readable snapshot may be the only copy of [0, 5]; the rebuild keeps it.");
+        await snapshot.DidNotReceive().ClearAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Rebuild_refuses_to_discard_a_snapshot_whose_load_throws()
+    {
+        // A throwing load cannot be told apart from an unreachable store, and
+        // discarding a snapshot that was merely unreachable would destroy writes
+        // the operator did not need to lose.
+        var (grain, state, snapshot, _) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: [TrimmedPrefixEntry(6), TrimmedPrefixEntry(7)]);
+        snapshot.LoadAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<LeafSnapshotBlob?>(new TimeoutException("store unreachable")));
+
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
+        var thrown = Assert.ThrowsAsync<InvalidOperationException>(async () => await grain.RebuildProjectionFromWalAsync());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.InnerException, Is.InstanceOf<TimeoutException>());
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L),
+                "The rebuild must fail before it resets anything, so the retry starts clean.");
+        });
+        await snapshot.DidNotReceive().ClearAsync(Arg.Any<CancellationToken>());
     }
 }

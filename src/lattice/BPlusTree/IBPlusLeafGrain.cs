@@ -1115,6 +1115,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is advisory and needs
     /// no rebuild.
     /// <para>
+    /// A snapshot that is present but proven unreadable - an unreadable row
+    /// payload, or a missing or unreadable segment - is cleared first, accepting
+    /// the loss of whatever only it held, so the next activation does not fail
+    /// its replay closed on it again (issue #4450). A readable or absent
+    /// snapshot is left alone, and a snapshot load that throws fails the
+    /// rebuild rather than discarding a snapshot that may merely have been
+    /// unreachable.
+    /// </para>
+    /// <para>
     /// Asynchronous failure mode: a transient storage failure on the
     /// persist surfaces back to the caller with the durable row still in
     /// its pre-rebuild shape, but with this activation's in-memory

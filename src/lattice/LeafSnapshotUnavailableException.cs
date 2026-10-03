@@ -18,8 +18,10 @@ namespace Orleans.Lattice;
 /// The condition is transient by design. The replay barrier re-arms on the next
 /// data operation or WAL GC touch, and the retry loads the snapshot once the
 /// store answers. If the snapshot is permanently unreadable, the prefix it
-/// covered is lost, and recovery is a restore or an explicit projection rebuild
-/// that accepts the loss.
+/// covered is lost: recovery is a restore from backup, or
+/// <c>ILattice.RebuildLeafProjectionAsync</c> for the leaf's shard, which
+/// discards a snapshot proven unreadable and rebuilds the leaf from the WAL that
+/// survives, accepting the loss.
 /// </para>
 /// <para>
 /// Derives directly from <see cref="Exception"/> so the generated same-silo deep
@@ -50,6 +52,7 @@ internal sealed class LeafSnapshotUnavailableException : Exception, ILatticeLeaf
             + "trimming that snapshot may be the only durable copy of acknowledged writes, so the leaf's replay "
             + "has failed closed rather than rebuilding it from the log alone. It is retried on the next data "
             + "operation or WAL GC touch and succeeds once the snapshot loads. If the snapshot is permanently "
-            + "unreadable, the prefix it covered is lost: restore the tree from a backup, or rebuild the leaf "
-            + "projection explicitly accepting the loss.";
+            + "unreadable, the prefix it covered is lost: restore the tree from a backup, or call "
+            + "ILattice.RebuildLeafProjectionAsync for the leaf's shard, which discards an unreadable snapshot "
+            + "and rebuilds the leaf from the write-ahead log that survives, accepting the loss.";
 }
