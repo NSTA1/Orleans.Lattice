@@ -1,0 +1,20 @@
+# Pairs with RoutingConverges. An undo before the flip clears T's forwarding
+# but not a fence the interrupted swap left, so T stays in Rejecting under an
+# alias that still names it and its own pair is refused forever. Fairness is
+# unchanged.
+MODULE: RoutingConvergesUndoBeforeFlipKeepsFence
+TARGET: RoutingConverges
+CLASS: Temporal
+SUMMARY: an undo before the flip leaves a fence in place, so the tree's own copy refuses forever
+PERTURBS: UndoBeforeFlip
+
+--- FIND
+    /\ rz \in {"snap", "copied"}
+    /\ fence' = {}
+    /\ rz' = "undone"
+--- REPLACE
+    /\ rz \in {"snap", "copied"}
+\* MUTATION: the fence is not lifted.
+    /\ fence' = fence
+    /\ rz' = "undone"
+--- END

@@ -1,0 +1,21 @@
+# Pairs with NoKeyLost. The split moves the map without its final
+# authoritative drain, so k2's committed row never reaches the destination the
+# registry now routes it to.
+MODULE: NoKeyLostCommitSkipsFinalDrain
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the split moves the map without the final drain, so the new owner does not hold the key
+PERTURBS: SplitCommit
+
+--- FIND
+    /\ LET c == spCopy
+           v == Max(row[c][s2][k2], row[c][s1][k2])
+       IN row' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                     IF k = k2 /\ s = s2 /\ (x = c \/ (x = R /\ ResizeMirrors(c, s2)))
+                     THEN Max(row[x][s][k], v) ELSE row[x][s][k]]]]
+    /\ rmap' = s2
+--- REPLACE
+\* MUTATION: no final drain before ReassignSlotsAsync.
+    /\ UNCHANGED row
+    /\ rmap' = s2
+--- END

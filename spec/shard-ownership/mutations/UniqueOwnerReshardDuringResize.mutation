@@ -1,0 +1,24 @@
+# Pairs with UniqueOwner. The reshard drops its interlock with an in-flight
+# resize, so the split it drives commits on T during the resize, with the same
+# outcome as UniqueOwnerSplitDuringResize. It shows a reshard's split is safe
+# only because of the reshard's own interlock, which production does have.
+#
+# DEADLOCK: off for the same reason as UniqueOwnerSplitDuringResize.
+MODULE: UniqueOwnerReshardDuringResize
+TARGET: UniqueOwner
+CLASS: Invariant
+DEADLOCK: off
+SUMMARY: a reshard starts during a resize, so its split leaves a stale router serving the split target after the flip
+PERTURBS: ReshardStart
+
+--- FIND
+ReshardStart ==
+    /\ rs = "idle"
+    /\ sp = "idle"
+    /\ rz \in {"idle", "purged", "undone"}
+--- REPLACE
+ReshardStart ==
+    /\ rs = "idle"
+    /\ sp = "idle"
+\* MUTATION: no interlock with an in-flight resize.
+--- END

@@ -1,0 +1,17 @@
+# Pairs with NoKeyLost. A plain write accepted on the old copy during a resize
+# lands only locally and is not mirrored to the resized copy, so the flip loses
+# it.
+MODULE: NoKeyLostLaterWriteNotMirrored
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a write during a resize is not mirrored, so the flip loses it
+PERTURBS: LaterWrite
+
+--- FIND
+                        IF k = k2 /\ <<x, y>> \in Landing(c, s, k2)
+                        THEN Max(row[x][y][k], LaterV) ELSE row[x][y][k]]]]
+--- REPLACE
+\* MUTATION: the write lands only where it was routed.
+                        IF k = k2 /\ <<x, y>> = <<c, s>>
+                        THEN Max(row[x][y][k], LaterV) ELSE row[x][y][k]]]]
+--- END

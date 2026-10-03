@@ -1,0 +1,21 @@
+# Pairs with OwnerMonotonic. Reproduces current production (#4455): the online
+# snapshot copies committed entries but not prepared buckets. A saga that
+# prepared k1 on T before the resize began and decided before the flip has no
+# bucket for k1 on R, so after the flip a commit readers already saw reverts
+# (and the batch reads torn) until its terminal reaches R.
+MODULE: OwnerMonotonicSnapshotSkipsBuckets
+TARGET: OwnerMonotonic
+CLASS: Action
+SUMMARY: the snapshot does not carry prepared buckets, so a commit decided before the flip reverts on the resized copy
+PERTURBS: SnapCopy
+
+--- FIND
+    /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                 IF x = R /\ s \in rzShards /\ pend[R][s][k] = "none"
+                 THEN pend[T][s][k] ELSE pend[x][s][k]]]]
+    /\ rz' = "copied"
+--- REPLACE
+\* MUTATION: prepared buckets are not copied.
+    /\ UNCHANGED pend
+    /\ rz' = "copied"
+--- END

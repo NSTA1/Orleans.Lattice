@@ -1,0 +1,19 @@
+# Pairs with RoutingConverges. The undo's last step does not clear T's
+# shadow-forward state, so T stays in Rejecting under the alias that names it
+# again and the tree's own pair is refused forever. Fairness is unchanged.
+MODULE: RoutingConvergesUndoKeepsFence
+TARGET: RoutingConverges
+CLASS: Temporal
+SUMMARY: the undo never lifts the old copy's fence, so the restored tree refuses forever
+PERTURBS: UndoClear
+
+--- FIND
+    /\ rz = "undoing"
+    /\ alias = T
+    /\ fence' = {}
+--- REPLACE
+    /\ rz = "undoing"
+    /\ alias = T
+\* MUTATION: the fence is not lifted.
+    /\ fence' = fence
+--- END

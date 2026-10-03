@@ -1,0 +1,17 @@
+# Pairs with NoKeyLost. The undo's single registry write moves the alias back
+# to T with a map that does not describe T's shards, the pairing #4357 removed,
+# so k2 routes to a shard of T that never held it.
+MODULE: NoKeyLostUndoRestoresWrongMap
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the undo pairs the old copy with a map that does not describe it
+PERTURBS: UndoSwap
+
+--- FIND
+    /\ alias' = T
+    /\ rmap' = rmapOld
+--- REPLACE
+    /\ alias' = T
+\* MUTATION: the restored map is not the old copy's.
+    /\ rmap' = s2
+--- END

@@ -1,0 +1,17 @@
+# Pairs with OwnerMonotonic. The source enters Reject before the retroactive
+# sweep has run, so the sweep never runs and a prepare that predates the window
+# never reaches the destination the map then moves k2 to.
+MODULE: OwnerMonotonicFreezeBeforeSweep
+TARGET: OwnerMonotonic
+CLASS: Action
+SUMMARY: the split freezes before its retroactive sweep, so a visible commit reverts when the map moves
+PERTURBS: SplitFreeze
+
+--- FIND
+SplitFreeze ==
+    /\ sp = "swept"
+--- REPLACE
+SplitFreeze ==
+\* MUTATION: the freeze does not wait for the sweep.
+    /\ sp \in SplitWindow
+--- END

@@ -1,0 +1,25 @@
+# Pairs with OwnerMonotonic. A reactivation does not rebuild the leaf's
+# prepared buckets from the WAL, so a committed batch the owner was serving
+# through its bucket reverts to the pre-saga row.
+MODULE: OwnerMonotonicReactivationDropsBuckets
+TARGET: OwnerMonotonic
+CLASS: Action
+SUMMARY: a reactivation loses the leaf's prepared buckets, so a visible commit reverts
+PERTURBS: Reactivate
+
+--- FIND
+    /\ ~reacted
+    /\ term[c][s]
+    /\ term' = [term EXCEPT ![c][s] = FALSE]
+--- REPLACE
+    /\ ~reacted
+\* MUTATION: replay does not rebuild the prepared buckets.
+    /\ pend' = [pend EXCEPT ![c][s] = [k \in Keys |-> "none"]]
+    /\ term' = [term EXCEPT ![c][s] = FALSE]
+--- END
+
+--- FIND
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, late, wDone, ackOn>>
+--- REPLACE
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, late, wDone, ackOn>>
+--- END
