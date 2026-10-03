@@ -193,11 +193,25 @@ internal interface ILeafSnapshotStorageGrain : IGrainWithGuidKey
     Task<long> GetSnapshotByteSizeAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Drops the persisted snapshot. Idempotent: clearing a leaf
-    /// that has no snapshot is a no-op. Used by the operator-driven
-    /// projection rebuild seam so a forced rebuild does not silently
-    /// rehydrate from a stale snapshot.
+    /// Drops the persisted snapshot and every segment row it owns, including
+    /// segment runs a superseded capture still owes and the frames of a staged
+    /// capture that never committed. Idempotent: clearing a leaf that has no
+    /// snapshot is a no-op. Called when the owning leaf is removed from its tree
+    /// (purge, retirement, empty-leaf reclaim, orphan repair), after the leaf's
+    /// own state has been cleared (issue #4383).
+    /// <para>
+    /// Reliable rather than best-effort: the manifest stops claiming coverage
+    /// first while still recording every segment owed, the segments go next, and
+    /// the manifest row goes last. If any segment cannot be deleted the call
+    /// throws and the manifest is left naming what remains, so a retry finishes
+    /// the job; a caller must treat a throw as "clear still owed".
+    /// </para>
+    /// <para>
+    /// Must not run while the owning leaf is capturing: it abandons any staged
+    /// run, and deletes the frames such a run would commit.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancellation token observed before the clear.</param>
+    /// <exception cref="InvalidOperationException">A segment row could not be deleted; retry the clear.</exception>
     Task ClearAsync(CancellationToken cancellationToken);
 }

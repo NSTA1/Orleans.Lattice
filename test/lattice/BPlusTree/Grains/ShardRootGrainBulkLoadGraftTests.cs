@@ -199,6 +199,34 @@ public sealed class ShardRootGrainBulkLoadGraftTests
     // --- BulkLoadRawAsync preconditions ---
 
     [Test]
+    public async Task BulkLoadRaw_records_a_failed_seeded_root_clear_as_owed_instead_of_failing_the_load()
+    {
+        // Issue #4383. The replaced seeded root is cleared after the operation is
+        // recorded complete, so a retry of the same operation returns early and
+        // never comes back to it. Its clear - which now also deletes the leaf's
+        // snapshot rows, the part most able to fail - must therefore be owed
+        // durably rather than thrown at a caller whose retry cannot finish it.
+        var h = CreateHarness();
+        var seeded = h.AddLeaf();
+        var seededLeaf = h.Leaf(seeded);
+        seededLeaf.GetStatsAsync().Returns(Task.FromResult(new LeafStats()));
+        seededLeaf.ClearGrainStateAsync().Returns(Task.FromException(new InvalidOperationException("snapshot store unavailable")));
+        h.State.State.RootNodeId = seeded;
+        h.State.State.RootIsLeaf = true;
+
+        await h.Grain.BulkLoadRawAsync("op-1", RawEntries(5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("op-1"), "the load itself completed");
+            Assert.That(h.State.State.RootNodeId, Is.Not.EqualTo(seeded), "the seeded root was replaced");
+            Assert.That(h.State.State.PendingLeafClears, Is.EqualTo(new[] { seeded }),
+                "the seeded root's failed clear must be recorded where the reclaim and purge passes retry it");
+        });
+        await seededLeaf.Received(1).ClearGrainStateAsync();
+    }
+
+    [Test]
     public void BulkLoadRaw_refuses_a_shard_that_already_holds_data()
     {
         var h = CreateHarness();

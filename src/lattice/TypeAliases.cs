@@ -90,6 +90,7 @@ internal static class TypeAliases
     internal const string LeafSnapshotRow = "ol.lsr";
     internal const string LeafSnapshotSegment = "ol.lss";
     internal const string LeafSnapshotSaveOutcome = "ol.lsk";
+    internal const string LeafSnapshotSegmentRange = "ol.lsg";
     internal const string SnapshotShardBaseline = "ol.ssb";
     internal const string LeafBaselineFreeze = "ol.bsf";
     internal const string LeafBaselinePendingEntry = "ol.bpe";

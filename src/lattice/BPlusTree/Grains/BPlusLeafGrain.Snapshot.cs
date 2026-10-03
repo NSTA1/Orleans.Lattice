@@ -54,6 +54,35 @@ internal sealed partial class BPlusLeafGrain
     private bool _snapshotCaptureInFlight;
 
     /// <summary>
+    /// Completed when the capture holding <see cref="_snapshotCaptureInFlight"/>
+    /// finishes, so <see cref="ClearGrainStateAsync"/> can wait for a capture
+    /// already under way to land before it deletes the snapshot storage that
+    /// capture is writing (issue #4383). Without the wait, a capture suspended on
+    /// its store write when the leaf is removed lands after the clear and strands
+    /// a fresh snapshot for a leaf that no longer exists. <see langword="null"/>
+    /// while no capture is in flight.
+    /// </summary>
+    private TaskCompletionSource? _snapshotCaptureDrained;
+
+    /// <summary>
+    /// Set by <see cref="ClearGrainStateAsync"/> before it deletes the snapshot
+    /// storage. A capture that reaches the single-flight check afterwards
+    /// declines, so nothing can write a new snapshot for a leaf being removed.
+    /// Never reset: the activation deactivates once the clear completes.
+    /// </summary>
+    private bool _snapshotStorageRetired;
+
+    /// <summary>
+    /// How long <see cref="ClearGrainStateAsync"/> waits for an in-flight
+    /// capture to land before failing so the caller retries. Bounded because the
+    /// caller is often the shard root, mid-purge, and a capture that called back
+    /// into it would otherwise wait on a caller that is waiting on it. Kept
+    /// below the default Orleans response timeout so the failure is this
+    /// grain's, with its reason, rather than an anonymous timeout.
+    /// </summary>
+    internal TimeSpan SnapshotCaptureDrainTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// Number of successful checkpoint persists since this
     /// activation last ran the periodic snapshot recheck.
     /// <see cref="FlushPendingCheckpointAsync"/> increments this on
@@ -1519,7 +1548,21 @@ internal sealed partial class BPlusLeafGrain
             ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineAlreadyInFlight);
             return;
         }
+
+        // The leaf is being removed and its snapshot storage deleted (issue
+        // #4383). Checked in the same synchronous step that claims the slot, so a
+        // capture cannot slip in between the check and ClearGrainStateAsync's
+        // wait for in-flight captures. Counted as the no-tree decline: the tree
+        // id is cleared in the same operation, and a capture arriving later
+        // reaches that gate instead.
+        if (_snapshotStorageRetired)
+        {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoTreeId);
+            return;
+        }
+
         _snapshotCaptureInFlight = true;
+        _snapshotCaptureDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // Attempt boundary. Everything above this line is a DECLINE (no tree,
         // nothing checkpointed and no live data, or a capture already in
         // flight); everything below is a genuine attempt that will either land
@@ -1851,6 +1894,7 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             _snapshotCaptureInFlight = false;
+            Interlocked.Exchange(ref _snapshotCaptureDrained, null)?.TrySetResult();
             // Released unconditionally, including on the throwing paths. The
             // peak is a high-water mark and is never lowered by this; only the
             // live depth falls.

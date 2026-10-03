@@ -265,15 +265,21 @@ internal sealed class LeafSnapshotStorageGrain(
         var window = SegmentWindowBytes;
         var inlineFrame = merged.EncodedRows;
         var previousGeneration = state.State.SegmentGeneration;
+        var owed = state.State.PendingSegmentRetirements;
 
         if (!CanSegment || inlineFrame is not { Length: > 0 } || inlineFrame.LongLength <= window)
         {
             merged.SegmentCount = 0;
             merged.SegmentFrameBytes = 0;
             merged.SegmentGeneration = previousGeneration;
+
+            // The superseded segments are recorded as owed in the same write that
+            // stops referencing them (issue #4383), so a retirement that fails or
+            // never runs is finished later rather than stranded for good.
+            merged.PendingSegmentRetirements = Owe(owed, previousGeneration, 0, previousSegmentCount, merged);
             state.State = merged;
             await state.WriteStateAsync().ConfigureAwait(true);
-            await RetireSegmentsAsync(previousGeneration, 0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+            await RetirePendingAsync(cancellationToken).ConfigureAwait(true);
             return;
         }
 
@@ -299,13 +305,14 @@ internal sealed class LeafSnapshotStorageGrain(
         merged.SegmentCount = runs.Count;
         merged.SegmentFrameBytes = totalFrameBytes;
         merged.SegmentGeneration = generation;
+        merged.PendingSegmentRetirements = Owe(owed, previousGeneration, 0, previousSegmentCount, merged);
         state.State = merged;
         await state.WriteStateAsync().ConfigureAwait(true);
 
         // Retire the whole previous generation only now the new manifest has
         // committed: until this write landed, the old manifest was still the
         // authoritative one and still referenced every one of them.
-        await RetireSegmentsAsync(previousGeneration, 0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+        await RetirePendingAsync(cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -360,36 +367,153 @@ internal sealed class LeafSnapshotStorageGrain(
     }
 
     /// <summary>
-    /// Clears segments <paramref name="keepCount"/> through
-    /// <paramref name="previousCount"/> - 1 of generation
-    /// <paramref name="generation"/>, which the newly committed manifest no
-    /// longer references. Best-effort: an orphaned segment wastes a row but
-    /// is unreachable, so a failure here must not fail the capture that has
-    /// already durably committed.
+    /// Whether a run of generation <paramref name="generation"/> starting at
+    /// <paramref name="start"/> is one <paramref name="manifest"/> does not
+    /// reference and never will again, and so may be deleted at any later time.
     /// <para>
-    /// A segmented capture retires the whole previous generation
-    /// (<paramref name="keepCount"/> zero), because the new manifest addresses
-    /// a different generation entirely and keeps none of the old segments.
+    /// A generation below the manifest's is never written again: a segmented
+    /// capture always stages into the generation ABOVE the live one. In the live
+    /// generation itself, an index at or beyond the manifest's segment count is
+    /// never written again for the same reason. A generation above the live one
+    /// is excluded outright, because the next staged capture writes exactly there
+    /// - recording it would let a later retry delete a capture in progress.
     /// </para>
     /// </summary>
-    private async Task RetireSegmentsAsync(int generation, int keepCount, int previousCount, CancellationToken cancellationToken)
+    private static bool IsUnreferenced(int generation, int start, LeafSnapshotBlob manifest)
+        => generation < manifest.SegmentGeneration
+            || (generation == manifest.SegmentGeneration && start >= manifest.SegmentCount);
+
+    /// <summary>
+    /// Returns <paramref name="owed"/> with the run
+    /// [<paramref name="start"/>, <paramref name="start"/> + <paramref name="count"/>)
+    /// of <paramref name="generation"/> added, clipped to the part
+    /// <paramref name="manifest"/> does not reference.
+    /// <para>
+    /// The clip is what keeps a retirement from ever deleting live segments. A
+    /// capture that commits into the same generation as the one it supersedes
+    /// references that generation's leading indices again, and retiring the
+    /// whole superseded run there - which the code did before - deletes segments
+    /// the just-written manifest points at.
+    /// </para>
+    /// </summary>
+    private static LeafSnapshotSegmentRange[]? Owe(
+        LeafSnapshotSegmentRange[]? owed,
+        int generation,
+        int start,
+        int count,
+        LeafSnapshotBlob manifest)
     {
-        for (var i = keepCount; i < previousCount; i++)
+        if (generation == manifest.SegmentGeneration && start < manifest.SegmentCount)
         {
-            if (!CanSegment)
+            var clippedStart = manifest.SegmentCount;
+            count -= clippedStart - start;
+            start = clippedStart;
+        }
+
+        if (count <= 0 || !IsUnreferenced(generation, start, manifest))
+        {
+            return owed;
+        }
+
+        // Deliberately unbounded. A record is added only when its retirement is
+        // about to be attempted and dropped as soon as it succeeds, so the list
+        // grows only while deletes keep failing - by one 12-byte record per
+        // capture. Dropping a record instead would strand rows no probe can
+        // find, which is the leak this list exists to close.
+        var list = new List<LeafSnapshotSegmentRange>(owed ?? []);
+        list.Add(new LeafSnapshotSegmentRange(generation, start, count));
+        return list.ToArray();
+    }
+
+    /// <summary>
+    /// Deletes every run the live manifest records as owed, dropping each from
+    /// the in-memory record as it completes. The trimmed record is not written
+    /// on its own: the next manifest write carries it, and until then a retry
+    /// re-clears segments that are already gone, which is idempotent.
+    /// </summary>
+    /// <returns><see langword="true"/> when nothing is left owed.</returns>
+    private async Task<bool> RetirePendingAsync(CancellationToken cancellationToken)
+    {
+        var owed = state.State.PendingSegmentRetirements;
+        if (owed is not { Length: > 0 })
+        {
+            return true;
+        }
+
+        if (!CanSegment)
+        {
+            return false;
+        }
+
+        var remaining = new List<LeafSnapshotSegmentRange>(owed.Length);
+        foreach (var range in owed)
+        {
+            // Defensive: a record that would touch a referenced segment is
+            // dropped, never acted on. Owe never produces one.
+            if (range.Count <= 0 || !IsUnreferenced(range.Generation, range.Start, state.State))
             {
-                break;
+                continue;
             }
 
+            if (await RetireRangeAsync(range, cancellationToken).ConfigureAwait(true) is { } left)
+            {
+                remaining.Add(left);
+            }
+        }
+
+        state.State.PendingSegmentRetirements = remaining.Count == 0 ? null : remaining.ToArray();
+        return remaining.Count == 0;
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="range"/> from its highest index down, so that a
+    /// failure leaves a contiguous prefix of the run in place rather than a run
+    /// with gaps. That shape is what lets both the owed record (by shrinking its
+    /// count) and <see cref="ClearAsync"/>'s ascending probe (which stops at the
+    /// first index that holds nothing) find every row that is left.
+    /// </summary>
+    /// <returns>The part of the run left in place, or <see langword="null"/> when all of it was deleted.</returns>
+    private async Task<LeafSnapshotSegmentRange?> RetireRangeAsync(
+        LeafSnapshotSegmentRange range,
+        CancellationToken cancellationToken)
+    {
+        for (var i = range.Start + range.Count - 1; i >= range.Start; i--)
+        {
             try
             {
-                await Segment(generation, i).ClearAsync(cancellationToken).ConfigureAwait(true);
+                await Segment(range.Generation, i).ClearAsync(cancellationToken).ConfigureAwait(true);
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                break;
+                return range with { Count = i - range.Start + 1 };
             }
         }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Clears segments <paramref name="keepCount"/> through
+    /// <paramref name="previousCount"/> - 1 of generation
+    /// <paramref name="generation"/>, which no manifest references. Best-effort
+    /// and not recorded: used for the frames of an abandoned, declined or stale
+    /// staged capture. Those usually sit in the generation above the live one,
+    /// which the next staged capture writes into, so a durable record of them
+    /// could later delete a capture in progress. Rows a failure leaves behind
+    /// form a contiguous run from <paramref name="keepCount"/>, which
+    /// <see cref="ClearAsync"/>'s probes of the live generation's tail and the
+    /// generation above it find.
+    /// </summary>
+    private async Task RetireSegmentsAsync(int generation, int keepCount, int previousCount, CancellationToken cancellationToken)
+    {
+        if (!CanSegment || previousCount <= keepCount)
+        {
+            return;
+        }
+
+        await RetireRangeAsync(
+            new LeafSnapshotSegmentRange(generation, keepCount, previousCount - keepCount),
+            cancellationToken).ConfigureAwait(true);
     }
 
     /// <inheritdoc />
@@ -469,6 +593,19 @@ internal sealed class LeafSnapshotStorageGrain(
             stagedSegmentCount = 0;
             stagedFrameBytes = 0;
         }
+        else if (stagingGeneration <= state.State.SegmentGeneration)
+        {
+            // A segmented SaveAsync committed into this run's generation while
+            // the run was open, so the next index here may be a segment the live
+            // manifest references. Writing it would overwrite part of the live
+            // snapshot. Abandon the run instead; the capture fails and the next
+            // one starts a fresh run above the new live generation.
+            stagingGeneration = -1;
+            stagedSegmentCount = 0;
+            stagedFrameBytes = 0;
+            throw new InvalidOperationException(
+                "The staged run was overtaken by a committed snapshot in its own generation; restart the capture.");
+        }
 
         var index = stagedSegmentCount;
         await Segment(stagingGeneration, index).SaveAsync(frame, rowCount, cancellationToken).ConfigureAwait(true);
@@ -511,6 +648,22 @@ internal sealed class LeafSnapshotStorageGrain(
         // coverage does not regress, decline otherwise.
         var previousSegmentCount = state.State.SegmentCount;
         var previousGeneration = state.State.SegmentGeneration;
+
+        // A run stages into the generation above the live one at the time it
+        // starts. If the live manifest has since reached that generation - a
+        // segmented SaveAsync committed into it while this run was open - the
+        // run's leading frames have been overwritten by that save's, so
+        // committing would publish a manifest over a mixture of two snapshots
+        // while claiming this one's coverage. Decline instead, and retire only
+        // the staged frames the live manifest does not reference: anything below
+        // its segment count belongs to the live snapshot now.
+        if (generation <= previousGeneration)
+        {
+            var unreferencedFrom = generation == previousGeneration ? previousSegmentCount : 0;
+            await RetireSegmentsAsync(generation, unreferencedFrom, segmentCount, cancellationToken).ConfigureAwait(true);
+            return false;
+        }
+
         if (HasUsableSnapshot(state.State) && RegressesCoverage(state.State, manifest))
         {
             await RetireSegmentsAsync(generation, 0, segmentCount, cancellationToken).ConfigureAwait(true);
@@ -523,12 +676,16 @@ internal sealed class LeafSnapshotStorageGrain(
         manifest.SegmentFrameBytes = frameBytes;
         manifest.SegmentGeneration = generation;
 
+        // Owed in the same write that stops referencing them (issue #4383).
+        manifest.PendingSegmentRetirements = Owe(
+            state.State.PendingSegmentRetirements, previousGeneration, 0, previousSegmentCount, manifest);
+
         // Manifest last: until this write lands the previous snapshot is still
         // the authoritative one, and the frames backing it are untouched.
         state.State = manifest;
         await state.WriteStateAsync().ConfigureAwait(true);
 
-        await RetireSegmentsAsync(previousGeneration, 0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+        await RetirePendingAsync(cancellationToken).ConfigureAwait(true);
         return true;
     }
 
@@ -838,28 +995,134 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!HasCapturedPrefix(state.State))
+        var manifest = state.State;
+        var liveGeneration = manifest.SegmentGeneration;
+        var liveCount = manifest.SegmentCount;
+        var owed = manifest.PendingSegmentRetirements;
+
+        // Abandon any staged run. Its frames sit in the generation above the live
+        // one, which the probe below deletes, so a commit after this clear must
+        // fail for want of a run rather than publish a manifest over frames that
+        // are gone.
+        stagingGeneration = -1;
+        stagedSegmentCount = 0;
+        stagedFrameBytes = 0;
+
+        if (!state.RecordExists
+            && !HasCapturedPrefix(manifest)
+            && liveCount == 0
+            && owed is not { Length: > 0 }
+            && !CanSegment)
         {
-            // Nothing to clear; ClearStateAsync still touches the
-            // provider, so short-circuit to keep idempotent calls
-            // I/O-free.
+            // Nothing stored and no segment grains to probe; keep an
+            // idempotent clear free of provider traffic.
             return;
         }
 
-        var segmentCount = state.State.SegmentCount;
-        var segmentGeneration = state.State.SegmentGeneration;
-        await state.ClearStateAsync().ConfigureAwait(true);
+        if (CanSegment && liveCount > 0)
+        {
+            // Stop claiming coverage BEFORE deleting a single segment, and record
+            // every segment still owed in the same write (issue #4383). The
+            // manifest is the only record of which segment rows exist, so
+            // removing it first - the previous order - meant a segment delete
+            // that failed could never be retried: the next attempt found no
+            // manifest and returned. Deleting segments under a manifest that
+            // still claims coverage would instead leave, if interrupted, a
+            // snapshot reporting coverage it cannot reproduce. The tombstone
+            // claims nothing, so a load reads it as absent, and it still names
+            // every row a retry has to finish.
+            state.State = new LeafSnapshotBlob
+            {
+                SegmentGeneration = liveGeneration,
+                PendingSegmentRetirements = Owe(owed, liveGeneration, 0, liveCount, new LeafSnapshotBlob
+                {
+                    SegmentGeneration = liveGeneration,
+                }),
+            };
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
 
-        // Retire segments AFTER the manifest clear, never before. An orphaned
-        // segment is harmless (unreachable, wastes a row); a live manifest
-        // pointing at emptied segments is not - it reports coverage it cannot
-        // reproduce.
-        await RetireSegmentsAsync(segmentGeneration, 0, segmentCount, cancellationToken).ConfigureAwait(true);
+        var cleared = await RetirePendingAsync(cancellationToken).ConfigureAwait(true);
+
+        if (CanSegment)
+        {
+            // Rows no manifest records: a staged capture that never committed
+            // writes into the generation above the live one, and a superseded
+            // run retired best-effort by an earlier build may have left the
+            // live generation's tail. Retirement deletes from the top down, so
+            // whatever survives is a contiguous run from its first index and an
+            // ascending probe that stops at the first empty index finds all of it.
+            // A manifest that was never segmented (generation 0, no segments)
+            // has no live-generation tail to look at, which keeps the common
+            // small-leaf clear to a single probe.
+            if (liveGeneration > 0 || liveCount > 0)
+            {
+                cleared &= await ProbeAndClearAsync(liveGeneration, liveCount, cancellationToken).ConfigureAwait(true);
+            }
+
+            cleared &= await ProbeAndClearAsync(liveGeneration + 1, 0, cancellationToken).ConfigureAwait(true);
+        }
+
+        if (!cleared)
+        {
+            // The tombstone still names every segment left, so the caller's
+            // retry finishes the job. Surfacing the failure is what makes the
+            // caller keep the clear owed rather than recording it as done.
+            throw new InvalidOperationException(
+                $"Leaf snapshot {context.GrainId.Key} could not delete every segment row; the clear is incomplete and must be retried.");
+        }
+
+        // The manifest row goes last: until every segment is gone it is the only
+        // record of what is left to delete.
+        if (state.RecordExists || HasCapturedPrefix(state.State))
+        {
+            await state.ClearStateAsync().ConfigureAwait(true);
+        }
 
         // After ClearStateAsync the in-memory state is reset by the
         // provider; defensively re-seed the sentinel so LoadAsync's
         // null contract holds without relying on the provider's
         // post-clear state shape.
         state.State = new LeafSnapshotBlob();
+    }
+
+    /// <summary>
+    /// Finds the contiguous run of stored segments of <paramref name="generation"/>
+    /// from <paramref name="start"/> upward, without changing anything, and then
+    /// deletes it from the top down.
+    /// <para>
+    /// Discovery and deletion are separate on purpose. Deleting as the probe
+    /// ascended would, if a delete failed part-way, leave the run's head gone
+    /// and its tail in place, and a retry probing from the same start would
+    /// stop at the first index - now empty - and report the generation clean.
+    /// Deleting top-down after a read-only discovery means any failure leaves a
+    /// contiguous run from <paramref name="start"/>, which the retry's
+    /// discovery finds again in full.
+    /// </para>
+    /// </summary>
+    /// <returns><see langword="false"/> when a check or delete failed, so rows may remain.</returns>
+    private async Task<bool> ProbeAndClearAsync(int generation, int start, CancellationToken cancellationToken)
+    {
+        var end = start;
+        try
+        {
+            while (await Segment(generation, end).HasFrameAsync(cancellationToken).ConfigureAwait(true))
+            {
+                end++;
+            }
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        if (end == start)
+        {
+            return true;
+        }
+
+        return await RetireRangeAsync(
+            new LeafSnapshotSegmentRange(generation, start, end - start),
+            cancellationToken).ConfigureAwait(true) is null;
     }
 }

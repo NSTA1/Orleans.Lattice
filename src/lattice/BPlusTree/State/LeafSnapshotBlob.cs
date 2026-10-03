@@ -316,6 +316,30 @@ internal sealed class LeafSnapshotBlob : ILatticeBinaryPersistedState
     [Id(8)] public int SegmentGeneration { get; set; }
 
     /// <summary>
+    /// Segment runs this manifest no longer references and whose deletion is
+    /// still owed (issue #4383), or <see langword="null"/> when none is owed.
+    /// <para>
+    /// A capture records the run it supersedes here in the same write that stops
+    /// referencing it, then deletes it and drops the record. Before this existed
+    /// the deletion was purely best-effort: a failed or interrupted retirement
+    /// left segment rows that nothing referenced and nothing would ever revisit,
+    /// so they stayed in storage for good. A recorded run is retried by the next
+    /// capture and is finished by <see cref="Grains.ILeafSnapshotStorageGrain.ClearAsync"/>.
+    /// </para>
+    /// <para>
+    /// Only runs the manifest does not reference are ever recorded, and a run
+    /// stays unreferenced once it is: generations only increase, and a segmented
+    /// capture always writes a generation above the live one. That is what makes
+    /// a recorded run safe to retry at any later time.
+    /// </para>
+    /// <para>
+    /// <see langword="null"/> on every blob persisted before this member existed,
+    /// which reads as "nothing owed", so no migration is needed.
+    /// </para>
+    /// </summary>
+    [Id(9)] public LeafSnapshotSegmentRange[]? PendingSegmentRetirements { get; set; }
+
+    /// <summary>
     /// <see langword="true"/> when this blob is a segmented manifest whose rows
     /// live in separate segment grains rather than inline.
     /// <para>
