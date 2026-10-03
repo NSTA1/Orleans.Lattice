@@ -70,9 +70,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// Since issue #4385 a destination leaf whose current activation applied the
-/// terminal refuses the late prepare rather than bucketing it, so the detector
-/// stages the realisable case - a destination leaf whose terminal predates its
-/// activation - and a sibling test pins the refusal.
+/// terminal refuses the late prepare rather than bucketing it, and since issue
+/// #4445 a forwarded prepare the leaf has no memory of is also refused when the
+/// registry reports the saga decided. The detector therefore stages the one
+/// remaining realisable case - a destination leaf whose terminal predates its
+/// activation and whose registry does not report the decision (pruned past
+/// retention, or unreachable) - and sibling tests pin both refusals.
 /// </para>
 /// </summary>
 public partial class ShardRootGrainSplitShadowForwardTests
@@ -90,6 +93,12 @@ public partial class ShardRootGrainSplitShadowForwardTests
         public required ShardRootGrain Source { get; init; }
         public required BPlusLeafGrain DestinationLeaf { get; set; }
         public required FakePersistentState<ShardRootState> SourceState { get; init; }
+
+        /// <summary>
+        /// The destination tree's saga registry. Answers
+        /// <see cref="TxStatus.InFlight"/> unless a test reconfigures it.
+        /// </summary>
+        public required ITxRegistryGrain DestinationRegistry { get; init; }
 
         /// <summary>
         /// Replaces the destination leaf with a fresh activation over the same
@@ -124,6 +133,10 @@ public partial class ShardRootGrainSplitShadowForwardTests
 
         destinationFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(destinationLeaf);
         destinationFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
+        var destinationRegistry = Substitute.For<ITxRegistryGrain>();
+        destinationRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+        destinationRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+        destinationFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(destinationRegistry);
 
         var destinationRootContext = Substitute.For<IGrainContext>();
         destinationRootContext.GrainId.Returns(GrainId.Create("shard", $"{TreeId}/{TargetShardIndex}"));
@@ -178,6 +191,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
             Source = source,
             DestinationLeaf = destinationLeaf,
             SourceState = sourceState,
+            DestinationRegistry = destinationRegistry,
             ReactivateDestinationLeaf = () =>
             {
                 var reactivated = NewDestinationLeaf();
@@ -219,9 +233,12 @@ public partial class ShardRootGrainSplitShadowForwardTests
         // has a concrete counterpart below.
         //
         // Since issue #4385 a destination leaf that remembers the saga's
-        // terminal refuses the late prepare (see the next test), so the action
-        // is realised only where the leaf's current activation does not know
-        // the terminal: it landed before a reactivation.
+        // terminal refuses the late prepare (see the next test), and since
+        // issue #4445 one that has forgotten it asks the registry. So the
+        // action is realised only where the leaf's current activation does not
+        // know the terminal (it landed before a reactivation) AND the registry
+        // does not report the decision - here it answers InFlight, standing in
+        // for a row pruned past retention.
         var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
         var txid = Guid.NewGuid();
 
@@ -265,6 +282,37 @@ public partial class ShardRootGrainSplitShadowForwardTests
         // replay here, so it holds no row for the key at all.)
         Assert.That(h.DestinationLeaf.EntriesForTest.ContainsKey("k"), Is.False,
             "The forwarded prepared value must be bucketed, never published into the destination's visible Entries.");
+    }
+
+    [Test]
+    public async Task Hot_path_shadow_forward_after_a_destination_reactivation_installs_no_orphan_when_the_registry_reports_the_saga_decided()
+    {
+        // Issue #4445. The detector above with the registry reporting the
+        // saga's decision. The reactivated destination leaf has forgotten the
+        // terminal, so its per-activation memory cannot refuse the forward; the
+        // shadow-forward marks it as forwarded, and the leaf refuses it on the
+        // registry's answer instead. Without that, the bucket's prepared value
+        // [11] would be served over the newer row as the committed value.
+        var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
+        h.DestinationRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
+        var txid = Guid.NewGuid();
+
+        await h.DestinationLeaf.SetAsync("k", [99]);
+        await h.DestinationLeaf.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
+        h.DestinationLeaf = h.ReactivateDestinationLeaf();
+        await h.DestinationLeaf.SetAsync("k", [22]);
+
+        await PreparedShardSetAsync(h.Source, txid, "k", [11]);
+        var read = await h.DestinationLeaf.GetAsync("k");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.DestinationLeaf.PendingTransactionCount, Is.Zero,
+                "a forwarded prepare for a decided saga must not leave an orphan on a reactivated destination");
+            Assert.That(read, Is.EqualTo(new byte[] { 22 }),
+                "the committed saga's stale prepared value must not be served over the newer row");
+        });
+        await h.DestinationRegistry.Received().GetStatusAsync(txid);
     }
 
     [Test]

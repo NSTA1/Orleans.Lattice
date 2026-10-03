@@ -116,9 +116,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Multi-key reads hide a cross-tree batch whose coordinator is unreachable.** `GetManyAsync`, key and entry scans and cursors served such a batch's keys at their old values, while point reads hid them. They now hide them too, so a reader never sees a cross-tree batch as not applied while other trees may show it applied. ([#4448](https://github.com/NSTA1/Orleans.Lattice/issues/4448)) (`Orleans.Lattice`)
+
 - **Core - Growing a resized tree no longer over-counts after atomic batches.** On a tree that had been resized, a split looked up each in-flight batch's outcome under the wrong tree id and took committed batches for unfinished. It then re-sent their writes to the new shard, where nothing settled them, so `CountAsync` counted those keys twice. The split now reads the outcome under the tree's own id. ([#4368](https://github.com/NSTA1/Orleans.Lattice/issues/4368)) (`Orleans.Lattice`)
 
-- **Core - A reshard no longer leaves stale prepared writes behind an atomic batch.** A split forwards each prepared key on its own, so one could reach the new shard after the batch had committed and sit there undrained. Once the shard forgot the commit, it counted that key twice, could serve a stale round, and reads could hang. The late write is now dropped. ([#4385](https://github.com/NSTA1/Orleans.Lattice/issues/4385)) (`Orleans.Lattice`)
+- **Core - A reshard no longer leaves stale prepared writes behind an atomic batch.** A split forwards each prepared key on its own, so one could reach the new shard after the batch had committed and sit there undrained: counted twice, served as a stale round, or hanging reads. The late write is now dropped, even by a shard restarted since the commit. ([#4385](https://github.com/NSTA1/Orleans.Lattice/issues/4385), [#4445](https://github.com/NSTA1/Orleans.Lattice/issues/4445)) (`Orleans.Lattice`)
 
 - **Schema - Remediation keeps the tree's shard topology and sizing.** A remediation or eager schema-version migration built its copy with library defaults, so a resharded or pinned tree came back at 64 shards with default leaf sizing, WAL partitions and virtual slot count, and without its runtime overrides. The copy now inherits the tree's shard map, split mark, structural pins and overrides, as a resize's does. ([#4379](https://github.com/NSTA1/Orleans.Lattice/issues/4379)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`)
 
