@@ -5084,13 +5084,13 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, or after it completed, returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
+        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, after the shard walk completed but registry removal is still owed, or after it completed returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Accepting a purge that is already running or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
+        "basis": "Accepting a purge that is already running, still settling registry removal, or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart, and an owed registry removal is re-driven from RegistryUnregisterPending.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "concurrency": {
         "rule": "The per-tree TreeDeletionGrain state machine serializes purge through persisted TreeDeletionState, pinning logical alias targets and fencing alias changes with AliasOperationId.",
@@ -6891,6 +6891,10 @@
         {
           "error_id": "invalid-operation",
           "condition": "No resize exists to undo (the message names the most recent resize when it was already undone), the persisted resize state is incomplete, or the accepted unwind could not be applied, for example because the old tree has already been purged."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The logical tree registry row is missing during resize or undo carry; the coordinator refuses rather than recreating a purged or removed row."
         },
         {
           "error_id": "operation-canceled",

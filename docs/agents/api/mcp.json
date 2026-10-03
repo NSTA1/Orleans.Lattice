@@ -12176,13 +12176,13 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, or after it completed, returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
+        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, after the shard walk completed but registry removal is still owed, or after it completed returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Accepting a purge that is already running or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
+        "basis": "Accepting a purge that is already running, still settling registry removal, or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart, and an owed registry removal is re-driven from RegistryUnregisterPending.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "concurrency": {
         "rule": "confirm must be true before irreversible purge.",
@@ -12875,17 +12875,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry by reissuing the same request; setting the same alias overwrites the registry entry with the same physical tree id.",
-        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
+        "policy": "Retry by reissuing the same request; a repeated current alias leaves the logical shard map unchanged and releases any redirect on the target, while an interrupted first attempt re-drives the target map carry and previous-copy redirect repair.",
+        "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "SetAliasAsync stores PhysicalTreeId on the logical tree's registry entry, so the same alias request leaves the same alias mapping.",
-        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
+        "basis": "CarryAcrossExplicitAliasAsync moves the target's shard map and split allocation mark onto the logical entry in the same registry write as the alias; repeating the same current alias carries no map change and releases target redirects.",
+        "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed, and the alias is refused while either tree is deleted or a delete of it is pending.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+        "rule": "Only one level of alias indirection is allowed, the alias is refused while either tree is deleted or a delete of it is pending, and a refused alias writes nothing; a successful alias carries the target's shard map and split allocation mark onto the logical tree, writes the replaced map to the previous physical entry when possible, arms previous-copy redirects, and releases target redirects.",
+        "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.SetTreeAliasAsync",
@@ -14819,7 +14819,7 @@
       ],
       "response": {
         "type": "RepoContextSearchResult",
-        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler, including retrievalPath and reasons such as chunk:symbol, chunk:file, chunk:memory, symbol:<fqName>, and topic:<topic>."
+        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler, including retrievalPath and reasons such as chunk:symbol, chunk:file, chunk:memory, symbol:<fqName>, and topic:<topic>. With source indexing disabled, new passes add memory vectors only; search can still return memory hits and any source-derived records left from an earlier index until repocontext_reset_index removes them."
       },
       "errors": [
         {
@@ -14934,7 +14934,7 @@
           "name": "path",
           "type": "string",
           "required": true,
-          "notes": "Path to the repository to register, under the mounted workspace root (for example '/workspace/my-repo'). Resolved against the workspace boundary; a path outside it is rejected."
+          "notes": "Path to the repository to register, under the mounted workspace root (for example '/workspace/my-repo'). Resolved against the workspace boundary; a path outside it is rejected. With source indexing disabled, this path is still validated, but the accepted pass records only the repository marker and memory embeddings and does not walk or read files."
         },
         {
           "name": "repoId",
@@ -14997,14 +14997,14 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "Do not blindly retry a mutating call after an ambiguous failure.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.AddRepoAsync"
+        "safe": true,
+        "policy": "After an ambiguous add_repo failure, poll repocontext_index_status for the repository id; reissuing the same repository id is safe because onboarding is idempotent and resumable.",
+        "source": "src/lattice.api.mcp.repocontext/Indexing/RepoContextSelfIndexGrain.cs#EnsureRunningAsync"
       },
       "idempotency": {
-        "idempotent": false,
-        "basis": "Mutation has no general idempotency guarantee in the MCP binding.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.AddRepoAsync"
+        "idempotent": true,
+        "basis": "Re-adding the same repository id updates the same records through the self-index grain's idempotent indexing path; with source indexing disabled the pass only re-stamps the marker and embeds memory.",
+        "source": "src/lattice.api.mcp.repocontext/Indexing/RepoContextSelfIndexGrain.cs#EnsureRunningAsync"
       },
       "concurrency": {
         "rule": "Facade access gates and grains serialize or reject conflicting mutations according to the underlying facade contract.",
@@ -15539,7 +15539,7 @@
       ],
       "response": {
         "type": "RepoContextHealthResult",
-        "shape": "Structured JSON projection of RepoContextHealthResult. Without repoId it reports host retrieval readiness; with repoId it includes repository-scoped passive evidence in repository."
+        "shape": "Structured JSON projection of RepoContextHealthResult. Without repoId it reports host retrieval readiness; with repoId it includes repository-scoped passive evidence in repository. A zero-file repository is not automatically NothingRegistered: vectorCoverage counts files, symbols and memory, so memory embeddings can make a memory-only repository Serving."
       },
       "errors": [
         {
@@ -15603,7 +15603,7 @@
       ],
       "response": {
         "type": "RepoIndexProgress",
-        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler, including pending/walking/reconciling/applying/vectorising/done phases and resetting while repocontext_reset_index sweeps."
+        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler, including pending/walking/reconciling/applying/vectorising/done phases and resetting while repocontext_reset_index sweeps. With source indexing disabled, accepted passes can report zero file, content and symbol counters because only agent-memory embedding runs."
       },
       "errors": [
         {
@@ -15659,7 +15659,7 @@
       ],
       "response": {
         "type": "RepoContextRepoListResult",
-        "shape": "Structured JSON projection of RepoContextRepoListResult returned by the handler."
+        "shape": "Structured JSON projection of RepoContextRepoListResult returned by the handler. In memory-only mode a registered repository remains listed with fileCount zero, and embeddedVectorCount can still be non-zero because memory entries are embedded sources."
       },
       "errors": [
         {
@@ -16404,7 +16404,7 @@
           "name": "repoId",
           "type": "string",
           "required": true,
-          "notes": "The repository identity whose code index to reset. Agent memory for this repository is preserved."
+          "notes": "The repository identity whose code index to reset. Agent memory for this repository is preserved. After source indexing is disabled, this is the operation that drops an existing file, symbol, content, cross-reference and vector code index; memory-only passes do not delete those records themselves."
         },
         {
           "name": "region",
@@ -16586,7 +16586,7 @@
       ],
       "response": {
         "type": "RepoContextSearchResult",
-        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler, including retrievalPath and reasons such as chunk:symbol, chunk:file, chunk:memory, symbol:<fqName>, and topic:<topic>."
+        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler, including retrievalPath and reasons such as chunk:symbol, chunk:file, chunk:memory, symbol:<fqName>, and topic:<topic>. With source indexing disabled, new passes add memory vectors only; search can still return memory hits and any source-derived records left from an earlier index until repocontext_reset_index removes them."
       },
       "errors": [
         {

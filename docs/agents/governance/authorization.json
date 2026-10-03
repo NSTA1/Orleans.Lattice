@@ -571,34 +571,48 @@
           "check": "A restore target tree is explicitly supplied, or can be derived from the catalog or sink manifest.",
           "on_true": "compose-target",
           "on_false": "catalog-fallback",
-          "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+          "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl"
         },
         {
           "id": "compose-target",
           "check": "An explicit caller target is composed under the active tenant; a manifest-derived target is already effective and is not recomposed.",
           "on_true": "authorize-target",
           "on_false": "deny-tenant",
-          "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+          "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl"
         },
         {
           "id": "catalog-fallback",
           "check": "No target can be resolved, so authorization falls back to the reserved backup catalog tree.",
           "on_true": "authorize-target",
           "on_false": "deny-restore",
-          "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+          "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.ResolveRestoreAuthorizationScope"
         },
         {
           "id": "authorize-target",
-          "check": "BackupAccessAuthorizer authorizes LatticeOperation.Restore over the resolved target scope or catalog fallback before restore, cold restore, rebuild, scrub, or revert touches data.",
+          "check": "BackupAccessAuthorizer authorizes Backup or Restore over the resolved scope: whole tree as whole-tree, prefix as the half-open prefix range with filtered allows refused, and key as point.",
+          "on_true": "source-needed",
+          "on_false": "deny-restore",
+          "source": "src/lattice.backup/BackupAccessAuthorizer.cs#BackupAccessAuthorizer.AuthorizeAsync"
+        },
+        {
+          "id": "source-needed",
+          "check": "The restore will replay a manifest chain whose source tree differs from the target tree.",
+          "on_true": "authorize-source",
+          "on_false": "allow",
+          "source": "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.AuthorizeCapturedSourcesAsync"
+        },
+        {
+          "id": "authorize-source",
+          "check": "For a cross-tree retarget, the restore engine authorizes Backup on each distinct captured source tree over the effective restore scope retargeted to that source.",
           "on_true": "allow",
           "on_false": "deny-restore",
-          "source": "src/lattice.backup/BackupAccessAuthorizer.cs"
+          "source": "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.AuthorizeCapturedSourcesAsync"
         }
       ],
       "terminals": [
         {
           "id": "allow",
-          "outcome": "The restore, cold restore, catalog rebuild, catalog scrub, or revert operation proceeds."
+          "outcome": "The backup, restore, cold restore, catalog rebuild, catalog scrub, or revert operation proceeds."
         },
         {
           "id": "deny-restore",
@@ -609,11 +623,12 @@
           "outcome": "The operation is denied by active-tenant composition or backup tenant isolation before data is touched."
         }
       ],
-      "fail_closed": "Restore authorization is total: absence of a manifest target falls back to Restore on the catalog tree instead of skipping the gate, and tenant isolation denials are non-disclosing probes.",
+      "fail_closed": "Backup and restore authorization is total: a prefix scope must be allowed over its whole range, filtered coverage is refused, absence of a manifest target falls back to Restore on the catalog tree, and cross-tree restore retargets require Backup on the replayed source scope.",
       "sources": [
         "src/lattice.api.backup/LatticeBackupControl.cs",
         "src/lattice.backup/BackupAccessAuthorizer.cs",
-        "src/lattice.backup/ILatticeBackupTenantScope.cs"
+        "src/lattice.backup/LatticeBackupRestoreService.cs",
+        "src/lattice/LatticeAccessGateEnforcement.cs"
       ]
     },
     {
@@ -1360,15 +1375,29 @@
           "id": "all-trees-deny",
           "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching deny.",
           "on_true": "deny",
+          "on_false": "collection-request",
+          "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator"
+        },
+        {
+          "id": "collection-request",
+          "check": "The request has no exact key, the target tree has per-key rules, and the target is not the * sentinel.",
+          "on_true": "range-uniform-allow",
           "on_false": "specific-tree",
-          "source": "src/lattice.auth/PolicyEvaluator.cs"
+          "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator.Evaluate"
+        },
+        {
+          "id": "range-uniform-allow",
+          "check": "CompiledTree.TryResolveUniformRange finds that every key in the requested range resolves to one Allow after folding any all-trees match.",
+          "on_true": "allow",
+          "on_false": "filtered",
+          "source": "src/lattice.auth/CompiledTree.cs#CompiledTree.TryResolveUniformRange"
         },
         {
           "id": "specific-tree",
-          "check": "The target tree bucket has a matching operator rule (a rule whose id is not in the tenant: namespace); a matched operator verdict is final.",
+          "check": "The target tree bucket has a matching operator rule (a rule whose id is not in the tenant: namespace) for a point request or a uniform whole-scope request; a matched operator verdict is final.",
           "on_true": "matched-effect",
           "on_false": "all-trees-allow",
-          "source": "src/lattice.auth/PolicyEvaluator.cs"
+          "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator.Evaluate"
         },
         {
           "id": "all-trees-allow",
@@ -1403,14 +1432,14 @@
           "check": "The owning tenant's tenant-wide bucket has a matching allow.",
           "on_true": "allow",
           "on_false": "default-effect",
-          "source": "src/lattice.auth/PolicyEvaluator.cs"
+          "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator"
         },
         {
           "id": "default-effect",
           "check": "DefaultEffect is Allow.",
           "on_true": "allow",
           "on_false": "deny",
-          "source": "src/lattice.auth/PolicyEvaluator.cs"
+          "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator"
         }
       ],
       "terminals": [
@@ -1423,6 +1452,10 @@
           "outcome": "The request is denied."
         },
         {
+          "id": "filtered",
+          "outcome": "The decision carries a per-key filter; consumers that cannot safely narrow must refuse it."
+        },
+        {
           "id": "matched-effect",
           "outcome": "The matched rule effect (Allow or Deny) for the specific tree is the decision."
         },
@@ -1431,8 +1464,9 @@
           "outcome": "The matched tenant-tier rule effect (Allow or Deny) for the tree is the decision."
         }
       ],
-      "fail_closed": "DefaultEffect defaults to Deny and control-plane namespaces do not consult the all-trees tier; the tenant layer is consulted only when no operator rule matches and never for a control-plane, app-owned or default-tenant tree, and with the layer inactive no tenant-tier rule is evaluated.",
+      "fail_closed": "DefaultEffect defaults to Deny, control-plane namespaces do not consult the all-trees tier, and a range is a plain allow only when every key in it resolves to the same allowing rule; the tenant layer is consulted only when no operator rule matches and never for a control-plane, app-owned or default-tenant tree, and with the layer inactive no tenant-tier rule is evaluated.",
       "sources": [
+        "src/lattice.auth/CompiledTree.cs",
         "src/lattice.auth/LatticeAuthOptions.cs",
         "src/lattice.auth/PolicyEvaluator.cs",
         "src/lattice.auth/TenantRuleConfinement.cs",

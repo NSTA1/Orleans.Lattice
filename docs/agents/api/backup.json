@@ -2405,7 +2405,7 @@
         "source": "src/lattice.backup/LatticeBackupRestoreService.cs#DeriveOperationId"
       },
       "concurrency": {
-        "rule": "The backup facade authorizes a resolved target scope before the restore engine runs; the restore engine authorizes the target before coordinated dispatch and also requires Backup authority on every distinct captured source tree for cross-tree retargets.",
+        "rule": "The backup facade authorizes a resolved target scope before the restore engine runs; the restore engine authorizes the target before coordinated dispatch and also requires Backup authority on every distinct captured source tree for cross-tree retargets, using the effective restore scope retargeted to that source and refusing filtered prefix coverage.",
         "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AuthorizeCapturedSourcesAsync"
       },
       "sources": [

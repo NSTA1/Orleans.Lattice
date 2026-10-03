@@ -73,6 +73,8 @@ concurrency:
     source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.ThrowIfMigrationTargetAsync"
   - rule: "A shrink fold defers releasing the donor's storage while a snapshot of or merge into the same tree is in flight."
     source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.FinaliseAsync"
+  - rule: "A split or fold already in flight across an alias cutover abandons before committing its slot diff, so it does not apply the replaced tree's shard-index changes to the new copy's map."
+    source: "docs/lattice/shard-splitting.md"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"

@@ -3961,13 +3961,13 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, or after it completed, returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
+        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, after the shard walk completed but registry removal is still owed, or after it completed returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Accepting a purge that is already running or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
+        "basis": "Accepting a purge that is already running, still settling registry removal, or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart, and an owed registry removal is re-driven from RegistryUnregisterPending.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "concurrency": {
         "rule": "confirm must be true before irreversible purge.",
@@ -5421,17 +5421,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry by reissuing the same request; setting the same alias overwrites the registry entry with the same physical tree id.",
-        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
+        "policy": "Retry by reissuing the same request; a repeated current alias leaves the logical shard map unchanged and releases any redirect on the target, while an interrupted first attempt re-drives the target map carry and previous-copy redirect repair.",
+        "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "SetAliasAsync stores PhysicalTreeId on the logical tree's registry entry, so the same alias request leaves the same alias mapping.",
-        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
+        "basis": "CarryAcrossExplicitAliasAsync moves the target's shard map and split allocation mark onto the logical entry in the same registry write as the alias; repeating the same current alias carries no map change and releases target redirects.",
+        "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed, and the alias is refused while either tree is deleted or a delete of it is pending.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+        "rule": "Only one level of alias indirection is allowed, the alias is refused while either tree is deleted or a delete of it is pending, and a refused alias writes nothing; a successful alias carries the target's shard map and split allocation mark onto the logical tree, writes the replaced map to the previous physical entry when possible, arms previous-copy redirects, and releases target redirects.",
+        "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync",
@@ -5687,6 +5687,10 @@
         {
           "error_id": "precondition-failed",
           "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "tree-not-registered",
+          "condition": "The logical tree registry row is missing during resize or undo carry; the coordinator refuses rather than recreating a purged or removed row."
         },
         {
           "error_id": "cancelled",

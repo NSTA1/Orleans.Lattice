@@ -19,8 +19,8 @@ preconditions:
     check: "A backup engine is registered for tree-admin restore verbs."
     source: "docs/lattice.api.treeadmin/README.md"
   - id: restore-authority
-    check: "Caller has Restore authority for each target scope, authorized before coordinated restore dispatch."
-    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService"
+    check: "Caller has Restore authority for each target scope before coordinated restore dispatch; cross-tree backup restores also require Backup authority over the retargeted effective scope on every distinct captured source tree."
+    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.AuthorizeCapturedSourcesAsync"
   - id: restore-scope-total
     check: "Backup-facade restore authorizes exactly one scope even when the backup id cannot resolve and no target tree is supplied."
     source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl"
@@ -60,7 +60,7 @@ postconditions:
     source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#Mode"
   - check: "Backup-facade InPlace mode repairs missing or stale entries but does not overwrite newer live data."
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
-  - check: "ShadowCutover restore carries the shadow tree's shard map onto the logical tree before the alias swap and records the replaced map on the shadow so revert can carry it back."
+  - check: "ShadowCutover restore carries the shadow tree's shard map onto the logical tree in the same registry write as the alias swap and records the replaced map on the shadow so revert can carry it back."
     source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.PrepareCutoverAsync"
 failure_modes:
   - id: inplace-not-rollback
