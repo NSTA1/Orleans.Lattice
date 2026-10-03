@@ -236,12 +236,33 @@ public partial class TreeDeletionGrainTests
     }
 
     [Test]
-    public async Task Purging_an_ordinary_deleted_tree_does_not_trim_its_wal()
+    public async Task Purging_an_ordinary_deleted_tree_trims_its_wal()
     {
+        // Issue #3936: an ordinary (non-discarded) purge used to settle the
+        // registry entry and retire the tree's cursors without ever trimming
+        // its write-ahead log, so the log leaked forever once no reader was
+        // left to drive its own trim.
         var h = CreateDiscardHarness(4, 7, 9);
         await h.Grain.DeleteTreeAsync();
 
         await h.Grain.PurgeNowAsync();
+
+        await h.Wal.Received(1).TrimAsync(TreeId, 0, 4, Arg.Any<CancellationToken>());
+        await h.Wal.Received(1).TrimAsync(TreeId, 1, 7, Arg.Any<CancellationToken>());
+        await h.Wal.Received(1).TrimAsync(TreeId, 2, 9, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Purging_a_deleted_tree_that_retains_its_registry_entry_does_not_trim_its_wal()
+    {
+        // A retired physical copy (DeleteRetiredPhysicalTreeAsync) keeps its
+        // registry entry for the live logical tree that reused its id, so
+        // PurgeUnregistersTree is false and the trim must stay gated off: the
+        // id's WAL still belongs to that live tree.
+        var h = CreateDiscardHarness(4, 7, 9);
+        await h.Grain.DeleteRetiredPhysicalTreeAsync();
+
+        await h.Grain.PurgePhysicalAsync();
 
         await h.Wal.DidNotReceive().TrimAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
