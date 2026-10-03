@@ -248,6 +248,47 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<Guid, HashSet<string>>? _backstoppedTerminals;
 
     /// <summary>
+    /// The leaf clock at the moment each saga's terminal first landed here
+    /// (drained its bucket, wrote its backstop, or found nothing to do). Every
+    /// row the landing wrote is stamped at or below it, and every row written
+    /// here afterwards is stamped above it, so a later delivery of the same
+    /// terminal can tell a key the saga never reached on this leaf - one it
+    /// must still backstop - from a key overwritten since.
+    /// <para>
+    /// A terminal is delivered more than once by design: a saga re-runs its
+    /// broadcast whenever it resumes after the decision, and the split-forward
+    /// channel delivers a second subset. Each repeat used to backstop every key
+    /// the drained bucket no longer held, stamped above every row, so a repeat
+    /// that arrived after newer writes resurrected the saga's older values over
+    /// them. Lives as long as <see cref="_recentlyTerminal"/>; replay rebuilds
+    /// it through <see cref="ApplyTxCommit"/>.
+    /// </para>
+    /// </summary>
+    private Dictionary<Guid, Orleans.Lattice.HybridLogicalClock>? _terminalLandedClock;
+
+    /// <summary>
+    /// Records the leaf clock as <paramref name="transactionId"/>'s terminal
+    /// landing point the first time its terminal lands here.
+    /// </summary>
+    private void RecordTerminalLanded(Guid transactionId) =>
+        (_terminalLandedClock ??= new Dictionary<Guid, Orleans.Lattice.HybridLogicalClock>())
+            .TryAdd(transactionId, state.State.Clock);
+
+    /// <summary>
+    /// Whether <paramref name="key"/>'s row was written here after
+    /// <paramref name="transactionId"/>'s terminal first landed, so a repeat
+    /// delivery must not backstop over it. A migrated row is never treated as
+    /// newer: it carries its source's clock, not this leaf's, and the backstop
+    /// exists to overwrite a migrated pre-saga value.
+    /// </summary>
+    private bool IsRowNewerThanTerminalLanding(Guid transactionId, string key) =>
+        _terminalLandedClock is not null
+        && _terminalLandedClock.TryGetValue(transactionId, out var landed)
+        && Cache.TryGetRow(key, out var row)
+        && !row.IsMigrated
+        && row.Timestamp.CompareTo(landed) > 0;
+
+    /// <summary>
     /// Records a prepared-phase per-key mutation in the pending-tx map.
     /// The entry is invisible to readers until a matching terminal mark
     /// flips or drops it. Idempotent under LWW: a re-applied prepare
@@ -453,6 +494,7 @@ internal sealed partial class BPlusLeafGrain
         {
             RemovePendingTxOffsetsForTransaction(transactionId);
             (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+            RecordTerminalLanded(transactionId);
 #if LATTICE_DIAG
             // DIAG: commit arrived on leaf with no bucket (fast-path).
             DiagSink.Write($"[DIAG commit-empty] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} clock={state.State.Clock}");
@@ -795,6 +837,7 @@ internal sealed partial class BPlusLeafGrain
 
         RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+        RecordTerminalLanded(transactionId);
 
         // Bump the same-silo revision cookie so a co-located
         // LeafCacheGrain notices both that the pending bucket has
@@ -1966,6 +2009,8 @@ internal sealed partial class BPlusLeafGrain
                     continue;
                 if (alreadyBackstoppedKeys is not null && alreadyBackstoppedKeys.Contains(kvp.Key))
                     continue;
+                if (alreadyFlipped && IsRowNewerThanTerminalLanding(transactionId, kvp.Key))
+                    continue;
                 (missingKeys ??= []).Add(kvp);
             }
         }
@@ -2317,6 +2362,7 @@ internal sealed partial class BPlusLeafGrain
         // keyed per-key so future deliveries with different subsets
         // continue to do real work for keys they haven't covered yet.
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+        RecordTerminalLanded(transactionId);
 
         // Clear any destination-side shadow marker installed by the
         // split coordinator for this saga. Once the terminal has been

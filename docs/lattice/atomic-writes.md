@@ -48,7 +48,10 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
    saga is never overwritten by a rollback.
 3. **Crash recovery.** If the silo hosting the saga grain crashes mid-flight,
    a keepalive reminder resumes the saga on reactivation and drives it to a
-   terminal state (either Completed or Compensated + Completed).
+   terminal state (either Completed or Compensated + Completed). A saga that
+   had already recorded its commit is completed; one that had not is
+   compensated, because by then its caller has been answered (see
+   [Batches whose caller was answered](#batches-whose-caller-was-answered)).
 4. **Input validation.** Duplicate keys and null keys fail fast with
    `ArgumentException` before any write is attempted. A null value fails fast
    for an upsert entry, but is permitted for a delete entry in a mixed
@@ -756,9 +759,11 @@ either fail over to a peer silo (if the cluster is multi-node) or
 surface the back-pressure to upstream callers (drop the request, queue
 it to a side outbox, or rate-limit). Recovery does not start from
 scratch: the saga's persisted state still sits in the execute phase
-with its staging progress, so the keepalive reminder resumes it on the
-next silo activation, and re-issuing the same `operationId` re-attaches
-to that in-flight saga rather than starting a new one. See [API
+with its staging progress, so re-issuing the same `operationId`
+re-attaches to that in-flight saga and resumes it rather than starting a
+new one. Left alone, the saga is resumed by its keepalive reminder, which
+rolls it back rather than committing it (see
+[Batches whose caller was answered](#batches-whose-caller-was-answered)). See [API
 Reference - Shutdown back-
 pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception)
 for the cross-feature contract.
@@ -791,9 +796,10 @@ writer-side gate under `wal_admission`, the batch-write budgets under
 `set_many_fan_out` and `set_many_envelope`), and a refusal because the quiesce
 budget elapsed is counted twice under `atomic_write_saga`. Back off and
 retry with the
-same `operationId` once the signal returns to healthy (the keepalive
-reminder also resumes it); the saga continues from its persisted
-progress, and re-staging a write it already staged is idempotent.
+same `operationId` once the signal returns to healthy; the saga continues
+from its persisted progress, and re-staging a write it already staged is
+idempotent. A saga nobody re-issues is rolled back by its keepalive
+reminder (see [Batches whose caller was answered](#batches-whose-caller-was-answered)).
 
 ## Silo restarts
 
@@ -833,6 +839,44 @@ instant, with any number of parked sagas.
 
 Neither depends on the parked saga's keepalive reminder firing: the
 reminder resumes the saga, but readers are atomic before it does.
+
+## Batches whose caller was answered
+
+A caller can be answered with a failure while its saga is still working.
+Its call times out; or the routing tier behind `ILattice` re-issues the
+saga after a transient fault - a silo leaving the cluster, say - by which
+time the caller has timed out and may already have written the same keys
+again. A saga that then committed would make its batch visible after
+those newer writes, so a later batch would read back at this one's older
+values.
+
+- **A saga commits only while its caller can still be waiting.** Every
+  `SetManyAtomicAsync` and `SetManyAtomicWhereAsync` call carries a
+  decide-by deadline: the silo's `SiloMessagingOptions.ResponseTimeout`,
+  less a tenth of it (at least one second, at most half) for the time the
+  request spent reaching the silo. The saga persists the deadline and
+  checks it before it starts work and again immediately before its commit
+  decision. A saga past the deadline that has not recorded its commit
+  records an abort instead and rolls the batch back - its prepared writes
+  were never visible - and fails with `InvalidOperationException`
+  ("... failed and was rolled back"). A saga that already recorded its
+  commit is unaffected: the decision made the batch visible, and the saga
+  only finishes delivering it.
+- **A late resume rolls back.** The keepalive reminder first fires a
+  minute after the saga started, past any deadline, so a reminder-driven
+  resume of a saga that never recorded its commit rolls it back. A caller
+  that re-issues its `operationId` waits afresh: the re-issue carries its
+  own deadline and resumes the saga forwards.
+- **A terminal delivered again does not overwrite newer writes.** A
+  committed saga's terminal can reach a leaf more than once - a saga
+  resumed after its decision re-runs its broadcast. A repeat no longer
+  re-applies the batch over a key written on that leaf after the
+  terminal first landed there.
+
+The deadline is derived from the silo's response timeout because the
+caller's own is not observable. A client configured with a shorter
+`ClientMessagingOptions.ResponseTimeout` than the silo's can still time out
+before the deadline; configure the two alike.
 
 ## Caller-supplied idempotency keys
 

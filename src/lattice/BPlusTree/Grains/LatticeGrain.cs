@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
+using Orleans.Configuration;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Views;
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -3026,7 +3027,7 @@ internal sealed partial class LatticeGrain(
         DiagSink.Write($"[DIAG setmanyatomic-enter] tree={TreeId} op={operationId} entriesCount={entries.Count}");
         try
         {
-            await ShardActivationRetry.RunAsync(
+            await RunSagaCallAsync(
                 () => saga.ExecuteAsync(TreeId, entries),
                 cancellationToken);
             DiagSink.Write($"[DIAG setmanyatomic-exit] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0}");
@@ -3037,7 +3038,7 @@ internal sealed partial class LatticeGrain(
             throw;
         }
 #else
-        await ShardActivationRetry.RunAsync(
+        await RunSagaCallAsync(
             () => saga.ExecuteAsync(TreeId, entries),
             cancellationToken);
 #endif
@@ -3077,7 +3078,7 @@ internal sealed partial class LatticeGrain(
         DiagSink.Write($"[DIAG setmanyatomic-enter] tree={TreeId} op={operationId} entriesCount={entries.Count} idempotent=true");
         try
         {
-            await ShardActivationRetry.RunAsync(
+            await RunSagaCallAsync(
                 () => saga.ExecuteAsync(TreeId, entries),
                 cancellationToken);
             DiagSink.Write($"[DIAG setmanyatomic-exit] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0}");
@@ -3088,7 +3089,7 @@ internal sealed partial class LatticeGrain(
             throw;
         }
 #else
-        await ShardActivationRetry.RunAsync(
+        await RunSagaCallAsync(
             () => saga.ExecuteAsync(TreeId, entries),
             cancellationToken);
 #endif
@@ -3167,7 +3168,7 @@ internal sealed partial class LatticeGrain(
         }
 
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
-        await ShardActivationRetry.RunAsync(
+        await RunSagaCallAsync(
             () => saga.ExecuteAsync(TreeId, entries, entryDeletes),
             cancellationToken);
     }
@@ -3204,7 +3205,7 @@ internal sealed partial class LatticeGrain(
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
-        return await ShardActivationRetry.RunAsync(
+        return await RunSagaCallAsync(
             () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
             cancellationToken);
     }
@@ -3237,9 +3238,53 @@ internal sealed partial class LatticeGrain(
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
-        return await ShardActivationRetry.RunAsync(
+        return await RunSagaCallAsync(
             () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs one atomic-write saga call - with the same transient retries every
+    /// <see cref="ShardActivationRetry"/> caller gets - under a decide-by
+    /// deadline (<see cref="LatticeSagaDecisionDeadlineContext"/>) derived from
+    /// this silo's response timeout and taken once, before the first attempt.
+    /// <para>
+    /// The retries can outlast the caller: a saga call that fails on a
+    /// restarting silo after most of the response timeout is re-issued after a
+    /// backoff, by which point the caller has timed out and may already have
+    /// written the same keys again. Without a deadline the re-issued saga then
+    /// commits and its batch becomes visible over those newer writes; with one,
+    /// a saga that reaches its commit decision too late rolls the batch back.
+    /// </para>
+    /// </summary>
+    private async Task RunSagaCallAsync(Func<Task> call, CancellationToken cancellationToken)
+    {
+        using (LatticeSagaDecisionDeadlineContext.With(SagaDecisionDeadline()))
+        {
+            await ShardActivationRetry.RunAsync(call, cancellationToken);
+        }
+    }
+
+    /// <inheritdoc cref="RunSagaCallAsync(Func{Task}, CancellationToken)"/>
+    private async Task<T> RunSagaCallAsync<T>(Func<Task<T>> call, CancellationToken cancellationToken)
+    {
+        using (LatticeSagaDecisionDeadlineContext.With(SagaDecisionDeadline()))
+        {
+            return await ShardActivationRetry.RunAsync(call, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The decide-by deadline, in UTC ticks, for a saga call issued now: this
+    /// silo's response timeout, less a margin for the time the caller's request
+    /// spent reaching this grain. <c>0</c> (no deadline) when the silo has no
+    /// finite response timeout.
+    /// </summary>
+    private long SagaDecisionDeadline()
+    {
+        var responseTimeout = services.GetService<IOptions<SiloMessagingOptions>>()?.Value.ResponseTimeout
+            ?? new SiloMessagingOptions().ResponseTimeout;
+        return LatticeSagaDecisionDeadlineContext.DeadlineFor(responseTimeout, DateTime.UtcNow);
     }
 
     public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
