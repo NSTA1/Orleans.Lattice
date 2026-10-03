@@ -145,9 +145,13 @@ identical to the fully resident index - asserted across a query sweep - because 
 query is scored against exactly the cells it selects, and because a chunk is a
 slice of one contiguous cell rather than a gather across the corpus.
 
-At 250,000 vectors this is about 0.52 s to open and about 75 ms for the first
-query, after which roughly 12% of the corpus is resident and repeated queries over
-the same cells touch the store not at all. The box warms as it serves.
+Measured before byte-bounded chunks and batched key-map writes, at 250,000
+vectors this was about 0.52 s to open and about 75 ms for the first query, after
+which roughly 12% of the corpus was resident and repeated queries over the same
+cells touched the store not at all. The current lazy-load behaviour is the same -
+centroids and the identifier mapping are loaded first, then probed cells are
+fetched on demand - but those figures are dated measurements, not live
+benchmarks. The box warms as it serves.
 
 ### Incremental persistence
 

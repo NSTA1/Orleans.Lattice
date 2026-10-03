@@ -22,7 +22,7 @@ Each module registration is idempotent except `AddDataTools`, which is meant to 
 |---|---|---|---|
 | State | `AddStateTools()` | always | none (read-only facade) |
 | Data | `AddDataTools(enableWrites)` | always | writes, gated by `enableWrites` |
-| Backup | `AddBackupTools(enableControl)` | always | capture / incremental capture / restore / revert / delete, gated by `enableControl` |
+| Backup | `AddBackupTools(enableControl)` | always | backup and backup-set starts, restore starts, health/catalog rebuild/catalog scrub starts, operation cancel, revert, delete, and the deprecated create/restore aliases, gated by `enableControl` |
 | Auth | `AddAuthTools(enableAdministration)` | always | group / membership / rule mutation, gated by `enableAdministration` |
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
 | TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree lifecycle, restore, bulk-load, WAL-move, orphaned-leaf repair, view, tag-index, compaction, and retention control, gated by `enableLifecycle` |
@@ -136,7 +136,7 @@ The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; e
 
 ## Backup tools (`lattice_backup_*`)
 
-Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Registered by `AddBackupTools(enableControl)`. The seven read-only tools are always exposed; the ten control tools require `enableControl: true` (the count includes the three deprecated aliases).
+Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Registered by `AddBackupTools(enableControl)`. The read-only tools are always exposed; the control tools, including the deprecated `lattice_backup_create`, `lattice_backup_create_incremental` and `lattice_backup_restore` aliases, require `enableControl: true`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -290,7 +290,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state - running, an accepted undo still unwinding (`undoRequested`), or none - and effective B+ node capacities, with the phase and the completed and total work units of a running resize. |
 | `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree and, while one runs, its phase and how many of its shards are copied. |
 | `lattice_treeadmin_tree_create` | manage | Explicitly create or register a tree with optional initial sizing. |
-| `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. |
+| `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. The target's shard map moves onto the logical tree in the same registry write as the alias, and the physical tree the alias leaves redirects routers that still address it; refused when the registered tree-ownership guard denies the alias. |
 | `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides - publish-events, projection-digest maintenance, durable-history retention, and the advisory WAL retained-byte ceiling - each written only when its `apply*` flag is set (a null value on an applied dimension clears that override). |
 | `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
 | `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |

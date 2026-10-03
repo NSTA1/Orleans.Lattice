@@ -1,6 +1,6 @@
 # Typed CRDT delta records
 
-The replication package ships a small set of typed delta records - one per replicable primitive - that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.
+The core `Orleans.Lattice` assembly exposes a small set of typed delta records - one per replicable primitive - that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. The replication package writes and reads those records through `WalRecord.Delta`. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.
 
 Today the records are the **single wire contract** between the producer's commit-time accessor surface and the receiver's typed-delta apply pipeline. Every typed CRDT mode authors a public delta DTO into the single `WalRecord.Delta` byte slot at commit time, and the receiver-side apply pipeline dispatches on `WalRecord.Mode` to the matching primitive's instance `MergeDelta` operation. The canonical WAL encoder strips `WalRecord.Value` from every committed CRDT-mode `Set` that carries a `Delta`, so the stored and shipped record holds the delta only; prepared saga entries keep `Value`, which the receiver's pending-bucket apply needs. Change-feed consumers of a CRDT tree should therefore read `Delta`, or read current state through `ILattice`, rather than treating `Value` as a full-state snapshot. `LwwRegister` continues to use the opaque `Value` path and is unaffected.
 
@@ -12,7 +12,7 @@ Values that are not a recognised CRDT primitive - schemaless `byte[]` payloads o
 
 ## Records
 
-Every record is a `readonly record struct` marked `[GenerateSerializer]`, with a stable Orleans alias defined in the core `Orleans.Lattice` assembly. Every record except `OrMapDelta<TKey, TValue>`, `OrMapDeltaEntry<TKey, TValue>`, and `MvRegisterEntry` is also marked `[Immutable]`; those three deliberately are not, because each carries a mutable payload (a CRDT value the receiver folds in place, or `byte[]` value bytes) that Orleans must copy on a same-silo grain call. All records are public - they appear on the `IChangeFeed` consumer surface and on transport payloads, so custom transports and applier implementations can name them directly.
+Every record is a public `readonly record struct` marked `[GenerateSerializer]`, with a stable Orleans alias defined in the core `Orleans.Lattice` assembly. Every record except `OrMapDelta<TKey, TValue>`, `OrMapDeltaEntry<TKey, TValue>`, and `MvRegisterEntry` is also marked `[Immutable]`; those three deliberately are not, because each carries a mutable payload (a CRDT value the receiver folds in place, or `byte[]` value bytes) that Orleans must copy on a same-silo grain call. They appear on the `IChangeFeed` consumer surface and on transport payloads, so custom transports and applier implementations can name them directly.
 
 | Type | Alias | Purpose |
 |------|-------|---------|
@@ -34,7 +34,7 @@ Every record is a `readonly record struct` marked `[GenerateSerializer]`, with a
 | `RwSetDelta` | `ol.rsd` | Remove-wins observed-remove set: the add dots, the remove dots, and the remove dots an observed add has cancelled (tombstones), each an `OrSetDeltaDot` attached to its element. |
 | `BoundedRegisterDelta` | `ol.mxd` | Monotonic bounded register, shared by `MaxRegister` and `MinRegister`: the candidate value bytes and their total-order key; the direction comes from the receiver's register, not the delta. |
 
-The typed CRDT delta records each expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections (for `BoundedRegisterDelta`, a delta with no candidate value) - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
+The container-shaped delta records (`OrSetDelta`, `PnCounterDelta`, `VersionVectorDelta`, `MvRegisterDelta`, `OrMapDelta<TKey, TValue>`, `RgaDelta`, `OrFlagDelta`, `RwFlagDelta`, `GCounterDelta`, `GSetDelta`, `RwSetDelta`, and `BoundedRegisterDelta`) expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections (for `BoundedRegisterDelta`, a delta with no candidate value) - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
 
 ## Apply rules
 

@@ -55,6 +55,43 @@ public readonly record struct ReplicationBatchEnvelope
 
 The envelope is Orleans-serialisable (alias `olr.be`); the call-shape `ReplicationBatch` is intentionally not. Wire-format hardening - versioned envelopes, content framing, compression - lives inside the two payload shapes described above, never on the call-shape struct.
 
+## Serializer and gRPC field map
+
+There are no `.proto` files in the current replication gRPC package. The gRPC binding is built manually with `Grpc.Core.Method` definitions under the service name `orleans.lattice.replication.LatticeReplication`; the request and response bodies below are Orleans-serialized DTOs, so the `[Id(n)]` attributes in source are the field numbers.
+
+| RPC | Request | Response |
+|-----|---------|----------|
+| `Push` | `ReplicationBatchEnvelope` | `ReplicationAck` |
+| `ProbeDigest` | `DigestProbeRequest` | `DigestProbeResponse` |
+| `ExchangeContentManifest` | `ContentManifestRequest` | `ContentManifestResponse` |
+| `PullCompressionDictionary` | `CompressionDictionaryPullRequest` | `CompressionDictionaryPullResponse` |
+| `ProbeMerkleWalk` | `MerkleWalkProbeRequest` | `MerkleWalkProbeResponse` |
+| `GetPeerHighWaterMark` | `PeerHighWaterMarkRequest` | `PeerHighWaterMarkResponse` |
+
+`ReplicationBatchEnvelope` serializes these fields: `[Id(0)] WireVersion`, `[Id(1)] TreeName`, `[Id(2)] OriginClusterId`, and `[Id(3)] Entries`.
+
+`ReplicationAck` serializes these fields: `[Id(0)] Accepted`, `[Id(1)] HighestAppliedHlc`, `[Id(2)] BlockedAtHlc`, `[Id(3)] SuggestedBatchSize`, `[Id(4)] PauseForMs`, `[Id(5)] SupportedWireVersion`, `[Id(6)] AdvertisedDictionaryIds`, and `[Id(7)] AdvertisedDictionaries`. Each `AdvertisedCompressionDictionary` entry serializes `[Id(0)] Id` and `[Id(1)] Fingerprint`.
+
+The anti-entropy and auxiliary RPC DTOs serialize these fields:
+
+| DTO | Fields |
+|-----|--------|
+| `DigestProbeRequest` | `[Id(0)] TreeName`, `[Id(1)] ShardIndex` |
+| `DigestProbeResponse` | `[Id(0)] DigestAvailable`, `[Id(1)] Digest` |
+| `ContentManifestRequest` | `[Id(0)] TreeName`, `[Id(1)] OriginClusterId`, `[Id(2)] Entries` |
+| `ContentManifestEntry` | `[Id(0)] EntryIndex`, `[Id(1)] Key`, `[Id(2)] ContentHash`, `[Id(3)] Hlc` |
+| `ContentManifestResponse` | `[Id(0)] ExchangeSupported`, `[Id(1)] MissingEntryIndices`, `[Id(2)] AdvancedHlc` |
+| `CompressionDictionaryPullRequest` | `[Id(0)] DictionaryId` |
+| `CompressionDictionaryPullResponse` | `[Id(0)] ExchangeSupported`, `[Id(1)] Found`, `[Id(2)] DictionaryId`, `[Id(3)] Fingerprint`, `[Id(4)] Dictionary` |
+| `MerkleWalkProbeRequest` | `[Id(0)] TreeName`, `[Id(1)] ShardIndex`, `[Id(2)] RangeStartKey`, `[Id(3)] RangeEndKey`, `[Id(4)] Depth` |
+| `MerkleWalkProbeResponse` | `[Id(0)] Available`, `[Id(1)] Digest` |
+| `PeerHighWaterMarkRequest` | `[Id(0)] TreeName`, `[Id(1)] OriginClusterId` |
+| `PeerHighWaterMarkResponse` | `[Id(0)] Clock` |
+
+`WalRecord` is the per-entry payload inside a batch. Its durable serializer ids are: `[Id(0)] TreeId`, `[Id(1)] Op`, `[Id(2)] Key`, `[Id(3)] EndExclusiveKey`, `[Id(4)] Value`, `[Id(5)] Timestamp`, `[Id(6)] IsTombstone`, `[Id(7)] ExpiresAtTicks`, `[Id(8)] OriginClusterId`, `[Id(10)] VectorClock`, `[Id(11)] DependencySummary`, `[Id(13)] Delta`, `[Id(14)] AtomicBatchSize`, `[Id(15)] AtomicBatchIndex`, `[Id(16)] TransactionId`, `[Id(17)] IsPrepared`, `[Id(18)] ShardIndex`, `[Id(19)] AtomicShardCount`, `[Id(20)] IsMerge`, `[Id(21)] IsBackstop`, `[Id(22)] Category`, `[Id(23)] MatchedKeys`, `[Id(24)] CrossTreeOperationId`, `[Id(25)] CrossTreeParticipants`, and `[Id(26)] Mode`. Ids `9` and `12` are retired and reserved: `9` was the original `Mode` tag, and `12` was the retired `DeltaKind` tag.
+
+The fixed framing header is not Orleans-serialized. Its 32 bytes are: bytes `0..3` magic `OLRF` (`0x46524C4F` little-endian), `4..7` `WireVersion`, `8..15` `OriginClusterIdHash`, `16..19` `EntryCount`, `20..27` `BatchSequence`, and `28..31` a packed word containing low 16 bits `AtomicBatchSpanCount`, bits 16-23 `Mode`, and bits 24-31 `Compression`. `DictionaryId` is not part of the fixed header; when present, it is carried in the variable-length compressed tail for `ZstdDictionary` frames.
+
 `TryDecodeFraming` returns `false` rather than throwing when the payload is shorter than the fixed header or its magic prefix does not match, so a caller can fall back to `Decode`; it throws `NotSupportedException` for a framing wire version newer than `EncodedBatchHeader.CurrentWireVersion`, and `ArgumentException` for a negative, impossible, or truncated entry layout. The two version numbers are independent: `ReplicationBatchEnvelope.CurrentVersion` (currently `1`) versions the typed envelope only, while the framing header carries its own `EncodedBatchHeader.WireVersion` (`EncodedBatchHeader.CurrentWireVersion`, currently `5`) - the version that [wire-version capability negotiation](#wire-version-capability-negotiation) reasons about.
 
 ## Why a versioned envelope

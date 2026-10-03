@@ -39,6 +39,15 @@ Shrinking is the same trade in the other direction. Fewer shards means fewer ind
 | Crash-safety | Reminder-anchored coordinator (`reshard-keepalive`, 1 min keepalive). Resumes automatically on silo restart. |
 | Completion signal | `ILattice.IsReshardCompleteAsync(CancellationToken)`. |
 
+The tree-admin reshard status (`ILatticeTreeAdmin.GetReshardStatusAsync`, the
+`lattice_treeadmin_tree_reshard_status` tool) reports whether a reshard is in
+flight, the current distinct physical shard count, the virtual-slot count and
+map version observed from the registry shard map, and - while a coordinator is
+running - the target physical shard count and the physical shard count it
+started from. Read progress as the current count moving from the start count to
+the target; shrinks move downward as each fold commits, and grows move upward as
+each split commits.
+
 ## Usage
 
 ```csharp verify

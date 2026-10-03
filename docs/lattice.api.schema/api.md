@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Schema API reference
 
-The public surface is the registration extension, the options type, and the control facade interface (`ILatticeSchemaControl`, published in the shared `Orleans.Lattice.Api.Abstractions` package under the `Orleans.Lattice.Api.Schema` namespace, alongside its `LatticeSchemaCapabilities` result and the `ApiSchemaTypeAliases` alias table). The facade interface is the contract the gRPC binding adapts over, and is described by its operations below and in [Architecture](architecture.md).
+The public surface is the registration extension, the options type, and the facade interfaces published in the shared `Orleans.Lattice.Api.Abstractions` package under the `Orleans.Lattice.Api.Schema` namespace: `ILatticeSchemaControl`, `ILatticeSchemaComplianceOperations`, and `ILatticeSchemaOperations`, alongside `LatticeSchemaCapabilities`, the shared long-running operation records, and the `ApiSchemaTypeAliases` alias table. These facade interfaces are the contracts the gRPC binding adapts over, and are described by their operations below and in [Architecture](architecture.md).
 
 The schema policy, versioning, dead-letter, remediation, compliance, and transform records are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md). This package adds the control facade and its capability result, not a second schema model.
 
@@ -46,7 +46,7 @@ The control facade exposes these methods. Each method corresponds to one RPC in 
 | `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` - deprecated (`LATTICE0002`); use `ILatticeSchemaComplianceOperations` |
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
-Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. Once authorized, `SetPolicyAsync` compiles the policy before storing it and refuses one it cannot compile - a rule incomplete for its kind, a regex the non-backtracking engine rejects, or a `MaxByteLength` encoding rule with a negative limit - with an `ArgumentException`, storing nothing. The policy type and its enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
+Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. Once authorized, `SetPolicyAsync` compiles the policy before storing it and refuses one it cannot compile - a rule incomplete for its kind, a regex the non-backtracking engine rejects, or a `MaxByteLength` encoding rule with a negative limit - with an `ArgumentException`, storing nothing. The policy type, the structural predicate kinds (`TypeOf`, `Length`, `Every`, and `Self`), the public `LatticeSchemaPolicyValidator` preview helper, and the enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
 
 Dead-letter operations inspect diverted, schema-rejected writes. `ListDeadLettersAsync` streams entries with bounded memory and `CountDeadLettersAsync` returns the current count. Both require Read authority.
 
@@ -54,7 +54,7 @@ Versioning operations require the separate schema-versioning add-on. If the host
 
 Remediation operations apply or report a tree-wide repair. `RemediateAsync` requires SchemaAdmin authority, applies a `LatticeValueTransform` across a tree, and adopts the supplied target policy. `GetRemediationStatusAsync` requires Read authority and returns the status or last report; it never waits behind a running remediation, and it names the tracked operation that started the run in its `OperationId`.
 
-`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` are **deprecated** (`LATTICE0002`) and will be removed in the next major version. They block until the run ends, so a long run is cut off by the caller's timeout. The same singleton implements `ILatticeSchemaOperations`, whose start verbs return as soon as the run is accepted and whose status verbs report its phase and values processed:
+`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` are **deprecated** (`LATTICE0002`) and will be removed in the next major version. They still wait for the terminal report, so a long run remains exposed to the caller's own timeout even though the work itself is driven in resumable slices. The same singleton implements `ILatticeSchemaOperations`, whose start verbs return as soon as the run is accepted and whose status verbs report its phase and values processed:
 
 | Method | Signature |
 |---|---|

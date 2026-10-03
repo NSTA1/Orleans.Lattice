@@ -18,8 +18,9 @@ namespace Orleans.Lattice.Schema;
 /// destination - aborting and discarding the partial destination on the first
 /// offending value;</description></item>
 /// <item><description>cuts over by installing the target policy, then repointing
-/// the logical tree's alias (<see cref="ILatticeRegistry.SetAliasAsync"/>) to the
-/// destination so subsequent writes are enforced.</description></item>
+/// the logical tree's alias to the destination together with the destination's
+/// shard map in one registry write, and arming the source to redirect stale
+/// routers, so subsequent writes are enforced.</description></item>
 /// </list>
 /// The coordinator mirrors <c>TreeResizeGrain</c>'s durability discipline: it
 /// persists each phase transition before performing that phase's external side

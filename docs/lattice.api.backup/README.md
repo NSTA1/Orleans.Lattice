@@ -25,7 +25,7 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 ## Surface
 
-The facade operations. Long captures and restores should use the accept-then-poll `ILatticeBackupOperations` start verbs, which return a handle immediately and are polled through the shared operation status surface. The older blocking capture and restore verbs still behave as before, but are deprecated with warning `LATTICE0002` and will be removed in the next major version. The gRPC binding exposes the remote-safe subset as RPCs; inventory and catalog rebuild / scrub are in-process-only today.
+The facade operations. Long captures, restores, health checks, and catalog rebuild or scrub passes should use the accept-then-poll `ILatticeBackupOperations` start verbs, which return a handle immediately and are polled through the shared operation status surface. The older blocking verbs still behave as before, but are deprecated with warning `LATTICE0002` and will be removed in the next major version. The gRPC binding exposes the remote-safe subset as RPCs; inventory and the blocking catalog rebuild / scrub methods are in-process-only, while tracked catalog rebuild and scrub start over gRPC.
 
 | Operation | Purpose |
 |---|---|

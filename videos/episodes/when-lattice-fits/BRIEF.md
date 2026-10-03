@@ -86,7 +86,7 @@ table:
 
 - The deployment journey, which is the front door's to tell.
 - The guarantees operation by operation, which are the next episode's.
-- The Explorer, which is being redesigned.
+- The Explorer, which is still in progress.
 - Anything unreleased: vector search, and so the README's AI memory category,
   which rests on it. Its search and indexing category is left out for length
   only, since materialised views and tag indexes are in the released core.

@@ -97,7 +97,7 @@ further in combination with the silo's other concurrency knobs:
    `Retry-After` header, the Azure.Data.Tables SDK back-off engages,
    per-flush provider duration spikes from ~50 ms to ~8 s, the
    writer's `WalAppendDispatchTimeout` (default 30 s), which bounds both
-   the admission wait and each shard dispatch, exhausts,
+   the admission wait and each WAL partition dispatch, exhausts,
    and `[wal-admission-timeout]` lines fire on the slowest
    partition.
 
@@ -229,7 +229,7 @@ below the aggregate storage budget.
 Four instruments tell you which regime you are in:
 
 - **`wal.writer.append.admission_wait`** - time spent waiting at the
-  per-shard admission gate. If p99 is on the order of seconds and
+  per-partition admission gate. If p99 is on the order of seconds and
   `wal.append.provider.duration` is on the order of tens of
   milliseconds, you are admission-bound and lifting the cap helps.
   If admission_wait is sub-millisecond and provider duration is
@@ -268,7 +268,7 @@ and their tags.
 ## See also
 
 - [WAL](wal.md) - the foreground commit pipeline and how the
-  per-shard grain enforces the bounds.
+  WAL partition grain enforces the bounds.
 - [WAL Storage Providers](wal-storage-providers.md) - the
   `IWalStorageProvider` seam and the Azure Tables provider's
   two-phase batch protocol.

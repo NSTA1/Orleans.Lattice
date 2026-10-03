@@ -214,23 +214,21 @@ public class LatticeReplicationOptions
     /// Maximum number of recently-applied
     /// <c>(originClusterId, timestamp, key, op)</c> identity tuples
     /// the per-tree shadow-forward dedupe cache retains. The cache
-    /// is a fast-path receiver-side seam that drops the duplicate
-    /// emit pair structural rewrites (shard split / merge / saga
-    /// compensate) generate when they shadow-forward a user write
-    /// into a different shard: both emits ride the WAL with
-    /// identical <c>(origin, hlc, key, op)</c>, and a concurrent
-    /// inbound delivery can otherwise race past the per-origin
-    /// high-water-mark check (both deliveries observe the same
-    /// pre-advance HWM and both apply before either advances it).
+    /// is the receiver's primary exact-identity dedup for incremental
+    /// point writes: it drops the duplicate emit pair a structural
+    /// rewrite (shard split or merge) generates when it shadow-forwards
+    /// a user write into a different shard - both emits ride the WAL
+    /// with identical <c>(origin, hlc, key, op)</c> - and any other
+    /// recent re-delivery, without a leaf round-trip.
     /// <para>
     /// Defaults to <see cref="DefaultShadowForwardDedupeCacheSize"/>.
     /// Must be at least <c>64</c>; the registered options validator
     /// rejects smaller values at first-resolve time so a single
     /// pathological burst cannot evict the cache faster than it
     /// fills. Cache eviction under sustained churn cannot cause a
-    /// re-merge - the per-origin HWM check is the authoritative
-    /// dedupe key and remains in place for any entry the cache has
-    /// evicted.
+    /// re-merge - a re-delivery the cache has evicted falls through to
+    /// the idempotent leaf-level last-writer-wins apply, which is a
+    /// no-op for identical bytes.
     /// </para>
     /// </summary>
     public int ShadowForwardDedupeCacheSize { get; set; } = DefaultShadowForwardDedupeCacheSize;

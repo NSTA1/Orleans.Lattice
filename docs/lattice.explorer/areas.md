@@ -45,8 +45,11 @@ stands beside the key table as a split view, kept in view while the list
 scrolls; at narrower widths it opens below the table.
 
 The entry panel reads the selected key through the state reader and renders the
-value automatically, with alternate renderers when CRDT members are present. It
-does not echo server fault details. Permission denials become "You do not have
+value automatically, with alternate renderers when CRDT members are present. JSON
+values keep non-ASCII text and HTML-sensitive characters such as `<`, `>`, `&`,
+`'` and `+` as written; one-line previews end in `...` whenever the value
+continues, including truncated text and hex previews. It does not echo server
+fault details. Permission denials become "You do not have
 permission to read this entry.", unserved operations become "This cluster does
 not let you read this entry.", missing entries become "It no longer exists, or
 you cannot see it.", and transient failures ask the reader to try again.

@@ -36,7 +36,9 @@ Every operation that touches backup data authorizes its scope through the same
 backup access gate the engine uses, before touching data (the capability probe
 reports each grant as an allowed / denied flag, and the health-monitoring
 availability flag checks no grant). A
-capture / incremental / restore authorizes its target scope (a restore whose
+capture / incremental / restore authorizes its target scope (a prefix scope is a
+range over every key under that prefix, so a grant on the prefix string alone is
+not enough, and any deny below the prefix refuses it; a restore whose
 target cannot be resolved authorizes the reserved backup catalog tree instead,
 so the check is never skipped); a list / describe /
 delete authorizes the scope carried by each manifest, and a manifest whose scope

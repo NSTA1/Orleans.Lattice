@@ -2,12 +2,13 @@
 
 ## What it shows
 
-Lattice can grow the number of physical shards a tree's key space is spread
+Lattice can change the number of physical shards a tree's key space is spread
 across **while the tree stays online** - no downtime, no data loss. This sample
-writes 24 keys, kicks off `ReshardAsync(72)`, writes another key *while the
-migration is in flight*, and polls until `IsReshardCompleteAsync` reports done.
-It measures the distinct physical shard count from the effective `ShardMap`
-before and after, and re-reads every key to prove nothing was lost.
+shows the grow path: it writes 24 keys, kicks off `ReshardAsync(72)`, writes
+another key *while the migration is in flight*, and polls until
+`IsReshardCompleteAsync` reports done. It measures the distinct physical shard
+count from the effective `ShardMap` before and after, and re-reads every key to
+prove nothing was lost.
 
 ## Run it
 
@@ -57,10 +58,17 @@ demo finishes sooner at the cost of proportionally more background drain I/O.
 ## When not to use
 
 - Shrinking below what the write rate needs. `ReshardAsync` also accepts a smaller
-  count, but fewer shards means fewer independent write paths.
+  count and folds adjacent shards online, completing only after the folds it
+  started have finished and retired donor storage has been released or safely
+  left as a routing tombstone. Fewer shards means fewer independent write paths.
 - Expecting instant completion. Resharding is a background migration; poll
   `IsReshardCompleteAsync` rather than assuming the new count is live immediately.
 
 ## Feature docs
 
-[docs/lattice/online-reshard.md](../../docs/lattice/online-reshard.md)
+[docs/lattice/online-reshard.md](../../docs/lattice/online-reshard.md) covers the
+same `ReshardAsync` surface. The tree-admin status surface also reports a
+shrink's start count, target count and current physical fan-out; a shrink can
+reach its target count before the final fold finishes releasing retired storage,
+so `IsReshardCompleteAsync` / status `InProgress`, not the count alone, is the
+completion signal.

@@ -39,7 +39,8 @@ public sealed class SnapshotStream
     /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>.
     /// Receivers pin this on
     /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
-    /// before draining <see cref="Entries"/>, so the causal dependency
+    /// once <see cref="Entries"/> has been drained, at the hand-off to
+    /// incremental replication, so the causal dependency
     /// check in the apply path starts from a non-empty frontier and
     /// the first incremental entry is guaranteed to satisfy its
     /// declared dependencies. When no consumer has reported a

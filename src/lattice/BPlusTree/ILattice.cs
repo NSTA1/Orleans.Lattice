@@ -758,8 +758,9 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Undoes the most recent resize by recovering the old physical tree,
-    /// removing the alias, restoring the original registry configuration,
-    /// and deleting the new snapshot tree. Available while a resize is still
+    /// moving the logical tree back onto it together with the shard map that
+    /// addresses its shards (one registry write), restoring the original
+    /// registry configuration, and deleting the new snapshot tree. Available while a resize is still
     /// in flight - at any phase - and afterwards for as long as the old tree
     /// is within its <see cref="LatticeOptions.SoftDeleteDuration"/> window
     /// (before purge completes).

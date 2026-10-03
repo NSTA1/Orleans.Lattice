@@ -9,17 +9,19 @@ a strongly-typed `LatticeSchemaApiGrpcClient` that re-exposes the whole control
 surface over the wire: setting, clearing, and reading enforcement policy;
 streaming (bounded-memory) and counting dead letters; opting trees in and out of
 envelope versioning and advancing / migrating their target version; starting and
-inspecting remediation; a read-only per-tree **compliance audit**; and a
-fail-closed **capability probe**. Every wire message rides the Orleans
+inspecting remediation; starting and polling a read-only per-tree **compliance audit**;
+and a fail-closed **capability probe**. Every wire message rides the Orleans
 serializer, so the contract stays versioned and additive-only.
 
-Remediation and migration run as tracked operations: `StartRemediationAsync`,
-`StartMigrationAsync` and `StartAdvanceAndMigrateAsync` return a handle as soon
-as the cluster accepts the run, and `GetSchemaOperationStatusAsync`,
-`ListSchemaOperationsAsync` and `CancelSchemaOperationAsync` follow, page and
-cancel it. The blocking `RemediateAsync`, `MigrateToTargetVersionAsync` and
-`AdvanceAndMigrateAsync` calls (and their RPCs) raise warning `LATTICE0002` and
-**will be removed in the next major version**.
+Compliance scans, remediation, and migration run as tracked operations:
+`StartComplianceScanAsync`, `StartRemediationAsync`, `StartMigrationAsync` and
+`StartAdvanceAndMigrateAsync` return a handle as soon as the cluster accepts the
+work. `GetComplianceScanStatusAsync` / `ListComplianceScansAsync` /
+`CancelComplianceScanAsync` follow scans, and `GetSchemaOperationStatusAsync` /
+`ListSchemaOperationsAsync` / `CancelSchemaOperationAsync` follow remediation and
+migration. The blocking `ScanComplianceAsync`, `RemediateAsync`,
+`MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` calls (and their RPCs)
+raise warning `LATTICE0002` and **will be removed in the next major version**.
 
 Wiring is two calls on the co-hosting silo:
 

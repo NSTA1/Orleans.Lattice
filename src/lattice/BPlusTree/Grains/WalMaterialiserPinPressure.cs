@@ -53,7 +53,8 @@ internal static class WalMaterialiserPinPressure
 
     /// <summary>
     /// The current instant in the same millisecond-tick units the shed-window
-    /// state stores, read from <see cref="Clock.GetTimestamp"/> (not
+    /// state stores, read from <see cref="Clock"/>'s
+    /// <see cref="TimeProvider.GetTimestamp"/> (not
     /// <see cref="TimeProvider.GetUtcNow"/>) so this stays monotonic like the
     /// <see cref="Environment.TickCount64"/> read it replaces: immune to
     /// wall-clock adjustments (NTP steps, manual clock changes), which a
