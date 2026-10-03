@@ -305,22 +305,24 @@ internal sealed class RegistryFanInGate(
     private int _inFlight;
 
     /// <summary>
-    /// Counts arrivals that were still in <see cref="_waiting"/> after their own
-    /// synchronously-triggered <see cref="Pump"/> call returned - that is,
-    /// genuinely deferred to a <em>later</em> pump, driven by another arrival or
-    /// by a <see cref="DispatchAsync"/> completion, rather than admitted
-    /// immediately.
+    /// Counts the <see cref="Pump"/> early-returns that found the budget already
+    /// exhausted (<c>_inFlight &gt;= CurrentBudget()</c>) with at least one
+    /// arrival still queued - that is, a pump that left genuine work behind for
+    /// lack of budget, rather than one that returned merely because nothing had
+    /// arrived yet. Incremented inside the same lock <see cref="Pump"/> already
+    /// holds for that check, so it shares that check's atomicity: no caller can
+    /// observe an admission state between the budget test and the count, and no
+    /// second lock acquisition is introduced on the arrival path.
     /// <para>
     /// This is a count of an event, not a duration, so unlike
     /// <see cref="LatticeMetrics.RegistryAdmissionWait"/> it carries no wall-clock
-    /// component and is immune to scheduler load: an arrival is either still
-    /// queued when its own <see cref="Pump"/> call returns or it is not, and that
-    /// fact does not depend on how long the surrounding machine took to get
-    /// there. It exists specifically so a test can assert "no genuine queuing
-    /// occurred" (or the reverse) without reading a clock at all. See
-    /// <c>RegistryFanInRegimeTests</c> for why a wall-clock floor on
-    /// <see cref="LatticeMetrics.RegistryAdmissionWait"/> could not fill that
-    /// role under CI scheduler jitter.
+    /// component and is immune to scheduler load: a pump either found budget
+    /// exhausted with work queued or it did not, and that fact does not depend on
+    /// how long the surrounding machine took to get there. It exists specifically
+    /// so a test can assert "no genuine queuing occurred" (or the reverse)
+    /// without reading a clock at all. See <c>RegistryFanInRegimeTests</c> for
+    /// why a wall-clock floor on <see cref="LatticeMetrics.RegistryAdmissionWait"/>
+    /// could not fill that role under CI scheduler jitter.
     /// </para>
     /// </summary>
     private int _deferredAdmissions;
@@ -385,20 +387,6 @@ internal sealed class RegistryFanInGate(
         LatticeMetrics.RegistryAdmissionQueueDepth.Record(depthAtArrival, LatticeTenantLabel.Platform);
         Pump();
 
-        // If this arrival is still waiting once its own triggering Pump() call
-        // has returned, that Pump() did not have budget for it: it will only be
-        // admitted by a later Pump(), reached through another arrival or a
-        // DispatchAsync completion. That is genuine queuing, and it is a fact
-        // about this instant, not a measurement that can be inflated by how long
-        // the lock or the Pump() loop took to run.
-        lock (_sync)
-        {
-            if (_waiting.ContainsKey(treeId))
-            {
-                _deferredAdmissions++;
-            }
-        }
-
         return waiter.Task;
     }
 
@@ -460,6 +448,14 @@ internal sealed class RegistryFanInGate(
             {
                 if (_inFlight >= CurrentBudget() || _arrivals.Count == 0)
                 {
+                    // Budget exhausted with at least one arrival still queued is
+                    // genuine deferral; an empty queue is merely "nothing to do"
+                    // and must not count.
+                    if (_arrivals.Count > 0)
+                    {
+                        _deferredAdmissions++;
+                    }
+
                     return;
                 }
 

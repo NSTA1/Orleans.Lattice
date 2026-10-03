@@ -353,6 +353,16 @@ public class RegistryFanInRegimeTests
             Assert.That(reading.PeakBatchSize, Is.GreaterThan(1),
                 "at least one dispatch must carry more than one id, or the gate is queueing without "
                 + "coalescing and MaxBatchSize is dead weight");
+
+            // The counterpart of the zero asserted below the bound: a wave wide
+            // enough to saturate the gate must genuinely defer admissions, or
+            // DeferredAdmissionCount would only ever be exercised at zero and the
+            // assertion in Below_the_bound_the_rig_cannot_see_the_bound_at_all
+            // would be vacuously true regardless of whether the counter works.
+            Assert.That(reading.DeferredAdmissionCount, Is.GreaterThan(0),
+                "a wave this far past the bound must defer at least one admission to a later Pump(); "
+                + $"got {reading.DeferredAdmissionCount} deferred, which would make the zero asserted "
+                + "below the bound meaningless");
         });
     }
 
