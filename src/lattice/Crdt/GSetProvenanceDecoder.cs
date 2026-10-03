@@ -97,19 +97,32 @@ public sealed class GSetProvenanceDecoder : ICrdtProvenanceDecoder
     {
         ArgumentNullException.ThrowIfNull(state);
         var set = (GSet)state;
-        if (set.Count == 0) return Array.Empty<CrdtMemberChange>();
+        var count = set.Count;
+        if (count == 0) return Array.Empty<CrdtMemberChange>();
 
-        var result = new List<CrdtMemberChange>(set.Count);
-        foreach (var element in set.Values())
+        // Project straight from the sorted key window instead of walking
+        // GSet.Values(). Values() is a yield-return iterator, so it costs a
+        // state-machine allocation plus an interface-dispatched MoveNext and
+        // Current for every element, on top of the List the keys are sorted
+        // in. Count is exact here, so the destination is an exactly-sized
+        // array written by index: no List wrapper, and no per-element bounds
+        // check and version bump. Order is unchanged - the same ordinal sort
+        // of the same base64 keys that Values() yields.
+        var keys = new string[count];
+        set.Elements.CopyTo(keys);
+        Array.Sort(keys, OrdinalStringOrder.Comparison);
+
+        var result = new CrdtMemberChange[count];
+        for (var i = 0; i < count; i++)
         {
-            result.Add(new CrdtMemberChange
+            result[i] = new CrdtMemberChange
             {
-                Element = element,
+                Element = Convert.FromBase64String(keys[i]),
                 Kind = CrdtMemberChangeKind.Added,
                 ReplicaId = string.Empty,
                 Ordinal = 0,
                 WallClock = null,
-            });
+            };
         }
         return result;
     }
@@ -128,17 +141,26 @@ public sealed class GSetProvenanceDecoder : ICrdtProvenanceDecoder
     {
         ArgumentNullException.ThrowIfNull(state);
         var set = (GSet)state;
-        if (set.Count == 0) return Array.Empty<CrdtMemberValue>();
+        var count = set.Count;
+        if (count == 0) return Array.Empty<CrdtMemberValue>();
 
-        var result = new List<CrdtMemberValue>(set.Count);
-        foreach (var element in set.Values())
+        // Same trim as DecodeState: the sorted key window is projected
+        // directly into an exactly-sized array, so the Values() iterator
+        // state machine, its per-element interface dispatch, and the List
+        // growth bookkeeping all drop out. Order is unchanged.
+        var keys = new string[count];
+        set.Elements.CopyTo(keys);
+        Array.Sort(keys, OrdinalStringOrder.Comparison);
+
+        var result = new CrdtMemberValue[count];
+        for (var i = 0; i < count; i++)
         {
-            result.Add(new CrdtMemberValue
+            result[i] = new CrdtMemberValue
             {
-                Element = element,
+                Element = Convert.FromBase64String(keys[i]),
                 ReplicaId = string.Empty,
                 Ordinal = 0,
-            });
+            };
         }
         return result;
     }
