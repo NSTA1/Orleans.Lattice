@@ -15,13 +15,13 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// made it fail, by timing out - is left in its swap phase, a silo restarts between the copy and
 /// the swap, and the resize must then finish when it is driven again. The host's ownership guard
 /// reads a registered tree none of whose shards has been seeded, from inside the registry's
-/// non-interleaved <c>SetAliasAsync</c> turn, which is the shape of the apps ownership ledger
+/// non-interleaved alias-swap turn, which is the shape of the apps ownership ledger
 /// read that deadlocked the Explorer sample.
 /// </summary>
 /// <remarks>
 /// Two silos over <see cref="ProcessScopeMemoryGrainStorage"/> and a shared WAL provider, so
 /// durable state survives the secondary's restart (see <see cref="MultiSiloRestartChaosTests"/>
-/// for why both are needed). The swap's first <c>SetAliasAsync</c> is failed by an incoming-call
+/// for why both are needed). The swap's first alias write is failed by an incoming-call
 /// filter rather than by the real deadlock, so the stuck state is reached deterministically.
 /// </remarks>
 [TestFixture]
@@ -134,7 +134,8 @@ public sealed class AliasSwapRegistryTurnRestartChaosTests
     {
         public Task Invoke(IIncomingGrainCallContext context)
         {
-            if (context.InterfaceMethod?.Name == nameof(ILatticeRegistry.SetAliasAsync)
+            // A resize moves its alias through the single-write swap verb (#4336).
+            if (context.InterfaceMethod?.Name is nameof(ILatticeRegistry.SetAliasAsync) or nameof(ILatticeRegistry.SwapAliasAsync)
                 && context.InterfaceMethod.DeclaringType == typeof(ILatticeRegistry)
                 && Interlocked.Exchange(ref _failNextSetAlias, 0) == 1)
             {
