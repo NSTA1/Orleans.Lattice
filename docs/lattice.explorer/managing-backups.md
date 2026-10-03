@@ -69,7 +69,7 @@ The Capture page can start three staged operations:
 - **Incremental** captures changes since a selected full backup. The page can find up to 50 newest full backups for the named tree and requires a base before capture.
 - **Set of trees** captures one full backup per tree under one set manifest. The set can be captured at one cross-tree consistency fence.
 
-A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. The **Tree** and **Tree to add** fields are pickers that accept only a tree you can reach; the key or prefix is typed. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. Its first stage checks access; its second starts the capture on the cluster, which accepts it and runs it in the background. The page then hands off to the cluster operation's own address.
+A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. Switching **Kind** to **Set of trees** starts the set with the tree already named, trimmed, unless it is blank or already in the set. The **Tree** and **Tree to add** fields are pickers that accept only a tree you can reach; the key or prefix is typed. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. Its first stage checks access; its second starts the capture on the cluster, which accepts it and runs it in the background. The page then hands off to the cluster operation's own address.
 
 A succeeded capture links to the captured backup pages and, for a set, reports the number of backups captured.
 

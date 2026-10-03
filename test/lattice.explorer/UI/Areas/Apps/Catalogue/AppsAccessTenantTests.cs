@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Tests.Connection;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 
@@ -83,6 +84,32 @@ public sealed class AppsAccessTenantTests
     }
 
     [Test]
+    public void A_lifecycle_change_settles_only_for_the_caller_that_made_it()
+    {
+        // #4414: the settling record was filed under the slug alone, so an install
+        // under acme made the same slug's reads settle under globex too.
+        var time = new ManualTimeProvider();
+        var (access, provider, _) = Create("acme", time);
+
+        access.Invalidate("crm");
+        var underAcme = access.ChangedRecently("crm");
+        provider.Set("globex");
+        var underGlobex = access.ChangedRecently("crm");
+        provider.Set("acme");
+        var backUnderAcme = access.ChangedRecently("crm");
+        time.Advance(AppsAccess.SettlingWindow + TimeSpan.FromSeconds(1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(underAcme, Is.True);
+            Assert.That(underGlobex, Is.False, "globex never changed crm");
+            Assert.That(backUnderAcme, Is.True, "acme's own change still settles for acme");
+            Assert.That(access.ChangedRecently("crm"), Is.False, "the window has passed");
+            Assert.That(access.ChangedRecently("board"), Is.False);
+        });
+    }
+
+    [Test]
     public void Without_tenancy_the_facades_assert_no_tenant()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
@@ -90,7 +117,7 @@ public sealed class AppsAccessTenantTests
         Assert.That(new AppsFacades(services).AssertedTenant, Is.Null);
     }
 
-    private static (AppsAccess Access, FakeActiveTenantProvider Provider, ILatticeAppWorkspace Workspace) Create(string tenant)
+    private static (AppsAccess Access, FakeActiveTenantProvider Provider, ILatticeAppWorkspace Workspace) Create(string tenant, TimeProvider? time = null)
     {
         var provider = new FakeActiveTenantProvider(tenant);
         var workspace = Substitute.For<ILatticeAppWorkspace>();
@@ -103,6 +130,6 @@ public sealed class AppsAccessTenantTests
             .AddSingleton<ILatticeActiveTenantProvider>(provider)
             .AddKeyedSingleton(ShellFacades.Key, workspace)
             .BuildServiceProvider();
-        return (new AppsAccess(new AppsFacades(services)), provider, workspace);
+        return (new AppsAccess(new AppsFacades(services), time: time), provider, workspace);
     }
 }

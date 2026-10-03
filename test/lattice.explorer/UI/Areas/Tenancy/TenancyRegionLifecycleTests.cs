@@ -303,6 +303,66 @@ public sealed class TenancyRegionLifecycleTests
         Assert.That((survey.Unset, survey.IsPartial), Is.EqualTo((3, true)));
     }
 
+    [Test]
+    public void The_only_region_planned_for_a_tenant_with_no_residency_can_be_unchecked_again()
+    {
+        // The cluster refuses an empty residency only while the tenant is resident
+        // somewhere, so a region checked for a tenant resident nowhere is an edit
+        // that can be undone at the checkbox (#4412).
+        var plan = new TenancyResidencyPlan();
+        plan.Reset([Region("eu-west", TenantRegionLifecycleStatus.None)]);
+
+        Assert.That(plan.Toggle("eu-west"), Is.Null);
+        Assert.That((plan.IsChanged, plan.Rows[0].Refusal), Is.EqualTo((true, (string?)null)), "the lone planned region is not locked");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Toggle("eu-west"), Is.Null);
+            Assert.That(plan.Planned, Is.Empty);
+            Assert.That(plan.IsChanged, Is.False, "the plan is back at the committed, empty residency");
+            Assert.That(plan.IsResidentNow, Is.False);
+        });
+    }
+
+    [Test]
+    [TestCase(TenantRegionLifecycleStatus.Offline)]
+    [TestCase(TenantRegionLifecycleStatus.Removed)]
+    public void A_tenant_whose_regions_have_all_left_may_plan_a_region_and_take_it_back(TenantRegionLifecycleStatus left)
+    {
+        var plan = new TenancyResidencyPlan();
+        plan.Reset([Region("eu-west", left), Region("us-east", TenantRegionLifecycleStatus.None)]);
+
+        plan.Toggle("us-east");
+        plan.Toggle("eu-west");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Toggle("us-east"), Is.Null);
+            Assert.That(plan.Toggle("eu-west"), Is.Null, "nothing is resident now, so the last planned region is not held");
+            Assert.That((plan.Planned.Count, plan.IsChanged), Is.EqualTo((0, false)));
+        });
+    }
+
+    [Test]
+    [TestCase(TenantRegionLifecycleStatus.Provisioning)]
+    [TestCase(TenantRegionLifecycleStatus.Backfilling)]
+    [TestCase(TenantRegionLifecycleStatus.Online)]
+    public void A_tenant_resident_in_a_region_keeps_its_last_planned_region(TenantRegionLifecycleStatus resident)
+    {
+        var plan = new TenancyResidencyPlan();
+        plan.Reset([Region("eu-west", resident), Region("us-east", TenantRegionLifecycleStatus.None)]);
+        plan.Toggle("us-east");
+        plan.Toggle("eu-west");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.IsResidentNow, Is.True);
+            Assert.That(plan.Toggle("us-east"), Is.EqualTo(TenancyResidencyPlan.LastRegionRefusal), "emptying a resident tenant is what the cluster refuses");
+            Assert.That(plan.Planned, Is.EqualTo(new[] { "us-east" }));
+            Assert.That(plan.Rows[1].Refusal, Is.EqualTo(TenancyResidencyPlan.LastRegionRefusal));
+        });
+    }
+
     private static TenantRegionStatusDescriptor Region(string id, TenantRegionLifecycleStatus status) =>
         new() { RegionId = id, Status = status, IsAllowed = true };
 }
