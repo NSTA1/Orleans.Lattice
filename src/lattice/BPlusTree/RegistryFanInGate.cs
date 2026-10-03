@@ -386,7 +386,6 @@ internal sealed class RegistryFanInGate(
 
         LatticeMetrics.RegistryAdmissionQueueDepth.Record(depthAtArrival, LatticeTenantLabel.Platform);
         Pump();
-
         return waiter.Task;
     }
 

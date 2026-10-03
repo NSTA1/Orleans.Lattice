@@ -97,12 +97,12 @@ public class RegistryFanInRegimeTests
     /// for the other.
     /// </param>
     /// <param name="DeferredAdmissionCount">
-    /// How many arrivals were still queued once their own triggering
-    /// <c>Pump()</c> call returned - admitted only by a later pump, driven by
-    /// another arrival or a dispatch completion, rather than immediately. This
-    /// is a count, not a duration: it is what <see cref="MaxWaitMs"/> cannot
-    /// safely be under CI scheduler load, because an event either happened or it
-    /// did not, with no wall clock to inflate under contention. See
+    /// How many <c>Pump()</c> calls found the budget already exhausted with at
+    /// least one arrival still queued - genuine admission deferral, rather than
+    /// a pump that returned merely because nothing had arrived yet. This is a
+    /// count, not a duration: it is what <see cref="MaxWaitMs"/> cannot safely
+    /// be under CI scheduler load, because an event either happened or it did
+    /// not, with no wall clock to inflate under contention. See
     /// <c>Below_the_bound_the_rig_cannot_see_the_bound_at_all</c> for why this
     /// replaced a sub-millisecond <see cref="MaxWaitMs"/> assertion.
     /// </param>
