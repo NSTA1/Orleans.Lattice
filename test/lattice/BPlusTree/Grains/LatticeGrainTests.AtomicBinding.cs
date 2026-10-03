@@ -79,8 +79,12 @@ public partial class LatticeGrainTests
     }
 
     [Test]
-    public async Task SetManyAsync_takes_the_saga_binding_off_the_request_context()
+    public async Task SetManyAsync_hands_the_saga_binding_to_the_shards_of_the_bound_copy_only()
     {
+        // The bound copy's shards are told the batch is addressed to them, so a
+        // copy an online resize has fenced still takes it and mirrors it (#4369).
+        // The binding is taken off the request context on entry and handed on only
+        // for the dispatch to the bound copy.
         var (grain, factory, registry) = CreateGrainWithRegistry(BindingAlias);
         registry.ResolveAsync(BindingAlias).Returns(Task.FromResult(BoundCopy));
         var shardRoot = SetupShardRoot(factory);
@@ -95,7 +99,27 @@ public partial class LatticeGrainTests
         await SetManyBoundAsync(grain, BoundCopy);
 
         Assert.That(seenByShard, Is.Not.Empty);
-        Assert.That(seenByShard, Is.All.Null, "the binding is for the routing tier only and must not travel to the shards");
+        Assert.That(seenByShard, Is.All.EqualTo(BoundCopy));
+    }
+
+    [Test]
+    public async Task SetManyAsync_outside_a_prepared_scope_does_not_hand_a_binding_to_the_shards()
+    {
+        var (grain, factory, registry) = CreateGrainWithRegistry(BindingAlias);
+        registry.ResolveAsync(BindingAlias).Returns(Task.FromResult(BoundCopy));
+        var shardRoot = SetupShardRoot(factory);
+        SetupCompactionGrain(factory, BindingAlias);
+        var seenByShard = new List<string?>();
+        shardRoot.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(_ =>
+        {
+            seenByShard.Add(LatticeAtomicBindingContext.Current);
+            return Task.CompletedTask;
+        });
+
+        await SetManyBoundAsync(grain, BoundCopy, prepared: false);
+
+        Assert.That(seenByShard, Is.Not.Empty);
+        Assert.That(seenByShard, Is.All.Null, "only an atomic-write saga's prepared dispatch is bound to a copy");
     }
 
     [Test]

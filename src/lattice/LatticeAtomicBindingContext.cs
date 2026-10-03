@@ -20,13 +20,20 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// The saga therefore stamps its bound physical tree around the dispatch with
-/// <see cref="With"/>. The routing tier <see cref="Take"/>s it on receipt, so it
-/// never travels to the shards, re-reads its routing from the registry when its
-/// cached pair addresses another copy, and refuses to place the batch anywhere
-/// but the bound copy: it raises <see cref="StaleTreeRoutingException"/> whose
+/// <see cref="With"/>. The routing tier <see cref="Take"/>s it on receipt,
+/// re-reads its routing from the registry when its cached pair addresses another
+/// copy, and refuses to place the batch anywhere but the bound copy: it raises
+/// <see cref="StaleTreeRoutingException"/> whose
 /// <see cref="StaleTreeRoutingException.StalePhysicalTreeId"/> is the bound copy,
-/// and the saga re-binds and re-dispatches. The value only ever narrows where a
-/// write may land, so it confers no capability.
+/// and the saga re-binds and re-dispatches.
+/// </para>
+/// <para>
+/// The routing tier hands the binding on to the shards of the bound copy, and
+/// only to them. A shard an online resize has fenced admits a prepared batch
+/// whose binding names its own copy, and mirrors it to the resize's destination,
+/// so a batch in flight across the fence is not left on some of the old copy's
+/// shards only for a resize undo to re-expose (issue #4369). That admission
+/// makes the binding a capability: external client calls have it stripped.
 /// </para>
 /// </remarks>
 internal static class LatticeAtomicBindingContext

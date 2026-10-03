@@ -2546,6 +2546,12 @@ internal sealed partial class LatticeGrain(
                 StageTagTenant);
         }
 
+        // The shards of the bound copy are told the batch is addressed to them
+        // by the saga bound to them: a copy an online resize has fenced still
+        // takes it, and mirrors it to the resize's destination, rather than
+        // leaving the batch on some of its shards only (issue #4369).
+        using var binding = boundPhysicalTreeId is null ? null : LatticeAtomicBindingContext.With(boundPhysicalTreeId);
+
         // Group entries by shard. Pre-size each bucket to the expected
         // shard-fair fraction of the batch, capped at 256 to bound
         // over-allocation for tiny shards / huge batches (see PR #210 for

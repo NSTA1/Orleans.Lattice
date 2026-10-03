@@ -95,9 +95,11 @@ internal sealed partial class ShardRootGrain
         CancellationToken cancellationToken = default,
         bool inlineWalAppend = true)
     {
-        // Pre-flight: refuse if this shard is rejecting (mid Rejecting phase of
-        // a tree-rewrite) so the caller can catch StaleTreeRoutingException and
-        // retry against the destination tree's shard. PrepareForOperationAsync
+        // Pre-flight: refuse a routed terminal if this shard is rejecting (mid
+        // Rejecting phase of a tree-rewrite) so the caller can catch
+        // StaleTreeRoutingException and retry against the destination tree's
+        // shard; a saga terminal addressed to this copy directly is taken and
+        // mirrored (see PrepareForTerminalAsync). PrepareForOperationAsync
         // additionally runs EnsureRootAsync, which is load-bearing for the
         // cross-migration backstop path: when the retroactive prepared-mutation
         // sweep migrates a saga's prepared mutations to a freshly-activated
@@ -118,7 +120,7 @@ internal sealed partial class ShardRootGrain
         if (state.State.IsRetired)
             return null;
 
-        await PrepareForOperationAsync();
+        await PrepareForTerminalAsync();
 
         if (transactionId == Guid.Empty)
             return null;

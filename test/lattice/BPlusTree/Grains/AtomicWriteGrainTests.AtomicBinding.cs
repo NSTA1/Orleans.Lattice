@@ -133,6 +133,55 @@ public partial class AtomicWriteGrainTests
         });
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ExecuteAsync_stays_bound_across_a_move_only_when_its_bound_copy_mirrors_into_the_new_copy(bool mirrors)
+    {
+        // The tree moves after the dispatch but before the decision. A resize
+        // source mirrors everything into its destination: staying bound commits
+        // the batch whole on both copies, where re-binding would orphan its
+        // prepares on the old copy for a resize undo to expose (#4369). Any other
+        // copy still forces the re-bind of #4336.
+        IGrainFactory factory = null!;
+        var (grain, state, _, lattice, shard) = CreateGrain(configureFactory: f => factory = f);
+        var current = RoutingTo(TreeId);
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(current));
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(current));
+        shard.GetMirrorDestinationAsync().Returns(Task.FromResult<string?>(mirrors ? MovedCopy : null));
+
+        var bindings = new List<string?>();
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(_ =>
+        {
+            bindings.Add(LatticeAtomicBindingContext.Current);
+            current = RoutingTo(MovedCopy);
+            return Task.CompletedTask;
+        });
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2])));
+
+        var terminalsOnBound = shard.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(IShardRootGrain.AppendTxTerminalAsync));
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+            if (mirrors)
+            {
+                Assert.That(bindings, Is.EqualTo(new[] { TreeId }), "no re-dispatch onto the destination");
+                Assert.That(state.State.BoundPhysicalTreeId, Is.EqualTo(TreeId));
+                Assert.That(terminalsOnBound, Is.GreaterThan(0));
+                Assert.That(ShardAddressesOn(factory, MovedCopy), Is.Zero,
+                    "the terminals go to the bound copy, which mirrors them");
+            }
+            else
+            {
+                Assert.That(bindings, Is.EqualTo(new[] { TreeId, MovedCopy }));
+                Assert.That(state.State.BoundPhysicalTreeId, Is.EqualTo(MovedCopy));
+            }
+        });
+    }
+
     [Test]
     public async Task ExecuteAsync_treats_a_refusal_as_an_ordinary_failure_when_the_tree_still_resolves_to_its_bound_copy()
     {

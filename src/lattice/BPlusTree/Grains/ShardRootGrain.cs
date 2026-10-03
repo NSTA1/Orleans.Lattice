@@ -2984,9 +2984,42 @@ internal sealed partial class ShardRootGrain(
     /// </summary>
     private Task<bool> PrepareForOperationAsync() => PrepareForOperationAsync(forWrite: false, purgedAnswersEmpty: false);
 
+    /// <summary>
+    /// <see cref="PrepareForOperationAsync()"/> for a saga terminal. A terminal the
+    /// saga addresses to this physical copy directly - not routed through the
+    /// logical alias - is admitted while an online resize fences the copy, and
+    /// once it has soft-deleted it, so the copy holding the saga's prepares takes
+    /// the decision on every shard and mirrors it to the resize's destination
+    /// (issue #4369). A routed terminal is refused as before so the caller
+    /// follows the alias.
+    /// </summary>
+    private Task<bool> PrepareForTerminalAsync() =>
+        PrepareForOperationAsync(
+            forWrite: false,
+            purgedAnswersEmpty: false,
+            admitBoundSaga: RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) is null);
+
+    /// <summary>
+    /// Whether this shard admits the current call although an online resize
+    /// has fenced its copy (<see cref="ShadowForwardPhase.Rejecting"/>), and
+    /// possibly soft-deleted it once the copy was retired: a saga bound to this
+    /// copy addressing it - its prepared batch carries the binding
+    /// (<see cref="LatticeAtomicBindingContext"/>), its terminals are passed in as
+    /// <paramref name="admitBoundSaga"/> - is still served and mirrored to the
+    /// destination, so a batch in flight across the fence or the retirement lands
+    /// whole on both copies instead of on some of this copy's shards only, which
+    /// a resize undo would re-expose torn (issue #4369). A purge clears the
+    /// mirror, and with it this admission.
+    /// </summary>
+    private bool AdmitsBoundSagaWhileFenced(bool admitBoundSaga) =>
+        state.State.ShadowForward is { Phase: ShadowForwardPhase.Rejecting }
+        && (admitBoundSaga
+            || (LatticePreparedContext.Current
+                && string.Equals(LatticeAtomicBindingContext.Current, TreeId, StringComparison.Ordinal)));
+
     private static readonly Task<bool> ShardReady = Task.FromResult(true);
 
-    private Task<bool> PrepareForOperationAsync(bool forWrite, bool purgedAnswersEmpty)
+    private Task<bool> PrepareForOperationAsync(bool forWrite, bool purgedAnswersEmpty, bool admitBoundSaga = false)
     {
         // Order matters: a shard that participated as the *source* of an
         // online resize transitions Reject -> Cleanup, which sets BOTH
@@ -2999,10 +3032,20 @@ internal sealed partial class ShardRootGrain(
         // InvalidOperationException. A user-initiated DeleteTreeAsync never
         // touches ShadowForward state, so for that case ThrowIfTreeRejecting
         // is a no-op and ThrowIfDeleted still fires correctly.
-        ThrowIfTreeRejecting();
-        ThrowIfRetainedRedirect();
-        ThrowIfDeleted();
-        ThrowIfRetired();
+        if (state.State.ShadowForward is not null && AdmitsBoundSagaWhileFenced(admitBoundSaga))
+        {
+            // The retired copy's soft delete does not refuse its bound saga
+            // either; see AdmitsBoundSagaWhileFenced.
+            ThrowIfRetainedRedirect();
+            ThrowIfRetired();
+        }
+        else
+        {
+            ThrowIfTreeRejecting();
+            ThrowIfRetainedRedirect();
+            ThrowIfDeleted();
+            ThrowIfRetired();
+        }
 
         // Steady-state sync fast path: on the read hot path each `await`
         // below resolves synchronously - `EnsureRootAsync` short-circuits

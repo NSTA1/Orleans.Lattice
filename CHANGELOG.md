@@ -88,6 +88,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - A resize undo no longer brings back a half-applied atomic batch.** A batch in flight when an online resize moved the alias could be left on only some shards of the old copy, which an undo then served torn. The old copy now still takes and mirrors a batch bound to it, so the batch lands whole on both copies. ([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)) (`Orleans.Lattice`)
+
 - **Core - Atomic batches stay whole when an alias swap catches one in flight.** During a resize undo, or any other alias swap, a batch's prepared writes could reach the copy being discarded while it committed on the copy kept. Readers then saw it torn and a committed batch could be lost. Its writes now land only on the copy it commits on, and follow that copy if it moves. ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)) (`Orleans.Lattice`)
 
 - **Core - Reshard under atomic writes no longer duplicates keys.** A grow or shrink raced by `SetManyAtomicAsync` could leave a key on two leaves of one shard, so `CountAsync` over-counted and `ScanKeysAsync` skipped keys while point reads were correct. A saga's commit now sends a key a leaf split moved away to the leaf that holds it. ([#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)) (`Orleans.Lattice`)

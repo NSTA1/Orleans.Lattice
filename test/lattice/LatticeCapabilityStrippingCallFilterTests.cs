@@ -37,6 +37,7 @@ public sealed class LatticeCapabilityStrippingCallFilterTests
         LatticeEventConstants.CommitLogSourceRequestContextKey,
         LatticeEventConstants.ApplyOffsetRequestContextKey,
         LatticeEventConstants.ApplyOffsetPartitionRequestContextKey,
+        LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
     ];
 
     [TearDown]
