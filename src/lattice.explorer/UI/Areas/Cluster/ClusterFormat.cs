@@ -19,7 +19,7 @@ internal static class ClusterFormat
 
     /// <summary>A size in binary units: <c>4.2 GiB</c>.</summary>
     /// <param name="bytes">The size in bytes.</param>
-    /// <returns>The text.</returns>
+    /// <returns>The size in the largest unit whose figure, as written, is below 1024.</returns>
     public static string Bytes(long bytes)
     {
         if (bytes < 1024)
@@ -29,7 +29,10 @@ internal static class ClusterFormat
 
         double value = bytes;
         var unit = 0;
-        while (value >= 1024 && unit < Units.Length - 1)
+
+        // The unit is chosen on the figure as written, so a size that rounds up to
+        // 1024 moves to the next unit rather than reading "1024.0 KiB" (#4355).
+        while (Math.Round(value, 1, MidpointRounding.AwayFromZero) >= 1024 && unit < Units.Length - 1)
         {
             value /= 1024;
             unit++;

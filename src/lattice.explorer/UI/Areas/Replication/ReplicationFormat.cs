@@ -33,7 +33,10 @@ internal static class ReplicationFormat
 
         double value = bytes;
         var unit = 0;
-        while (value >= 1024 && unit < ByteUnits.Length - 1)
+
+        // The unit is chosen on the figure as written, so a size that rounds up to
+        // 1024 moves to the next unit rather than reading "1024 KB" (#4355).
+        while (Math.Round(value, value >= 100 ? 0 : 1, MidpointRounding.AwayFromZero) >= 1024 && unit < ByteUnits.Length - 1)
         {
             value /= 1024;
             unit++;

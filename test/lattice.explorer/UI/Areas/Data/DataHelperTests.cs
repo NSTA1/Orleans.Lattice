@@ -123,6 +123,51 @@ public sealed class DataHelperTests
         });
     }
 
+    [TestCase(100, 160, true)]
+    [TestCase(81, 160, true)]
+    [TestCase(80, 160, false)]
+    [TestCase(10, 160, false)]
+    [TestCase(30, 40, true)]
+    public void An_inline_hex_preview_marks_the_bytes_it_leaves_out(int length, int maximum, bool leavesSomeOut)
+    {
+        // #4354: two hex digits per byte filled the cell exactly, so a longer binary
+        // value read as if the visible bytes were all of it.
+        var bytes = Enumerable.Range(0, length).Select(i => (byte)(i % 2 == 0 ? 0x00 : 0xff)).ToArray();
+
+        var inline = DataValueRendering.Inline(bytes, truncated: false, maximum);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inline, Has.Length.AtMost(maximum));
+            Assert.That(inline.EndsWith("...", StringComparison.Ordinal), Is.EqualTo(leavesSomeOut));
+            Assert.That(inline, Does.StartWith(leavesSomeOut ? "00ff" : Convert.ToHexString(bytes).ToLowerInvariant()));
+        });
+    }
+
+    [Test]
+    public void An_inline_preview_of_a_truncated_value_says_the_value_continues()
+    {
+        var binary = Enumerable.Range(0, 20).Select(i => (byte)(i % 2 == 0 ? 0x00 : 0xff)).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DataValueRendering.Inline(Encoding.UTF8.GetBytes("short text"), truncated: true), Is.EqualTo("short text..."));
+            Assert.That(DataValueRendering.Inline(binary, truncated: true), Is.EqualTo(Convert.ToHexString(binary).ToLowerInvariant() + "..."));
+            Assert.That(DataValueRendering.Inline(Encoding.UTF8.GetBytes(new string('x', 300)), truncated: true), Has.Length.EqualTo(160).And.EndsWith("..."));
+            Assert.That(DataValueRendering.Inline(Encoding.UTF8.GetBytes("short text"), truncated: false), Is.EqualTo("short text"));
+        });
+    }
+
+    [TestCase(1023L, "1,023 B")]
+    [TestCase(1024L, "1 KiB")]
+    [TestCase(1_048_524L, "1023.9 KiB")]
+    [TestCase(1_048_525L, "1 MiB")]
+    [TestCase(1_048_575L, "1 MiB")]
+    [TestCase(1_048_576L, "1 MiB")]
+    public void A_size_just_under_a_unit_boundary_reads_in_the_next_unit(long bytes, string expected) =>
+        // #4355: 1,048,575 bytes read "1024 KiB".
+        Assert.That(DataValueRendering.Size(bytes), Is.EqualTo(expected));
+
     [Test]
     public void Json_renderers_show_text_as_written_rather_than_escaped()
     {

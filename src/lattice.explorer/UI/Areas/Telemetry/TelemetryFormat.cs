@@ -73,7 +73,10 @@ internal static class TelemetryFormat
     {
         var scaled = value;
         var index = 0;
-        while (Math.Abs(scaled) >= 1024 && index < ByteUnits.Length - 1)
+
+        // The unit is chosen on the figure as written, so a reading that rounds up
+        // to 1024 moves to the next unit rather than reading "1024 KiB" (#4355).
+        while (Math.Abs(Math.Round(scaled, index == 0 ? 0 : 1, MidpointRounding.AwayFromZero)) >= 1024 && index < ByteUnits.Length - 1)
         {
             scaled /= 1024;
             index++;

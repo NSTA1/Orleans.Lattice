@@ -69,6 +69,14 @@ public sealed class BackupsHelperTests
         });
     }
 
+    [TestCase(1_048_575L, "1 MiB")]
+    [TestCase(1_048_524L, "1023.9 KiB")]
+    [TestCase(-1_048_575L, "-1 MiB")]
+    [TestCase(1023L, "1,023 B")]
+    public void A_size_just_under_a_unit_boundary_reads_in_the_next_unit(long bytes, string expected) =>
+        // #4355: 1,048,575 bytes read "1024 KiB".
+        Assert.That(BackupsFormat.Bytes(bytes), Is.EqualTo(expected));
+
     [Test]
     public void Text_forms_are_culture_invariant()
     {

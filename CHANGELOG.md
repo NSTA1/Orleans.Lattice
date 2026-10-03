@@ -221,6 +221,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - App consent review agrees with the cluster on prefixes.** An approved key prefix now covers a key or narrower prefix under it, as activation does, so the review no longer reports a gap that would not fail, flags drift, or asks to re-consent for a scope already approved. ([#4326](https://github.com/NSTA1/Orleans.Lattice/issues/4326)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Explorer - Value previews say when the value goes on.** A text value whose preview ends part-way through a character shows as text rather than a hex dump, and a key's one-line preview ends in `...` whenever the value continues, including a binary value's hex. ([#4353](https://github.com/NSTA1/Orleans.Lattice/issues/4353), [#4354](https://github.com/NSTA1/Orleans.Lattice/issues/4354)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Sizes never read 1024 of a unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry and Data areas. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355)) (`Orleans.Lattice.Explorer.UI`)
+
 ### Security
 
 - **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
