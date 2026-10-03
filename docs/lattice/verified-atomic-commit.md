@@ -17,6 +17,27 @@ specification that pins the protocol design above the code. It is an assurance
 document; the runtime behaviour it protects is documented in
 [Atomic Writes](atomic-writes.md) and [Online Reshard](online-reshard.md).
 
+## Scope: one cluster
+
+Everything this document verifies is the **single-cluster** protocol: one
+coordinator, one tree's registry, and that cluster's own leaves. The
+cross-cluster half - a saga's prepared writes and terminals replicated to a peer,
+the receiver's per-source-shard terminal tally that holds the peer's view back
+until every shard's terminal has arrived, and the cross-tree receiver barrier -
+has **no formal artefact at either layer**. The TLA+ specification does not
+model it (see the cross-tree and cross-cluster entry under the refinement note's
+[abstraction gaps](../../spec/Refinement.md#deliberate-abstraction-gaps)), and
+no Coyote model drives it.
+
+Do not read coverage of the first as coverage of the second. A reader who finds
+the single-cluster half model-checked can reasonably assume the replicated half
+inherits that, and it does not: the receiver path has different inputs (a
+dial-back to the origin's decision, a tally, a cross-cluster transport that can
+drop or reorder) and its own failure modes. What does cover it is ordinary
+testing - the receiver gate's integration tests and the cross-cluster chaos
+suites in `test/lattice.replication/` - which is evidence of a different and
+weaker kind than an exhaustive check (issue #2324).
+
 ## The proven-core pattern
 
 A verified core is a single pure function (or small pure type) that captures one
@@ -87,8 +108,12 @@ thread interleavings for it to enumerate. What it does enumerate is every
 resolution of the model's own choices, which is why the models encode the
 protocol's concurrency as data in the first place: expressed that way it is
 fully enumerable without threads. Raising the degree above zero, so that Coyote
-also explores genuine operation interleavings, is tracked as
-[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319). The shared
+also explores genuine operation interleavings, was considered under
+[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319) and deliberately
+not done: it needs a `coyote rewrite` pass over the product assembly, and every
+race these models target is already a choice point they explore. The honest fix
+was to stop claiming the exploration, which the harness's member names and
+remarks now do. The shared
 harness is `CoyoteModelHarness`
 (`test/shared/Orleans.Lattice.Testing/Coyote/`), whose
 `AssertNoViolationInAnyExploredRun` / `AssertViolationFoundInSomeExploredRun` entry points

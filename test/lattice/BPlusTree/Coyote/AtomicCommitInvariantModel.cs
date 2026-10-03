@@ -602,6 +602,10 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
         var outcome = AtomicVisibilityGate.ResolveKey(
             status,
             alreadyTerminal: false,
+            // Pinned false on purpose (issue #2319): the invariants here compare a
+            // key's visibility with the recorded decision, on which a hidden
+            // prepared tombstone and a surfaced prepared value agree. The Hidden arm
+            // is exercised live in AtomicCommitVisibilityModel.
             preparedHiddenByTombstoneOrExpiry: false);
 
         return outcome == PendingReadOutcome.SurfacePrepared;

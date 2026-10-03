@@ -13,9 +13,10 @@ namespace Orleans.Lattice.BPlusTree;
 /// guard. It is the exact rule the production registry grain
 /// (<c>TxRegistryGrain.MarkCommittedAsync</c> / <c>MarkAbortedAsync</c> and the
 /// mixed-outcome guard in <c>RecordTerminalArrivalAsync</c>) executes before it
-/// mutates the decision map, so the "never both commit and abort" invariant is a
-/// property of the code that runs rather than three hand-copied inline branches
-/// that could drift apart. Companion to <see cref="TxRegistryDecisionCore"/>,
+/// mutates the decision map, so the "never both commit and abort" invariant -
+/// scoped to the decision-retention window, as <see cref="TerminalDecisionGuard"/>
+/// sets out - is a property of the code that runs rather than three hand-copied
+/// inline branches that could drift apart. Companion to <see cref="TxRegistryDecisionCore"/>,
 /// which applies the resulting <see cref="TerminalRecordAction.Record"/>.
 /// </remarks>
 internal enum TerminalRecordAction : byte
@@ -60,6 +61,33 @@ internal enum TerminalRecordAction : byte
 /// therefore the ordering invariant (write-once, never both terminals), which is
 /// exhaustively covered by unit tests over every terminal-delivery ordering.
 /// </para>
+/// <para>
+/// <b>What being verified does and does not establish.</b> Model-checking this
+/// function establishes a property <i>of the function</i>: over its inputs, it
+/// never returns <see cref="TerminalRecordAction.Record"/> for an opposite
+/// terminal that is already recorded. Promoting that to the system invariant
+/// "a saga is never both committed and aborted" needs a second obligation the
+/// function cannot discharge: every call site must supply inputs whose
+/// <i>meaning</i> matches this contract. <paramref name="hasExisting"/> here
+/// means "a terminal has been recorded for this saga", and a caller that
+/// computes it as "the decision map holds a row right now" passes a value that
+/// is locally true and contractually false once the row has been retired. That
+/// obligation grows with every caller and is visible nowhere in this file, so
+/// each call site states the scope it actually enforces (issue #2331):
+/// <list type="bullet">
+///   <item><description><c>TxRegistryGrain.MarkCommittedAsync</c> /
+///     <c>MarkAbortedAsync</c> enforce write-once only while the decision is
+///     live. A <see cref="TerminalRecordAction.Conflict"/> against a tombstoned
+///     row is deliberately overridden and re-recorded, and once a tombstone
+///     has been purged there is no row to classify against at all.</description></item>
+///   <item><description><c>TxRegistryGrain.RecordTerminalArrivalAsync</c>
+///     rejects a conflict against any row still stored, tombstoned or not, and
+///     cannot see past a purged one.</description></item>
+/// </list>
+/// So the invariant holds within the decision-retention window and is not
+/// claimed across a forget. Cite this guard for that scoped invariant, never
+/// for the unscoped one.
+/// </para>
 /// </summary>
 internal static class TerminalDecisionGuard
 {
@@ -68,7 +96,10 @@ internal static class TerminalDecisionGuard
     /// </summary>
     /// <param name="hasExisting">
     /// <see langword="true"/> when the registry already holds a recorded outcome
-    /// for the saga (a hit in its decision map).
+    /// for the saga (a hit in its decision map). A caller passes
+    /// <see langword="false"/> to assert that no terminal has been recorded; a
+    /// row that existed and has been retired makes that assertion false, and the
+    /// guard has no way to tell. See the type's remarks.
     /// </param>
     /// <param name="existing">
     /// The saga's currently-recorded outcome. Meaningful only when

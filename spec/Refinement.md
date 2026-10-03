@@ -293,8 +293,17 @@ the reshard chaos suite cover them at the implementation level:
   `ResolveAllDelegatedAsync` leaves a delegation it could not resolve out of
   the snapshot, and `TxDecisionView` resolves an absent txid to `InFlight`, so
   a reader resolving through a snapshot is told the saga has not decided while
-  its coordinator is unreachable, whatever the coordinator decided. That answer
+  its coordinator is unreachable, whatever the coordinator decided (issue #4448). That answer
   is outside this model, and no conclusion about it may be drawn here.
+  **Cross-cluster atomic visibility has no formal artefact at either layer.**
+  Neither this specification nor any Coyote model covers a saga replicated to a
+  peer: the receiver's per-source-shard terminal tally
+  (`ITxRegistryGrain.RecordTerminalArrivalAsync`, driven from
+  `IReplicationApplyGrain.ApplyTxTerminalAsync`), its dial-back to the origin's
+  decision, or the cross-tree receiver barrier. Every property row above is a
+  claim about one cluster, and none of them should be read as covering the
+  replicated half (issue #2324). That half is covered by integration and chaos
+  tests in `test/lattice.replication/`, not by an exhaustive check.
 - **Crash / recovery.** Not modelled. `DecideTx` fires at most once per saga
   and `BroadcastStep` at most once per written key, because each leaves the
   phase or terminal its own guard requires, so the model has no re-entry at

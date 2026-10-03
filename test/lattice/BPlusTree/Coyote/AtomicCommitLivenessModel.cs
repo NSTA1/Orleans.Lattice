@@ -411,6 +411,10 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
         var outcome = AtomicVisibilityGate.ResolveKey(
             core.Resolve(txid),
             alreadyTerminal: false,
+            // Pinned false on purpose (issue #2319): this model asserts progress, and a
+            // prepared tombstone hidden under a commit is the post-saga value, so it
+            // resolves the same way for every assertion here. The Hidden arm is
+            // exercised live in AtomicCommitVisibilityModel.
             preparedHiddenByTombstoneOrExpiry: false);
 
         return outcome == PendingReadOutcome.SurfacePrepared ? Post : Pre;
