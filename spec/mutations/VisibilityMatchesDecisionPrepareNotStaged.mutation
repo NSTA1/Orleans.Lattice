@@ -1,0 +1,18 @@
+# Pairs with VisibilityMatchesDecision. The prepare fan-out collects its votes
+# but stages no pending bucket, as a prepare acknowledged without being durably
+# written would. Once the registry records commit there is nothing for the gate
+# to surface, so a key of a committed saga reads at its pre-saga value until its
+# terminal lands - the gate serving "did not commit" for a saga that did.
+MODULE: VisibilityMatchesDecisionPrepareNotStaged
+TARGET: VisibilityMatchesDecision
+CLASS: Invariant
+SUMMARY: acknowledges a prepare without staging its pending bucket, so a committed key reads pre-saga
+PERTURBS: PrepareTx
+
+--- FIND
+    /\ pend' = [pend EXCEPT ![t] =
+                  [k \in Keys |-> IF k \in Written(t) THEN "pending" ELSE pend[t][k]]]
+--- REPLACE
+\* MUTATION: the participants ack, but no pending bucket is installed.
+    /\ pend' = pend
+--- END

@@ -77,8 +77,20 @@ public static class CoyoteModelHarness
     /// interleavings to enumerate. That is by design rather than an oversight -
     /// the models encode the protocol's step orderings as data precisely so
     /// they are fully enumerable without threads - but it is a real limit, so
-    /// it is named here instead of implied. Raising the degree above zero is
-    /// tracked separately as issue #2319.
+    /// it is named here instead of implied.
+    /// <para>
+    /// Raising the degree above zero was considered and deliberately not done
+    /// (issue #2319, which offered it as the alternative to renaming the members
+    /// that promised it). A second controlled operation buys real thread
+    /// interleavings only with <c>coyote rewrite</c> over the product assembly,
+    /// and every race these models target is already a choice point in their
+    /// data-encoded orderings, which the engine explores across its iterations.
+    /// What #2319 required was that no member name or
+    /// document claim schedule exploration the harness does not perform; the
+    /// members were renamed by #2325, and this remark is the claim stated
+    /// accurately. A model that needs genuine thread interleaving is a new
+    /// harness, not a degree setting on this one.
+    /// </para>
     /// </remarks>
     public static CoyoteExplorationResult Explore(
         ICoyoteModel model,

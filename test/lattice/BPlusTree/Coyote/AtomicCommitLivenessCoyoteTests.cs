@@ -94,4 +94,38 @@ public sealed class AtomicCommitLivenessCoyoteTests
                 AtomicCommitLivenessScenario.Abort,
                 AtomicCommitLivenessMode.NoBackstop));
     }
+
+    /// <summary>
+    /// The guard for progress property 1 specifically - "every participant
+    /// eventually reaches its terminal", the encoding of the TLA+ property
+    /// <c>NoStrandedPrepare</c>. The two guards above accept ANY violation, and
+    /// properties 2 and 3 catch the same stall, so they stay green with property
+    /// 1's assertion disabled outright (measured: weakening it to
+    /// <c>true || terminalApplied[leaf]</c> left every test in this fixture
+    /// passing). This one requires the violation Coyote reports to be property
+    /// 1's, for both outcomes, so it is the guard that goes red when that
+    /// encoding is removed.
+    /// </summary>
+    [Test]
+    public void Without_backstop_the_stranded_participant_is_reported_by_progress_property_1(
+        [Values] AtomicCommitLivenessScenario scenario,
+        [Values(2, 3)] int leafCount)
+    {
+        var result = CoyoteModelHarness.Explore(
+            new AtomicCommitLivenessModel(leafCount, scenario, AtomicCommitLivenessMode.NoBackstop));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                result.BugsFound,
+                Is.GreaterThan(0),
+                "Coyote found no stall with the backstop removed, so this guard would pass vacuously.");
+            Assert.That(
+                result.BugReports,
+                Has.Some.Contains(AtomicCommitLivenessModel.NeverReachedTerminalMessage),
+                "Coyote found a stall, but no bug report is progress property 1's. The stranded participant "
+                + "is no longer detected by the assertion that encodes NoStrandedPrepare. Reports: "
+                + string.Join(" | ", result.BugReports));
+        });
+    }
 }

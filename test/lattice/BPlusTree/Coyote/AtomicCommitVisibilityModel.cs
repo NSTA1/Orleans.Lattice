@@ -88,16 +88,46 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
 {
     private readonly int _keyCount;
     private readonly AtomicCommitReaderMode _mode;
+    private readonly bool _exercisePreparedHidden;
+    private readonly bool _hiddenPreparedFallsThrough;
 
     /// <summary>
     /// Creates the model for a <paramref name="keyCount"/>-key fan-out under the
     /// chosen reader <paramref name="mode"/>.
     /// </summary>
-    public AtomicCommitVisibilityModel(int keyCount, AtomicCommitReaderMode mode)
+    /// <param name="keyCount">How many keys the saga writes and the reader fans out to.</param>
+    /// <param name="mode">The reader design under test.</param>
+    /// <param name="exercisePreparedHidden">
+    /// When <see langword="true"/>, each key's prepared value is
+    /// nondeterministically a tombstone or already expired, so the gate's
+    /// <c>preparedHiddenByTombstoneOrExpiry</c> input is driven live rather than
+    /// pinned (issue #2319). A committed saga's hidden prepared value reads as
+    /// absent, which IS its post-saga value: the saga deleted the key.
+    /// </param>
+    /// <param name="hiddenPreparedFallsThrough">
+    /// The companion guard: a reader that treats the gate's Hidden answer for a
+    /// committed saga's own tombstone as "fall through to the pre-saga value",
+    /// as a gate that dropped its Hidden arm would. Requires
+    /// <paramref name="exercisePreparedHidden"/>; Coyote must find a torn read.
+    /// </param>
+    public AtomicCommitVisibilityModel(
+        int keyCount,
+        AtomicCommitReaderMode mode,
+        bool exercisePreparedHidden = false,
+        bool hiddenPreparedFallsThrough = false)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(keyCount, 2);
+        if (hiddenPreparedFallsThrough && !exercisePreparedHidden)
+        {
+            throw new ArgumentException(
+                "the fall-through guard is vacuous unless prepared values can be hidden.",
+                nameof(hiddenPreparedFallsThrough));
+        }
+
         _keyCount = keyCount;
         _mode = mode;
+        _exercisePreparedHidden = exercisePreparedHidden;
+        _hiddenPreparedFallsThrough = hiddenPreparedFallsThrough;
     }
 
     /// <inheritdoc />
@@ -112,6 +142,15 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
         // its runtime cache regardless of any reader snapshot; it can only drain
         // after the saga has committed.
         var drained = new bool[_keyCount];
+
+        // Per-key shape of the prepared value: a tombstone or an already-expired
+        // write, which the gate hides rather than surfaces. Chosen per run so a
+        // single fan-out can mix hidden and surfaced prepared values.
+        var preparedHidden = new bool[_keyCount];
+        for (var i = 0; i < _keyCount; i++)
+        {
+            preparedHidden[i] = _exercisePreparedHidden && runtime.RandomBoolean();
+        }
 
         void MaybeCommit()
         {
@@ -131,18 +170,18 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
 
         if (_mode == AtomicCommitReaderMode.LivePerKeyRead)
         {
-            RunLivePerKeyRead(txid, core, MaybeCommit);
+            RunLivePerKeyRead(txid, core, preparedHidden, MaybeCommit);
             return;
         }
 
         if (_mode is AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailures
             or AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailuresFailOpen)
         {
-            RunUnderRegistryFailures(runtime, txid, core, drained, MaybeCommit, MaybeDrain);
+            RunUnderRegistryFailures(runtime, txid, core, drained, preparedHidden, MaybeCommit, MaybeDrain);
             return;
         }
 
-        RunSharedSnapshot(txid, core, drained, MaybeCommit, MaybeDrain);
+        RunSharedSnapshot(txid, core, drained, preparedHidden, MaybeCommit, MaybeDrain);
     }
 
     /// <summary>
@@ -165,6 +204,7 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
         Guid txid,
         TxRegistryDecisionCore core,
         bool[] drained,
+        bool[] preparedHidden,
         Action maybeCommit,
         Action<int> maybeDrain)
     {
@@ -204,7 +244,7 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
                     var view = snap1 is { } s
                         ? new TxDecisionView(s.Decisions)
                         : new TxDecisionView(core.Snapshot().Decisions);
-                    observedPost[i] = ObserveKey(i, view, txid, drained);
+                    observedPost[i] = ObserveKey(i, view, txid, drained, preparedHidden);
                 }
 
                 if (reachedUnresolvablePrepare)
@@ -293,6 +333,7 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
         Guid txid,
         TxRegistryDecisionCore core,
         bool[] drained,
+        bool[] preparedHidden,
         Action maybeCommit,
         Action<int> maybeDrain)
     {
@@ -313,7 +354,7 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
             {
                 maybeCommit();
                 maybeDrain(i);
-                observedPost[i] = ObserveKey(i, view, txid, drained);
+                observedPost[i] = ObserveKey(i, view, txid, drained, preparedHidden);
             }
 
             if (withProbe && !ReaderStabilityGate.IsRevisionStable(snapshot.Revision, core.Revision))
@@ -333,7 +374,7 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
     /// The live-per-key reader (the original #1584 regression): each key reads the
     /// registry decision live, so a commit falling between two reads tears the view.
     /// </summary>
-    private void RunLivePerKeyRead(Guid txid, TxRegistryDecisionCore core, Action maybeCommit)
+    private void RunLivePerKeyRead(Guid txid, TxRegistryDecisionCore core, bool[] preparedHidden, Action maybeCommit)
     {
         // The commit may already have landed before the reader begins.
         maybeCommit();
@@ -344,9 +385,7 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
             // Live read: no shared snapshot, so a value observed here can be
             // superseded before the next key is read.
             var liveStatus = core.Resolve(txid);
-            observedPost[i] = AtomicVisibilityGate.ResolveKey(
-                liveStatus, alreadyTerminal: false, preparedHiddenByTombstoneOrExpiry: false)
-                == PendingReadOutcome.SurfacePrepared;
+            observedPost[i] = IsPostSaga(liveStatus, preparedHidden[i]);
             maybeCommit();
         }
 
@@ -359,17 +398,45 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
     /// regardless of the reader's snapshot; an undrained leaf consults the
     /// captured registry <paramref name="view"/> through the production gate.
     /// </summary>
-    private static bool ObserveKey(int leaf, TxDecisionView view, Guid txid, bool[] drained)
+    private bool ObserveKey(int leaf, TxDecisionView view, Guid txid, bool[] drained, bool[] preparedHidden)
     {
         if (drained[leaf])
         {
             return true;
         }
 
-        var status = view.Resolve(txid);
-        return AtomicVisibilityGate.ResolveKey(
-            status, alreadyTerminal: false, preparedHiddenByTombstoneOrExpiry: false)
-            == PendingReadOutcome.SurfacePrepared;
+        return IsPostSaga(view.Resolve(txid), preparedHidden[leaf]);
+    }
+
+    /// <summary>
+    /// Runs the production gate with its <c>preparedHiddenByTombstoneOrExpiry</c>
+    /// input live, and maps its answer to "the reader saw the post-saga value".
+    /// <para>
+    /// <see cref="PendingReadOutcome.Hidden"/> for a committed saga whose own
+    /// prepared value is a tombstone or has expired means the key reads as
+    /// absent, and absent IS that saga's post-saga value. It is the only way the
+    /// gate answers Hidden in this model: no status here is
+    /// <see cref="TxStatus.Indeterminate"/>, the other route to Hidden, which
+    /// asserts nothing about the saga and would need a third observation.
+    /// </para>
+    /// </summary>
+    private bool IsPostSaga(TxStatus status, bool preparedHidden)
+    {
+        var outcome = AtomicVisibilityGate.ResolveKey(
+            status, alreadyTerminal: false, preparedHiddenByTombstoneOrExpiry: preparedHidden);
+
+        if (outcome == PendingReadOutcome.Hidden && _hiddenPreparedFallsThrough)
+        {
+            // Guard: the saga's own delete is served as the pre-saga value.
+            return false;
+        }
+
+        return outcome switch
+        {
+            PendingReadOutcome.SurfacePrepared => true,
+            PendingReadOutcome.Hidden => preparedHidden && status == TxStatus.Committed,
+            _ => false,
+        };
     }
 
     private static void AssertAllOrNothing(bool[] observedPost)

@@ -1,0 +1,32 @@
+# Pairs with Termination, and is the protocol-level counterpart of
+# TerminationNoFairness. The broadcast tests for completion over every key in
+# the keyspace instead of over the saga's own participants, so a saga whose
+# participants have all applied their terminal is never declared done. The
+# fairness Spec asserts is intact: nothing is left enabled for it to force.
+# NoStrandedPrepare and EveryCommittedKeyReadable stay green, because every
+# participant IS told and every committed key does materialise.
+#
+# This is the evidence that Termination fails on a protocol defect under the
+# asserted fairness, not only when fairness is dropped. An earlier revision
+# claimed only NoStrandedPrepare could do that; that described the mutation
+# then paired with Termination, not the property.
+#
+# DEADLOCK: off is required. The stuck saga leaves no action enabled once its
+# row is retired, so with deadlock checking on TLC reports "Deadlock reached"
+# before it reaches the liveness check, and the experiment would be about the
+# deadlock rather than about Termination. The harness proves the declaration
+# is needed by running this mutant once with deadlock checking left on.
+MODULE: TerminationCompletionOverAllKeys
+TARGET: Termination
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: the broadcast tests completion over the whole keyspace, so a fully told saga is never declared done
+PERTURBS: BroadcastStep
+
+--- FIND
+           allDone == \A j \in Written(t) : nterm[j] # "none"
+--- REPLACE
+\* MUTATION: completion is tested over Keys, including keys this saga never
+\* wrote and so never applies a terminal to.
+           allDone == \A j \in Keys : nterm[j] # "none"
+--- END

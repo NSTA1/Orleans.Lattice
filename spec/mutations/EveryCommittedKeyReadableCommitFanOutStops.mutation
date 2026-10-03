@@ -1,0 +1,30 @@
+# Pairs with EveryCommittedKeyReadable. The commit fan-out declares the saga
+# done once ANY participant has applied the commit terminal, so the rest are
+# never told and never materialise the committed value. Every invariant still
+# holds: the gate serves a skipped key's prepared value post-saga for as long
+# as the registry reports the commit, so no reader ever sees a split view or a
+# pre-saga value. That is what makes this the pairing that shows the property
+# is not entailed by an invariant: with this mutation,
+# ([]VisibilityMatchesDecision /\ []AllOrNothing) => EveryCommittedKeyReadable
+# is violated. (The pairing this replaced, a projection that switched on an
+# abort terminal, also broke VisibilityMatchesDecision and AllOrNothing, so it
+# could not show that.)
+#
+# It fires NoStrandedPrepare too, and cannot avoid doing so: in this model a
+# committed key materialises exactly when its terminal lands. Only committed
+# sagas are affected, so Termination stays green.
+MODULE: EveryCommittedKeyReadableCommitFanOutStops
+TARGET: EveryCommittedKeyReadable
+CLASS: Temporal
+SUMMARY: the commit fan-out stops after its first participant, so a committed key is never materialised although every read is consistent
+PERTURBS: BroadcastStep
+
+--- FIND
+           allDone == \A j \in Written(t) : nterm[j] # "none"
+--- REPLACE
+\* MUTATION: on the commit path "some participant applied its terminal" is
+\* mistaken for "every participant did". Compensation is unchanged.
+           allDone == IF phase[t] = "committing"
+                      THEN \E j \in Written(t) : nterm[j] # "none"
+                      ELSE \A j \in Written(t) : nterm[j] # "none"
+--- END

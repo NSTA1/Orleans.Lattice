@@ -17,6 +17,27 @@ specification that pins the protocol design above the code. It is an assurance
 document; the runtime behaviour it protects is documented in
 [Atomic Writes](atomic-writes.md) and [Online Reshard](online-reshard.md).
 
+## Scope: one cluster
+
+Everything this document verifies is the **single-cluster** protocol: one
+coordinator, one tree's registry, and that cluster's own leaves. The
+cross-cluster half - a saga's prepared writes and terminals replicated to a peer,
+the receiver's per-source-shard terminal tally that holds the peer's view back
+until every shard's terminal has arrived, and the cross-tree receiver barrier -
+has **no formal artefact at either layer**. The TLA+ specification does not
+model it (see the cross-tree and cross-cluster entry under the refinement note's
+[abstraction gaps](../../spec/Refinement.md#deliberate-abstraction-gaps)), and
+no Coyote model drives it.
+
+Do not read coverage of the first as coverage of the second. A reader who finds
+the single-cluster half model-checked can reasonably assume the replicated half
+inherits that, and it does not: the receiver path has different inputs (a
+dial-back to the origin's decision, a tally, a cross-cluster transport that can
+drop or reorder) and its own failure modes. What does cover it is ordinary
+testing - the receiver gate's integration tests and the cross-cluster chaos
+suites in `test/lattice.replication/` - which is evidence of a different and
+weaker kind than an exhaustive check (issue #2324).
+
 ## The proven-core pattern
 
 A verified core is a single pure function (or small pure type) that captures one
@@ -87,8 +108,12 @@ thread interleavings for it to enumerate. What it does enumerate is every
 resolution of the model's own choices, which is why the models encode the
 protocol's concurrency as data in the first place: expressed that way it is
 fully enumerable without threads. Raising the degree above zero, so that Coyote
-also explores genuine operation interleavings, is tracked as
-[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319). The shared
+also explores genuine operation interleavings, was considered under
+[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319) and deliberately
+not done: it needs a `coyote rewrite` pass over the product assembly, and every
+race these models target is already a choice point they explore. The honest fix
+was to stop claiming the exploration, which the harness's member names and
+remarks now do. The shared
 harness is `CoyoteModelHarness`
 (`test/shared/Orleans.Lattice.Testing/Coyote/`), whose
 `AssertNoViolationInAnyExploredRun` / `AssertViolationFoundInSomeExploredRun` entry points
@@ -150,10 +175,12 @@ enumerated as a catalogue, kept aligned name-for-name with the TLA+ spec below.
 
 Safety properties:
 
-- **AllOrNothing** - within one saga every key resolves identically for a
-  snapshot reader; never a split view.
-- **VisibilityMatchesDecision** - a key is observed post-saga exactly when the
-  recorded decision is committed (the sharpest safety statement).
+- **AllOrNothing** - within one saga a snapshot reader never sees one key at its
+  post-saga value and another at its pre-saga value; never a split view.
+- **VisibilityMatchesDecision** - a key is observed post-saga only when the
+  recorded decision is committed, and pre-saga only when it is not (the sharpest
+  safety statement). A key the gate hides because the registry reports
+  `Indeterminate` satisfies both: hiding asserts nothing about the saga.
 - **StrictIsolation** - an in-flight or aborted saga is never surfaced as
   committed.
 - **CommitIntegrity** - commit implies every participant acked; abort implies at
@@ -168,13 +195,28 @@ Liveness and temporal properties:
 - **DecisionDurability** - once terminal, the registry decision never flips to the
   other terminal, and its row is never retired while a participant still holds an
   undrained prepared bucket (an unset hides a committed value just as a flip does).
-- **MonotonicVisibility** - once a committed key is observed visible it stays
-  visible, even across a reshard.
+- **MonotonicVisibility** - once a committed key has been observed visible it is
+  never observed at its pre-saga value at any later point, even across a reshard
+  or while the registry declines to report the decision. Being hidden in between
+  does not excuse a reversion, so the TLA+ form is stated over the whole
+  behaviour rather than over one step.
 - **RevisionMonotonic** - the registry revision counter never decreases.
 - **Termination** - every saga reaches a terminal decision under a bounded fault
   budget.
-- **EveryCommittedKeyReadable** - every committed saga's keys eventually all
-  become readable.
+- **EveryCommittedKeyReadable** - every committed saga's keys are eventually all
+  materialised at their post-saga value on their own leaves, so they stay
+  readable once the registry forgets the decision.
+- **NoStrandedPrepare** - every participant of a decided saga eventually applies
+  the saga's terminal, so no prepared bucket is stranded.
+
+In the TLA+ specification all three liveness properties fail on protocol
+defects under the fairness the specification asserts, not only when that
+fairness is removed. `Termination` alone catches a broadcast that never declares
+a fully told saga done; `NoStrandedPrepare` alone catches a compensation fan-out
+that skips participants whose prepare failed. `EveryCommittedKeyReadable`
+catches a commit fan-out that stops early, which `Termination` misses, but for a
+committed saga it coincides with `NoStrandedPrepare`, which catches that defect
+too.
 
 Each property has a live model home and a companion guard test. The full
 catalogue table - property, plain-language meaning, owning core, encoding, guard
@@ -191,8 +233,8 @@ encoded as **bounded progress**: a finite fault budget (drops, duplicates,
 restarts) encodes the fairness assumption that faults do not happen forever; once
 the budget is exhausted the transport is reliable, so a correct protocol must
 converge, and the model asserts the good terminal state is reached within the
-bounded step limit. The `Termination` and `EveryCommittedKeyReadable` properties
-are checked this way.
+bounded step limit. The `Termination`, `EveryCommittedKeyReadable` and
+`NoStrandedPrepare` properties are checked this way.
 
 ## The TLA+ specification
 
@@ -208,16 +250,16 @@ The spec lives outside the compiled solution under [`spec/`](../../spec/):
 |------|-----------|
 | `AtomicCommit.tla` | The specification: state, actions, safety invariants, liveness properties. |
 | `AtomicCommit.cfg` | The TLC model: the bounded instance and the invariant / property list. |
-| `mutations/` | One deliberate defect per checked property, each of which must make that property fire (see [`spec/mutations/README.md`](../../spec/mutations/README.md)). |
+| `mutations/` | Deliberate defects - at least one per checked property and at least one perturbing each protocol action - each of which must make its paired property fire (see [`spec/mutations/README.md`](../../spec/mutations/README.md)). |
 | `Refinement.md` | The refinement note mapping each spec variable and action to its protocol counterpart in the code cores. |
 | `README.md` | How to run TLC and the last-checked result. |
 
 The `AtomicCommit.cfg` instance fixes two concurrent sagas over three keys with
 overlapping write sets and a bounded reshard orphan step, and checks all seven
 invariants (the type invariant `TypeOK` plus the six safety invariants of the
-catalogue above) and all five temporal properties. A clean run enumerates a few
-thousand distinct states with no invariant, temporal-property, or deadlock
-violation. The spec's invariant names are the same names used by the property
+catalogue above) and all six temporal properties. A clean run enumerates a few
+tens of thousands of distinct states with no invariant, temporal-property, or
+deadlock violation. The spec's invariant names are the same names used by the property
 catalogue above; the [refinement note](../../spec/Refinement.md) is the mapping
 between the two levers. It maps every property the cfg checks to the core or
 production seam that plays its protocol role, with the test that would detect a
@@ -229,8 +271,8 @@ neither mapped nor excluded.
 TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
 `[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
 and CI provisions a Java runtime and a digest-pinned `tla2tools.jar` for it. The
-fixture checks that the base specification holds and that each of the twelve
-checked properties fires under its paired mutation in `spec/mutations/` while
+fixture checks that the base specification holds and that each of the thirteen
+checked properties fires under its paired mutations in `spec/mutations/` while
 staying clean against the unmutated specification, so a property weakened until it
 can no longer fail breaks the build instead of passing vacuously. Locally the
 fixture skips when the toolchain is absent; under CI a missing toolchain fails it.

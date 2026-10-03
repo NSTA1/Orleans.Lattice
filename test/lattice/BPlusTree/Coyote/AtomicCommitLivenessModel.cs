@@ -100,6 +100,16 @@ public enum AtomicCommitLivenessMode
 /// </summary>
 public sealed class AtomicCommitLivenessModel : ICoyoteModel
 {
+    /// <summary>
+    /// The text progress property 1 ("every participant eventually reaches its
+    /// terminal") puts in its bug report, and no other assertion does. It is the
+    /// encoding of the TLA+ property <c>NoStrandedPrepare</c>, and exposing it is
+    /// what lets a guard require that THIS property fires, rather than accepting
+    /// any violation - properties 2 and 3 catch the same stall, so a guard that
+    /// accepts any violation stays green with property 1 removed.
+    /// </summary>
+    public const string NeverReachedTerminalMessage = "never reached the saga terminal";
+
     private const int Pre = 0;
     private const int Post = 1;
 
@@ -347,9 +357,12 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
         for (var leaf = 0; leaf < _leafCount; leaf++)
         {
             // Progress property 1: every participant eventually reaches its terminal.
+            // Checked first for each leaf, so a stalled leaf is reported by this
+            // assertion rather than by property 2 or 3, which also catch the same
+            // stall; NeverReachedTerminalMessage is what lets a guard tell them apart.
             Specification.Assert(
                 terminalApplied[leaf],
-                $"liveness: leaf {leaf} never reached the saga terminal " +
+                $"liveness: leaf {leaf} {NeverReachedTerminalMessage} " +
                 $"(committed={committed}) - the protocol got stuck");
 
             if (committed)
@@ -398,6 +411,10 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
         var outcome = AtomicVisibilityGate.ResolveKey(
             core.Resolve(txid),
             alreadyTerminal: false,
+            // Pinned false on purpose (issue #2319): this model asserts progress, and a
+            // prepared tombstone hidden under a commit is the post-saga value, so it
+            // resolves the same way for every assertion here. The Hidden arm is
+            // exercised live in AtomicCommitVisibilityModel.
             preparedHiddenByTombstoneOrExpiry: false);
 
         return outcome == PendingReadOutcome.SurfacePrepared ? Post : Pre;
