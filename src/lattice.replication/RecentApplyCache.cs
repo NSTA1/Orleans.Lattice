@@ -22,8 +22,8 @@ namespace Orleans.Lattice.Replication;
 /// Correctness is shared with the receiver's other idempotency seams. The cache
 /// suppresses recent duplicate identity tuples before the apply grain hop; cache
 /// eviction under sustained churn falls through to the leaf-level per-key LWW merge,
-/// which makes an identical re-apply a no-op. The high-water-mark pinned floor only
-/// drops point writes already covered by a snapshot handoff.
+/// which makes an identical re-apply a no-op. There is no per-origin HLC drop
+/// threshold ahead of the cache (#1060, #4463).
 /// </para>
 /// <para>
 /// The cache is per-applier, per-tree; the applier singleton holds a

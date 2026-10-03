@@ -1335,9 +1335,9 @@ invariants:
     sources:
       - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
       - "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer"
-  - id: replication-pinned-causal-floor
-    name: "Replication pinned causal floor"
-    description: "Steady-state receiver dedupe drops only entries at or below a pinned snapshot floor and not entries below the per-origin high-water mark."
+  - id: replication-point-write-no-hlc-floor
+    name: "Replication point-write no HLC floor"
+    description: "Steady-state receiver dedupe never drops point writes only because their HLC is at or below a per-origin high-water mark or legacy snapshot floor."
     scope:
       packages:
         - "Orleans.Lattice.Replication"
@@ -1347,7 +1347,7 @@ invariants:
         - "Bootstrap handoff"
     violation_modes:
       - "A genuinely new point write with a source HLC below the running high-water mark is dropped."
-      - "Snapshot-pinned backlog is re-applied above an already-installed snapshot frontier."
+      - "A genuinely new point write with a source HLC at or below a legacy snapshot coordinate is dropped."
       - "High-water-mark advance regresses under a lower applied HLC."
     detection_signals:
       - type: metric
@@ -1357,10 +1357,10 @@ invariants:
         name: "orleans.lattice.replication.apply.lag"
         source: "src/lattice.replication/LatticeReplicationMetrics.cs"
       - type: status-field
-        name: "pinned causal floor"
+        name: "per-origin high-water mark"
         source: "docs/lattice.replication/replication-apply.md"
     remediation:
-      - step: "Apply point writes above the pinned floor even when their HLC is below the running high-water mark."
+      - step: "Apply point writes regardless of whether their HLC is below the running high-water mark or legacy snapshot coordinate."
         source: "docs/lattice.replication/replication-apply.md"
       - step: "Advance the per-origin high-water mark monotonically after successful point apply."
         source: "docs/lattice.replication/replication-apply.md"

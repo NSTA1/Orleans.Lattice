@@ -18,8 +18,8 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ApplyResult"/> is returned to the caller. For point writes only
 /// (not range deletes or saga terminals), the per-origin high-water-mark is also
 /// advanced to at least the entry timestamp. That advance does not make a later
-/// re-delivery a no-op - the canonical applier's only point-write drop threshold
-/// is the snapshot-pinned causal floor, which parking does not move - but the
+/// re-delivery a no-op - the canonical applier has no point-write HLC drop
+/// threshold - but the
 /// transport does not normally re-deliver a parked entry, because the
 /// non-deferred not-applied result is acknowledged and the sender moves past it.
 /// A successful apply clears the counter for

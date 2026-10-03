@@ -28,17 +28,15 @@ before calling `AddLatticeReplication`.
   cursor yet.
 - **`asOfHlc > Zero`** filters out entries whose stamped commit-time
   HLC is strictly greater than `asOfHlc`. After the drain the
-  receiver's snapshot pin replaces both its per-origin
-  high-water-mark vector and its pinned causal floor with the
-  snapshot's causal-stable frontier (the source cluster's own
-  coordinate sealed at or above every entry the drain applied), and
-  the steady-state floor gate in `IReplicationApplier` then drops any
-  incremental entry at or below that frontier, which keeps the
-  handoff exactly-once across the snapshot/incremental boundary. See
-  "Bootstrap drain bypasses the pinned-floor gate and the
-  high-water-mark advance" below for the
-  receiver-side state machine that keeps the in-drain apply
-  idempotent without relying on that gate.
+  receiver's snapshot pin replaces its per-origin high-water-mark
+  vector with the snapshot's causal-stable frontier (the source
+  cluster's own coordinate sealed at or above every entry the drain
+  applied) and clears any legacy pinned floor. `IReplicationApplier`
+  does not drop live incremental point writes at or below that
+  frontier; duplicates across the boundary are absorbed by exact
+  identity dedup and idempotent per-key merge. See "Bootstrap drain
+  bypasses the high-water-mark advance" below for the receiver-side
+  state machine that keeps the in-drain apply idempotent.
 - **`CausalStableFrontier`** is the producer's causal-stable frontier
   at snapshot time - the pointwise minimum `VersionVector` across
   every consumer that has reported a vector through
@@ -480,8 +478,8 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   receiver-side LWW
   reconciliation on each leaf grain (plus the per-leaf recently-terminal
   short-circuit and the per-tx registry no-op described under "Bootstrap
-  drain bypasses the pinned-floor gate and the high-water-mark advance"
-  below) absorbs it. A fresh `BootstrapAsync` kickoff resets the cursor
+  drain bypasses the high-water-mark advance" below) absorbs it. A
+  fresh `BootstrapAsync` kickoff resets the cursor
   to `Zero`.
 - **`Failed` is restartable.** On any thrown exception inside the
   phase pump the state transitions to `Failed` (persisted) and
@@ -498,10 +496,9 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   retries the drain in-place using a bounded exponential backoff
   (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
   `500 ms`, capped at `30 s`). Each retry re-opens the export with no
-  upper bound (the resume rule above); the drain applies without the
-  pinned-floor gate, and receiver-side LWW reconciliation is what makes
-  re-applying the entries the failed attempt already applied a
-  correctness no-op. Every retry increments
+  upper bound (the resume rule above); receiver-side LWW reconciliation
+  is what makes re-applying the entries the failed attempt already
+  applied a correctness no-op. Every retry increments
   the `orleans.lattice.replication.bootstrap.transient_retries`
   counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
   operators can dashboard the rate. Non-transient faults still pivot
@@ -528,23 +525,19 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   therefore raises the same observable side-effects as a receiver
   that catches up via the WAL tail, so UI live-update hooks and
   audit observers see the bootstrap window rather than missing it.
-- **Bootstrap drain bypasses the pinned-floor gate and the
-  high-water-mark advance.** The applier
-  reads an ambient bootstrap-apply flag on every
-  inbound call; when the flag is set (the bootstrap coordinator
-  opens one scope around the entire drain) the pinned-causal-floor
-  check and the post-apply high-water-mark advance are skipped, and
-  the steady-state
-  `orleans.lattice.replication.apply.fifo_violations` tracker is not
-  fed. This is required because the snapshot exporter
+- **Bootstrap drain bypasses the high-water-mark advance.** The
+  applier reads an ambient bootstrap-apply flag on every inbound call;
+  when the flag is set (the bootstrap coordinator opens one scope
+  around the entire drain) the post-apply high-water-mark advance and
+  the steady-state `orleans.lattice.replication.apply.fifo_violations`
+  tracker are skipped. This is required because the snapshot exporter
   enumerates shards/leaves in arbitrary order rather than HLC order:
-  per-shard HLCs are not globally monotonic across a single
-  bootstrap stream, so advancing the high-water-mark mid-drain can
-  suppress a still-pending saga key with a strictly-earlier source
-  HLC and break per-saga all-or-nothing visibility on the
-  bootstrapped peer; and feeding those out-of-order HLCs to the FIFO
-  diagnostic would register every out-of-order shard arrival as a
-  violation. The drain is still
+  per-shard HLCs are not globally monotonic across a single bootstrap
+  stream, so advancing the high-water-mark mid-drain can suppress a
+  still-pending saga key with a strictly-earlier source HLC and break
+  per-saga all-or-nothing visibility on the bootstrapped peer; and
+  feeding those out-of-order HLCs to the FIFO diagnostic would register
+  every out-of-order shard arrival as a violation. The drain is still
   idempotent end-to-end because:
   - **Receiver-side LWW** on each leaf grain reconciles concurrent
     arrivals of the same key by HLC, with a replica-invariant
@@ -565,31 +558,30 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
     window is `LatticeOptions.TxDecisionRetention`, not "forever".
 
   The post-drain snapshot pin atomically replaces the per-origin
-  high-water-mark vector and the pinned causal floor with the
-  snapshot's causal-stable frontier, so the
-  bootstrap-to-incremental handoff retains exactly-once semantics on
-  the live tail. Range deletes,
-  saga terminal records (which carry the saga's own terminal HLC), and
-  tombstone-reap envelopes are routed before the pinned-floor gate, so
-  the bootstrap scope does not change how they apply.
-- **Live-incremental dedup is unchanged.** The snapshot-pinned causal
-  floor in the applier suppresses any re-delivery of
-  bootstrap-arrived entries through the live-incremental path - the
-  pin at the end of the drain sets each origin's floor to its
-  coordinate in the snapshot's causal-stable frontier, so a live entry
-  at or below that coordinate is deduped canonically.
-- **Snapshot/incremental handoff is exactly-once.** The coordinator
+  high-water-mark vector with the snapshot's causal-stable frontier
+  and clears any legacy pinned floor. The bootstrap-to-incremental
+  handoff remains idempotent on the live tail because exact identity
+  dedup and per-key merge absorb duplicates, while point writes at or
+  below one pinned coordinate still apply when they are not duplicates.
+  Range deletes, saga terminal records (which carry the saga's own
+  terminal HLC), and tombstone-reap envelopes are routed before the
+  point-write path, so the bootstrap scope does not change how they
+  apply.
+- **Live-incremental dedup is unchanged except for the removed floor.**
+  The applier suppresses exact re-delivery of bootstrap-arrived entries
+  through the shadow-forward identity cache, and an entry whose cache
+  tuple has aged out re-applies idempotently under the leaf-level merge.
+- **Snapshot/incremental handoff is idempotent.** The coordinator
   pins the snapshot's causal-stable frontier on the per-tree
   high-water-mark store *after* every snapshot entry has been
   applied, first sealing the source cluster's own coordinate at or
   above the highest HLC the drain applied and the oldest
   source-authored entry the local WAL still retains, so the fall-off
   detector cannot read the retained baselines as a trim gap. The
-  pin replaces both the high-water-mark vector and the pinned floor
-  (the `AsOfHlc` passed alongside it is currently ignored). The
-  applier's floor gate then makes any incremental entry whose
-  timestamp is at or below the pinned frontier a no-op, so the
-  snapshot/incremental boundary is exactly-once regardless of
+  pin replaces the high-water-mark vector and clears any legacy pinned
+  floor (the `AsOfHlc` passed alongside it is currently ignored). The
+  applier has no HLC floor gate; exact identity dedup and idempotent
+  per-key merge make the snapshot/incremental boundary safe regardless of
   overlap.
 - **Tombstones in custom providers are skipped.** Committed
   (non-prepared) snapshot entries whose `Value` is `null` (not emitted

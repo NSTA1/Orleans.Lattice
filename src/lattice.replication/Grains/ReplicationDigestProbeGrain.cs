@@ -492,9 +492,9 @@ internal sealed class ReplicationDigestProbeGrain(
             // The fallback re-derives the committed projection of just the
             // divergent ranges from the live tree, which is immune to both the
             // WAL trim and the cursor filter, so it ships those orphans; the
-            // receiver applies them because its only drop threshold is the
-            // snapshot-pinned causal floor, never the incremental per-origin
-            // diagonal.
+            // receiver applies them because it has no point-write HLC drop
+            // threshold (neither the incremental per-origin diagonal, #1060,
+            // nor a snapshot-pinned floor, #4463).
             if (reReplay.SkipReason is LeafReReplaySkipReason.WalTrimmed
                 or LeafReReplaySkipReason.RangeEmpty)
             {

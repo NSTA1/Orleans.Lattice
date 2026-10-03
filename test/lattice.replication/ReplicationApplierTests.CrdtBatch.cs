@@ -171,21 +171,23 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_crdt_entry_at_or_below_hwm_is_deduped()
+    public async Task ApplyBatchAsync_crdt_entries_at_or_below_hwm_fold_through_the_batch_seam()
     {
+        // No HLC drop threshold (#1060, #4463): below-HWM typed-CRDT
+        // entries fold idempotently through the batched delta seam.
         var (applier, _, apply, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
         var entries = new[]
         {
-            OrSetEntry("a", Hlc(10), new byte[] { 1 }), // <= floor: deduped
-            OrSetEntry("b", Hlc(20), new byte[] { 2 }), // <= floor: deduped
+            OrSetEntry("a", Hlc(10), new byte[] { 1 }),
+            OrSetEntry("b", Hlc(20), new byte[] { 2 }),
         };
 
         var result = await applier.ApplyBatchAsync(entries);
 
-        Assert.That(result.Applied, Is.False);
-        await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaManyAsync(default!);
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplyCrdtDeltaManyAsync(
+            Arg.Is<IReadOnlyList<ApplyCrdtDeltaItem>>(items => items.Count == 2));
     }
 
     [Test]

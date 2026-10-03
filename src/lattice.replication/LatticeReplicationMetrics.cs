@@ -98,8 +98,7 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was short-circuited by
-    /// the receiver before merge - the snapshot-pinned causal floor already
-    /// covers the point write, the receiver-side local-origin gate rejected an
+    /// the receiver before merge - the receiver-side local-origin gate rejected an
     /// entry authored by this cluster, the entry is a tombstone-reap envelope
     /// (local structural cleanup, never applied), or, on the per-entry apply
     /// path only, a coordinated restore's receive fence deferred it (a deferred
