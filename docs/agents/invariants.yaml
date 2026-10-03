@@ -408,6 +408,8 @@ invariants:
         source: "docs/lattice/atomic-writes.md"
       - step: "Keep the registry decision recorded until every participant has drained its prepared bucket."
         source: "spec/AtomicCommit.tla"
+      - step: "When several prepared buckets cover one key, select the bucket that can still decide visibility rather than letting an older undecided bucket shadow a newer committed batch or a newer in-flight bucket shadow an older committed one."
+        source: "src/lattice/BPlusTree/AtomicVisibilityGate.cs#AtomicVisibilityGate.SelectDecidingPrepare"
       - step: "Run the paired non-vacuous guard when changing a catalogued property."
         source: "docs/lattice/verified-atomic-commit.md"
       - step: "When a read reaches prepared rows and the transaction registry cannot be reached, fail with LatticeTransactionOutcomeUnavailableException rather than guessing visibility."
@@ -1787,7 +1789,7 @@ invariants:
       - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - id: tree-resize-shadow-swap
     name: "Tree resize shadow swap"
-    description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves ordinary reads and writes with at most one transparent retry; bulk loads and appends are not retried across the rejecting window, so a call made after the swap reaches the destination but one already in flight when the alias swaps lands on the old physical tree and is removed by its purge."
+    description: "An online resize drains into a new physical tree, shadow-forwards live writes, fences the old physical tree before the alias swap, atomically swaps the registry alias, and leaves ordinary reads and writes retrying transparently until the alias flip lands; bulk loads and appends are not retried across the rejecting window, so a call made after the swap reaches the destination but one already in flight when the alias swaps lands on the old physical tree and is removed by its purge."
     scope:
       packages:
         - "Orleans.Lattice"
@@ -1919,6 +1921,9 @@ invariants:
         source: "src/lattice/LatticeMetrics.cs"
       - type: metric
         name: "orleans.lattice.wal.gc.drive_orphan_pin_retirement"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.wal.gc.floor_holder_admission"
         source: "src/lattice/LatticeMetrics.cs"
     remediation:
       - step: "Report each consumer cursor monotonically after successfully applying a batch."
