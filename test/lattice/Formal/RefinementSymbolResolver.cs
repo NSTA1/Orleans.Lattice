@@ -35,7 +35,7 @@ internal enum RefinementSymbolResolution
 
 /// <summary>
 /// Resolves the <c>Type.Member</c> references named by
-/// <c>spec/Refinement.md</c> against the C# under <c>src/</c>, using nothing
+/// <c>spec/atomic-commit/Refinement.md</c> against the C# under <c>src/</c>, using nothing
 /// but the source text. No compiler, no reflection, no external toolchain.
 /// <para>
 /// SOURCE TEXT RATHER THAN REFLECTION, deliberately. Reflection would resolve

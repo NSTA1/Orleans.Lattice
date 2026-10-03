@@ -26,7 +26,7 @@ the receiver's per-source-shard terminal tally that holds the peer's view back
 until every shard's terminal has arrived, and the cross-tree receiver barrier -
 has **no formal artefact at either layer**. The TLA+ specification does not
 model it (see the cross-tree and cross-cluster entry under the refinement note's
-[abstraction gaps](../../spec/Refinement.md#deliberate-abstraction-gaps)), and
+[abstraction gaps](../../spec/atomic-commit/Refinement.md#deliberate-abstraction-gaps)), and
 no Coyote model drives it.
 
 Do not read coverage of the first as coverage of the second. A reader who finds
@@ -244,15 +244,16 @@ keys, participant leaves, and a transaction status, with no serialization,
 timers, HLC, or WAL - so TLC can enumerate every interleaving of the decision and
 broadcast steps.
 
-The spec lives outside the compiled solution under [`spec/`](../../spec/):
+The spec lives outside the compiled solution, as the `atomic-commit` module under [`spec/`](../../spec/README.md), in [`spec/atomic-commit/`](../../spec/atomic-commit/README.md):
 
 | File | What it is |
 |------|-----------|
 | `AtomicCommit.tla` | The specification: state, actions, safety invariants, liveness properties. |
 | `AtomicCommit.cfg` | The TLC model: the bounded instance and the invariant / property list. |
-| `mutations/` | Deliberate defects - at least one per checked property and at least one perturbing each protocol action - each of which must make its paired property fire (see [`spec/mutations/README.md`](../../spec/mutations/README.md)). |
+| `mutations/` | Deliberate defects - at least one per checked property and at least one perturbing each protocol action - each of which must make its paired property fire (see [`spec/atomic-commit/mutations/README.md`](../../spec/atomic-commit/mutations/README.md)). |
 | `Refinement.md` | The refinement note mapping each spec variable and action to its protocol counterpart in the code cores. |
-| `README.md` | How to run TLC and the last-checked result. |
+| `AtomicCommit.manifest.json` | The counts the formal gates assert for this module, and where its mutations and refinement note live. |
+| `README.md` | What is modelled, the last-checked result, and the module's counts table. |
 
 The `AtomicCommit.cfg` instance fixes two concurrent sagas over three keys with
 overlapping write sets and a bounded reshard orphan step, and checks all seven
@@ -260,7 +261,7 @@ invariants (the type invariant `TypeOK` plus the six safety invariants of the
 catalogue above) and all six temporal properties. A clean run enumerates a few
 tens of thousands of distinct states with no invariant, temporal-property, or
 deadlock violation. The spec's invariant names are the same names used by the property
-catalogue above; the [refinement note](../../spec/Refinement.md) is the mapping
+catalogue above; the [refinement note](../../spec/atomic-commit/Refinement.md) is the mapping
 between the two levers. It maps every property the cfg checks to the core or
 production seam that plays its protocol role, with the test that would detect a
 regression there, and names `TypeOK` - a type-only well-formedness check with no
@@ -272,12 +273,12 @@ TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
 `[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
 and CI provisions a Java runtime and a digest-pinned `tla2tools.jar` for it. The
 fixture checks that the base specification holds and that each of the thirteen
-checked properties fires under its paired mutations in `spec/mutations/` while
+checked properties fires under its paired mutations in `spec/atomic-commit/mutations/` while
 staying clean against the unmutated specification, so a property weakened until it
 can no longer fail breaks the build instead of passing vacuously. Locally the
 fixture skips when the toolchain is absent; under CI a missing toolchain fails it.
 Run TLC by hand when iterating on the protocol design; the procedure and the CI
-decision are in [`spec/README.md`](../../spec/README.md).
+decision are in [`spec/README.md`](../../spec/README.md), which also describes the module layout the gates discover every specification by.
 
 ## Why three levers
 

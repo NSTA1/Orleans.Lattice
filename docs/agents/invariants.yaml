@@ -407,7 +407,7 @@ invariants:
       - step: "Retry transport-level failures with the same operation id so the call re-attaches to the original saga."
         source: "docs/lattice/atomic-writes.md"
       - step: "Keep the registry decision recorded until every participant has drained its prepared bucket."
-        source: "spec/AtomicCommit.tla"
+        source: "spec/atomic-commit/AtomicCommit.tla"
       - step: "When several prepared buckets cover one key, select the bucket that can still decide visibility rather than letting an older undecided bucket shadow a newer committed batch or a newer in-flight bucket shadow an older committed one."
         source: "src/lattice/BPlusTree/AtomicVisibilityGate.cs#AtomicVisibilityGate.SelectDecidingPrepare"
       - step: "Run the paired non-vacuous guard when changing a catalogued property."
@@ -419,8 +419,8 @@ invariants:
       - "docs/lattice/api.md"
       - "docs/lattice/consistency.md"
       - "docs/lattice/verified-atomic-commit.md"
-      - "spec/AtomicCommit.tla"
-      - "spec/README.md"
+      - "spec/atomic-commit/AtomicCommit.tla"
+      - "spec/atomic-commit/README.md"
       - "test/lattice/Formal/TlcModelCheckTests.cs"
   - id: atomic-cross-cluster-receiver-gate
     name: "Cross-cluster atomic receiver gate"
@@ -493,7 +493,7 @@ invariants:
     sources:
       - "docs/lattice/atomic-writes.md"
       - "docs/lattice/consistency.md"
-      - "spec/AtomicCommit.tla"
+      - "spec/atomic-commit/AtomicCommit.tla"
   - id: auth-fail-closed-access-gates
     name: "Authorization fails closed"
     description: "Authorization denies on missing rules, ambiguous security context, or direct external grain calls, and denied mutations leave no partial state."

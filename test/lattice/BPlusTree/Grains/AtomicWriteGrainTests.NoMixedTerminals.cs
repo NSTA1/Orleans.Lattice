@@ -12,7 +12,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Detector for the <c>NoMixedTerminals</c> row of <c>spec/Refinement.md</c>
+/// Detector for the <c>NoMixedTerminals</c> row of <c>spec/atomic-commit/Refinement.md</c>
 /// (issue #2552, epic #2556). The row claims that a saga records exactly one
 /// <c>TxStatus</c>, <em>so</em> its per-leaf terminals are uniformly commit or
 /// uniformly abort.
@@ -221,7 +221,7 @@ public partial class AtomicWriteGrainTests
     [Test]
     public async Task Aborting_saga_broadcasts_its_single_recorded_abort_verdict_to_every_touched_shard()
     {
-        // spec/Refinement.md, property NoMixedTerminals. The compensation
+        // spec/atomic-commit/Refinement.md, property NoMixedTerminals. The compensation
         // path is the half that runs when something has already gone wrong,
         // so it is the half where a mixed fan-out would do the most damage:
         // a leaf handed a commit terminal for an aborted saga drains its
