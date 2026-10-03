@@ -110,6 +110,7 @@
                                  IdChanged="@(value => _subjectId = value)"
                                  Error="@_addError"
                                  DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                                 DirectorySearchDenied="_modelDenied"
                                  DirectoryExplanation="@_model?.DirectoryExplanation"
                                  Disabled="AtCap" />
             <div class="lt-access-form__actions">

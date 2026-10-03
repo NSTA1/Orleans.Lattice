@@ -47,12 +47,22 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// read; an unread model is unknown, never "not enforced".
     /// </summary>
     /// <param name="cancellationToken">Cancels the read.</param>
-    public async Task<AccessModelDescriptor?> GetAccessModelAsync(CancellationToken cancellationToken)
+    public async Task<AccessModelDescriptor?> GetAccessModelAsync(CancellationToken cancellationToken) =>
+        (await ReadAccessModelAsync(cancellationToken).ConfigureAwait(true)).Model;
+
+    /// <summary>
+    /// The cluster's access model, as <see cref="GetAccessModelAsync"/> reads it,
+    /// and whether the cluster refused the caller it. The same single call is
+    /// made; a refusal is not remembered, so it is asked again next time, as an
+    /// unread model always is.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public async ValueTask<AccessModelRead> ReadAccessModelAsync(CancellationToken cancellationToken)
     {
         var key = ForgetIfTheCallerChanged();
         if (_model is not null)
         {
-            return _model;
+            return new AccessModelRead(_model, Denied: false);
         }
 
         AccessModelDescriptor? model;
@@ -60,9 +70,13 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
         {
             model = await Admin.GetAccessModelAsync(cancellationToken).ConfigureAwait(true);
         }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return new AccessModelRead(null, Denied: true);
+        }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return null;
+            return default;
         }
 
         if (ForgetIfTheCallerChanged() == key)
@@ -70,7 +84,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
             _model = model;
         }
 
-        return model;
+        return new AccessModelRead(model, Denied: false);
     }
 
     /// <summary>The first page of groups, for completion.</summary>

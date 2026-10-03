@@ -30,6 +30,7 @@
                          IdChanged="@(value => _form.SubjectId = value)"
                          Error="@_errors.Subject"
                          DirectoryAvailable="DirectoryAvailable"
+                         DirectorySearchDenied="DirectorySearchDenied"
                          DirectoryExplanation="@DirectoryExplanation" />
     <LtSelect Label="Scope" Options="ScopeOptions" Value="@_form.ScopeValue" ValueChanged="OnScopeChanged" Disabled="_form.IsExisting" Hint="@ScopeHint" />
     @if (_form.NeedsTree)

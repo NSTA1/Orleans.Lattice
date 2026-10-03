@@ -38,6 +38,7 @@ public partial class TenancyMembers : IDisposable
     private bool _busy;
     private bool _delegated;
     private bool _directoryAvailable;
+    private bool _directorySearchDenied;
     private string? _directoryExplanation;
 
     /// <summary>The tenant whose admin subjects to show.</summary>
@@ -121,6 +122,7 @@ public partial class TenancyMembers : IDisposable
     private async Task ReadDirectoryAsync(ILatticeAuthAdmin? auth, CancellationToken cancellationToken)
     {
         _directoryAvailable = false;
+        _directorySearchDenied = false;
         _directoryExplanation = null;
         if (auth is null)
         {
@@ -132,6 +134,11 @@ public partial class TenancyMembers : IDisposable
             var model = await auth.GetAccessModelAsync(cancellationToken).ConfigureAwait(true);
             _directoryAvailable = model?.DirectoryAvailable == true;
             _directoryExplanation = model?.DirectoryExplanation;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            // A directory may be configured; this caller may not search it, and the id is used as typed.
+            _directorySearchDenied = true;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

@@ -31,6 +31,7 @@ public partial class TenantExplainView
     private TenantExplanation? _explanation;
     private TenantSubjectResolution? _resolution;
     private AccessModelDescriptor? _model;
+    private bool _modelDenied;
     private string? _preparedTenant;
     private AccessSubjectPicker? _subjectPicker;
     private LtComboBox? _treeBox;
@@ -64,7 +65,7 @@ public partial class TenantExplainView
             }
         }
 
-        _model = await ReadModelAsync().ConfigureAwait(true);
+        (_model, _modelDenied) = await ReadModelAsync().ConfigureAwait(true);
     }
 
     private static IReadOnlyList<LtSelectOption> BuildOperationOptions()
@@ -192,8 +193,8 @@ public partial class TenantExplainView
         return subject && tree;
     }
 
-    /// <summary>The cluster's access model, which says whether cluster users and groups can be searched; <see langword="null"/> when it cannot be read.</summary>
-    private async Task<AccessModelDescriptor?> ReadModelAsync()
+    /// <summary>The cluster's access model, which says whether cluster users and groups can be searched, and whether the caller was refused it.</summary>
+    private async Task<AccessModelRead> ReadModelAsync()
     {
         AccessCatalog? catalog;
         try
@@ -203,9 +204,9 @@ public partial class TenantExplainView
         catch (InvalidOperationException)
         {
             // A head without the auth facade: cluster users and groups are typed, not searched.
-            return null;
+            return default;
         }
 
-        return catalog is null ? null : await catalog.GetAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+        return catalog is null ? default : await catalog.ReadAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
     }
 }

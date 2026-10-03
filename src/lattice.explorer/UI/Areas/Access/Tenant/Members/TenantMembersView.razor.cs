@@ -20,6 +20,7 @@ public partial class TenantMembersView
     private TenantMemberPage? _page;
     private TenantAccessPosture? _posture;
     private AccessModelDescriptor? _model;
+    private bool _modelDenied;
     private AccessFailure? _failure;
     private IReadOnlyList<string>? _admins;
     private bool _adminsRead;
@@ -68,7 +69,11 @@ public partial class TenantMembersView
 
         _loadedTenant = Tenant;
         _removing = null;
-        _model ??= await Catalog.GetAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+        if (_model is null)
+        {
+            (_model, _modelDenied) = await Catalog.ReadAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+        }
+
         await LoadAsync().ConfigureAwait(true);
         await LoadAdminsAsync().ConfigureAwait(true);
     }

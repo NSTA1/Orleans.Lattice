@@ -18,6 +18,7 @@ public partial class TenantRuleDetailView
     private TenantRuleView? _rule;
     private IReadOnlyList<TenantRuleView> _rules = [];
     private AccessModelDescriptor? _model;
+    private bool _modelDenied;
     private AccessFailure? _failure;
     private (string Tenant, string RuleId)? _loaded;
     private bool _editorOpen;
@@ -125,7 +126,9 @@ public partial class TenantRuleDetailView
 
         if (catalog is not null)
         {
-            _model = await catalog.GetAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+            var read = await catalog.ReadAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+            _model = read.Model;
+            _modelDenied = read.Denied;
         }
     }
 

@@ -26,6 +26,7 @@ public partial class TenantRulesView
     private string? _next;
     private AccessFailure? _failure;
     private AccessModelDescriptor? _model;
+    private bool _modelDenied;
     private TenantAccessPosture? _posture;
     private string _treeFilter = AllTrees;
     private string _subjectFilter = string.Empty;
@@ -166,7 +167,10 @@ public partial class TenantRulesView
         }
 
         await ReadPostureAsync(tenant).ConfigureAwait(true);
-        _model ??= await ReadModelAsync().ConfigureAwait(true);
+        if (_model is null)
+        {
+            (_model, _modelDenied) = await ReadModelAsync().ConfigureAwait(true);
+        }
     }
 
     private async Task LoadMoreAsync()
@@ -213,8 +217,8 @@ public partial class TenantRulesView
         }
     }
 
-    /// <summary>The cluster's access model, which says whether cluster users and groups can be searched; <see langword="null"/> when it cannot be read.</summary>
-    private async Task<AccessModelDescriptor?> ReadModelAsync()
+    /// <summary>The cluster's access model, which says whether cluster users and groups can be searched, and whether the caller was refused it.</summary>
+    private async Task<AccessModelRead> ReadModelAsync()
     {
         AccessCatalog? catalog;
         try
@@ -224,10 +228,10 @@ public partial class TenantRulesView
         catch (InvalidOperationException)
         {
             // A head without the auth facade: cluster users and groups are typed, not searched.
-            return null;
+            return default;
         }
 
-        return catalog is null ? null : await catalog.GetAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+        return catalog is null ? default : await catalog.ReadAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
     }
 
     private void OpenEditor() => _editorOpen = true;

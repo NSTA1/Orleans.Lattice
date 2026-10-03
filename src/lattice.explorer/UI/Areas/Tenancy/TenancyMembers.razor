@@ -47,6 +47,7 @@
                                  IdChanged="@(value => _newSubject = value)"
                                  Error="@_addError"
                                  DirectoryAvailable="_directoryAvailable"
+                                 DirectorySearchDenied="_directorySearchDenied"
                                  DirectoryExplanation="@_directoryExplanation" />
             <LtButton Type="LtButtonType.Submit" Disabled="_busy">Add admin subject</LtButton>
         </form>
