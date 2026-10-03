@@ -76,4 +76,39 @@ public sealed class AtomicCommitVisibilityCoyoteTests
         CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailuresFailOpen));
     }
+
+    /// <summary>
+    /// Issue #2319: the gate's <c>preparedHiddenByTombstoneOrExpiry</c> input is
+    /// driven live instead of pinned <see langword="false"/>, so a fan-out can mix
+    /// keys the saga deletes (hidden, which reads as the post-saga absence) with
+    /// keys it writes (surfaced). Every reader design that never certifies a
+    /// split view must still never certify one.
+    /// </summary>
+    [Test]
+    public void Fixed_readers_never_certify_a_split_view_when_prepared_values_can_be_hidden(
+        [Values(AtomicCommitReaderMode.SharedSnapshotWithRevisionProbe, AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailures)] AtomicCommitReaderMode mode,
+        [Values(2, 3)] int keyCount)
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new AtomicCommitVisibilityModel(keyCount, mode, exercisePreparedHidden: true));
+    }
+
+    /// <summary>
+    /// The guard for the test above, and what makes the unpinned input
+    /// load-bearing: a reader that serves a committed saga's own hidden
+    /// prepared value as the pre-saga value - a gate that dropped its Hidden
+    /// arm - tears a fan-out that mixes deletes with writes, and Coyote must
+    /// find it. With the input pinned, as it was at every model call site, no
+    /// model could have.
+    /// </summary>
+    [Test]
+    public void Serving_a_hidden_prepared_value_as_pre_saga_certifies_a_torn_read([Values(2, 3)] int keyCount)
+    {
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
+            new AtomicCommitVisibilityModel(
+                keyCount,
+                AtomicCommitReaderMode.SharedSnapshotWithRevisionProbe,
+                exercisePreparedHidden: true,
+                hiddenPreparedFallsThrough: true));
+    }
 }

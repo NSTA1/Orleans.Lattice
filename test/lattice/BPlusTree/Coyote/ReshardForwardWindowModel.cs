@@ -161,6 +161,10 @@ public sealed class ReshardForwardWindowModel : ICoyoteModel
         var outcome = AtomicVisibilityGate.ResolveKey(
             core.Resolve(saga),
             alreadyTerminal: false,
+            // Pinned false on purpose (issue #2319): this model is about the
+            // forward window's routing, which the shape of the prepared value does
+            // not affect. The Hidden arm is exercised live in
+            // AtomicCommitVisibilityModel.
             preparedHiddenByTombstoneOrExpiry: false);
 
         return outcome == PendingReadOutcome.SurfacePrepared ? Post : projected[i];
