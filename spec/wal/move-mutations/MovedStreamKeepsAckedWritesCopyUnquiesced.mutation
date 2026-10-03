@@ -1,0 +1,19 @@
+# Pairs with MovedStreamKeepsAckedWrites. The move copies the stream without
+# waiting for it to quiesce (WalMoveFenceCore's stale-observation abort is
+# skipped), so an append already in flight when the fence rose lands on the old
+# home after the copy, is acknowledged, and is dropped at the switch.
+MODULE: MovedStreamKeepsAckedWritesCopyUnquiesced
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: a move copies the stream while appends are still in flight and loses them at the switch
+PERTURBS: MoveCopy
+
+--- FIND
+    /\ move = "fenced"
+    /\ inflight = {}
+    /\ moveCopy' = durable
+--- REPLACE
+\* MUTATION: no quiesce before the copy.
+    /\ move = "fenced"
+    /\ moveCopy' = durable
+--- END

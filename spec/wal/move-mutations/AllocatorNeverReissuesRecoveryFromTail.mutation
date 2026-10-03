@@ -1,0 +1,15 @@
+# Pairs with AllocatorNeverReissues. A recovering shard resumes its allocator
+# from the trim floor instead of past the highest stored offset, so it hands out
+# offsets that acknowledged writes already hold.
+MODULE: AllocatorNeverReissuesRecoveryFromTail
+TARGET: AllocatorNeverReissues
+CLASS: Invariant
+SUMMARY: the allocator recovers from the tail and reissues acknowledged offsets
+PERTURBS: ShardCrash
+
+--- FIND
+    /\ next' = Max({tail} \cup {o + 1 : o \in durable})
+--- REPLACE
+\* MUTATION: recovered from the floor, not the high-water mark.
+    /\ next' = tail
+--- END

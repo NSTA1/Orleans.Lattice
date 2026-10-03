@@ -1,37 +1,31 @@
 # Pairs with ReadPositionHonest, and reproduces production's snapshot-load
-# failure path. TryRehydrateFromSnapshotAsync answers an ordinary storage fault,
-# a missing segment or an unreadable frame by returning false, which the
-# activation cannot tell from "no snapshot": it takes the -1 cold override and
-# replays the whole READABLE WAL. Under coverage-gated trim the readable WAL no
-# longer holds the prefix the snapshot covered, and the cold-replay guard only
-# fires when the tail has passed the persisted checkpoint plus one, so a tail
-# sitting at exactly that boundary passes. The leaf comes up having read past
-# acknowledged writes it does not hold. The base fails the activation instead.
+# failure path (issue #4450). TryRehydrateFromSnapshotAsync answers an ordinary
+# storage fault, a missing segment or an unreadable frame by returning false,
+# which the activation cannot tell from "no snapshot": it takes the -1 cold
+# override and replays the whole READABLE WAL, guarded only by the cold-replay
+# trim test against the persisted checkpoint. Under coverage-gated trim the
+# readable WAL no longer holds the prefix the snapshot covered, and a tail at
+# exactly persisted + 1 passes that test, so the leaf comes up having read past
+# acknowledged writes it does not hold. The base fails the activation closed.
 MODULE: ReadPositionHonestLoadFailureColdReplays
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: a snapshot that fails to load is treated as absent and the leaf cold-replays a WAL trimmed under that snapshot's coverage
 PERTURBS: ActivateLoadFail
-
 --- FIND
     /\ snapCov[l] # NoSnap
-    /\ faults < MaxFaults
-    /\ faults' = faults + 1
-    /\ UNCHANGED walVars
-    /\ UNCHANGED leafVars
-    /\ UNCHANGED pinVars
+    /\ UNCHANGED vars
 --- REPLACE
     /\ snapCov[l] # NoSnap
-    /\ faults < MaxFaults
-    /\ faults' = faults + 1
-\* MUTATION: the failed load falls through to the cold path, guarded only by
-\* production's cold-replay trim test against the durable checkpoint.
+\* MUTATION: production's fall-through to the cold path.
     /\ ~FallsOff(durCp[l])
     /\ up' = [up EXCEPT ![l] = TRUE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]
+    /\ anchor' = [anchor EXCEPT ![l] = durCp[l]]
     /\ UNCHANGED walVars
     /\ UNCHANGED <<durCp, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
 --- END

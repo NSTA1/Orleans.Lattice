@@ -1,20 +1,25 @@
 --------------------------- MODULE WalDurability ---------------------------
 (***************************************************************************)
 (* An abstract TLA+ specification of the Orleans.Lattice write-ahead-log    *)
-(* durability lifecycle, end to end and with crash-anywhere recovery.       *)
+(* durability lifecycle at the leaf, end to end and with crash-anywhere     *)
+(* recovery.                                                               *)
 (*                                                                         *)
 (* One WAL partition is a stream shared by every leaf of a tree. Writes    *)
 (* are appended at dense offsets, flushed (possibly out of order) and       *)
-(* acknowledged once durable. Each leaf owns some of the stream's entries,  *)
-(* reads the stream through a per-leaf READ position (its checkpoint),      *)
-(* folds the entries it owns into an in-memory projection, persists the     *)
-(* read position (a write that can fail), captures durable snapshots of     *)
-(* its projection, and publishes a durable materialiser pin. The WAL        *)
-(* garbage collector trims the stream's prefix up to the minimum pin. A     *)
-(* shard move fences and quiesces the stream and copies it to a new home.   *)
-(* Leaves and the WAL shard crash at any step between actions; a leaf       *)
-(* recovers from its snapshot, or cold from the readable WAL, and either    *)
-(* rebuilds every acknowledged write it owns or fails closed.               *)
+(* acknowledged once durable. Each leaf reads the stream through a per-leaf *)
+(* READ position (its checkpoint), folds the entries it owns into an        *)
+(* in-memory projection, persists the read position (a write that can      *)
+(* fail), captures durable snapshots of its projection (which can fail),   *)
+(* and publishes a durable materialiser pin. The WAL garbage collector     *)
+(* trims the stream's prefix up to the minimum pin. The WAL shard and a   *)
+(* leaf crash at any step between actions; a leaf recovers from its        *)
+(* snapshot, or cold from the readable WAL, and either rebuilds every      *)
+(* acknowledged write it owns or fails closed.                             *)
+(*                                                                         *)
+(* Shard moves are specified separately, in WalMove.tla: a move touches    *)
+(* the stream and its allocator but none of this module's leaf state, and *)
+(* keeping it out keeps this module small enough to check its liveness     *)
+(* properties exhaustively in CI.                                          *)
 (*                                                                         *)
 (* This models the protocol DESIGN, not the code. Values, keys, HLCs,       *)
 (* partitions beyond one, retention TTLs and replication are abstracted     *)
@@ -28,25 +33,22 @@
 EXTENDS Naturals, Integers, FiniteSets, TLC
 
 (***************************************************************************)
-(* Model instance. Two leaves share one partition of three offsets. The    *)
-(* owner of each offset is fixed and alternates, so each leaf's entries    *)
-(* are sparse in the shared stream (the reason a checkpoint must be a read  *)
-(* position) and every leaf owns at least one entry. MaxFaults bounds the  *)
-(* environment's faults - crashes, failed persists, failed captures and     *)
-(* failed snapshot loads together - which is the fairness ceiling that     *)
-(* lets the liveness properties be checked.                                *)
+(* Model instance. Two leaves share one partition of three offsets. Every  *)
+(* write belongs to l1; l2 owns nothing in the partition - the common case *)
+(* behind issue #3453, since keys hash across every partition - so l2 must *)
+(* advance its read position over entries it never applies, which is why  *)
+(* a checkpoint is a read position and not an applied high-water mark.     *)
+(* MaxFaults bounds the environment's faults (a shard crash, a leaf stop, a *)
+(* failed persist or capture): the fairness ceiling that lets the liveness *)
+(* properties be checked. One is enough to reach every defect paired below.*)
 (***************************************************************************)
 CONSTANTS l1, l2
 
 Leaves == {l1, l2}
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
-Owner == (0 :> l1) @@ (1 :> l2) @@ (2 :> l1)
-MaxFaults == 2
-
-\* Shard moves are operator-initiated and finite; one is enough to interleave
-\* a fence, quiesce, copy and switch with every other action.
-MaxMoves == 1
+Owner == (0 :> l1) @@ (1 :> l1) @@ (2 :> l1)
+MaxFaults == 1
 
 \* The "no snapshot" sentinel for snapshot coverage; -1 is a real coverage
 \* claim ("a snapshot exists and covers no offset").
@@ -64,9 +66,6 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*  durable   offsets the WAL store holds (trim removes them).             *)
 (*  tail      the oldest readable offset; every offset below it is gone.   *)
 (*  acked     offsets acknowledged to their writer (only once durable).    *)
-(*  move      shard-move phase: "idle", "fenced" or "copied".              *)
-(*  moveCopy  the offsets a move copied to the target store.               *)
-(*  moves     shard moves started so far (bounded by MaxMoves).            *)
 (*                                                                         *)
 (* Leaf l:                                                                 *)
 (*  up[l]     an activation exists and has finished activating.            *)
@@ -75,8 +74,11 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*  stCp[l]   the activation's belief about its persisted checkpoint       *)
 (*            (state.State).                                               *)
 (*  durCp[l]  the checkpoint grain storage actually holds.                 *)
+(*  anchor[l] the checkpoint this activation started from: the snapshot's   *)
+(*            coverage it rehydrated, or the stored checkpoint on a cold   *)
+(*            start. The activation may hold this belief before persisting.*)
 (*  clk[l]    whether the leaf's persisted clock is past Zero (it has      *)
-(*            durably recorded applying a write); gates pin publication.   *)
+(*            durably recorded applying a write).                          *)
 (*  cov[l]    the snapshot coverage this activation has recorded from a    *)
 (*            kept capture or a successful load; NoSnap when none.         *)
 (*  snapCov[l], snapRows[l]  the durable snapshot: its coverage claim and  *)
@@ -91,15 +93,15 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*                                                                         *)
 (*  faults    environment faults spent so far.                             *)
 (***************************************************************************)
-VARIABLES next, inflight, durable, tail, acked, move, moveCopy, moves,
-          up, cache, rp, stCp, durCp, clk, cov, snapCov, snapRows, stale,
+VARIABLES next, inflight, durable, tail, acked,
+          up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
           pinOff, pinHlc, faults
 
-walVars  == <<next, inflight, durable, tail, acked, move, moveCopy, moves>>
-leafVars == <<up, cache, rp, stCp, durCp, clk, cov, snapCov, snapRows, stale>>
+walVars  == <<next, inflight, durable, tail, acked>>
+leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
 pinVars  == <<pinOff, pinHlc>>
-vars == <<next, inflight, durable, tail, acked, move, moveCopy, moves,
-          up, cache, rp, stCp, durCp, clk, cov, snapCov, snapRows, stale,
+vars == <<next, inflight, durable, tail, acked,
+          up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
           pinOff, pinHlc, faults>>
 
 Pos == -1..(MaxOff - 1)
@@ -110,14 +112,12 @@ TypeOK ==
    /\ durable \subseteq Offs
    /\ tail \in 0..MaxOff
    /\ acked \subseteq Offs
-   /\ move \in {"idle", "fenced", "copied"}
-   /\ moveCopy \subseteq Offs
-   /\ moves \in 0..MaxMoves
    /\ up \in [Leaves -> BOOLEAN]
    /\ cache \in [Leaves -> SUBSET Offs]
    /\ rp \in [Leaves -> Pos]
    /\ stCp \in [Leaves -> Pos]
    /\ durCp \in [Leaves -> Pos]
+   /\ anchor \in [Leaves -> Pos]
    /\ clk \in [Leaves -> BOOLEAN]
    /\ cov \in [Leaves -> Pos \cup {NoSnap}]
    /\ snapCov \in [Leaves -> Pos \cup {NoSnap}]
@@ -133,7 +133,11 @@ TypeOK ==
 (* Readable: what a reader of the stream can still get. Watermark: the     *)
 (* durable-contiguous tail a cursor-advancing reader may be shown - the     *)
 (* oldest in-flight offset, or the next offset when nothing is in flight   *)
-(* (WalShippingWatermark). Owned(l): the acknowledged writes l owns.        *)
+(* (WalShippingWatermark). Owned(l): the acknowledged writes l owns. Cur:  *)
+(* the checkpoint the leaf reports as current, the higher of its persisted *)
+(* belief and its pending read position (GetCurrentCheckpointForPartition) *)
+(* - a cold activation's read position restarts below the persisted slot,  *)
+(* which it leaves untouched, so the two differ for a whole cold replay.   *)
 (***************************************************************************)
 Readable == {o \in durable : o >= tail}
 
@@ -141,10 +145,6 @@ Watermark == IF inflight = {} THEN next ELSE Min(inflight)
 
 Owned(l) == {o \in acked : Owner[o] = l}
 
-\* The checkpoint the leaf reports as current: the higher of its persisted
-\* belief and its pending read position (GetCurrentCheckpointForPartition).
-\* A cold activation's read position restarts below the persisted slot, which
-\* it leaves untouched, so the two differ for the length of a cold replay.
 Cur(l) == IF rp[l] > stCp[l] THEN rp[l] ELSE stCp[l]
 
 \* What a recovery of l from durable state alone rebuilds: the snapshot's
@@ -165,7 +165,7 @@ MergePin(l, hlc, off) ==
 \* The GC's view of the pin store. A pin that has never left Zero with no
 \* offset is a block pin and stops every trim; a real frontier with no
 \* offset abstains from the offset floor; any offset joins the floor.
-Blocking(l)  == pinOff[l] < 0 /\ pinHlc[l] = "zero"
+Blocking(l) == pinOff[l] < 0 /\ pinHlc[l] = "zero"
 Floor == Min({pinOff[l] : l \in {k \in Leaves : pinOff[k] >= 0}} \cup {MaxOff})
 
 Init ==
@@ -174,14 +174,12 @@ Init ==
     /\ durable = {}
     /\ tail = 0
     /\ acked = {}
-    /\ move = "idle"
-    /\ moveCopy = {}
-    /\ moves = 0
     /\ up = [l \in Leaves |-> TRUE]
     /\ cache = [l \in Leaves |-> {}]
     /\ rp = [l \in Leaves |-> -1]
     /\ stCp = [l \in Leaves |-> -1]
     /\ durCp = [l \in Leaves |-> -1]
+    /\ anchor = [l \in Leaves |-> -1]
     /\ clk = [l \in Leaves |-> FALSE]
     /\ cov = [l \in Leaves |-> NoSnap]
     /\ snapCov = [l \in Leaves |-> NoSnap]
@@ -194,46 +192,46 @@ Init ==
     /\ faults = 0
 
 (***************************************************************************)
-(* Append: the allocator hands the next offset to a new write, atomically  *)
-(* with the move-fence check (WalOffsetAllocationCore.Assign,               *)
-(* WalMoveFenceCore.IsAppendAdmitted). The write is in flight until its    *)
+(* Append: the allocator hands the next offset to a new write              *)
+(* (WalOffsetAllocationCore.Assign). The write is in flight until its      *)
 (* flush completes.                                                        *)
 (***************************************************************************)
 Append ==
-    /\ move = "idle"
     /\ next < MaxOff
     /\ inflight' = inflight \cup {next}
     /\ next' = next + 1
-    /\ UNCHANGED <<durable, tail, acked, move, moveCopy, moves>>
+    /\ UNCHANGED <<durable, tail, acked>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
 (***************************************************************************)
 (* FlushAck(o): one in-flight append's flush completes - flushes complete  *)
-(* in any order - and the write is acknowledged. The write path may also   *)
-(* fold it into its owner's projection if the owner is active (the         *)
-(* foreground apply); it does not advance the owner's read position.        *)
+(* in any order - and the write is acknowledged. The owning leaf handles   *)
+(* its own write, so when it is active it folds the write into its         *)
+(* projection (the foreground apply); that never advances its read         *)
+(* position. When the owner is not active the write is acknowledged        *)
+(* without the apply, which over-approximates production (a write reaches  *)
+(* an active leaf) and leaves the owner to replay it.                      *)
 (***************************************************************************)
 FlushAck(o) ==
     /\ o \in inflight
     /\ inflight' = inflight \ {o}
     /\ durable' = durable \cup {o}
     /\ acked' = acked \cup {o}
-    /\ \E apply \in BOOLEAN :
-         cache' = IF apply /\ up[Owner[o]] /\ ~stale[Owner[o]]
-                  THEN [cache EXCEPT ![Owner[o]] = @ \cup {o}]
-                  ELSE cache
-    /\ UNCHANGED <<next, tail, move, moveCopy, moves>>
-    /\ UNCHANGED <<up, rp, stCp, durCp, clk, cov, snapCov, snapRows, stale>>
+    /\ cache' = IF up[Owner[o]] /\ ~stale[Owner[o]]
+                THEN [cache EXCEPT ![Owner[o]] = @ \cup {o}]
+                ELSE cache
+    /\ UNCHANGED <<next, tail>>
+    /\ UNCHANGED <<up, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
 (***************************************************************************)
 (* ShardCrash: the WAL shard's activation is lost at any step. Every       *)
-(* unflushed append is lost (none was acknowledged), an unfinished move is *)
-(* abandoned with its fence, and the allocator recovers from what the      *)
-(* store holds: one past the highest stored offset, never below the tail.  *)
+(* unflushed append is lost (none was acknowledged) and the allocator      *)
+(* recovers from what the store holds: one past the highest stored offset, *)
+(* never below the tail.                                                   *)
 (***************************************************************************)
 RecoveredNext == Max({tail} \cup {o + 1 : o \in durable})
 
@@ -241,46 +239,10 @@ ShardCrash ==
     /\ faults < MaxFaults
     /\ inflight' = {}
     /\ next' = RecoveredNext
-    /\ move' = "idle"
-    /\ moveCopy' = {}
     /\ faults' = faults + 1
-    /\ UNCHANGED <<durable, tail, acked, moves>>
+    /\ UNCHANGED <<durable, tail, acked>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
-
-(***************************************************************************)
-(* A shard move: raise the fence, wait for the stream to quiesce (nothing  *)
-(* in flight) and copy it, then switch to the target and lower the fence.  *)
-(***************************************************************************)
-MoveFence ==
-    /\ move = "idle"
-    /\ moves < MaxMoves
-    /\ move' = "fenced"
-    /\ moves' = moves + 1
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, moveCopy>>
-    /\ UNCHANGED leafVars
-    /\ UNCHANGED pinVars
-    /\ UNCHANGED faults
-
-MoveCopy ==
-    /\ move = "fenced"
-    /\ inflight = {}
-    /\ moveCopy' = durable
-    /\ move' = "copied"
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, moves>>
-    /\ UNCHANGED leafVars
-    /\ UNCHANGED pinVars
-    /\ UNCHANGED faults
-
-MoveSwitch ==
-    /\ move = "copied"
-    /\ durable' = {o \in moveCopy : o >= tail}
-    /\ move' = "idle"
-    /\ moveCopy' = {}
-    /\ UNCHANGED <<next, inflight, tail, acked, moves>>
-    /\ UNCHANGED leafVars
-    /\ UNCHANGED pinVars
-    /\ UNCHANGED faults
 
 (***************************************************************************)
 (* ReadStep(l): an active leaf reads the next entry of the shared stream   *)
@@ -303,7 +265,7 @@ ReadStep(l) ==
                       THEN [cache EXCEPT ![l] = @ \cup {o}]
                       ELSE cache
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, stCp, durCp, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
@@ -322,7 +284,7 @@ PersistCheckpoint(l) ==
     /\ stCp' = [stCp EXCEPT ![l] = rp[l]]
     /\ clk' = [clk EXCEPT ![l] = @ \/ cache[l] # {}]
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, cache, rp, anchor, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
@@ -334,16 +296,20 @@ PersistFail(l) ==
     /\ stCp' = stCp
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, durCp, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, cache, rp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
 
 (***************************************************************************)
 (* Capture(l) / CaptureFail(l): the leaf captures a durable snapshot of    *)
-(* its projection, claiming coverage up to its current read position. It   *)
-(* is gated on the projection holding rows, not on the checkpoint (#2695), *)
-(* and the store keeps only a claim that does not regress the coverage it  *)
-(* already holds. Coverage is recorded in memory only from a kept capture  *)
-(* (#3440): a failed or declined capture records nothing.                  *)
+(* its projection. Production proceeds once any partition is proven        *)
+(* checkpointed (Cur >= 0) and declines a claim that covers nothing        *)
+(* (#2725). The claim is the leaf's read position - what the projection     *)
+(* actually holds - and the store keeps only a claim that does not regress *)
+(* the coverage it already holds. Coverage is recorded in memory only from *)
+(* a kept capture (#3440): a failed or declined capture records nothing.   *)
+(* CLAIMING THE READ POSITION IS THE INTENDED DESIGN, NOT PRODUCTION'S      *)
+(* (#4451): production claims the current checkpoint, which stands above   *)
+(* the projection for the whole of a cold rebuild.                         *)
 (***************************************************************************)
 Capture(l) ==
     /\ up[l]
@@ -355,7 +321,7 @@ Capture(l) ==
     /\ snapRows' = [snapRows EXCEPT ![l] = cache[l]]
     /\ cov' = [cov EXCEPT ![l] = rp[l]]
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, clk, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
@@ -367,12 +333,12 @@ CaptureFail(l) ==
     /\ cov' = cov
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, clk, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
 
 (***************************************************************************)
 (* PublishPin(l): the leaf resolves and publishes its durable materialiser *)
-(* pin (ResolveDurablePinForPartition), which the pin store merges by      *)
+(* pin (LeafDurablePinCore.Resolve), which the pin store merges by          *)
 (* monotone max.                                                           *)
 (*                                                                         *)
 (* A leaf whose clock is past Zero: an empty leaf with no checkpoint        *)
@@ -383,12 +349,19 @@ CaptureFail(l) ==
 (*                                                                         *)
 (* A leaf whose clock is still Zero has never applied a write. The cursor  *)
 (* mirror publishes nothing for it, but the flush paths (the starvation    *)
-(* drive and the deactivation barrier) publish (Zero, persisted) once it   *)
-(* has scanned through a persisted checkpoint holding no row (#3453), so a *)
-(* leaf whose every write was lost before it was applied cannot hold its   *)
-(* seeded block pin forever.                                               *)
+(* drive and the deactivation barrier) release its block once it has       *)
+(* scanned through a persisted checkpoint holding no row (#3453), so a     *)
+(* leaf that owns nothing cannot hold its seeded block pin forever. The    *)
+(* release is bounded by the snapshot coverage the leaf has recorded, when *)
+(* it holds one: a recovery from that snapshot restarts from its coverage, *)
+(* not from the persisted checkpoint.                                      *)
+(* THE BOUND IS THE INTENDED DESIGN, NOT PRODUCTION'S (#4456): production   *)
+(* releases the persisted checkpoint whatever the leaf's coverage.         *)
 (***************************************************************************)
 ClockLive(l) == clk[l] \/ cache[l] # {}
+
+NeverWrittenRelease(l) ==
+    IF cov[l] >= 0 /\ cov[l] < stCp[l] THEN cov[l] ELSE stCp[l]
 
 PublishPin(l) ==
     /\ up[l]
@@ -396,7 +369,7 @@ PublishPin(l) ==
     /\ ClockLive(l) \/ (cache[l] = {} /\ stCp[l] >= 0)
     /\ LET safe == IF stCp[l] < cov[l] THEN stCp[l] ELSE cov[l]
        IN IF ~ClockLive(l)
-          THEN MergePin(l, "zero", stCp[l])
+          THEN MergePin(l, "zero", NeverWrittenRelease(l))
           ELSE IF cache[l] = {} /\ Cur(l) < 0
                THEN MergePin(l, "clock", -1)
                ELSE IF safe < 0
@@ -420,7 +393,7 @@ GcTrim ==
          /\ t - 1 <= Floor
          /\ tail' = t
          /\ durable' = {o \in durable : o >= t}
-    /\ UNCHANGED <<next, inflight, acked, move, moveCopy, moves>>
+    /\ UNCHANGED <<next, inflight, acked>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -440,7 +413,7 @@ LeafStop(l) ==
     /\ cov' = [cov EXCEPT ![l] = NoSnap]
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<durCp, clk, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<durCp, anchor, clk, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
 
 (***************************************************************************)
@@ -450,8 +423,7 @@ LeafStop(l) ==
 (* been trimmed past the first offset it still needs. Without a snapshot it *)
 (* starts cold, reading the whole readable WAL, and the cold-replay guard  *)
 (* latches it stale when the WAL has been trimmed past its durable          *)
-(* checkpoint. Both trim tests are production's: checkpoint > 0 and        *)
-(* tail > checkpoint + 1.                                                  *)
+(* checkpoint. Both trim tests are WalFallOffCore.IsPrefixLost.            *)
 (***************************************************************************)
 FallsOff(cp) == cp > 0 /\ tail > cp + 1
 
@@ -462,6 +434,7 @@ Activate(l) ==
        THEN /\ cache' = [cache EXCEPT ![l] = snapRows[l]]
             /\ rp' = [rp EXCEPT ![l] = snapCov[l]]
             /\ stCp' = [stCp EXCEPT ![l] = snapCov[l]]
+            /\ anchor' = [anchor EXCEPT ![l] = snapCov[l]]
             /\ cov' = [cov EXCEPT ![l] = snapCov[l]]
             /\ IF FallsOff(snapCov[l])
                THEN /\ stale' = [stale EXCEPT ![l] = TRUE]
@@ -471,6 +444,7 @@ Activate(l) ==
        ELSE /\ cache' = [cache EXCEPT ![l] = {}]
             /\ rp' = [rp EXCEPT ![l] = -1]
             /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]
+            /\ anchor' = [anchor EXCEPT ![l] = durCp[l]]
             /\ cov' = cov
             /\ IF FallsOff(durCp[l])
                THEN /\ stale' = [stale EXCEPT ![l] = TRUE]
@@ -484,29 +458,42 @@ Activate(l) ==
 
 (***************************************************************************)
 (* ActivateLoadFail(l): a leaf that has a durable snapshot fails to load it *)
-(* (a storage fault, a missing segment, an unreadable frame). The          *)
-(* activation fails and is retried later; it does not fall through to a    *)
-(* cold replay, because the snapshot may be the only durable copy of a      *)
-(* prefix the GC trimmed under its coverage. THIS IS THE INTENDED DESIGN,  *)
-(* NOT PRODUCTION'S: see the abstraction gaps in Refinement.md.            *)
+(* (a storage fault, a cancelled load, an unreadable payload or segment).  *)
+(* A failed load is not the same as no snapshot: the snapshot may be the   *)
+(* only durable copy of a prefix the GC trimmed under its coverage, and    *)
+(* the leaf's pin - resolved against that snapshot and never lowerable -   *)
+(* keeps the GC entitled to trim that prefix for as long as a cold rebuild *)
+(* would run. So the activation fails closed and is retried later, however *)
+(* the WAL's tail reads at the moment of the failure: nothing changes, and *)
+(* the step is a stutter. It costs no fault budget because it changes no   *)
+(* state; Activate's weak fairness still forces the retry to succeed.      *)
+(* THIS IS THE INTENDED DESIGN (#4450); production cold-replays instead.   *)
 (***************************************************************************)
 ActivateLoadFail(l) ==
     /\ ~up[l]
     /\ ~stale[l]
     /\ snapCov[l] # NoSnap
-    /\ faults < MaxFaults
-    /\ faults' = faults + 1
-    /\ UNCHANGED walVars
-    /\ UNCHANGED leafVars
-    /\ UNCHANGED pinVars
+    /\ UNCHANGED vars
+
+(***************************************************************************)
+(* ReplayFaultRearm(l): an active leaf's cold rebuild faults part-way (a   *)
+(* read or apply failure inside the replay barrier) and the barrier is     *)
+(* re-armed within the same activation, with the partly rebuilt projection *)
+(* still in memory. The re-armed replay stays cold - it resumes from what  *)
+(* it has actually re-read - so the step changes nothing and is a stutter. *)
+(* THIS IS THE INTENDED DESIGN; production resumed warm from the persisted *)
+(* checkpoint over the partial projection (the sibling of #4451).          *)
+(***************************************************************************)
+ReplayFaultRearm(l) ==
+    /\ up[l]
+    /\ ~stale[l]
+    /\ rp[l] < anchor[l]
+    /\ UNCHANGED vars
 
 Next ==
     \/ Append
     \/ \E o \in Offs : FlushAck(o)
     \/ ShardCrash
-    \/ MoveFence
-    \/ MoveCopy
-    \/ MoveSwitch
     \/ \E l \in Leaves : ReadStep(l)
     \/ \E l \in Leaves : PersistCheckpoint(l)
     \/ \E l \in Leaves : PersistFail(l)
@@ -517,21 +504,20 @@ Next ==
     \/ \E l \in Leaves : LeafStop(l)
     \/ \E l \in Leaves : Activate(l)
     \/ \E l \in Leaves : ActivateLoadFail(l)
+    \/ \E l \in Leaves : ReplayFaultRearm(l)
 
 (***************************************************************************)
 (* Fairness: the protocol's own steps are weakly fair - appends complete,  *)
 (* flushes land, leaves activate, read, persist, capture and publish, and  *)
-(* the GC and an in-progress move run. The fault actions and MoveFence are *)
-(* environment events and deliberately NOT fair; faults are bounded by     *)
-(* MaxFaults, which is the assumption that faults do not happen forever.   *)
+(* the GC runs. The fault actions are environment events and deliberately *)
+(* NOT fair; faults are bounded by MaxFaults, which is the assumption that *)
+(* faults do not happen for ever.                                          *)
 (***************************************************************************)
 Spec ==
     /\ Init
     /\ [][Next]_vars
     /\ WF_vars(Append)
     /\ \A o \in Offs : WF_vars(FlushAck(o))
-    /\ WF_vars(MoveCopy)
-    /\ WF_vars(MoveSwitch)
     /\ WF_vars(GcTrim)
     /\ \A l \in Leaves : WF_vars(ReadStep(l))
     /\ \A l \in Leaves : WF_vars(PersistCheckpoint(l))
@@ -576,9 +562,21 @@ OffsetContiguity ==
 RecoveryNeverFallsOffLog ==
     \A l \in Leaves : ~stale[l]
 
+\* The activation's belief about its persisted checkpoint (state.State) is
+\* either what storage holds or the anchor it started from. A failed persist
+\* must not leave it claiming an advance storage never recorded (#4017).
+PersistedBeliefHonest ==
+    \A l \in Leaves : up[l] => stCp[l] \in {durCp[l], anchor[l]}
+
 \* Durable snapshot coverage never regresses.
 SnapshotCoverageMonotonic ==
     [][ \A l \in Leaves : snapCov'[l] >= snapCov[l] ]_vars
+
+\* A newly published pin offset never exceeds the persisted checkpoint the
+\* leaf believes at that moment: a pending advance never reaches the pin
+\* store, which can never take an offset back (#3476).
+PublishedPinWithinPersistedBelief ==
+    [][ \A l \in Leaves : pinOff'[l] > pinOff[l] => pinOff'[l] <= stCp[l] ]_vars
 
 (***************************************************************************)
 (* Liveness.                                                               *)

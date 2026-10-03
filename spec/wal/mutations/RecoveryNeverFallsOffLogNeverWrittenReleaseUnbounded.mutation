@@ -1,0 +1,20 @@
+# Pairs with RecoveryNeverFallsOffLog, and reproduces production's never-written
+# release (#3453): ResolveDurablePinForPartition publishes (Zero, persisted
+# checkpoint) for a leaf whose clock is Zero and which holds no row, ahead of and
+# independently of its recorded snapshot coverage. A never-written leaf can hold
+# an empty snapshot below its checkpoint (the zero-coverage repair captures one),
+# so the GC trims past that snapshot's coverage, and the next activation
+# rehydrates the snapshot, restarts from its coverage and latches stale over a
+# prefix the leaf never owned (#4456). The base bounds the release by coverage.
+MODULE: RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded
+TARGET: RecoveryNeverFallsOffLog
+CLASS: Invariant
+SUMMARY: a never-written leaf releases its block at its persisted checkpoint above the coverage of the snapshot it holds
+PERTURBS: PublishPin
+
+--- FIND
+          THEN MergePin(l, "zero", NeverWrittenRelease(l))
+--- REPLACE
+\* MUTATION: the release ignores the leaf's recorded snapshot coverage.
+          THEN MergePin(l, "zero", stCp[l])
+--- END

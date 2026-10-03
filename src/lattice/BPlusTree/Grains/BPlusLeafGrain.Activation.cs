@@ -4177,7 +4177,7 @@ internal sealed partial class BPlusLeafGrain
                 var trimCoordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                     $"{treeId}/{partition}");
                 var tail = await trimCoordinator.GetTailOffsetAsync(cancellationToken);
-                if (tail > persistedCheckpoint + 1)
+                if (WalFallOffCore.IsPrefixLost(persistedCheckpoint, tail))
                 {
                     _lastStaleReplayPartition = partition;
                     throw new LeafProjectionStaleException(

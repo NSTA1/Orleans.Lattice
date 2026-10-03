@@ -1,0 +1,21 @@
+# Pairs with EveryAckedWriteMaterialised. A leaf that activates with no snapshot
+# and an empty projection resumes reading after its persisted checkpoint instead
+# of from the start of the readable WAL - the defect the -1 cold override exists
+# to prevent (BPlusLeafGrainTests'
+# Activation_replays_from_minus_one_when_cache_starts_empty_and_no_snapshot_rehydrated).
+# The writes at or below that checkpoint are never re-read, so the leaf never
+# materialises them. The spec's fairness is intact.
+MODULE: EveryAckedWriteMaterialisedColdStartResumesFromCheckpoint
+TARGET: EveryAckedWriteMaterialised
+CLASS: Temporal
+SUMMARY: a cold activation resumes after its persisted checkpoint over an empty projection
+PERTURBS: Activate
+
+--- FIND
+       ELSE /\ cache' = [cache EXCEPT ![l] = {}]
+            /\ rp' = [rp EXCEPT ![l] = -1]
+--- REPLACE
+       ELSE /\ cache' = [cache EXCEPT ![l] = {}]
+\* MUTATION: no cold override; the replay starts after the checkpoint.
+            /\ rp' = [rp EXCEPT ![l] = durCp[l]]
+--- END

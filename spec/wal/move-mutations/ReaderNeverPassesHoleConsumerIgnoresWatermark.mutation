@@ -1,0 +1,15 @@
+# Pairs with ReaderNeverPassesHole. The consumer is clamped at the allocator's
+# head rather than at the durable-contiguous watermark (WalShippingWatermark),
+# so with flushes completing out of order it reads past a still-unfilled hole.
+MODULE: ReaderNeverPassesHoleConsumerIgnoresWatermark
+TARGET: ReaderNeverPassesHole
+CLASS: Invariant
+SUMMARY: the consumer is shown offsets above an in-flight append
+PERTURBS: Consume
+
+--- FIND
+    /\ ConsumeFrom < Watermark
+--- REPLACE
+\* MUTATION: the horizon ignores in-flight flushes.
+    /\ ConsumeFrom < next
+--- END
