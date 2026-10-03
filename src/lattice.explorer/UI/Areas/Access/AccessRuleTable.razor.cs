@@ -6,7 +6,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
 /// <summary>
 /// A table of authorization rules, each linking to its page, with app-owned
-/// rules attributed to (and linked to the roles of) their owning app.
+/// rules attributed to (and linked to the roles of) their owning app, tenant-tier
+/// rules attributed to (and linked to the rules of) their owning tenant, and the
+/// rule that decided an explanation marked.
 /// </summary>
 public partial class AccessRuleTable
 {
@@ -33,6 +35,21 @@ public partial class AccessRuleTable
     [Parameter]
     public string? Tenant { get; set; }
 
+    /// <summary>
+    /// The owning tenant of each tenant-tier rule among <see cref="Rules"/>, as the
+    /// cluster's listing reported it (<c>AuthRulePage.TenantRuleTenants</c>); a rule
+    /// it does not name is not tenant-tier. <see langword="null"/> names none.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyDictionary<LatticeAuthorizationRule, string>? TenantRules { get; set; }
+
+    /// <summary>
+    /// The id of the rule that decided an explanation (<c>AuthExplanation.DecidingRuleId</c>),
+    /// whose row is marked, or <see langword="null"/> when no rule is marked.
+    /// </summary>
+    [Parameter]
+    public string? DecidingRuleId { get; set; }
+
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
 
@@ -49,4 +66,15 @@ public partial class AccessRuleTable
         Navigator.Canonicalize(AccessRoutes.Rule(rule.RuleId, rule.Scope.TreeId).WithTenant(Tenant)).ToHref();
 
     private string AppRolesHref(string slug) => Navigator.Canonicalize(AccessRoutes.AppRoles(slug)).ToHref();
+
+    /// <summary>The link to <paramref name="tenant"/>'s own rules, or <see langword="null"/> when this Explorer has no tenant-rooted addresses.</summary>
+    private string? TenantRulesHref(string tenant) =>
+        TenantId.TryParse(tenant, out _) && Navigator.Canonicalize(AccessRoutes.TenantRules(tenant)) is { Tenant: not null } address
+            ? address.ToHref()
+            : null;
+
+    private string? TenantOf(LatticeAuthorizationRule rule) =>
+        TenantRules is { } tenants && tenants.TryGetValue(rule, out var tenant) ? tenant : null;
+
+    private bool IsDeciding(LatticeAuthorizationRule rule) => string.Equals(rule.RuleId, DecidingRuleId, StringComparison.Ordinal);
 }

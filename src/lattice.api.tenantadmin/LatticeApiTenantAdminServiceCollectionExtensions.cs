@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <c>Orleans.Lattice.Api.TenantAdmin</c> tenant-administration control facade on
 /// an Orleans silo.
 /// </summary>
-public static class LatticeApiTenantAdminServiceCollectionExtensions
+public static partial class LatticeApiTenantAdminServiceCollectionExtensions
 {
     /// <summary>
     /// Adds the transport-agnostic tenant-administration control facade to the
@@ -180,6 +180,14 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
             sp.GetRequiredService<ITenantUsageReader>()));
 
+        // Delegated tenant access administration (epic #4154). The tenant directory
+        // facade (tenant groups, group members, the tenant member set) and the tenant
+        // policy facade (tenant-tier rules, layer-aware explain, posture) are each
+        // registered by a partial method implemented in its own file, so the two land
+        // independently. A partial method with no implementation compiles to nothing.
+        AddTenantDirectoryAdmin(builder.Services);
+        AddTenantPolicyAdmin(builder.Services);
+
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any
         // supplied configure delegate above, matching how the sibling add-ons
@@ -188,6 +196,22 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Registers the <see cref="ILatticeTenantDirectoryAdmin"/> facade. Implemented,
+    /// in its own file, by the tenant directory facade; until then the call compiles
+    /// to nothing and no directory facade is registered.
+    /// </summary>
+    /// <param name="services">The silo's service collection.</param>
+    static partial void AddTenantDirectoryAdmin(IServiceCollection services);
+
+    /// <summary>
+    /// Registers the <see cref="ILatticeTenantPolicyAdmin"/> facade. Implemented, in
+    /// its own file, by the tenant policy facade; until then the call compiles to
+    /// nothing and no policy facade is registered.
+    /// </summary>
+    /// <param name="services">The silo's service collection.</param>
+    static partial void AddTenantPolicyAdmin(IServiceCollection services);
 
     /// <summary>
     /// Internal singleton whose sole purpose is to make a repeated

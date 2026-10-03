@@ -1,0 +1,75 @@
+@*
+    The signature moment of a tenant's Explain: the Platform layer, read-only and
+    final when it matches, drawn above the Tenant layer the administrator
+    controls, on one spine. The deciding layer and the deciding rule sit on the
+    join node (the marker, ringed) with the strong weight and the words that say
+    so; the layer that lost is drawn in tertiary ink. A platform-wide or app
+    decision names only its rule id and effect.
+*@
+<ol class="lt-access-layers" aria-label="The layers that decide, evaluated top to bottom" data-lt-deciding-layer="@DecidingAttribute">
+    @foreach (var layer in Layers)
+    {
+        var deciding = Explanation.DecidingLayer == layer;
+        var losing = Explanation.DecidingLayer is { } decided && decided != layer;
+        var rules = RulesIn(layer);
+        <li class="@(losing ? "lt-access-layer lt-access-layer--losing" : "lt-access-layer")"
+            aria-current="@(deciding ? "true" : null)"
+            data-lt-layer="@LayerAttribute(layer)"
+            data-lt-layer-state="@(deciding ? "deciding" : losing ? "losing" : "undecided")"
+            @key="layer">
+            <div class="lt-access-layer__head">
+                <LtNode Kind="@(deciding ? LtNodeKind.Join : LtNodeKind.Hollow)" />
+                <h3 class="lt-access-layer__title">@TenantRuleFormat.LayerLabel(layer)</h3>
+                <span class="lt-access-layer__note">@Note(layer)</span>
+                @if (deciding)
+                {
+                    <span class="lt-access-layer__decides">Decides: @(Explanation.Allowed ? "Allowed" : "Denied")</span>
+                }
+            </div>
+            @if (deciding && Explanation.DecidingRule is { SubjectWithheld: true } withheld)
+            {
+                <p class="lt-access-caveat" data-lt-withheld-rule="@withheld.RuleId">
+                    @TenantRuleFormat.OriginLabel(withheld.Origin) decides: rule <span class="lt-access-mono">@withheld.RuleId</span>, @AccessRuleFormat.EffectLabel(withheld.Effect). Its subject and scope are not shown to tenant administrators.
+                </p>
+            }
+            @if (rules.Count == 0)
+            {
+                @if (!(deciding && Explanation.DecidingRule is { SubjectWithheld: true }))
+                {
+                    <p class="lt-access-caveat">@NoneText(layer)</p>
+                }
+            }
+            else
+            {
+                <ul class="lt-access-layer__rules">
+                    @foreach (var rule in rules)
+                    {
+                        var decides = deciding && IsDecidingRule(rule);
+                        <li class="@(decides ? "lt-access-layer__rule lt-access-layer__rule--deciding" : "lt-access-layer__rule")" data-lt-rule-id="@rule.RuleId" @key="rule">
+                            <LtNode Kind="@(decides ? LtNodeKind.Join : LtNodeKind.Filled)" />
+                            <span class="lt-access-mono">@rule.RuleId</span>
+                            <span>@AccessRuleFormat.EffectLabel(rule.Effect)</span>
+                            <span class="lt-access-mono">@TenantRuleFormat.SubjectLabel(rule.SubjectKind, rule.SubjectId)</span>
+                            <span class="lt-access-mono">@TenantRuleFormat.ScopeLabel(rule)</span>
+                            <span>@AccessRuleFormat.OperationsLabel(rule.Operations)</span>
+                            @if (decides)
+                            {
+                                <span class="lt-access-layer__decides">Deciding rule</span>
+                            }
+                        </li>
+                    }
+                </ul>
+                @if (layer == TenantRuleLayer.Tenant && Explanation.DecidingLayer == TenantRuleLayer.Platform)
+                {
+                    <p class="lt-access-caveat" data-lt-shadowed-by="@Explanation.DecidingRuleId">These rules match but do not take effect: platform rule @Explanation.DecidingRuleId decided first.</p>
+                }
+            }
+        </li>
+    }
+</ol>
+@if (Explanation.DecidingLayer is null)
+{
+    <p class="lt-access-caveat" data-lt-default-decided="true">
+        <LtNode Kind="LtNodeKind.Join" /> No rule in either layer matched, so the default decided: @AccessRuleFormat.EffectLabel(Explanation.DefaultEffect).
+    </p>
+}

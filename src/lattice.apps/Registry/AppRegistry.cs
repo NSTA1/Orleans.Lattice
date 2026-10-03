@@ -374,6 +374,16 @@ internal sealed class AppRegistry : IAppRegistry
                     $"Role binding {i} must name a non-empty role and membership group.", nameof(request));
             }
 
+            // D4 confinement: refuse at write time so an install or re-binding naming another tenant's
+            // group fails at the call; activation refuses a stored one again (AppRoleBindingTenantMismatch).
+            if (!AppRoleCompiler.IsBindableGroup(request.Tenant, binding.GroupId))
+            {
+                throw new ArgumentException(
+                    $"Role '{binding.RoleName}' is bound to group '{binding.GroupId}', which is not a group of the installing tenant; "
+                    + "a role may be bound only to a cluster group or one of the tenant's own groups.",
+                    nameof(request));
+            }
+
             for (var j = 0; j < i; j++)
             {
                 if (string.Equals(bindings[j].RoleName, binding.RoleName, StringComparison.Ordinal))

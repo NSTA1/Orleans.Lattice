@@ -263,8 +263,8 @@ different region codes).
   the in-environment collector stamps with `lattice_head="silo"`; each region's
   Azure Monitor workspace holds only that region's silo series, so no app-name
   label is needed. The default `siloScaleThreshold` of `0.5` is below 1 on
-  purpose: KEDA asks for `ceil(value / threshold)` replicas and the scale value
-  never exceeds the current replica count, so a threshold of `1` could only hold
+  purpose: KEDA asks for `ceil(value / threshold)` replicas and demand alone
+  never lifts the scale value above the current replica count, so a threshold of `1` could only hold
   or shrink the pool, while `0.5` asks for twice the current count at full
   saturation. The same division applies at rest: the scale value never reads
   below its own floor (`Scaling:MinReplicas`, which compute sets from

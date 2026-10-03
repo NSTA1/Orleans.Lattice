@@ -81,6 +81,24 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
     }
 
     [Test]
+    public void AddLatticeTenancy_registers_the_tenant_access_data_purge_once()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        builder.AddLatticeTenancy();
+        builder.AddLatticeTenancy();
+
+        var descriptor = builder.Services.Single(d => d.ServiceType == typeof(ITenantAccessDataPurge));
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            Assert.That(
+                descriptor.ImplementationFactory!(Substitute.For<IServiceProvider>()),
+                Is.InstanceOf<TenantAccessDataPurge>());
+        });
+    }
+
+    [Test]
     public void AddLatticeTenancy_wires_the_cross_silo_tenant_policy_epoch_once()
     {
         var builder = NewBuilderWithDependencies();

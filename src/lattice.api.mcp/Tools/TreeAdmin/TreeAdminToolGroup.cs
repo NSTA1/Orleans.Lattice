@@ -463,8 +463,11 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SetTreeAliasAsync, "lattice_treeadmin_tree_set_alias",
                 "Point a logical tree at a physical tree",
                 "Points a logical tree at a physical tree so subsequent reads and writes routed through it target "
-                + "the physical tree, returning the resulting alias state. Only a single level of indirection is "
-                + "allowed - the physical target must not itself be aliased. Rejected for a reserved system tree id. "
+                + "the physical tree, returning the resulting alias state. The target's shard map moves onto the "
+                + "logical tree in the same registry write as the alias, and the physical tree the alias leaves "
+                + "redirects routers that still address it. Only a single level of indirection is "
+                + "allowed - the physical target must not itself be aliased. Rejected for a reserved system tree id, "
+                + "and refused when the registered tree-ownership guard denies the alias. "
                 + "Admin-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SetTreeConfigAsync, "lattice_treeadmin_tree_set_config",
                 "Update a tree's registry configuration",
@@ -575,7 +578,8 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Undoes a tree's in-flight or most recent completed resize, returning it to its pre-resize "
                 + "physical tree and B+ node capacity. An undo while the snapshot is still draining aborts the copy "
                 + "and discards the draft destination; an undo after the alias swap recovers the pre-resize tree, "
-                + "removes the alias, restores the prior registry configuration, and deletes the resized tree. "
+                + "moves the tree back onto it together with its shard map, restores the prior registry "
+                + "configuration, and deletes the resized tree. "
                 + "Available while a resize is in flight or while the pre-resize tree is still within its "
                 + "soft-delete recovery window. The undo is accepted even while a resize phase is running: the "
                 + "intent is persisted at once and the resize unwinds at its next phase or slice boundary. The call "

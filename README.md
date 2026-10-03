@@ -301,8 +301,9 @@ RepoContext is an MCP server that gives an AI agent durable, conflict-free
 memory about a codebase: a structural record and content digest per file, symbol
 outlines and a reverse cross-reference graph, agent-authored notes and decisions
 with optional TTL, semantic search over embeddings, and a budgeted context
-bundle with reuse accounting. It runs as a single local container alongside its
-embedding companion.
+bundle with reuse accounting. It can also run memory-only, disabling file and
+symbol indexing while keeping agent memory. It runs as a single local container
+alongside its embedding companion.
 
 It is worth reading as a worked example because it composes most of the platform
 at once, and does so without a line of bespoke storage code:

@@ -44,7 +44,8 @@ bounded chunks, and maintained in place as vectors are written and retired.
   serves instead of paying for the whole corpus up front.
 - **Honest status reporting.** The index always says which path answered a query
   (approximate or exhaustive) and whether it is still building, so a caller can
-  never mistake a warming index for a settled one.
+  never mistake a warming index for a settled one. Non-finite scores rank below
+  every numeric score, so a bad vector cannot displace a real match.
 
 ## Two layers, deliberately separable
 

@@ -135,7 +135,7 @@ The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becom
 - `-Vehicles <N>` -- synthetic fleet size (default 4000).
 - `-TickHz <N>` -- per-vehicle samples per second (default 5).
 - `-DurationSec <N>` -- producer run time (default 45).
-- `-ExtraSiloEnv @{ BENCH_FOO='bar' }` -- arbitrary env overrides for the silo unit.
+- `-ExtraSiloEnv @{ NAME='value' }` -- arbitrary env overrides for the silo unit.
 - `-NamePrefix lat-exp` -- target a non-default environment.
 - `-ParametersFile <path>` -- explicit parameters file instead of auto-discovery.
 - `-QuiesceTimeoutSec <N>` -- max seconds to wait for the silo's in-flight gauge to
@@ -330,7 +330,7 @@ current short version, in the order an investigator reaches for them:
 | `BENCH_TX_REGISTRY_SHARDS` | `1` (silo), `8` (via `-TxRegistryShards`) | Saga decision registry shards per tree (`LatticeOptions.TxRegistryShardCount`, [#3501](https://github.com/NSTA1/Orleans.Lattice/issues/3501)). The library default of `1` is the unsharded layout; `run-cohort-aca.ps1` opts in to `8` so atomic cohorts measure the sharded ceiling of about 100 sagas/s per shard. Clamped to `1..256`. |
 | `BENCH_TREE_ID` | rotates per cohort | Pin to re-use an existing WAL partition; otherwise every cohort starts on an empty manifest. |
 
-All of these can be passed via `-ExtraSiloEnv @{ BENCH_FOO = 'bar' }` to `run-cohort.ps1`,
+All of these can be passed via `-ExtraSiloEnv @{ NAME = 'value' }` to `run-cohort.ps1`,
 except that the offered rate comes from `-Vehicles` / `-TickHz`: on the silo,
 `BENCH_VEHICLE_COUNT` only sizes the read-mode pre-seed and `BENCH_TICK_HZ` is not read.
 
@@ -479,7 +479,7 @@ completing work stays `HEALTHY`, with its failures carried as data.
 | `-WalReplayQueueDepth` | `64` | `BENCH_WAL_REPLAY_QUEUE_DEPTH` for the silos. |
 | `-SetManyFanOutBudgetSec`, `-WalAdmissionCallBudgetSec` | `30`, `15` | The two saturation budgets from [Saturation knobs](#saturation-knobs); `0` means infinite, the library default. |
 | `-TxRegistryShards` | `8` | Saga decision registry shards per tree, passed as `BENCH_TX_REGISTRY_SHARDS`. Pass `1` for the unsharded library default. |
-| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default (see below); any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. For the coalescing threshold `0` turns coalescing off, the control arm of a sweep. |
+| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default (see below). The coalescing threshold and recovery-release batch pass any value from `0` up (`0` turns coalescing off, or releases every parked waiter); the two boolean arms should be pinned as `0` or `1`. |
 | `-WalMaterialiserPinBuckets` | `-1` | Floor on the durable pin buckets per pin shard (#3576). `-1` sets nothing, so the silo keeps the library default; any value from `1` up is passed as `BENCH_WAL_MATERIALISER_PIN_BUCKETS`. |
 | `-ResetStorage` | `$true` | Empty the rig's storage before the cohort (above). |
 | `-WalTable`, `-GrainStateTable` | `OrleansLatticeWal`, `OrleansLatticeGrainState` | Table names. Under `-ResetStorage` they are replaced by fresh `Wal<stamp>` / `Gs<stamp>` names unless passed explicitly. |

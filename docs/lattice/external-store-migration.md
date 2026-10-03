@@ -146,10 +146,13 @@ static async IAsyncEnumerable<KeyValuePair<string, byte[]>> ReadAscendingAsync()
 
 ### The target tree must be empty
 
-The one-shot path fans out to *every* physical shard, including shards this load
-has no entries for, so data sitting on an untouched shard is still detected. A
-shard that already holds a root node rejects the load with
-`InvalidOperationException`.
+The one-shot path resolves the tree's current physical routing and then fans
+out to *every* physical shard, including shards this load has no entries for, so
+data sitting on an untouched shard is still detected. A shard that already holds
+data - live keys, tombstones, an internal root, or an in-flight graft - rejects
+the load with `InvalidOperationException`. A seeded empty root left by an earlier
+read, count, warm-up, resize or reshard emptiness probe is still empty and is
+retired after the load publishes its own root.
 
 `BeginBulkLoadAsync` probes the tree first with a deep diagnostic and rejects a
 non-empty one with `TreeNotEmptyException`. It drops the tree's cached
@@ -180,8 +183,9 @@ or case-insensitive mode, and two consequences follow directly:
   current culture. Neither matches the tree's order. Sort with
   `StringComparer.Ordinal` or `string.CompareOrdinal`.
 
-The append-based paths graft each chunk onto the right edge of the tree, which is
-why they require ascending input rather than merely sorted-per-chunk input. The
+The append-based paths resolve the tree's current physical routing for each
+chunk and graft that chunk onto the right edge of the routed shards, which is why
+they require ascending input rather than merely sorted-per-chunk input. The
 tree-administration facade validates this and throws `BulkLoadOrderException`,
 carrying the tree id, the chunk index, the offending key, and the key that
 preceded it, before any grain call is made, so no partial data is grafted. The

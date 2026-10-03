@@ -20,7 +20,8 @@ internal static class TenantPolicyTestData
         string tenantId,
         TenantStatus status = TenantStatus.Active,
         IEnumerable<string>? admins = null,
-        IEnumerable<CrossTenantGrant>? grants = null)
+        IEnumerable<CrossTenantGrant>? grants = null,
+        IEnumerable<string>? members = null)
     {
         var id = TenantId.Parse(tenantId);
         var tick = 1L;
@@ -45,6 +46,14 @@ internal static class TenantPolicyTestData
             foreach (var grant in grants)
             {
                 record.AddGrant(grant, Clock(tick++), "test");
+            }
+        }
+
+        if (members is not null)
+        {
+            foreach (var member in members)
+            {
+                record.AddMemberSubject(member, Clock(tick++), "test");
             }
         }
 

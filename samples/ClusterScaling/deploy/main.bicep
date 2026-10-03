@@ -251,7 +251,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             custom: {
               type: 'metrics-api'
               metadata: {
-                // scaleValue never exceeds the current replica count, so
+                // Demand alone never lifts scaleValue above the current replica count, so
                 // desiredReplicas = ceil(scaleValue / targetValue) grows the
                 // pool only while targetValue is below 1 (default '0.5').
                 url: scaleSignalUrl

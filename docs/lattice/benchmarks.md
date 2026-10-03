@@ -235,8 +235,7 @@ shell.
 
 The available workload method names are listed by running
 `./benchmark.ps1 microbench -Workloads '*'` and reading the BDN summary
-table. The suite currently ships a broad set of `[Benchmark]` methods (on the
-order of ninety) covering point
+table. The suite currently ships a broad set of `[Benchmark]` methods covering point
 reads / writes (`PointRead`, `PointWrite`, `PointReadWithVersion`,
 `PointExists`), the other point-write shapes (`PointDelete`, `PointGetOrSet`,
 `PointSetIfVersion`, `PointSetWithTtl`, `PointApplyCrdtDelta`) and an empty
@@ -348,6 +347,9 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `crdtcoveragecollapse` | Three observed-remove dot-coverage tests that collapse a single-replica cancelling-dot list to its highest counter: the OR-Set and RW-Set live-member projections and the OR-Set folded-state decode. |
 | `crdtdotscantrims` | Three trims on the observed-remove dot primitives: span scans instead of list indexing, liveness reads that stop at the first surviving dot, and the merge-time compaction sweep. |
 | `crdtapplyprobetrims` | Three per-call trims on the CRDT delta-apply path: the capturing sizing lambda in the delta-run fold, the MV-register duplicate-dot probe returning an index instead of a nullable entry, and the OR-Flag / RW-Flag dot union walking a span. Read the fold group for allocation and the other two for time. |
+| `crdtapplywalktrims` | Three trims on the CRDT delta-apply path: replacing boxed `IReadOnlyList<T>` delta walks with span walks, hoisting the OR-set alternate lookup out of the per-dot loop, and pre-sizing the RGA insert batch and dot index. Read the first and third for allocation, and the second for time. |
+| `crdtdecodewalktrims` | Three provenance-decode read-path trims: the version-vector current-value projection keeps keys and clocks together in a pooled sorted window, OR-set / sequence / grow-set delta decoders walk spans instead of interface indexers, and `Rga.ToList` walks the cached backing list instead of a read-only wrapper. |
+| `scratchkeywindowtrims` | Pooled scratch key windows at three sort-and-discard sites: OR-set / RW-set folded-state decode, OR-set / RW-set current-value decode, and the single-tree and cross-tree atomic fingerprint paths. Read it primarily for allocation, with low-width controls for rental overhead. |
 | `leafdigestscantrims` | Three per-element trims on the leaf read, digest and bisect paths: the range enumerator retiring its lower-bound test once satisfied, the digest transcoding each string field once, and a single-replica vector clock fed without a pooled sort. |
 | `leafboundhoistdotspan` | Three read-path trims, each with a baseline, an optimised and a no-gain control lane: the leaf range scan dropping per-row bound re-tests its window already enforces, the key range read sorting only when fresh pending keys were appended, and the provenance decoders' dot scans walking spans instead of the list indexer. |
 | `crdtprovenancedecode` | Three CRDT provenance-decode paths an entry-history read runs for every revision: the multi-value register's delta decode and current-value projection, and the OR-Map's folded-state decode and key projection. |

@@ -23,7 +23,7 @@ public sealed class LatticeTenantRegistryTests
         var cluster = Options.Create(new ClusterOptions { ClusterId = "test-cluster" });
         var serializer = TestSerializers.TenantRecords;
         var initializer = new TenantRegistryInitializer(grainFactory, services, options, cluster, serializer);
-        return new LatticeTenantRegistry(grainFactory, initializer, serializer);
+        return new LatticeTenantRegistry(grainFactory, initializer, serializer, Substitute.For<ITenantAccessDataPurge>());
     }
 
     [Test]

@@ -679,8 +679,9 @@ internal sealed class TreeResizeGrain(
         //      the alias has been flipped and the destination is live.
         //   2. After swap - during the SoftDeleteDuration window, or mid
         //      Swap/Reject/Cleanup. Recover the old physical tree if the
-        //      Cleanup phase already soft-deleted it, remove the alias,
-        //      restore registry entry, and delete the destination tree.
+        //      Cleanup phase already soft-deleted it, move the alias and the
+        //      shard map back onto it in one registry write, restore the
+        //      registry entry, and delete the destination tree.
         //      Shadow-forward state on the old-tree shards must also
         //      be cleared so the tree becomes writable again.
         if (!state.State.InProgress && !state.State.Complete)

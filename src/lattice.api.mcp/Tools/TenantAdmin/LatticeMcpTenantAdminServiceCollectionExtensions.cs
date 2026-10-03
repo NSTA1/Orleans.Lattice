@@ -21,6 +21,15 @@ namespace Orleans.Lattice.Api.Mcp;
 /// annotated destructive and non-read-only; the region-status read is read-only.
 /// </para>
 /// <para>
+/// The same opt-in contributes the delegated tenant access tools
+/// (<c>lattice_tenant_group_*</c>, <c>lattice_tenant_member_*</c>,
+/// <c>lattice_tenant_rule_*</c>, <c>lattice_tenant_explain</c>,
+/// <c>lattice_tenant_effective_permissions</c> and
+/// <c>lattice_tenant_access_posture</c>), each only when its facade -
+/// <c>ILatticeTenantDirectoryAdmin</c> or <c>ILatticeTenantPolicyAdmin</c> - is
+/// registered.
+/// </para>
+/// <para>
 /// The module adds no authorization path. Each tool stamps the caller credential
 /// bridged from the request principal onto the ambient credential context and
 /// defers to the facade's own fail-closed tenant-admin access gate, so an
@@ -67,6 +76,12 @@ public static class LatticeMcpTenantAdminServiceCollectionExtensions
         });
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup, TenantAdminToolGroup>());
+
+        // The delegated tenant access tools share the tenant-admin group and its
+        // control opt-in; each facade's tools appear only when that facade is
+        // registered (in-process by the tenant-admin API, remotely by the tenant
+        // access gRPC client), so registering the module changes nothing otherwise.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup, TenantAccessToolGroup>());
 
         return services;
     }

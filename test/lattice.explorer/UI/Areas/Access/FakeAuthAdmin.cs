@@ -196,11 +196,22 @@ internal sealed class FakeAuthAdmin : ILatticeAuthAdmin
         {
             var owned = Rules.Where(rule => AccessCatalog.IsOwnedBy(rule, TenantId.Parse(tenant))).ToList();
             var (narrowed, after) = Page(owned, request);
-            return new AuthRulePage { Entries = narrowed, NextPageToken = after, Tenant = tenant };
+            return new AuthRulePage { Entries = narrowed, NextPageToken = after, Tenant = tenant, TenantRuleTenants = TenantsOf(narrowed) };
         }
 
         var (entries, next) = Page(Rules, request);
-        return new AuthRulePage { Entries = entries, NextPageToken = next };
+        return new AuthRulePage { Entries = entries, NextPageToken = next, TenantRuleTenants = TenantsOf(entries) };
+    }
+
+    /// <summary>
+    /// The owning tenant of each tenant-tier (<c>tenant:</c>) rule, index-aligned
+    /// with <paramref name="entries"/>, or empty when none is tenant-tier, as the
+    /// cluster reports them.
+    /// </summary>
+    private static IReadOnlyList<string?> TenantsOf(IReadOnlyList<LatticeAuthorizationRule> entries)
+    {
+        var tenants = entries.Select(rule => LatticeTenantRuleIds.TryGetTenant(rule.RuleId, out var tenant) ? tenant.Value : null).ToArray();
+        return tenants.Any(tenant => tenant is not null) ? tenants : [];
     }
 
     /// <summary>Every rule-listing request, in order.</summary>

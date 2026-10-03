@@ -225,8 +225,21 @@ the consented UI bridge grants, the consenting principal, the lifecycle state, a
 revision that every applied transition advances, and install, consent and state-change
 timestamps.
 
+A description also carries `ManifestDigest`, the lower-case SHA-256 digest of the
+manifest shape and its effective provenance. Send it back on install as
+`ExpectedManifestDigest` to pin the commit to the manifest the operator reviewed; if
+the source changes the manifest before commit, the install is refused instead of
+consenting to unseen roles, trees, bridge grants or UI assets.
+
 - **Role bindings** (`AppRoleBinding`) map each manifest role to one membership group
-  id.
+  id: a cluster group, or one of the installing tenant's own
+  [tenant groups](../lattice.tenancy/README.md#tenant-groups) (`t/{tenant}/{name}`).
+  The whole `t/` namespace is otherwise reserved, so a binding naming another
+  tenant's group, a `t/default/...` id, a malformed `t/` id, or any `t/` id on an
+  install in the default tenant is refused: the registry rejects the install, upgrade,
+  re-binding or consent update with an `ArgumentException`, activation fails a stored
+  one with `AppRoleBindingTenantMismatch`, and the role-holding check used by the app
+  UI bridge and app MCP tools ignores it.
 - **The ceiling** (`AppCapabilityCeiling`) holds `AllowedOperations` and
   `ApprovedExceptionScopes`. Scopes inside the app's own `a/{app}/` namespace are
   covered structurally, so the common case needs no exception at all
@@ -350,8 +363,10 @@ Replacing the owned rule set withdraws stale rules before writing new ones, so a
 policy-store fault part-way through never keeps a grant the current consent revoked.
 When the installed version itself cannot be activated - its manifest cannot be resolved
 or validated, its roles exceed the consented ceiling, a binding names an undeclared
-role, its UI requests a bridge grant that was never consented, or it has a tree
-ownership conflict - any rules left from an earlier
+role, a binding names a group outside the installing tenant
+(`AppRoleBindingTenantMismatch`, reported ahead of any other compilation failure with
+the diagnostic code `role-binding-tenant-mismatch`), its UI requests a bridge grant
+that was never consented, or it has a tree ownership conflict - any rules left from an earlier
 activation are withdrawn; a replication, tree-provisioning or rule-write failure
 keeps the existing rules, so a retry is not an outage.
 
@@ -451,11 +466,15 @@ the tree as an operator; the app supplies no bootstrap source.
 bindings, the ceiling and an optional cross-app `AppTreeOwnerSnapshot` to an
 `AppRuleCompilation`. On success it holds the full
 set of `LatticeAuthorizationRule` records; on failure it lists every excess
-(`AppCeilingExcess`) and every binding that names an unknown role, and emits no
+(`AppCeilingExcess`), every binding that names an unknown role, and every binding
+whose group is outside the installing tenant (`TenantMismatchBindings`), and emits no
 rules. A declared role with no binding emits nothing and is listed in
 `AppRuleCompilation.UnboundRoles` without failing the compilation.
 
-- Every rule's subject is `LatticeSubjectSelector.Group(groupId)`.
+- Every rule's subject is `LatticeSubjectSelector.Group(groupId)`. A rule naming one
+  of the tenant's own groups is scoped only to that tenant's trees - its app trees or
+  an adopted tree - as the policy store's confinement guard requires (see
+  [The tenant rule layer](../lattice.auth/tenant-layer.md#confinement-guards)).
 - Every rule id is `app:{slug}:{role}:{hash}`, where the hash is derived from the
   slug, role, group, scope kind, tenant-composed tree id and key or prefix, so ids
   are stable across runs and processes. `LatticeAppRuleIds.Prefix` (`app:`) and

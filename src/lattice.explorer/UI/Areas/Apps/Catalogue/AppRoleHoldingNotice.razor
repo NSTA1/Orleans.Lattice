@@ -1,5 +1,3 @@
-@using Orleans.Lattice.Explorer.UI.Areas.Access
-
 @*
     Why the caller cannot open an app they hold no role in, and how to fix it (issue #4150).
     A role is held only through membership of the group it is bound to (issue #3902), so
@@ -99,7 +97,7 @@ else
         {
             @foreach (var group in Assessment.MissingGroups)
             {
-                <a class="lt-btn lt-btn--quiet" href="@Navigator.Canonicalize(AccessRoutes.Group(group)).ToHref()" data-lt-join="@group">Add me to @group</a>
+                <a class="lt-btn lt-btn--quiet" href="@Navigator.Canonicalize(AppBindingGroups.JoinAddress(group)).ToHref()" data-lt-join="@group">Add me to @group</a>
             }
         }
         @if (RebindHref is { } rebind && Assessment.HoldsAny != true)

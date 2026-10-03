@@ -13,8 +13,8 @@
 #   - us-replicate     PathPrefix(`/orleans.lattice.replication.`)
 #                      Round-robin, no sticky cookie. Priority 200 so
 #                      it wins decisively against the / catch-all.
-#                      Reached by the peer cluster's silos opening the
-#                      package's gRPC push transport stream. Upstream
+#                      Reached by the peer cluster's silos calling the
+#                      package's unary gRPC push transport. Upstream
 #                      uses h2c (HTTP/2 cleartext) because gRPC
 #                      requires HTTP/2 end-to-end and the silo Kestrel
 #                      endpoint is configured for h2c.
@@ -27,6 +27,11 @@
 #                      serves them and no affinity is needed. The
 #                      trailing slash anchors the prefix so it cannot
 #                      collide with a Blazor route.
+#   - us-backup        PathPrefix(`/orleans.lattice.api.backup/`)
+#                      Round-robin, no sticky cookie. Priority 200.
+#                      Reached by the Orleans.Lattice.Explorer backup UI
+#                      when the stack runs with run.ps1 -Backup. Same h2c
+#                      backend pool on :8081.
 #   - us-web           /             sticky cookie. Blazor Server's
 #                      SignalR circuit pins to one silo per browser tab.
 http:
@@ -62,7 +67,7 @@ http:
       # Orleans.Lattice.Explorer backup UI drives (issue #1131), wired
       # only when the stack is started with run.ps1 -Backup. Without this
       # router the backup service path falls through to the / catch-all
-      # (Blazor), which 404s the gRPC call and greys out the Backups tab.
+      # (Blazor), which 404s the gRPC call the Explorer Backups area makes.
       # The trailing slash anchors the prefix; priority 200 keeps it
       # ahead of the / catch-all, exactly like us-state.
       rule: "PathPrefix(`/orleans.lattice.api.backup/`)"

@@ -39,6 +39,13 @@ siloBuilder.ConfigureLatticeGrainStorageFencing(o => o.Mode = LatticeGrainStorag
 
 `Warn` is the default so that upgrading never turns a running deployment's next restart into a failed start. Use `Disabled` only for a deliberately non-durable provider, such as a benchmark's no-op storage, where the probe's writes are wasted.
 
+`LatticeGrainStorageFencingOptions` has these settings:
+
+| Option | Type | Default | Validation |
+|--------|------|---------|------------|
+| `Mode` | `LatticeGrainStorageFencingMode` | `Warn` | Must be a defined `LatticeGrainStorageFencingMode` value: `Warn`, `Reject` or `Disabled`. |
+| `ProbeTimeout` | `TimeSpan` | 30 seconds | Must be positive. |
+
 ## Setting Options
 
 Lattice uses the standard .NET [named options](https://learn.microsoft.com/dotnet/core/extensions/options#named-options-support-using-iconfigurenamedoptions) pattern. Each tree resolves its options by name (the tree ID passed to `GetGrain<ILattice>(treeId)`).

@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// resolves the actual instance per request.
 /// </remarks>
 [BindServiceMethod(typeof(LatticeTenantAdminGrpcServiceBase), nameof(BindService))]
-internal abstract class LatticeTenantAdminGrpcServiceBase
+internal abstract partial class LatticeTenantAdminGrpcServiceBase
 {
     /// <summary>Creates a new active tenant. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.</summary>
     public abstract Task<TenantCreationResult> CreateTenant(TenantAdminCreateRequest request, ServerCallContext context);
@@ -200,6 +200,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.ApproveCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
             binder.AddMethod(methods.RejectCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
             binder.AddMethod(methods.RevokeCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
+            BindTenantAccessMetadata(binder, methods);
             return;
         }
 
@@ -224,6 +225,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.ApproveCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.ApproveCrossTenantGrant));
         binder.AddMethod(methods.RejectCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.RejectCrossTenantGrant));
         binder.AddMethod(methods.RevokeCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.RevokeCrossTenantGrant));
+        BindTenantAccess(binder, methods, serviceImpl);
     }
 }
 
@@ -234,7 +236,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
 /// translating argument failures, precondition failures, and authorization
 /// denials onto gRPC status codes.
 /// </summary>
-internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServiceBase
+internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServiceBase
 {
     private readonly ILatticeTenantAdmin _control;
     private readonly ILatticeTenantSelfService _selfService;
@@ -242,6 +244,8 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     private readonly ILatticeTenantQuotaUsage? _quotaUsage;
     private readonly ILatticeTenantAccessAdmin? _accessAdmin;
     private readonly ILatticeTenantGrantAdmin? _grantAdmin;
+    private readonly ILatticeTenantDirectoryAdmin? _directoryAdmin;
+    private readonly ILatticeTenantPolicyAdmin? _policyAdmin;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeTenantAdminApiGrpcOptions> _options;
@@ -259,7 +263,8 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// </summary>
     /// <remarks>
     /// <paramref name="regionAdmin"/>, <paramref name="quotaUsage"/>,
-    /// <paramref name="accessAdmin"/> and <paramref name="grantAdmin"/> are
+    /// <paramref name="accessAdmin"/>, <paramref name="grantAdmin"/>,
+    /// <paramref name="directoryAdmin"/> and <paramref name="policyAdmin"/> are
     /// <b>optional</b>. Each is a separate
     /// opt-in registration (and the usage facade may also be absent on a host
     /// running an older facade package), so a host that binds tenant
@@ -280,7 +285,9 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ILatticeTenantRegionAdmin? regionAdmin = null,
         ILatticeTenantQuotaUsage? quotaUsage = null,
         ILatticeTenantAccessAdmin? accessAdmin = null,
-        ILatticeTenantGrantAdmin? grantAdmin = null)
+        ILatticeTenantGrantAdmin? grantAdmin = null,
+        ILatticeTenantDirectoryAdmin? directoryAdmin = null,
+        ILatticeTenantPolicyAdmin? policyAdmin = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -296,6 +303,8 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         _quotaUsage = quotaUsage;
         _accessAdmin = accessAdmin;
         _grantAdmin = grantAdmin;
+        _directoryAdmin = directoryAdmin;
+        _policyAdmin = policyAdmin;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;

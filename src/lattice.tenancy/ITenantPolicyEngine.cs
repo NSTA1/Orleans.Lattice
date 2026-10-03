@@ -35,7 +35,10 @@ public interface ITenantPolicyEngine
 
     /// <summary>
     /// Resolves the set of tenants <paramref name="subjectId"/> may act as - the
-    /// tenants for which it is a registered tenant-admin subject.
+    /// tenants for which it is a registered tenant-admin subject, or, while
+    /// delegated tenant access administration is enabled, an exact admin or member
+    /// entry. Groups are not considered; see
+    /// <see cref="ResolveAllowedTenants(string, IReadOnlyCollection{string})"/>.
     /// </summary>
     /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
     /// <returns>
@@ -49,13 +52,69 @@ public interface ITenantPolicyEngine
     /// <summary>
     /// Validates whether <paramref name="subjectId"/> may act as the active tenant
     /// <paramref name="activeTenant"/>: the tenant must be registered and active,
-    /// and the subject must be one of its tenant-admin subjects.
+    /// and the subject must be one of its tenant-admin subjects (or, while delegated
+    /// tenant access administration is enabled, an exact admin or member entry).
+    /// Groups are not considered; see
+    /// <see cref="ValidateActiveTenant(string, IReadOnlyCollection{string}, TenantId)"/>.
     /// </summary>
     /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
     /// <param name="activeTenant">The candidate active tenant.</param>
     /// <returns>An allow decision, or a denial carrying the reason.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> is <c>null</c>.</exception>
     TenantAccessDecision ValidateActiveTenant(string subjectId, TenantId activeTenant);
+
+    /// <summary>
+    /// Resolves the set of tenants a subject may act as, considering its resolved
+    /// transitive groups (<see cref="LatticeSubject.GroupIds"/>): the tenants for
+    /// which its id, or any of its groups, is an admin or member entry. While
+    /// delegated tenant access administration is disabled
+    /// (<see cref="LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"/>)
+    /// groups and member entries are ignored and this is exactly
+    /// <see cref="ResolveAllowedTenants(string)"/>.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation ignores <paramref name="groupIds"/> and answers
+    /// <see cref="ResolveAllowedTenants(string)"/>, so an implementation written
+    /// before groups existed keeps its exact-id behaviour.
+    /// </remarks>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <param name="groupIds">The subject's resolved transitive group ids. Must not be <c>null</c>.</param>
+    /// <returns>
+    /// The tenants the subject may act as, in ascending tenant-id order and without
+    /// duplicates. Callers must not mutate it.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> or <paramref name="groupIds"/> is <c>null</c>.</exception>
+    IReadOnlyList<TenantId> ResolveAllowedTenants(string subjectId, IReadOnlyCollection<string> groupIds)
+    {
+        ArgumentNullException.ThrowIfNull(groupIds);
+        return ResolveAllowedTenants(subjectId);
+    }
+
+    /// <summary>
+    /// Validates whether a subject may act as the active tenant
+    /// <paramref name="activeTenant"/>, considering its resolved transitive groups
+    /// (<see cref="LatticeSubject.GroupIds"/>): the tenant must be registered and
+    /// active, and the subject's id or any of its groups must be one of its admin or
+    /// member entries. While delegated tenant access administration is disabled
+    /// (<see cref="LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"/>)
+    /// this is exactly <see cref="ValidateActiveTenant(string, TenantId)"/>: the
+    /// exact-id admin check, with groups and member entries ignored.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation ignores <paramref name="groupIds"/> and answers
+    /// <see cref="ValidateActiveTenant(string, TenantId)"/>, so an implementation
+    /// written before groups existed keeps its exact-id behaviour.
+    /// </remarks>
+    /// <param name="subjectId">The caller subject id. Must not be <c>null</c>.</param>
+    /// <param name="groupIds">The subject's resolved transitive group ids. Must not be <c>null</c>.</param>
+    /// <param name="activeTenant">The candidate active tenant.</param>
+    /// <returns>An allow decision, or a denial carrying the reason.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> or <paramref name="groupIds"/> is <c>null</c>.</exception>
+    TenantAccessDecision ValidateActiveTenant(string subjectId, IReadOnlyCollection<string> groupIds, TenantId activeTenant)
+    {
+        ArgumentNullException.ThrowIfNull(groupIds);
+        return ValidateActiveTenant(subjectId, activeTenant);
+    }
 
     /// <summary>
     /// Resolves whether <paramref name="sourceTenant"/> holds a cross-tenant grant

@@ -1394,7 +1394,7 @@
         },
         {
           "id": "specific-tree",
-          "check": "The target tree bucket has a matching rule for a point request or a uniform whole-scope request.",
+          "check": "The target tree bucket has a matching operator rule (a rule whose id is not in the tenant: namespace) for a point request or a uniform whole-scope request; a matched operator verdict is final.",
           "on_true": "matched-effect",
           "on_false": "all-trees-allow",
           "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator.Evaluate"
@@ -1402,6 +1402,34 @@
         {
           "id": "all-trees-allow",
           "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching allow.",
+          "on_true": "allow",
+          "on_false": "tenant-layer-applies",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "tenant-layer-applies",
+          "check": "ITenantRuleLayer.IsActive, the compiled snapshot carries a tenant partition, and the target is a tenant-layer tree t/{tenant}/{name} (tenant not default; name not *, a/..., sys-... or _lattice_...) with tenant-tier rules of its own or of its tenant's tenant-wide scope.",
+          "on_true": "tenant-wide-deny",
+          "on_false": "default-effect",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "tenant-wide-deny",
+          "check": "The owning tenant's tenant-wide (t/{tenant}/*) bucket has a matching deny.",
+          "on_true": "deny",
+          "on_false": "tenant-tree",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "tenant-tree",
+          "check": "The tree's tenant bucket has a matching tenant-tier rule (key, then longest prefix, then tree; deny overrides allow at an equal tier; UserRuleBeatsGroupRuleAtEqualScope honoured).",
+          "on_true": "tenant-matched-effect",
+          "on_false": "tenant-wide-allow",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "tenant-wide-allow",
+          "check": "The owning tenant's tenant-wide bucket has a matching allow.",
           "on_true": "allow",
           "on_false": "default-effect",
           "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator"
@@ -1430,13 +1458,19 @@
         {
           "id": "matched-effect",
           "outcome": "The matched rule effect (Allow or Deny) for the specific tree is the decision."
+        },
+        {
+          "id": "tenant-matched-effect",
+          "outcome": "The matched tenant-tier rule effect (Allow or Deny) for the tree is the decision."
         }
       ],
-      "fail_closed": "DefaultEffect defaults to Deny, control-plane namespaces do not consult the all-trees tier, and a range is a plain allow only when every key in it resolves to the same allowing rule.",
+      "fail_closed": "DefaultEffect defaults to Deny, control-plane namespaces do not consult the all-trees tier, and a range is a plain allow only when every key in it resolves to the same allowing rule; the tenant layer is consulted only when no operator rule matches and never for a control-plane, app-owned or default-tenant tree, and with the layer inactive no tenant-tier rule is evaluated.",
       "sources": [
         "src/lattice.auth/CompiledTree.cs",
         "src/lattice.auth/LatticeAuthOptions.cs",
-        "src/lattice.auth/PolicyEvaluator.cs"
+        "src/lattice.auth/PolicyEvaluator.cs",
+        "src/lattice.auth/TenantRuleConfinement.cs",
+        "src/lattice.auth/ITenantRuleLayer.cs"
       ]
     },
     {

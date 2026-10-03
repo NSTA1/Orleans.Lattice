@@ -38,10 +38,10 @@ internal static class SampleBanner
         if (estate)
         {
             writer.WriteLine($"  {SampleIdentities.AcmeAdmin,-15} tenant admin of '{SampleIdentities.AcmeTenant}': the tenant-scoped view at /t/{SampleIdentities.AcmeTenant}");
-            writer.WriteLine($"  {SampleIdentities.GlobexAdmin,-15} tenant admin of '{SampleIdentities.GlobexTenant}': the tenant-scoped view at /t/{SampleIdentities.GlobexTenant}");
+            writer.WriteLine($"  {SampleIdentities.GlobexAdmin,-15} tenant admin of '{SampleIdentities.GlobexTenant}', not an operator: keeps globex's groups, members and rules at /t/{SampleIdentities.GlobexTenant}/access");
         }
 
-        writer.WriteLine($"  {SampleIdentities.Alice,-15} groups '{SampleIdentities.OperatorsGroup}' and '{SampleIdentities.TaskEditorsGroup}'");
+        writer.WriteLine($"  {SampleIdentities.Alice,-15} groups '{SampleIdentities.OperatorsGroup}' and '{SampleIdentities.TaskEditorsGroup}', and globex's own 't/{SampleIdentities.GlobexTenant}/{SampleIdentities.GlobexOperatorsGroup}'");
         writer.WriteLine($"  {SampleIdentities.Bob,-15} group '{SampleIdentities.TaskViewersGroup}'");
         writer.WriteLine($"  {SampleIdentities.Carol,-15} group '{SampleIdentities.VisitorsGroup}'");
         writer.WriteLine(sample.Options.Entra is null

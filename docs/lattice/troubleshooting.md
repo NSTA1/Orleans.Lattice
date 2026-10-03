@@ -1,10 +1,11 @@
 # Troubleshooting
 
 A symptom-driven guide to the problems Lattice trees actually hit in
-production: storage-provider failures on write, slowdowns caused by an
-in-flight shard split, scans that take far longer than expected, and reads
-that look stale. Each section is laid out as **symptom -> likely cause -> how
-to confirm -> how to fix**.
+production: storage-provider failures on write, startup checks for grain-storage
+ETag enforcement, slowdowns caused by an in-flight shard split, scans that take
+far longer than expected, WAL reclamation or replay pathologies, and reads that
+look stale. Each section is laid out as **symptom -> likely cause -> how to
+confirm -> how to fix**.
 
 The centre of the guide is [Reading a `DiagnoseAsync`
 report](#reading-a-diagnoseasync-report). Nearly every investigation starts by
@@ -647,6 +648,37 @@ Two secondary checks:
 
 ---
 
+## WAL reclamation and cold replay loops
+
+### Symptom
+
+One of three signals points at the write-ahead-log recovery path rather than at
+ordinary scan or cache behaviour:
+
+- Silo startup logs `Lattice grain-storage fencing check: the 'lattice' grain storage provider accepted a write carrying a stale ETag...` or, in `Reject` mode, silo start fails with an `OrleansConfigurationException` containing that text.
+- WAL-retained bytes stay high, or a tree's WAL looks wedged, even when write load is low.
+- A leaf logs `SELF-REINFORCING COLD REPLAY LOOP: leaf ...`, or `orleans.lattice.leaf.activation.cold_replay_loop` advances.
+
+### Likely cause
+
+These are different faults with different remedies:
+
+- The grain-storage fencing warning means the provider registered under `LatticeOptions.StorageProviderName` accepted a write carrying a stale ETag. Lattice writes some grain state directly through that provider and relies on stale-ETag writes being rejected; without that, an older checkpoint can overwrite a newer one while the WAL pin keeps the newer offset, so later WAL reclamation can trim entries a rebuild still needs. `LatticeGrainStorageFencingOptions.Mode` defaults to `Warn`; `Reject` throws from silo startup only when the probe proves the provider is unfenced. A timeout, missing provider, or transient probe fault is `Inconclusive` and warns even in `Reject` mode.
+- A wedged WAL floor is not the same as a large or growing WAL. The WAL reclamation read names the durable materialiser pin holding the tree's floor. `TreeWalReclamationReport.IsWedged` is true only when the floor holder carries a usable pin offset (`PinOffset >= 0`) while the leaf's persisted checkpoint for that WAL partition is still `-1` (`TreeWalFloorHolderState.NeverCheckpointed`). A holder at offset `-1` with the same state is the benign never-checkpointed sentinel and can clear when the leaf checkpoints.
+- The cold-replay-loop warning means one leaf has crossed the consecutive-cancellation threshold with no successful activation in between. The warning's three counters are the diagnosis: `cancelled mid-replay` means replay started but did not bank enough progress, `queued for a replay permit` means replay-permit admission is saturated, and `resolving tree options` means activation never reached the replay gate and was serialized behind a shared dependency.
+
+### How to confirm
+
+- For startup fencing, read the exact log line. A healthy provider logs `Verdict=Fenced: the provider rejected a write carrying a stale ETag.` An unfenced provider logs the `accepted a write carrying a stale ETag` message; in `Reject` mode the same message is thrown as `OrleansConfigurationException`. The disabled mode logs that the probe will not run.
+- For WAL reclamation, call the tree-admin WAL reclamation read. In-process callers use `ILatticeWalReclamation.GetWalReclamationAsync(treeId)`, gRPC callers use `GetWalReclamation`, and agents use the MCP tool `lattice_treeadmin_wal_reclamation`. Read `PinStoreReadable`, `PinCount`, `PinsWithoutOffset`, `FloorHolder.ConsumerId`, `FloorHolder.LeafId`, `FloorHolder.Partition`, `FloorHolder.PinOffset`, `FloorHolder.PersistedCheckpoint`, `FloorHolder.State`, and `IsWedged`. If the pin store is unreadable, the report proves no health claim.
+- For cold replay, read the warning rather than collapsing it into one saturation bucket. The text deliberately says `READ THE SPLIT BY ARM`: a high options-resolving share is a dependency-serialization problem, a high queued-for-permit share is replay-gate pressure, and a high mid-replay share is an overlong replay or missing replay progress banking.
+
+### How to fix
+
+- Use a grain-storage provider that enforces ETags, such as Orleans memory, Azure Table, Azure Blob, Cosmos DB or ADO.NET storage. During rollout, leave the default `Warn` mode if you need the silo to start while you replace the provider; set `LatticeGrainStorageFencingOptions.Mode` to `Reject` once startup should fail closed on an unfenced provider. Do not disable the probe except for a deliberately accepted compatibility gap.
+- For a wedged WAL floor, use the WAL reclamation report as the diagnostic record: it tells you which materialiser pin, leaf and WAL partition hold the floor, and whether the condition is a stranded pin rather than an idle tree. Do not treat a flat retained-WAL graph alone as proof that reclamation works or is broken.
+- For a cold-replay loop, remediate the arm the warning names. Back off workload or raise replay-admission headroom for queued-for-permit pressure; investigate shared option / registry resolution if activations cancel before requesting a permit; and reduce replay work or improve snapshot coverage when cancellations happen mid-replay. Retrying the same activation without changing the named cause reproduces the loop.
+
 ## Symptom index
 
 | Symptom | Section |
@@ -655,6 +687,7 @@ Two secondary checks:
 | `LatticeQuotaExceededException` on write | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) (admission control, not a provider limit) |
 | `LatticeStateWriteFailedException` from an atomic write | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) - `FaultType` names the provider fault; with `Conflict` set, retry with the same operation id |
 | Repeating "Proactive snapshot capture ... failed" warning | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) |
+| `Lattice grain-storage fencing check` warns, or silo start fails on stale ETag acceptance | [WAL reclamation and cold replay loops](#wal-reclamation-and-cold-replay-loops) - the grain-storage provider registered for Lattice accepted a stale-ETag write; use a provider that enforces ETags, or set `LatticeGrainStorageFencingOptions.Mode` deliberately during rollout |
 | One shard far hotter than its peers | [Concurrent split activity](#concurrent-split-activity) |
 | `SplitInProgress` stuck on for a long time | [Concurrent split activity](#concurrent-split-activity) |
 | `BulkOperationPending` stuck on | [Concurrent split activity](#concurrent-split-activity) and [Bulk loading](bulk-loading.md) |
@@ -662,6 +695,8 @@ Two secondary checks:
 | `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity); from `GetManyAsync`, concurrent [atomic writes](atomic-writes.md) |
 | `LatticeTransactionOutcomeUnavailableException` on a read | [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception) - the transaction registry was unreachable for a key under a pending atomic write: transient, retry after a back-off |
 | `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry. `SaturationSource` names the seam that refused, and the `source` tag on `orleans.lattice.saturation.refusals` counts refusals by seam; a `replay_permit_admission` refusal also carries an `arm` tag naming which part of the replay admission check refused |
+| WAL retained bytes stay high, or `lattice_treeadmin_wal_reclamation` reports `IsWedged` | [WAL reclamation and cold replay loops](#wal-reclamation-and-cold-replay-loops) - read the floor holder, pin offset, persisted checkpoint and state before concluding whether the tree is idle or stranded |
+| `SELF-REINFORCING COLD REPLAY LOOP` warning, or `orleans.lattice.leaf.activation.cold_replay_loop` advances | [WAL reclamation and cold replay loops](#wal-reclamation-and-cold-replay-loops) - read the warning split by arm: mid-replay, queued-for-permit, and resolving-options have different remedies |
 | `LatticeTreeOwnershipDeniedException` from an alias change | [Ownership-bounded aliasing](tree-registry.md#ownership-bounded-aliasing) - the registered `ITreeOwnershipGuard` refused the alias before anything was written; `Reason` carries the guard's explanation |
 | Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |

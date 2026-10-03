@@ -328,7 +328,7 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.AddedMethods, Is.EqualTo(21));
+            Assert.That(binder.AddedMethods, Is.EqualTo(39), "21 pre-epic RPCs plus the 18 delegated tenant access RPCs");
             Assert.That(binder.BoundHandlers, Is.Zero,
                 "the startup metadata pass binds no handler instance");
         });
@@ -357,8 +357,8 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.AddedMethods, Is.EqualTo(21));
-            Assert.That(binder.BoundHandlers, Is.EqualTo(21));
+            Assert.That(binder.AddedMethods, Is.EqualTo(39), "21 pre-epic RPCs plus the 18 delegated tenant access RPCs");
+            Assert.That(binder.BoundHandlers, Is.EqualTo(39));
         });
     }
 

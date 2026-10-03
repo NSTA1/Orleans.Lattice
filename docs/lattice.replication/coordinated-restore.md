@@ -68,7 +68,10 @@ phases:
    The fence covers every shard the tree's routing reaches when it engages -
    including a shard an adaptive split added, on the physical copy an earlier
    resize or restore put behind the alias - and every release lifts exactly
-   that set.
+   that set. The cutover carries the restored copy's shard map in the same
+   registry write as the alias and records the replaced map on the shadow, so
+   revert can move the previous copy's map back atomically and no reader can
+   pair one physical copy with another copy's routing map.
    The alias swap is bounded by tree ownership like every alias change: a
    registered `ITreeOwnershipGuard` (the `Orleans.Lattice.Apps` package registers
    one) is consulted before the alias is written, and a denial throws

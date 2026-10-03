@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Explorer.UI.Navigation;
 
 /// <summary>
 /// The Explorer's platform-operator gate: a caller is a platform operator exactly
-/// when the Access area proves visible for it, which is the successor of the old
-/// Access plugin's gate.
+/// when the Access area proves the caller administers access for the whole
+/// cluster, which is the successor of the old Access plugin's gate. The area's own
+/// visibility is wider - a delegated tenant administrator sees it too - so the
+/// area answers this question separately (<see cref="IPlatformOperatorProbe"/>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -53,6 +55,19 @@ internal sealed class ShellTenantOperatorGate(IServiceProvider services, Explore
         if (access is null)
         {
             return false;
+        }
+
+        // An area that is visible to more than platform operators (Access, to a
+        // delegated tenant administrator) answers the operator question itself.
+        if (access is IPlatformOperatorProbe probe)
+        {
+            var (probed, standing, _) = await TimeBoxed.RunAsync(
+                probe.IsClusterAccessAdministratorAsync,
+                options.AvailabilityTimeout,
+                time,
+                cancellationToken).ConfigureAwait(false);
+
+            return probed == TimeBoxed.Outcome.Completed && standing;
         }
 
         var (outcome, availability, _) = await TimeBoxed.RunAsync(

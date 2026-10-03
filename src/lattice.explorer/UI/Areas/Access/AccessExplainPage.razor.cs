@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Suggestions;
@@ -13,7 +15,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// <see cref="ILatticeAuthAdmin.EffectivePermissionsAsync"/> for a subject. The
 /// question is kept in the address (<c>?subject=&amp;kind=&amp;operation=&amp;tree=</c>
 /// plus <c>key</c> or <c>prefix</c>, and <c>view=permissions</c>), so an answer can
-/// be linked to and is asked again when the page opens at that address.
+/// be linked to and is asked again when the page opens at that address. At a
+/// tenant-rooted address whose access administration is delegated to the caller,
+/// the tenant's layer-aware explain instead.
 /// </summary>
 public partial class AccessExplainPage
 {
@@ -35,9 +39,14 @@ public partial class AccessExplainPage
     private AccessModelDescriptor? _model;
     private LtComboBox? _treeBox;
     private AccessSubjectPicker? _subjectPicker;
+    private bool _asked;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal ExplorerSuggestions Suggestions { get; set; } = default!;
@@ -54,8 +63,15 @@ public partial class AccessExplainPage
     ];
 
     /// <inheritdoc />
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        if (await _gate.ResolveAsync(TenantAccess, Address.Tenant).ConfigureAwait(true) || _asked)
+        {
+            // The tenant's layer-aware explain reads for itself; the question here is asked once.
+            return;
+        }
+
+        _asked = true;
         _model = await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         ReadQuestion(Address);
 
@@ -101,6 +117,28 @@ public partial class AccessExplainPage
         {
             _scopeKind = AccessRuleDraft.ClusterScope;
         }
+    }
+
+    /// <summary>
+    /// Which layer, and which rule, decided <paramref name="explanation"/>, as the
+    /// cluster reports it: a platform (operator) rule, a tenant's rule, or the
+    /// default when a rule-level decision was made and none matched. <see langword="null"/>
+    /// when the cluster reports no deciding layer, as one that predates the tenant
+    /// tier, or a per-key collection verdict, does.
+    /// </summary>
+    /// <param name="explanation">The explanation.</param>
+    /// <returns>The sentence, or <see langword="null"/>.</returns>
+    internal static string? DecidedBy(AuthExplanation explanation)
+    {
+        ArgumentNullException.ThrowIfNull(explanation);
+        return (explanation.DecidingLayer, explanation.DecidingRuleId) switch
+        {
+            (TenantRuleLayer.Platform, { } rule) => $"Platform rule {rule}",
+            (TenantRuleLayer.Tenant, { } rule) => $"Tenant rule {rule}, because no platform rule matched",
+            (TenantRuleLayer.Platform, null) => "The platform layer",
+            (TenantRuleLayer.Tenant, null) => "The tenant layer, because no platform rule matched",
+            _ => null,
+        };
     }
 
     private Task ExplainAsync() => RunExplainAsync(updateAddress: true);

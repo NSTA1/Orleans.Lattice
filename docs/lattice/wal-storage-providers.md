@@ -1,10 +1,10 @@
 # WAL Storage Providers
 
-The write-ahead log (WAL) is the per-shard, durable, ordered record of every committed mutation. `IWalStorageProvider` is the pluggable seam that lets a host swap the WAL's underlying storage backend - in-memory for tests and single-process samples, a local disk file for a durable deployment with no cloud dependency, Azure Table Storage for cross-region replicated production deployments, or a custom backend - without touching the rest of the commit-log pipeline.
+The write-ahead log (WAL) is the per-WAL-partition, durable, ordered record of every committed mutation. `IWalStorageProvider` is the pluggable seam that lets a host swap the WAL's underlying storage backend - in-memory for tests and single-process samples, a local disk file for a durable deployment with no cloud dependency, Azure Table Storage for cross-region replicated production deployments, or a custom backend - without touching the rest of the commit-log pipeline.
 
 ## Contract
 
-`IWalStorageProvider` lives in `Orleans.Lattice` (core). Implementations are provider-agnostic; they see only `(treeId, shardIndex, WalEntry)` triples and must satisfy five invariants:
+`IWalStorageProvider` lives in `Orleans.Lattice` (core). Implementations are provider-agnostic; they see only `(treeId, shardIndex, WalEntry)` triples (`shardIndex` is the compatibility name for the WAL partition index) and must satisfy five invariants:
 
 | Invariant | Meaning |
 |---|---|
@@ -33,11 +33,11 @@ Task<long> GetPhysicalByteSizeAsync(string treeId, int shardIndex, CancellationT
 
 ### Reclamation without a trim (`EvaluateCompactionAsync`)
 
-`EvaluateCompactionAsync` asks a provider to decide whether a shard is due for physical reclamation, and to perform it if its own policy says so. The WAL GC calls it wherever a pass ends without invoking `TrimAsync` for a shard: when that shard's scan released nothing, and - because the collector can also return before the per-shard scan begins at all - when the tree holds no usable trim predicate on any partition and no TTL is configured, or when the pass could not read the durable pin and offset census at all and so fails closed, TTL included (see [Predicate](wal.md#predicate)). The second case is the state an unusable durable materialiser pin produces, it can persist indefinitely, and it is distinguishable in telemetry because such a pass reports no trim-stop series at all rather than a zero one.
+`EvaluateCompactionAsync` asks a provider to decide whether a WAL partition is due for physical reclamation, and to perform it if its own policy says so. The WAL GC calls it wherever a pass ends without invoking `TrimAsync` for a partition: when that partition's scan released nothing, and - because the collector can also return before the per-partition scan begins at all - when the tree holds no usable trim predicate on any partition and no TTL is configured, or when the pass could not read the durable pin and offset census at all and so fails closed, TTL included (see [Predicate](wal.md#predicate)). The second case is the state an unusable durable materialiser pin produces, it can persist indefinitely, and it is distinguishable in telemetry because such a pass reports no trim-stop series at all rather than a zero one.
 
-It exists because trimming and reclamation are separable concerns that a log-structured backend can accidentally weld together. Trimming decides which *live* entries may be released and is gated by consumers that have not yet applied them; reclamation returns space belonging to entries that are *already* trimmed and that nothing references. A provider that reclaims only as a side effect of being trimmed cannot reclaim at all while the retention floor is held - and a held floor is precisely the state in which the backlog is largest. Issue #3207 measured that shape: a shard whose scan stopped on the offset floor at its **first** entry was never evaluated against any compaction threshold, at any dead ratio, for as long as the stop persisted, so no value of any compaction option could reach it. The same issue measured the stronger form of the shape on a tree whose pins had become unusable: the collector returned before the scan, so not even the stop was recorded.
+It exists because trimming and reclamation are separable concerns that a log-structured backend can accidentally weld together. Trimming decides which *live* entries may be released and is gated by consumers that have not yet applied them; reclamation returns space belonging to entries that are *already* trimmed and that nothing references. A provider that reclaims only as a side effect of being trimmed cannot reclaim at all while the retention floor is held - and a held floor is precisely the state in which the backlog is largest. Issue #3207 measured that shape: a partition whose scan stopped on the offset floor at its **first** entry was never evaluated against any compaction threshold, at any dead ratio, for as long as the stop persisted, so no value of any compaction option could reach it. The same issue measured the stronger form of the shape on a tree whose pins had become unusable: the collector returned before the scan, so not even the stop was recorded.
 
-The call carries no watermark and must not move one. It is not a trim, it grants no additional release, and the shard's **logical** contents must be identical either side of it: the offsets `ReadAsync`, `GetLowestOffsetAsync`, and `GetHighestOffsetAsync` report are unchanged whether or not a compaction ran. Whether anything happens is entirely the provider's decision, taken against the same policy - and reported through the same `orleans.lattice.wal.compactions` arms - as the evaluation `TrimAsync` already performs.
+The call carries no watermark and must not move one. It is not a trim, it grants no additional release, and the partition's **logical** contents must be identical either side of it: the offsets `ReadAsync`, `GetLowestOffsetAsync`, and `GetHighestOffsetAsync` report are unchanged whether or not a compaction ran. Whether anything happens is entirely the provider's decision, taken against the same policy - and reported through the same `orleans.lattice.wal.compactions` arms - as the evaluation `TrimAsync` already performs.
 
 The default interface implementation is a no-op. That is correct rather than an omission for a backend whose trim deletes its storage outright: deletion *is* reclamation for the in-memory and Azure Table providers, so no dead bytes exist and there is nothing to evaluate. Only a backend that reclaims by rewriting - the file provider - overrides it.
 
@@ -45,7 +45,7 @@ Because the evaluation is threshold-gated it is self-limiting, and so needs no f
 
 ### Activation-time recovery (`ReconcileAsync`)
 
-`ReconcileAsync` is the optional activation-time recovery seam for providers whose commit protocol can leave the durable state inconsistent across crash boundaries. The WAL grain calls it in `OnActivateAsync` before reading the highest offset, so the activation hook runs while the grain is quiescent. It also calls it from the post-failure resync after a flush fails, when the grain's own flush chain has drained but the provider may still hold work the grain has already been told about (for example a pipelined phase-2 commit), so an override must tolerate writes to the same shard that are still settling - the Azure Tables provider waits them out before scanning, including a phase-2 transaction it abandoned on its commit deadline, which can still land after its callers were faulted, and its `GetHighestOffsetAsync` waits for those too, so the resync never resumes the producer beneath rows such a transaction then writes. The default interface implementation is a no-op, suitable for backends whose append is atomic in a single operation (`InMemoryWalStorageProvider` inherits the default). The Azure Tables provider overrides it to repair phase-1/phase-2 orphans (see [Recovery and downgrade safety](../lattice.storage.azuretable/architecture.md#recovery-and-downgrade-safety) in the Azure Table WAL docs).
+`ReconcileAsync` is the optional activation-time recovery seam for providers whose commit protocol can leave the durable state inconsistent across crash boundaries. The WAL grain calls it in `OnActivateAsync` before reading the highest offset, so the activation hook runs while the grain is quiescent. It also calls it from the post-failure resync after a flush fails, when the grain's own flush chain has drained but the provider may still hold work the grain has already been told about (for example a pipelined phase-2 commit), so an override must tolerate writes to the same partition that are still settling - the Azure Tables provider waits them out before scanning, including a phase-2 transaction it abandoned on its commit deadline, which can still land after its callers were faulted, and its `GetHighestOffsetAsync` waits for those too, so the resync never resumes the producer beneath rows such a transaction then writes. The default interface implementation is a no-op, suitable for backends whose append is atomic in a single operation (`InMemoryWalStorageProvider` inherits the default). The Azure Tables provider overrides it to repair phase-1/phase-2 orphans (see [Recovery and downgrade safety](../lattice.storage.azuretable/architecture.md#recovery-and-downgrade-safety) in the Azure Table WAL docs).
 
 ### Zero-copy append (`AppendEncodedBatchAsync`)
 
@@ -57,7 +57,7 @@ The default encoder, `OrleansBinaryWalRecordEncoder`, wraps the canonical `Seria
 
 `ReadEncodedAsync` is the read-side mirror of that seam: it returns the same entries `ReadAsync` would yield, as pre-encoded byte segments rather than materialised `WalEntry` values. The WAL grain's encoded read path and the partition-move copy use it. The default interface implementation drains `ReadAsync` and re-encodes each entry through the supplied encoder, so a provider that has not overridden it keeps working; a provider that stores the encoded bytes natively overrides it to return them verbatim.
 
-A `WalEntry` pairs the `LatticeMutation` with its dense per-shard offset:
+A `WalEntry` pairs the `LatticeMutation` with its dense per-partition offset:
 
 ```csharp verify
 var entry = new WalEntry
@@ -222,17 +222,35 @@ Each partition runs the same quiesce-copy-verify phases as a single move; `WalMo
 The batch is **all-or-nothing**: if any partition's phase fails, the pin is never flipped, every fenced source is released back to service, and the partial target copies are retained so a re-execute resumes without recopying. The batch fails closed before touching any log (throwing `LatticeWalProviderMissingException`) if **any** target key is unresolvable on the serving silo, and rejects an empty batch or a partition named more than once with `ArgumentException`. As with a single move, sources are never trimmed - reclaim each one explicitly with `ReclaimMovedWalSourceAsync` once the move is permanent.
 
 
+## Grain storage ETag requirement
+
+The WAL provider is not the only persistence seam a durable host must choose
+carefully. `AddLattice` also requires the grain storage provider registered under
+`LatticeOptions.StorageProviderName` to enforce optimistic concurrency: a write that presents a
+stale ETag must fail with `InconsistentStateException`. Lattice writes some grain
+state directly through the provider, and a provider that accepts stale writes can
+let an older checkpoint overwrite a newer one while a durable WAL pin keeps the
+newer offset, allowing a later trim past entries a rebuild still needs.
+
+Each silo probes that provider once as it becomes active. The probe writes a
+reserved row twice, then writes it again with the first ETag. The default
+`LatticeGrainStorageFencingMode.Warn` logs when the stale write is accepted;
+`Reject` fails silo start for that verdict; `Disabled` skips the probe. A probe
+that cannot reach a verdict, for example because storage faults or all retry
+attempts race another silo's probe, warns rather than rejecting. Configure the
+mode with `ConfigureLatticeGrainStorageFencing`.
+
 ## Provider catalogue
 
 ### `InMemoryWalStorageProvider`
 
-Default implementation shipped in core. Stores every appended entry in a thread-safe per-shard list. State is kept entirely in process memory and is lost on silo restart. Suitable for tests, single-process samples, and as the registered default until a host wires up a durable provider.
+Default implementation shipped in core. Stores every appended entry in a thread-safe per-partition list. State is kept entirely in process memory and is lost on silo restart. Suitable for tests, single-process samples, and as the registered default until a host wires up a durable provider.
 
 - **Atomicity**: validates the supplied offsets are dense ahead of any state mutation; a rejected batch leaves observable state untouched.
-- **Throughput**: lock-per-shard append (uncontended outside fan-in benchmarks).
+- **Throughput**: lock-per-partition append (uncontended outside fan-in benchmarks).
 - **Recovery**: none - the provider is process-scoped and reports an empty log on restart.
 - **Byte accounting**: reports retained payload bytes from a running counter maintained at append and trim time; the physical figure is unsupported (`-1`).
-- **Filtered read**: copies the window out under the shard lock - a struct copy per entry, with no payload duplicated - and filters it after the lock is released, so appends never wait on the filter.
+- **Filtered read**: copies the window out under the partition lock - a struct copy per entry, with no payload duplicated - and filters it after the lock is released, so appends never wait on the filter.
 
 ### `AzureTableWalStorageProvider`
 
@@ -248,10 +266,10 @@ Its storage and row layout, transactional append pipeline, retry and saturation 
 
 Durable local-disk implementation shipped in the optional `Orleans.Lattice.Storage.File` NuGet package, for a deployment that needs a crash-safe WAL without a cloud storage account. Register it with `AddFileWalStorage(o => o.RootDirectory = "/data/wal")`, which, like `AddAzureTableWalStorage`, also wires the WAL cursor registry and garbage collector.
 
-- **Atomicity**: each batch is written as its data records followed by one commit record in a single write, then flushed to disk before the append completes (`FileWalStorageOptions.FlushToDisk`, default `true`). Records that no commit record seals are discarded on recovery. A write or flush that fails is not acknowledged: the shard truncates the file back to its last acknowledged end before rethrowing, so a later recovery cannot roll the failed batch forward, and if that truncation also fails the shard fail-stops until it is reopened. A batch that reuses an offset at or below the shard's trim watermark is refused like any other overlap, even when no live entry holds that offset, because recovery discards every record at or below the watermark.
+- **Atomicity**: each batch is written as its data records followed by one commit record in a single write, then flushed to disk before the append completes (`FileWalStorageOptions.FlushToDisk`, default `true`). Records that no commit record seals are discarded on recovery. A write or flush that fails is not acknowledged: the partition truncates the file back to its last acknowledged end before rethrowing, so a later recovery cannot roll the failed batch forward, and if that truncation also fails the partition fail-stops until it is reopened. A batch that reuses an offset at or below the partition's trim watermark is refused like any other overlap, even when no live entry holds that offset, because recovery discards every record at or below the watermark.
 - **Layout**: one append-only `wal.log` per tree and WAL partition, under `{RootDirectory}/{encoded tree id}/shard-{index}`.
 - **Recovery**: `ReconcileAsync` rolls every committed batch forward, truncates a torn or uncommitted tail, and reclaims space already trimmed.
-- **Reclamation**: a trim writes a durable trim marker, and space is physically reclaimed by rewriting the file once the configured dead-byte policy is met - by default once at least half of the shard's on-disk payload is dead and at least 64 KiB of it is; an absolute dead-byte ceiling exists but is disabled by default, leaving the ratio as the sole trigger. It is the one shipped provider that overrides `EvaluateCompactionAsync`, and the one that reports a trim point past its last entry through `GetHighestOffsetAsync`.
+- **Reclamation**: a trim writes a durable trim marker, and space is physically reclaimed by rewriting the file once the configured dead-byte policy is met - by default once at least half of the partition's on-disk payload is dead and at least 64 KiB of it is; an absolute dead-byte ceiling exists but is disabled by default, leaving the ratio as the sole trigger. It is the one shipped provider that overrides `EvaluateCompactionAsync`, and the one that reports a trim point past its last entry through `GetHighestOffsetAsync`.
 - **Byte accounting**: overrides both `GetRetainedByteSizeAsync` and `GetPhysicalByteSizeAsync`; the physical figure is the file length, dead bytes included.
 - **Filtered read**: registered through `AddFileWalStorage`, classifies each record from the first kilobyte of its payload, read into a stack buffer, so a record the reader does not own costs one short read and no allocation. A record whose key does not fit in that prefix is decoded in full instead, which gives the same answer more slowly. A provider built through its public constructor returns the same records but decodes every record it examines.
 
@@ -266,7 +284,7 @@ Authoring a custom provider is purely an exercise in implementing the contract. 
 3. Persist a head pointer (or equivalent O(1)-readable structure) so `GetHighestOffsetAsync` does not require scanning the log on activation. Symmetrically, expose the lowest still-persisted offset in O(1) so `GetLowestOffsetAsync` does not scan either - the live entry count is computed from both endpoints on the hot diagnostic path.
 4. Make `TrimAsync` idempotent and safe to interrupt - a crash mid-trim must leave the WAL in a state where a subsequent trim resumes correctly.
 5. **Optional fast path.** Override `AppendEncodedBatchAsync` when the backend stores binary payloads natively. The default implementation decodes each segment through the supplied `IWalRecordEncoder` and delegates to `AppendBatchAsync`, so a provider that only implements `AppendBatchAsync` keeps working - overriding the zero-copy overload skips the round-trip and stores the grain's already-encoded bytes directly.
-6. **Optional activation-time recovery.** Override `ReconcileAsync` if the backend's commit protocol can leave the durable state inconsistent across crash boundaries (e.g. a multi-phase commit, as in the Azure Tables provider). The default implementation is a no-op, suitable for backends whose append is atomic in a single operation. The WAL grain calls `ReconcileAsync` in `OnActivateAsync` before reading the highest offset, so the activation seam is quiescent for the duration; it also calls it from its post-failure resync, where writes to the same shard may still be settling (see [Activation-time recovery](#activation-time-recovery-reconcileasync)).
+6. **Optional activation-time recovery.** Override `ReconcileAsync` if the backend's commit protocol can leave the durable state inconsistent across crash boundaries (e.g. a multi-phase commit, as in the Azure Tables provider). The default implementation is a no-op, suitable for backends whose append is atomic in a single operation. The WAL grain calls `ReconcileAsync` in `OnActivateAsync` before reading the highest offset, so the activation seam is quiescent for the duration; it also calls it from its post-failure resync, where writes to the same partition may still be settling (see [Activation-time recovery](#activation-time-recovery-reconcileasync)).
 7. **Optional filtered read.** Override `ReadFilteredAsync` when the backend can read a record's key without materialising its payload. An override must yield exactly what the default implementation would for the same window - the owned entries in full, and the last examined entry routing-only when it is excluded - and must count excluded entries against `maxEntries`. The WAL grain re-applies the rule to whatever the provider yields, so an override that delivers too much never leaks another leaf's payload to a replaying leaf; it only forgoes the saving.
 
 The `InMemoryWalStorageProvider` source under `src/lattice/InMemoryWalStorageProvider.cs` is the canonical reference implementation; the `AzureTableWalStorageProvider` source under `src/lattice.storage.azuretable/` is the canonical durable reference implementation.

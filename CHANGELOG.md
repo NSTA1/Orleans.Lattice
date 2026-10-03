@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Auth - Delegated tenant access administration.** Opt-in: a tenant's admins manage its own groups, member set and rules on its trees, evaluated beneath operator rules, which stay final. Capped per tenant and purged on delete; served in-process, over gRPC, as MCP tools and in the Explorer. ([#4154](https://github.com/NSTA1/Orleans.Lattice/issues/4154)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Tenancy`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.TenantAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
+
 - **Admin - Compliance scans and fresh storage usage run in the background.** Start either and poll its progress in entries or trees; it outlives a caller timeout, and Explorer shows its progress. The blocking compliance scan is deprecated (`LATTICE0002`). ([#4126](https://github.com/NSTA1/Orleans.Lattice/issues/4126)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Schema - Accept-then-poll remediation and migration.** Remediations and migrations return a handle at once and run in the background; follow the dry run, build and cutover in values processed, cancel before cutover, and find a run again after closing the tab. MCP tools start and poll them too. ([#4123](https://github.com/NSTA1/Orleans.Lattice/issues/4123), [#4209](https://github.com/NSTA1/Orleans.Lattice/issues/4209)) (`Orleans.Lattice.Explorer.UI`)
@@ -64,6 +66,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - GSet decode projection.** The `GSet` decoders built a key list, sorted it, then grew a result list through an iterator. Both project from an exactly-sized sorted array now, as does `GSet.Values`: 10-48% faster decodes, 136 bytes less per call. ([#4377](https://github.com/NSTA1/Orleans.Lattice/pull/4377)) (`Orleans.Lattice`)
+
 - **Performance - CRDT set provenance decode windows.** The `OrSet` and `RwSet` decoders each built an unsized `List<string>` per call purely to sort a key window. All four decode methods rent a right-sized pooled array now: 9-22% less allocated across state and current-value decodes. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
 
 - **Performance - Atomic and cross-tree fingerprint windows.** Both fingerprint paths allocated a scratch key array per call, the cross-tree one once per participant. They share a single pooled rental now: 192 bytes whatever the width, down from 4.3 KB and 16.3 KB at 512 keys. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
@@ -88,9 +92,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Schema - Remediation keeps the tree's shard topology and sizing.** A remediation or eager schema-version migration built its copy with library defaults, so a resharded or pinned tree came back at 64 shards with default leaf sizing, WAL partitions and virtual slot count, and without its runtime overrides. The copy now inherits the tree's shard map, split mark, structural pins and overrides, as a resize's does. ([#4379](https://github.com/NSTA1/Orleans.Lattice/issues/4379)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`)
+
 - **Core - A resize undo no longer brings back a half-applied atomic batch.** A batch in flight when an online resize moved the alias could be left on only some shards of the old copy, which an undo then served torn. The old copy now still takes and mirrors a batch bound to it, so the batch lands whole on both copies. ([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)) (`Orleans.Lattice`)
 
 - **Core - Atomic batches stay whole when an alias swap catches one in flight.** During a resize undo, or any other alias swap, a batch's prepared writes could reach the copy being discarded while it committed on the copy kept. Readers then saw it torn and a committed batch could be lost. Its writes now land only on the copy it commits on, and follow that copy if it moves. ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)) (`Orleans.Lattice`)
+
+- **Schema - Remediation no longer copies stale values after a reshard under atomic writes.** A remediated copy now holds exactly what point reads of the original returned. Before, an atomic write that overlapped an online reshard could leave a stale copy of a key on a shard that did not own it, and the remediation, which builds its copy by scanning the tree, could copy that stale value or a key no reader saw. The build now reads each key's value from its owner, and `ScanEntriesAsync` likewise prefers the owner's copy when several shards hold the key. ([#4361](https://github.com/NSTA1/Orleans.Lattice/issues/4361)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`)
 
 - **Core - Reshard under atomic writes no longer duplicates keys.** A grow or shrink raced by `SetManyAtomicAsync` could leave a key on two leaves of one shard, so `CountAsync` over-counted and `ScanKeysAsync` skipped keys while point reads were correct. A saga's commit now sends a key a leaf split moved away to the leaf that holds it. ([#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)) (`Orleans.Lattice`)
 

@@ -14,7 +14,7 @@ The Orleans.Lattice API surface is built in layers. Each **facade** package (`Or
 
 ### Long-running operations contract
 
-The `Orleans.Lattice.Api.Operations` namespace carries the shared accept-then-poll contract for facade work that can outlast a caller request. `ILatticeOperations` exposes `GetOperationStatusAsync`, `ListOperationsAsync`, and `CancelOperationAsync`; `LatticeOperationHandle`, `LatticeOperationStatus`, `LatticeOperationScope`, `LatticeOperationListRequest`, and `LatticeOperationPage` are the common DTOs. Backup is the first facade to implement it through `ILatticeBackupOperations`; see [Long-running operations](operations.md) and [Backup operations](../lattice.api.backup/operations.md).
+The `Orleans.Lattice.Api.Operations` namespace carries the shared accept-then-poll contract for facade work that can outlast a caller request. `ILatticeOperations` exposes `GetOperationStatusAsync`, `ListOperationsAsync`, and `CancelOperationAsync`; `LatticeOperationHandle`, `LatticeOperationStatus`, `LatticeOperationScope`, `LatticeOperationListRequest`, and `LatticeOperationPage` are the common DTOs. Backup implements it through `ILatticeBackupOperations`; schema and tree-administration facades implement the same contract for their long-running work. See [Long-running operations](operations.md) and [Backup operations](../lattice.api.backup/operations.md).
 
 ### Region contract
 

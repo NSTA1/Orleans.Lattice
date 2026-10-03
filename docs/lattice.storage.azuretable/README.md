@@ -16,7 +16,7 @@ Core WAL semantics, provider selection, and placement are covered in [WAL Storag
 
 ## Core Properties
 
-- **Per-shard ordering.** Offsets are stored verbatim and read back in ascending order within each `(tree, shard)` stream.
+- **Per-partition ordering.** Offsets are stored verbatim and read back in ascending order within each tree's WAL partition stream.
 - **Batch atomicity.** A successful append is visible as a complete batch; a rejected append leaves no visible partial batch.
 - **Crash recoverability.** Interrupted appends are reconciled before normal reads and writes rely on the stored tail.
 - **Bounded backend shape.** The provider refuses a batch of more than 100 entries, the Azure Table transaction limit, and each entry must fit one 64 KiB binary property after compression: an entry is never split, so a larger one is rejected by the service and fails its whole batch. Tune WAL batching and pending depth with [WAL tuning](../lattice/wal-tuning.md).
@@ -84,7 +84,7 @@ Related package docs:
 
 - [Core WAL Storage Providers](../lattice/wal-storage-providers.md) - core provider seam, in-memory default, provider catalogue, and WAL placement.
 - [Core WAL](../lattice/wal.md) - single-cluster WAL commit and replay semantics.
-- [WAL tuning](../lattice/wal-tuning.md) - batching, pending depth, shard count, and saturation envelope.
+- [WAL tuning](../lattice/wal-tuning.md) - batching, pending depth, WAL partition count, and saturation envelope.
 - [WAL saturation signal](../lattice/wal-saturation-signal.md) - classifier and observer model used by saturation-aware retries.
 - [Replication WAL](../lattice.replication/wal.md) - how replication consumes retained WAL entries.
 - [Replication package](../lattice.replication/README.md) - end-to-end cross-cluster replication overview.

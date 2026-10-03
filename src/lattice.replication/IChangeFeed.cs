@@ -67,18 +67,22 @@ public interface IChangeFeed
 {
     /// <summary>
     /// Yields every captured <see cref="WalRecord"/> for
-    /// <paramref name="treeName"/> with
-    /// <see cref="WalRecord.Timestamp"/> strictly greater than
-    /// <paramref name="cursor"/>. Entries are emitted in HLC ascending
+    /// <paramref name="treeName"/>, read from the start of every WAL
+    /// partition: the HLC <paramref name="cursor"/> is retained for source
+    /// compatibility and is not applied, so a consumer that resumes through
+    /// this overload de-duplicates against entries it has already seen (use
+    /// <see cref="Subscribe(string, ChangeFeedCursor, bool, CancellationToken)"/>
+    /// to resume from per-partition offsets). Entries are emitted in HLC ascending
     /// order; ties are broken by the order in which the merge consumes
     /// them across partitions and is therefore unspecified - consumers
     /// must treat the feed as a multiset under equal HLCs.
     /// <para>
     /// The enumeration takes a snapshot of the WAL at call time and
     /// completes once that snapshot is exhausted. To pick up entries
-    /// committed after the call, a consumer re-subscribes with an
-    /// updated cursor; this matches the cursor-driven, pure-pull model
-    /// described in the replication design.
+    /// committed after the call, a consumer re-subscribes - with an
+    /// updated <see cref="ChangeFeedCursor"/> on the offset overload; this
+    /// matches the cursor-driven, pure-pull model described in the
+    /// replication design.
     /// </para>
     /// <para>
     /// The feed is <b>locally-authored writes only</b>: see the

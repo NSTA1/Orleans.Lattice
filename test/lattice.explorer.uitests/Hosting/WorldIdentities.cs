@@ -18,6 +18,12 @@ internal static class WorldIdentities
     /// <summary>A visitor bound to no task-board role.</summary>
     public const string Carol = "carol";
 
+    /// <summary>
+    /// The administrator of tenant globex in the delegated-access world, and nothing
+    /// else: not a platform operator, and named by no cluster rule.
+    /// </summary>
+    public const string GlobexAdmin = "globex-admin";
+
     /// <summary>The password every identity signs in with; the world never checks it.</summary>
     public const string Password = "explorer";
 

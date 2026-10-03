@@ -69,6 +69,10 @@ internal static class TenantAdminToolMappings
             MaxOpsPerSecond = quotas.MaxOpsPerSecond,
             BurstPercent = quotas.BurstPercent,
             IsUnbounded = quotas.IsUnbounded,
+            MaxGroups = quotas.MaxGroups,
+            MaxMembershipEdges = quotas.MaxMembershipEdges,
+            MaxMemberSubjects = quotas.MaxMemberSubjects,
+            MaxTenantRules = quotas.MaxTenantRules,
         };
     }
 

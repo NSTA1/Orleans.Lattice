@@ -222,6 +222,62 @@ public sealed class TenantAdminToolGroupInvocationTests
         });
     }
 
+    [Test]
+    public async Task Set_quotas_tool_delegate_forwards_the_delegated_access_caps()
+    {
+        TenantQuotasDescriptor? captured = null;
+        _admin.SetTenantQuotasAsync("acme", Arg.Any<TenantQuotasDescriptor>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var quotas = call.ArgAt<TenantQuotasDescriptor>(1);
+                captured = quotas;
+                return Task.FromResult(new TenantQuotasUpdateResult { TenantId = "acme", Quotas = quotas });
+            });
+
+        var result = await CallAsync<McpTenantSetQuotasResult>(
+            "lattice_tenant_set_quotas",
+            ("tenantId", "acme"),
+            ("maxGroups", 10L),
+            ("maxMembershipEdges", 20L),
+            ("maxMemberSubjects", 30L),
+            ("maxTenantRules", 40L));
+
+        Assert.That(captured, Is.Not.Null);
+        var observed = captured!.Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed.MaxGroups, Is.EqualTo(10L));
+            Assert.That(observed.MaxMembershipEdges, Is.EqualTo(20L));
+            Assert.That(observed.MaxMemberSubjects, Is.EqualTo(30L));
+            Assert.That(observed.MaxTenantRules, Is.EqualTo(40L));
+            Assert.That(result.MaxTenantRules, Is.EqualTo(40L));
+        });
+    }
+
+    [Test]
+    public async Task Set_quotas_tool_delegate_leaves_omitted_caps_at_their_default()
+    {
+        TenantQuotasDescriptor? captured = null;
+        _admin.SetTenantQuotasAsync("acme", Arg.Any<TenantQuotasDescriptor>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var quotas = call.ArgAt<TenantQuotasDescriptor>(1);
+                captured = quotas;
+                return Task.FromResult(new TenantQuotasUpdateResult { TenantId = "acme", Quotas = quotas });
+            });
+
+        await CallAsync<McpTenantSetQuotasResult>("lattice_tenant_set_quotas", ("tenantId", "acme"));
+
+        var observed = captured!.Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed.MaxGroups, Is.Null, "Null means the default cap, never unbounded.");
+            Assert.That(observed.MaxMembershipEdges, Is.Null);
+            Assert.That(observed.MaxMemberSubjects, Is.Null);
+            Assert.That(observed.MaxTenantRules, Is.Null);
+        });
+    }
+
     // ---- region tools (ILatticeTenantRegionAdmin) --------------------------
 
     [Test]

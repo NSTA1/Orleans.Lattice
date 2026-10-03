@@ -278,6 +278,13 @@
       "summary": "Operational procedure (tag-index-reconcile): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
     },
     {
+      "path": "procedures/tenant-access.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (tenant-access): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
       "path": "procedures/tree-delete-recover.yaml",
       "kind": "procedure",
       "format": "yaml",

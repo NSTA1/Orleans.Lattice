@@ -175,6 +175,12 @@ internal sealed partial class LatticeGrain
                 pq.Enqueue(i, cursors[i].Current.Key);
         }
 
+        // The map the live shard cursors were opened under, and the shard each
+        // one reads: when several cursors hold a row for the same key, the value
+        // is taken from the key's owner (issue #4361). See ScanOwnership.
+        var routedMap = shardMap0;
+        var liveShards = physicalShards;
+
         HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(capacity: pageSize, comparer: StringComparer.Ordinal);
         // Frontier of the k-way merge: the last key emitted to the caller.
         // Used only on predicate scans to suppress reconciliation entries the
@@ -299,6 +305,26 @@ internal sealed partial class LatticeGrain
             var idx = pq.Dequeue();
             var entry = cursors[idx].Current;
 
+            // Every cursor holding a row for this key is tied with it at the top of
+            // the queue. A shard can hold a copy of a key whose slot it does not own
+            // (an atomic write's cross-migration backstop writes the whole batch into
+            // every split shard it may reach), so the value comes from the key's
+            // owner rather than whichever copy dequeued first (issue #4361). Only the
+            // value is chosen here: which keys are yielded, and their order, are
+            // exactly as before.
+            List<int>? ties = null;
+            while (pq.TryPeek(out var tiedIdx, out var tiedKey)
+                && string.Equals(tiedKey, entry.Key, StringComparison.Ordinal))
+            {
+                pq.Dequeue();
+                (ties ??= new List<int>(2)).Add(tiedIdx);
+            }
+
+            if (ties is not null && !isSystemTree)
+            {
+                entry = cursors[ScanOwnership.PickOwnerRow(routedMap, liveShards, idx, ties, entry.Key)].Current;
+            }
+
             if (yielded is null || yielded.Add(entry.Key))
             {
                 // Advance the merge frontier for every key the merge passes,
@@ -328,6 +354,15 @@ internal sealed partial class LatticeGrain
             await cursors[idx].MoveNextAsync();
             if (cursors[idx].HasCurrent)
                 pq.Enqueue(idx, cursors[idx].Current.Key);
+            if (ties is not null)
+            {
+                foreach (var tiedIdx in ties)
+                {
+                    await cursors[tiedIdx].MoveNextAsync();
+                    if (cursors[tiedIdx].HasCurrent)
+                        pq.Enqueue(tiedIdx, cursors[tiedIdx].Current.Key);
+                }
+            }
         }
     }
 

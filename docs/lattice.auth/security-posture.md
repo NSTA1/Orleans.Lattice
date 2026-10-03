@@ -76,6 +76,17 @@ path:
   origin, as the app compiler is; a bootstrap administrator is no exception. The
   check runs before anything is read or written, so a rejected delete does not
   disclose whether the rule exists.
+- **Tenant-tier rules are write-protected and confined.** A write or delete of a rule
+  id in the tenant-tier `tenant:` namespace (`LatticeTenantRuleIds.Prefix`) off
+  system origin is rejected the same way, with `LatticeTenantOwnedRuleException`.
+  Independently of origin, the policy store refuses a tenant-tier rule outside its
+  tenant's own trees or outside the data-plane operations, and any rule that names a
+  tenant group (`t/{tenant}/{name}`) on a tree outside that group's tenant, so no
+  caller can carry a tenant's grant beyond its tenant. See
+  [The tenant rule layer](tenant-layer.md#confinement-guards).
+- **Operator verdicts are final.** A tenant-tier rule is evaluated only when no
+  operator rule matches, so it can neither override an operator deny nor revoke an
+  operator allow, and the tenant layer is never consulted for a control-plane tree.
 - **Denied mutations leave no partial state.** A denied single-key write,
   delete, range delete, CRDT apply, batch write, atomic multi-key write, or bulk
   load throws before any leg of the operation is applied. The adversarial

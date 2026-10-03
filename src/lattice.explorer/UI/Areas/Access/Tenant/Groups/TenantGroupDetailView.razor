@@ -1,0 +1,185 @@
+@inherits TenantAccessView
+
+@*
+    One of the tenant's own groups (/t/{tenant}/access/groups/{name}), named by
+    its tenant-local name: its display name, its direct members with each one's
+    kind and source (added through the tenant-aware subject picker, removed with a
+    confirmation), "Add me" for a tenant administrator who is not in it, the rules
+    and app role bindings that use it (read-only), its history, and delete. A name
+    the tenant has no group of is not found.
+*@
+
+<PageTitle>@Name - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@Name</h1>
+@if (_group?.DisplayName is { Length: > 0 } displayName)
+{
+    <p class="lt-shell-page-lede">@displayName</p>
+}
+<AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="group" data-lt-caller="@CallerValue" aria-label="Group @Name of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The group could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_group is null || _members is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading the group" />
+    }
+    else
+    {
+        <p class="lt-access-provenance" data-lt-provenance="tenant">
+            <span class="lt-access-provenance__source">@TenantGroupSuggestionSource.SourceLabel</span>
+            <span class="lt-access-provenance__id">@FullId</span>
+        </p>
+        @if (IsOperatorOnly)
+        {
+            <p class="lt-access-caveat" role="note" data-lt-operator-note="true">You administer tenant @Tenant's access as a platform operator, not as one of its administrators.</p>
+        }
+
+        <section class="lt-access-section" aria-labelledby="lt-access-tenant-group-details">
+            <h2 id="lt-access-tenant-group-details" class="lt-access-section__title">Details</h2>
+            <form class="lt-access-form" @onsubmit="SaveDisplayNameAsync" novalidate>
+                <div class="lt-access-form__row">
+                    <LtTextInput Label="Display name" Value="@_displayName" ValueChanged="@(value => _displayName = value)" Error="@_displayNameError" />
+                    <LtButton Type="LtButtonType.Submit" Disabled="_busy">Save name</LtButton>
+                </div>
+            </form>
+        </section>
+
+        <section class="lt-access-section" aria-labelledby="lt-access-tenant-group-members">
+            <h2 id="lt-access-tenant-group-members" class="lt-access-section__title">Direct members</h2>
+            <LtTable TItem="TenantGroupMember" Items="_members" Caption="Direct members" CaptionHidden="true" RowKey="@(member => MemberKey(member))" DetailTitle="@(member => member.MemberId)">
+                <ChildContent>
+                    <LtColumn TItem="TenantGroupMember" Title="Member" RowHeader="true" Mono="true" SortBy="@(member => member.MemberId)">
+                        @if (context.Kind == TenantSubjectKind.TenantGroup)
+                        {
+                            <a href="@GroupHref(context.MemberId)">@context.MemberId</a>
+                        }
+                        else
+                        {
+                            @context.MemberId
+                        }
+                    </LtColumn>
+                    <LtColumn TItem="TenantGroupMember" Title="Kind" SortBy="@(member => (int)member.Kind)">
+                        <span data-lt-kind="@TenantGroupFormat.KindValue(context.Kind)">@TenantGroupFormat.KindLabel(context.Kind)</span>
+                    </LtColumn>
+                    <LtColumn TItem="TenantGroupMember" Title="Actions" Align="LtColumnAlign.End">
+                        <LtButton Variant="LtButtonVariant.Quiet" Disabled="_busy" OnClick="@(() => _removing = context)" aria-label="@($"Remove {context.MemberId}")">Remove</LtButton>
+                    </LtColumn>
+                </ChildContent>
+                <EmptyContent><span>This group has no direct members.</span></EmptyContent>
+                <CompactRow>
+                    <LtCompactRow Mono="true">
+                        <Primary>@context.MemberId</Primary>
+                        <Secondary>@TenantGroupFormat.KindLabel(context.Kind)</Secondary>
+                    </LtCompactRow>
+                </CompactRow>
+                <Detail>
+                    <LtDefinitionList>
+                        <LtDefinition Term="Member" Mono="true">@context.MemberId</LtDefinition>
+                        <LtDefinition Term="Kind">@TenantGroupFormat.KindLabel(context.Kind)</LtDefinition>
+                    </LtDefinitionList>
+                </Detail>
+                <DetailActions>
+                    @if (context.Kind == TenantSubjectKind.TenantGroup)
+                    {
+                        <a class="lt-btn" href="@GroupHref(context.MemberId)">Open group</a>
+                    }
+                    <LtButton Variant="LtButtonVariant.Destructive" Disabled="_busy" OnClick="@(() => _removing = context)">Remove member</LtButton>
+                </DetailActions>
+            </LtTable>
+
+            @if (CanAddMe)
+            {
+                <div class="lt-access-actions" data-lt-add-me="true">
+                    <span>You administer tenant @Tenant but are not a direct member of this group.</span>
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_busy || EdgesAtCap)" OnClick="AddMeAsync">Add me to this group</LtButton>
+                </div>
+            }
+
+            @if (EdgesAtCap)
+            {
+                <p class="lt-access-notice" role="note" data-lt-cap-reason="membership-edges">@TenantGroupFormat.CapReason(_posture!.MembershipEdges, "membership entries", Tenant)</p>
+            }
+            <form class="lt-access-form" @onsubmit="AddMemberAsync" novalidate>
+                <AccessSubjectPicker @ref="_picker"
+                                     Label="Member"
+                                     Tenant="@Tenant"
+                                     SubjectKind="_memberKind"
+                                     SubjectKindChanged="@(kind => _memberKind = kind)"
+                                     Id="@_memberId"
+                                     IdChanged="@(value => _memberId = value)"
+                                     Error="@_memberError"
+                                     DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                                     DirectorySearchDenied="_modelDenied"
+                                     DirectoryExplanation="@_model?.DirectoryExplanation"
+                                     Disabled="EdgesAtCap" />
+                <div class="lt-access-form__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@(_busy || EdgesAtCap)">Add member</LtButton>
+                </div>
+            </form>
+        </section>
+
+        <section class="lt-access-section" aria-labelledby="lt-access-tenant-group-used-by" data-lt-used-by="true">
+            <h2 id="lt-access-tenant-group-used-by" class="lt-access-section__title">Used by</h2>
+            <p class="lt-access-caveat">The rules and app role bindings that name this group. Platform and app role rules are read-only here.</p>
+            @if (_references is null)
+            {
+                <p class="lt-access-fieldset__hint" data-lt-used-by-unavailable="true">The rules that name this group could not be read.</p>
+            }
+            else
+            {
+                <LtTable TItem="TenantRuleView" Items="_references" Caption="Rules and app role bindings that name this group" CaptionHidden="true" RowKey="@(rule => rule.RuleId)" DetailTitle="@(rule => rule.RuleId)">
+                    <ChildContent>
+                        <LtColumn TItem="TenantRuleView" Title="Rule" RowHeader="true" Mono="true" SortBy="@(rule => rule.RuleId)">
+                            @if (RuleHref(context) is { } href)
+                            {
+                                <a href="@href">@context.RuleId</a>
+                            }
+                            else
+                            {
+                                @context.RuleId
+                            }
+                        </LtColumn>
+                        <LtColumn TItem="TenantRuleView" Title="Source" Value="@(rule => SourceLabel(rule))" />
+                        <LtColumn TItem="TenantRuleView" Title="Scope" Value="@(rule => ScopeLabel(rule))" />
+                        <LtColumn TItem="TenantRuleView" Title="Effect" Value="@(rule => AccessRuleFormat.EffectLabel(rule.Effect))" />
+                    </ChildContent>
+                    <EmptyContent><span>No rule or app role binding names this group.</span></EmptyContent>
+                    <CompactRow>
+                        <LtCompactRow Mono="true">
+                            <Primary>@context.RuleId</Primary>
+                            <Secondary>@SourceLabel(context)</Secondary>
+                        </LtCompactRow>
+                    </CompactRow>
+                </LtTable>
+            }
+        </section>
+
+        <TenantGroupHistory Tenant="@Tenant" Name="@Name" />
+
+        <div class="lt-access-actions">
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="@(() => _deleteOpen = true)" Disabled="_busy">Delete group</LtButton>
+        </div>
+
+        <TenantGroupDeleteDialog Tenant="@Tenant"
+                                 Name="@Name"
+                                 Open="_deleteOpen"
+                                 OpenChanged="@(open => _deleteOpen = open)"
+                                 OnDeleted="OnDeleted" />
+        <LtConfirmDestructive Open="@(_removing is not null)"
+                              OpenChanged="@(open => { if (!open) { _removing = null; } })"
+                              Title="Remove this member"
+                              ObjectKind="member"
+                              ObjectName="@(_removing?.MemberId ?? string.Empty)"
+                              ConfirmText="Remove member"
+                              OnConfirm="RemoveMemberAsync">
+            @_removing?.MemberId stops being a direct member of @Name, and loses whatever this group grants it.
+        </LtConfirmDestructive>
+    }
+</section>

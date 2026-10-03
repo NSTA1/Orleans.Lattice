@@ -34,4 +34,19 @@ public sealed record AuthRulePage
     /// the narrowing, and was answered the whole catalogue.
     /// </summary>
     [Id(2)] public string? Tenant { get; init; }
+
+    /// <summary>
+    /// The owning tenant of each tenant-tier rule on this page: the rules a
+    /// tenant's own administrators authored over its trees, whose ids carry the
+    /// reserved <c>tenant:{tenant}:</c> prefix. Empty when no entry on the page is a
+    /// tenant-tier rule (and from a server that predates this member); otherwise
+    /// index-aligned with <see cref="Entries"/>, holding the tenant id for a
+    /// tenant-tier rule and <see langword="null"/> for an operator rule.
+    /// </summary>
+    /// <remarks>
+    /// Operators can list and remove tenant-tier rules but cannot author them; the
+    /// tenant id is the same one <c>LatticeTenantRuleIds.TryGetTenant</c> parses
+    /// from the rule id.
+    /// </remarks>
+    [Id(3)] public IReadOnlyList<string?> TenantRuleTenants { get; init; } = Array.Empty<string?>();
 }

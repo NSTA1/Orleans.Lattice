@@ -79,9 +79,11 @@ await tree.BulkLoadAsync(entries);
 ```
 
 It is a **one-shot initial-import primitive**: every shard must be empty when
-it is called. The call fans out to every physical shard, including shards this
-load has no entries for, and a shard that holds data rejects it with
-`InvalidOperationException` while the empty shards still load their share. A
+it is called. The call force-refreshes the tree's current physical routing first,
+so a resize, reshard, restore or alias swap that completed before the call is
+observed before entries are bucketed. It then fans out to every physical shard,
+including shards this load has no entries for, and a shard that holds data rejects
+it with `InvalidOperationException` while the empty shards still load their share. A
 shard is empty while it holds no entry at all, live or deleted: a tree that has
 only ever been read from - including the emptiness probe an empty-tree reshard
 or resize runs, a count or a warm-up - still accepts a bulk load, and the empty
@@ -146,7 +148,10 @@ loses the in-flight position. When an import must survive that - a multi-hour
 load, or one driven from an external orchestrator that owns its own
 checkpointing - drive the chunks yourself through `ILattice.BulkAppendChunkAsync`,
 which runs the same per-shard right-edge append the streaming extension uses,
-but under an operation id you supply and can safely re-drive.
+but under an operation id you supply and can safely re-drive. Each chunk call also
+force-refreshes the tree's current physical routing before it buckets entries, so
+chunks follow a resize, reshard, restore or alias swap that completed before the
+call.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|

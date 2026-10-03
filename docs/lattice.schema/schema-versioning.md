@@ -167,6 +167,14 @@ LatticeSchemaRemediationReport again =
     await admin.MigrateToTargetVersionAsync("orders", cancellationToken);
 ```
 
+Remote callers should prefer the accept-then-poll schema operations on the control
+facade: `ILatticeSchemaOperations.StartAdvanceAndMigrateAsync` and
+`StartMigrationAsync` return a `LatticeOperationHandle` immediately, then report
+`Advance` (for advance-and-migrate), `DryRun`, `Build`, and `Cutover` phases with
+values-processed progress. The blocking facade methods
+`AdvanceAndMigrateAsync` and `MigrateToTargetVersionAsync` still work in 9.9.0 but
+are deprecated with `LATTICE0002`.
+
 Migration re-stamps each value from its **own** stored version to the target through
 the registered upcaster chain, then re-envelopes it at the target; a legacy value
 written before the tree opted in carries no envelope and is stamped at the target

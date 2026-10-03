@@ -70,12 +70,14 @@ sees the merged value.
 The check runs on the tree's value-carrying write operations: `SetAsync`,
 `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyWherePredicateAsync`,
 the atomic batches (`SetManyAtomicAsync`, `SetManyAtomicWhereAsync`, and the
-whole-value writes of a cross-tree atomic batch), the CRDT delta applies
+whole-value upserts of a cross-tree atomic batch), the CRDT delta applies
 (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync`) and the bulk loads
-(`BulkLoadAsync`, `BulkAppendChunkAsync`). A batch is checked before any of it is
-written, so one non-compliant value in a local batch fails the whole call. A tree
-merge (`MergeAsync`) folds the source tree's entries straight into the shards
-without passing through the check, so merged values are not validated.
+(`BulkLoadAsync`, `BulkAppendChunkAsync`). Cross-tree atomic tombstone deletes and
+CRDT-delta entries are not whole-value upserts, so they are not inspected by the
+cross-tree preflight pass. A batch is checked before any of it is written, so one
+non-compliant value in a local batch fails the whole call. A tree merge
+(`MergeAsync`) folds the source tree's entries straight into the shards without
+passing through the check, so merged values are not validated.
 
 ## Rule kinds
 
@@ -89,7 +91,7 @@ value fails rejects it with that rule's reason:
 | `LatticeSchemaRule.Utf8()` | The value is well-formed UTF-8. |
 | `LatticeSchemaRule.MaxLength(n)` | The value is at most `n` bytes. `n` must be non-negative; `SetPolicyAsync` rejects a rule built without the factory that carries a negative limit. |
 | `LatticeSchemaRule.Regex(pattern, memberPath?)` | The value (or a named JSON member) matches a regex. |
-| `LatticeSchemaRule.Structured(predicate)` | A JSON document satisfies a `LatticePredicateNode` (the same predicate IR used by [predicate operations](../lattice/predicated-operations.md)). Besides comparisons and string tests, it can use the [structural kinds](../lattice/predicated-operations.md#structural-predicate-kinds): a type test (`TypeOf`), a length (`LengthOf`), a quantifier over an array's items (`Every`) and the current document (`Self`). |
+| `LatticeSchemaRule.Structured(predicate)` | A JSON document satisfies a `LatticePredicateNode` (the same predicate IR used by [predicate operations](../lattice/predicated-operations.md)). Besides comparisons and string tests, it can use the [structural kinds](../lattice/predicated-operations.md#structural-predicate-kinds): a type test (`TypeOf`), the `Length` operand (created with `LengthOf`), a quantifier over an array's items (`Every`) and the current document (`Self`). |
 
 Every factory also takes an optional `description`, which replaces the rule's default
 violation reason when the rule fails. A `Regex` rule's `memberPath` is a dotted path
@@ -203,6 +205,17 @@ again - so a delete of the tree is refused for that whole time, and a remediatio
 is refused with `InvalidOperationException` while the tree is deleted, a delete is
 pending, or a resize or restore holds the reservation; see
 [Deleting an aliased tree](../lattice/tree-deletion.md#deleting-an-aliased-tree).
+The destination inherits everything about the tree except its values. It is
+registered with the shard map the tree routes by (and with it the virtual slot
+count), the split allocation mark, the shard-count, leaf-sizing (`MaxLeafKeys`,
+`MaxInternalChildren`) and WAL-partition pins, and the per-tree runtime overrides a
+resize also keeps: event publishing, projection digest maintenance and its disable
+latch, history retention, and the cache-value and WAL retention ceilings. The build
+lays every value out by that map, so a resharded or pinned tree - including an app
+tree's declared `virtualShardCount` - keeps its topology and sizing across the
+cutover; an eager schema-version migration builds its destination the same way.
+Host-level named options (`ConfigureLattice(name)`) do not follow the alias, as for
+a resize.
 The destination is registered as derived from the tree, so after cutover a delete,
 recover or purge of the tree acts on the remediated copy the alias targets. The
 cutover's alias swap is put to the host's `ITreeOwnershipGuard` like every alias
@@ -216,6 +229,13 @@ The build copies at the logical level and does not shadow-forward writes that la
 on the source while it runs, so run a remediation while the tree is
 write-quiescent: a write accepted after the dry-run scan but before cutover is not
 carried into the destination and is superseded by the alias swap.
+
+The dry run and the build walk the source in key order with a scan, but they take
+each key's value from a point read, which is routed to the shard that owns the key.
+The remediated copy therefore holds exactly what a reader of the original was served,
+even when a shard holds a stale copy of a key it does not own (an atomic write that
+overlaps an online reshard can leave one), and a key a point read finds absent is not
+copied.
 
 Remediation is idempotent and resumable. It persists its intent and then works in
 bounded slices of values, each resuming strictly after the last value the phase
@@ -255,7 +275,13 @@ the audited `TreeId`, `HasPolicy`, `CompliantCount`, `NonCompliantCount`,
 `ScannedCount`, and a `RuleBreakdown` of `LatticeSchemaComplianceRuleCount`
 (`Reason`, `Count`) rows, grouped by the reason of the first rule each
 non-compliant value failed. An ungoverned tree returns an ungoverned report
-(`HasPolicy` is `false` and every count is zero).
+(`HasPolicy` is `false` and every count is zero). Remote callers should start the
+accept-then-poll compliance operation with
+`ILatticeSchemaComplianceOperations.StartComplianceScanAsync`: it returns a
+`LatticeOperationHandle` immediately, then reports `Counting` and `Scanning` phases
+with `entries` progress and the same report encoded in the operation result. The
+blocking facade method `ILatticeSchemaControl.ScanComplianceAsync` still works in
+9.9.0 but is deprecated with `LATTICE0002`.
 
 ## Composition with versioning
 

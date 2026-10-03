@@ -202,9 +202,11 @@ internal sealed class SampleRegion : IAsyncDisposable
         // Tenancy behind the Tenancy area, on the estate only: the tenant
         // registry and isolation seams, and the tenant-administration facades
         // (lifecycle, admins, grants, regions, quota usage and self-service).
+        // Delegated tenant access administration is on, so a tenant's own
+        // administrators keep its groups, members and rules under Access.
         if (plan.IsEstate)
         {
-            silo.AddLatticeTenancy();
+            silo.AddLatticeTenancy(tenancy => tenancy.DelegatedAccessAdministrationEnabled = true);
             silo.AddLatticeTenantAdminApi();
         }
 

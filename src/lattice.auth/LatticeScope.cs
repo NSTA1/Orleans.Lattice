@@ -122,4 +122,103 @@ public sealed record LatticeScope
     /// <returns>A whole-tree scope over the all-trees sentinel id.</returns>
     public static LatticeScope ClusterWide() =>
         new(LatticeScopeKind.Tree, ClusterWideTreeId);
+
+    /// <summary>
+    /// The tenant-local name (<c>*</c>) of the sentinel tree a
+    /// <see cref="TenantWide(TenantId)"/> scope is keyed by: the scope's
+    /// <see cref="TreeId"/> is <c>t/{tenant}/*</c>.
+    /// </summary>
+    private const string TenantWideLocalName = "*";
+
+    /// <summary>
+    /// Creates the <b>tenant-wide</b> scope for <paramref name="tenant"/>: a
+    /// whole-tree scope over the sentinel tree id <c>t/{tenant}/*</c>, which stands
+    /// for every tree the tenant owns. It is the tenant-bounded analogue of
+    /// <see cref="ClusterWide"/> and is authorable only in the tenant layer
+    /// (tenant-tier rules, <see cref="LatticeTenantRuleIds"/>); it never reaches an
+    /// app-owned, reserved or system tree, nor another tenant's trees. No real tree
+    /// can carry the sentinel id, because the data plane refuses to create a
+    /// tenant tree whose local name is <c>*</c>.
+    /// </summary>
+    /// <param name="tenant">The owning tenant. Must be an initialised tenant other than <see cref="TenantId.Default"/>.</param>
+    /// <returns>A whole-tree scope over the tenant-wide sentinel id.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="tenant"/> is the uninitialised "no tenant" value or the
+    /// reserved <see cref="TenantId.Default"/> tenant.
+    /// </exception>
+    public static LatticeScope TenantWide(TenantId tenant)
+    {
+        if (tenant.Value is null || !TenantId.IsValid(tenant.Value.AsSpan()))
+        {
+            throw new ArgumentException(
+                "Cannot create a tenant-wide scope from the uninitialised 'no tenant' value.",
+                nameof(tenant));
+        }
+
+        if (tenant.IsDefault)
+        {
+            throw new ArgumentException(
+                $"The reserved '{TenantId.DefaultId}' tenant has no tenant-wide scope; its access is operator-administered.",
+                nameof(tenant));
+        }
+
+        return new(LatticeScopeKind.Tree, LatticeTenantTrees.Compose(tenant, TenantWideLocalName));
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when this is a tenant-wide scope: a whole-tree scope over
+    /// a sentinel id <c>t/{tenant}/*</c> naming a valid tenant other than
+    /// <see cref="TenantId.Default"/>, as <see cref="TenantWide(TenantId)"/> creates.
+    /// Allocation-free. A method rather than a property so the record's printed and
+    /// serialized member set is unchanged.
+    /// </summary>
+    /// <returns><c>true</c> for a tenant-wide scope; otherwise <c>false</c>.</returns>
+    public bool IsTenantWide() => TryGetTenantWideSlice(out _);
+
+    /// <summary>
+    /// Returns the tenant a tenant-wide scope covers. Allocation-free unless this is
+    /// a tenant-wide scope (then one string for the tenant id is materialised).
+    /// </summary>
+    /// <param name="tenant">The covered tenant when this returns <c>true</c>; otherwise <c>default</c>.</param>
+    /// <returns><c>true</c> when this is a tenant-wide scope (see <see cref="IsTenantWide"/>); otherwise <c>false</c>.</returns>
+    public bool TryGetTenantWideTenant(out TenantId tenant)
+    {
+        if (TryGetTenantWideSlice(out var slice))
+        {
+            tenant = TenantId.ForValidated(new string(slice));
+            return true;
+        }
+
+        tenant = default;
+        return false;
+    }
+
+    private bool TryGetTenantWideSlice(out ReadOnlySpan<char> tenant)
+    {
+        tenant = default;
+        if (Kind != LatticeScopeKind.Tree || KeyOrPrefix is not null || TreeId is null)
+        {
+            return false;
+        }
+
+        var span = TreeId.AsSpan();
+        var prefix = LatticeTenantTrees.SegmentPrefix;
+        var minimum = prefix.Length + 1 + 1 + TenantWideLocalName.Length;
+        if (span.Length < minimum
+            || !span.StartsWith(prefix, StringComparison.Ordinal)
+            || !span.EndsWith(TenantWideLocalName, StringComparison.Ordinal)
+            || span[^(TenantWideLocalName.Length + 1)] != '/')
+        {
+            return false;
+        }
+
+        var slice = span[prefix.Length..^(TenantWideLocalName.Length + 1)];
+        if (!TenantId.IsValid(slice) || slice.Equals(TenantId.DefaultId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        tenant = slice;
+        return true;
+    }
 }

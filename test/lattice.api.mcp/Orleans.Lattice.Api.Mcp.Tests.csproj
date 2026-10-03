@@ -29,6 +29,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\lattice.api.abstractions\TenantAdmin\Fakes\*.cs" Link="Shared\TenantAdmin\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />

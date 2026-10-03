@@ -91,4 +91,63 @@ public static class ApiTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantGrantChangeResult"/>.</summary>
     public const string TenantGrantChangeResult = "oitn.gc";
+
+    // ----- Delegated tenant access administration (directory and policy) -----
+
+    /// <summary>Alias for <see cref="TenantSubjectKind"/>.</summary>
+    public const string TenantSubjectKind = "oitn.sk";
+
+    /// <summary>Alias for <see cref="TenantRuleLayer"/>.</summary>
+    public const string TenantRuleLayer = "oitn.ly";
+
+    /// <summary>Alias for <see cref="TenantRuleOrigin"/>.</summary>
+    public const string TenantRuleOrigin = "oitn.ro";
+
+    /// <summary>Alias for <see cref="TenantRuleScopeKind"/>.</summary>
+    public const string TenantRuleScopeKind = "oitn.rs";
+
+    /// <summary>Alias for <see cref="TenantAccessPageRequest"/>.</summary>
+    public const string TenantAccessPageRequest = "oitn.pq";
+
+    /// <summary>Alias for <see cref="TenantGroupDescriptor"/>.</summary>
+    public const string TenantGroupDescriptor = "oitn.gp";
+
+    /// <summary>Alias for <see cref="TenantGroupPage"/>.</summary>
+    public const string TenantGroupPage = "oitn.gg";
+
+    /// <summary>Alias for <see cref="TenantGroupMember"/>.</summary>
+    public const string TenantGroupMember = "oitn.gm";
+
+    /// <summary>Alias for <see cref="TenantGroupRemovalResult"/>.</summary>
+    public const string TenantGroupRemovalResult = "oitn.gx";
+
+    /// <summary>Alias for <see cref="TenantMemberEntry"/>.</summary>
+    public const string TenantMemberEntry = "oitn.me";
+
+    /// <summary>Alias for <see cref="TenantMemberPage"/>.</summary>
+    public const string TenantMemberPage = "oitn.mp";
+
+    /// <summary>Alias for <see cref="TenantMembershipChangeResult"/>.</summary>
+    public const string TenantMembershipChangeResult = "oitn.mc";
+
+    /// <summary>Alias for <see cref="TenantSubjectResolution"/>.</summary>
+    public const string TenantSubjectResolution = "oitn.sv";
+
+    /// <summary>Alias for <see cref="TenantRuleDraft"/>.</summary>
+    public const string TenantRuleDraft = "oitn.rf";
+
+    /// <summary>Alias for <see cref="TenantRuleView"/>.</summary>
+    public const string TenantRuleView = "oitn.rv";
+
+    /// <summary>Alias for <see cref="TenantRulePage"/>.</summary>
+    public const string TenantRulePage = "oitn.rg";
+
+    /// <summary>Alias for <see cref="TenantExplanation"/>.</summary>
+    public const string TenantExplanation = "oitn.ex";
+
+    /// <summary>Alias for <see cref="TenantEffectivePermissions"/>.</summary>
+    public const string TenantEffectivePermissions = "oitn.ep";
+
+    /// <summary>Alias for <see cref="TenantAccessPosture"/>.</summary>
+    public const string TenantAccessPosture = "oitn.ap";
 }

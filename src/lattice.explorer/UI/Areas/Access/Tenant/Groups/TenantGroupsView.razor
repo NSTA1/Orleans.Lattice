@@ -1,0 +1,127 @@
+@inherits TenantAccessView
+
+@*
+    The tenant's own groups (/t/{tenant}/access/groups), shown once the posture
+    probe reports the tenant's access administration delegated to the caller: a
+    booktabs table of each group's name, display name, direct members and the
+    rules and app role bindings that name it; a create form whose name is checked
+    against the local group-name grammar as it is typed; the tenant's group cap;
+    and delete, confirmed with the cascade the tenant directory will apply.
+*@
+
+<PageTitle>Groups of tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Tenant @Tenant's own groups collect users, cluster groups and its other groups, so a tenant rule can name them once.</p>
+<AccessNav Current="@AccessRoutes.GroupsSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="groups" aria-label="Groups of tenant @Tenant">
+    <div class="lt-toolbar">
+        <LtButton OnClick="OpenCreate" Disabled="@(!CanCreate)" data-lt-create-group="true">New group</LtButton>
+        @if (_page is not null && _failure is null)
+        {
+            <span class="lt-access-count" role="status">@CountText</span>
+        }
+        @if (CapText is { } cap)
+        {
+            <span class="lt-access-count" data-lt-cap="groups" data-lt-at-cap="@(AtCap ? "true" : "false")">@cap</span>
+        }
+    </div>
+    @if (AtCap)
+    {
+        <p class="lt-access-notice" role="note" data-lt-cap-reason="groups">@TenantGroupFormat.CapReason(_posture!.Groups, "groups", Tenant)</p>
+    }
+
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Groups could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_page is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading groups" />
+    }
+    else if (_groups.Count == 0)
+    {
+        <LtEmptyState Title="No groups yet">
+            <ChildContent>Tenant @Tenant has no groups of its own yet.</ChildContent>
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtTable TItem="TenantGroupDescriptor" Items="_groups" Caption="@($"Groups of tenant {Tenant}")" CaptionHidden="true" RowKey="@(group => group.Name)" DetailTitle="@(group => group.Name)">
+            <ChildContent>
+                <LtColumn TItem="TenantGroupDescriptor" Title="Group" RowHeader="true" Mono="true" SortBy="@(group => group.Name)">
+                    <a href="@GroupHref(context.Name)">@context.Name</a>
+                </LtColumn>
+                <LtColumn TItem="TenantGroupDescriptor" Title="Display name" Value="@(group => group.DisplayName)" SortBy="@(group => group.DisplayName)" />
+                <LtColumn TItem="TenantGroupDescriptor" Title="Direct members" Align="LtColumnAlign.End" Value="@(group => Figure(group, MemberFigure))" />
+                <LtColumn TItem="TenantGroupDescriptor" Title="Rules" Align="LtColumnAlign.End" Value="@(group => Figure(group, RuleFigure))" />
+                <LtColumn TItem="TenantGroupDescriptor" Title="App roles" Align="LtColumnAlign.End" Value="@(group => Figure(group, AppRoleFigure))" />
+                <LtColumn TItem="TenantGroupDescriptor" Title="Actions" Align="LtColumnAlign.End">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => ConfirmDelete(context.Name))" aria-label="@($"Delete {context.Name}")">Delete</LtButton>
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent><span>No group matches.</span></EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context.Name</Primary>
+                    <Secondary>@(context.DisplayName ?? "No display name")</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <Detail>
+                <LtDefinitionList>
+                    <LtDefinition Term="Group" Mono="true">@context.Name</LtDefinition>
+                    <LtDefinition Term="Display name">@(context.DisplayName ?? "None")</LtDefinition>
+                    <LtDefinition Term="Direct members">@Figure(context, MemberFigure)</LtDefinition>
+                    <LtDefinition Term="Rules">@Figure(context, RuleFigure)</LtDefinition>
+                    <LtDefinition Term="App roles">@Figure(context, AppRoleFigure)</LtDefinition>
+                </LtDefinitionList>
+            </Detail>
+            <DetailActions>
+                <a class="lt-btn" href="@GroupHref(context.Name)">Open group</a>
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="@(() => ConfirmDelete(context.Name))">Delete group</LtButton>
+            </DetailActions>
+        </LtTable>
+        @if (_page.NextPageToken is not null)
+        {
+            <div class="lt-access-actions">
+                <LtButton OnClick="LoadMoreAsync" Disabled="_loadingMore">Load more groups</LtButton>
+            </div>
+        }
+    }
+</section>
+
+<LtDialog Open="_createOpen" OpenChanged="@(open => _createOpen = open)" Title="New group">
+    @if (_createOpen)
+    {
+        <form class="lt-access-form" @onsubmit="CreateAsync" novalidate>
+            <LtNameInput @ref="_nameBox"
+                         Label="Group name"
+                         Value="@_newName"
+                         ValueChanged="OnNameChanged"
+                         Existing="@_existing"
+                         Noun="group"
+                         Validate="@ValidateNameAsync"
+                         Error="@_nameError"
+                         Hint="@NameHint" />
+            <LtTextInput Label="Display name (optional)" Value="@_newDisplayName" ValueChanged="@(value => _newDisplayName = value)" />
+            @if (_formError is not null)
+            {
+                <p class="lt-access-form__error" role="alert" data-lt-field="form">@_formError</p>
+            }
+            <div class="lt-access-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="_saving">Create group</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _createOpen = false)" Disabled="_saving">Cancel</LtButton>
+            </div>
+        </form>
+    }
+</LtDialog>
+
+<TenantGroupDeleteDialog Tenant="@Tenant"
+                         Name="@(_deleting ?? string.Empty)"
+                         Open="@(_deleting is not null)"
+                         OpenChanged="@(open => { if (!open) { _deleting = null; } })"
+                         OnDeleted="OnDeletedAsync" />

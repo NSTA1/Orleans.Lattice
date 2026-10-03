@@ -24,6 +24,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\lattice\Fakes\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
     <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\src\lattice.dashboards\Orleans.Lattice.Dashboards.csproj" />

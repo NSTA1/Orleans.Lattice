@@ -119,6 +119,68 @@ public enum LatticeTenantAdminApiOperation
     /// not assume the call comes from the granting tenant.
     /// </summary>
     RevokeCrossTenantGrant = 17,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>ListTenantGroups</c> RPC (delegated tenant access administration).</summary>
+    ListTenantGroups = 18,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantGroup</c> RPC.</summary>
+    GetTenantGroup = 19,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>UpsertTenantGroup</c> RPC.</summary>
+    UpsertTenantGroup = 20,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-tenant-admin</b> <c>RemoveTenantGroup</c> RPC,
+    /// which cascades the group's edges and its entries in the tenant's member set,
+    /// admin set and tenant-tier rules.
+    /// </summary>
+    RemoveTenantGroup = 21,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>ListTenantGroupMembers</c> RPC.</summary>
+    ListTenantGroupMembers = 22,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>AddTenantGroupMember</c> RPC.</summary>
+    AddTenantGroupMember = 23,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>RemoveTenantGroupMember</c> RPC.</summary>
+    RemoveTenantGroupMember = 24,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>ListTenantMembers</c> RPC.</summary>
+    ListTenantMembers = 25,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>AddTenantMember</c> RPC.</summary>
+    AddTenantMember = 26,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>RemoveTenantMember</c> RPC.</summary>
+    RemoveTenantMember = 27,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>ResolveTenantSubject</c> RPC.</summary>
+    ResolveTenantSubject = 28,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>PutTenantRule</c> RPC that authors a tenant-tier rule.</summary>
+    PutTenantRule = 29,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantRule</c> RPC.</summary>
+    GetTenantRule = 30,
+
+    /// <summary>The mutating, <b>operator-or-tenant-admin</b> <c>RemoveTenantRule</c> RPC.</summary>
+    RemoveTenantRule = 31,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>ListTenantRules</c> RPC.</summary>
+    ListTenantRules = 32,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>ExplainTenantAccess</c> RPC.</summary>
+    ExplainTenantAccess = 33,
+
+    /// <summary>The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantEffectivePermissions</c> RPC.</summary>
+    GetTenantEffectivePermissions = 34,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantAccessPosture</c>
+    /// RPC, the one delegated tenant access RPC that answers while the feature is
+    /// disabled.
+    /// </summary>
+    GetTenantAccessPosture = 35,
 }
 
 /// <summary>

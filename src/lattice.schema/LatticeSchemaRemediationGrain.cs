@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -16,10 +17,14 @@ namespace Orleans.Lattice.Schema;
 /// <item><description>builds a fresh destination physical tree by scanning source
 /// entries, transforming each value, revalidating it, and writing it into the
 /// destination - aborting and discarding the partial destination on the first
-/// offending value;</description></item>
+/// offending value. The destination is registered with the source's routing map,
+/// split allocation mark, structural pins and runtime configuration overrides
+/// (<see cref="DerivedTreeEntries.InheritingAsync"/>), so it lays keys out exactly
+/// as the source does and only the values change;</description></item>
 /// <item><description>cuts over by installing the target policy, then repointing
-/// the logical tree's alias (<see cref="ILatticeRegistry.SetAliasAsync"/>) to the
-/// destination so subsequent writes are enforced.</description></item>
+/// the logical tree's alias to the destination together with the destination's
+/// shard map in one registry write, and arming the source to redirect stale
+/// routers, so subsequent writes are enforced.</description></item>
 /// </list>
 /// The coordinator mirrors <c>TreeResizeGrain</c>'s durability discipline: it
 /// persists each phase transition before performing that phase's external side
@@ -512,9 +517,10 @@ internal sealed class LatticeSchemaRemediationGrain(
         string? lastKey = null;
         Offender? offender = null;
 
+        var slice = await ReadSliceAsync(source, sliceSize);
         try
         {
-            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            foreach (var entry in slice.Entries)
             {
                 byte[] rewritten;
                 try
@@ -536,10 +542,6 @@ internal sealed class LatticeSchemaRemediationGrain(
 
                 done++;
                 lastKey = entry.Key;
-                if (done == sliceSize)
-                {
-                    break;
-                }
             }
         }
         catch
@@ -553,13 +555,18 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
         }
-        else if (done < sliceSize)
+        else if (slice.Fault is { } fault)
+        {
+            await BankSliceProgressAsync(done, lastKey);
+            fault.Throw();
+        }
+        else if (slice.Exhausted)
         {
             await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Build, scannedCount: 0, phaseTotal: scanned);
         }
         else
         {
-            await RecordSliceProgressAsync(scanned, lastKey);
+            await RecordSliceProgressAsync(scanned, slice.LastScannedKey);
         }
     }
 
@@ -575,9 +582,14 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         if (state.State.ScanCursor is null)
         {
-            await grainFactory.GetLatticeRegistry().RegisterAsync(
-                state.State.DestinationTreeId!,
-                new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId });
+            // The destination inherits the logical tree's routing map, split
+            // allocation mark, structural pins and runtime overrides, so the build
+            // lays keys out exactly as the source does and the cutover, which
+            // carries the destination's map onto the logical tree, hands the tree
+            // back with the topology and sizing it had. Registered with defaults,
+            // it silently reset a resharded tree to the default shard count.
+            var inherited = await DerivedTreeEntries.InheritingAsync(grainFactory, TreeId, derivedFrom: TreeId);
+            await grainFactory.GetLatticeRegistry().RegisterAsync(state.State.DestinationTreeId!, inherited);
         }
 
         var source = grainFactory.GetGrain<ILattice>(TreeId);
@@ -590,9 +602,10 @@ internal sealed class LatticeSchemaRemediationGrain(
         string? lastKey = null;
         Offender? offender = null;
 
+        var slice = await ReadSliceAsync(source, sliceSize);
         try
         {
-            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            foreach (var entry in slice.Entries)
             {
                 byte[] rewritten;
                 try
@@ -615,10 +628,6 @@ internal sealed class LatticeSchemaRemediationGrain(
                 await destination.SetAsync(entry.Key, rewritten);
                 done++;
                 lastKey = entry.Key;
-                if (done == sliceSize)
-                {
-                    break;
-                }
             }
         }
         catch
@@ -633,16 +642,90 @@ internal sealed class LatticeSchemaRemediationGrain(
             await DiscardDestinationAsync(destination);
             await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
         }
-        else if (done < sliceSize)
+        else if (slice.Fault is { } fault)
+        {
+            await BankSliceProgressAsync(done, lastKey);
+            fault.Throw();
+        }
+        else if (slice.Exhausted)
         {
             await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Cutover, scanned, phaseTotal: null);
         }
         else
         {
-            await RecordSliceProgressAsync(scanned, lastKey);
+            await RecordSliceProgressAsync(scanned, slice.LastScannedKey);
         }
     }
 
+    /// <summary>
+    /// Reads the next slice of the source after the durable cursor: up to
+    /// <paramref name="sliceSize"/> keys in key order from a scan, each with the
+    /// value a point read returns for it (issue #4361).
+    /// <para>
+    /// The scan supplies the order and the resumable position only. Its values are
+    /// not used: a full scan merges every shard's rows, and a shard can hold a stale
+    /// copy of a key whose slot it does not own (an atomic write's cross-migration
+    /// backstop writes the whole batch into every split shard it may reach), so a
+    /// scan served by a routing activation holding an older map could return that
+    /// copy. Copying it would put a value into the remediated tree that no reader of
+    /// the original ever saw. A point read is routed to the key's owner, so the copy
+    /// holds exactly what the original served. A key a point read finds absent is
+    /// skipped for the same reason.
+    /// </para>
+    /// </summary>
+    private async Task<SourceSlice> ReadSliceAsync(ILattice source, int sliceSize)
+    {
+        var keys = new List<string>(Math.Min(sliceSize, 1024));
+        ExceptionDispatchInfo? fault = null;
+        try
+        {
+            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            {
+                keys.Add(entry.Key);
+                if (keys.Count == sliceSize)
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (keys.Count > 0)
+        {
+            // The keys read before the fault are still processed, so the slice can
+            // bank them (issue #2545) before it rethrows the fault.
+            fault = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        var exhausted = fault is null && keys.Count < sliceSize;
+        if (keys.Count == 0)
+        {
+            return new SourceSlice([], LastScannedKey: null, exhausted, Fault: null);
+        }
+
+        var values = await source.GetManyAsync(keys);
+        var entries = new List<KeyValuePair<string, byte[]>>(values.Count);
+        foreach (var key in keys)
+        {
+            if (values.TryGetValue(key, out var value) && value is not null)
+            {
+                entries.Add(new KeyValuePair<string, byte[]>(key, value));
+            }
+        }
+
+        return new SourceSlice(entries, keys[^1], exhausted, fault);
+    }
+
+    /// <summary>
+    /// One slice of the source: its entries, with point-read values; the last key
+    /// the scan reached, which the durable cursor resumes after even when that key
+    /// read absent; whether the scan reached the end of the source; and the fault
+    /// that cut the scan short after some keys were read, rethrown once the slice
+    /// has banked them.
+    /// </summary>
+    private sealed record SourceSlice(
+        List<KeyValuePair<string, byte[]>> Entries,
+        string? LastScannedKey,
+        bool Exhausted,
+        ExceptionDispatchInfo? Fault);
     /// <summary>
     /// The smallest key strictly after <paramref name="cursor"/> in ordinal order, or
     /// <c>null</c> to start at the beginning: appending U+0000 yields the immediate

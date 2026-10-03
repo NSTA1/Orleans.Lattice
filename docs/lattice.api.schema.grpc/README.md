@@ -41,9 +41,21 @@ The gRPC service name is `orleans.lattice.api.schema`.
 | `ClearVersionConfig` | unary | Clear version config |
 | `Remediate` | unary | Remediate |
 | `GetRemediationStatus` | unary | Get remediation status |
-| `ScanCompliance` | unary | Scan compliance |
-| `ProbeCapabilities` | unary | Probe capabilities |
-| `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes |
+| `ScanCompliance` | unary | Scan compliance (deprecated; blocking). |
+| `ProbeCapabilities` | unary | Probe capabilities. |
+| `StartComplianceScan` | unary | Start a compliance scan and return a `LatticeOperationHandle`. |
+| `GetComplianceScanStatus` | unary | Read a compliance-scan operation status. |
+| `ListComplianceScans` | unary | Page compliance-scan operations. |
+| `CancelComplianceScan` | unary | Request cancellation of a compliance-scan operation. |
+| `StartRemediation` | unary | Start a remediation and return a `LatticeOperationHandle`. |
+| `StartMigration` | unary | Start an eager migration and return a `LatticeOperationHandle`. |
+| `StartAdvanceAndMigrate` | unary | Start an advance-and-migrate operation and return a `LatticeOperationHandle`. |
+| `GetSchemaOperationStatus` | unary | Read a remediation or migration operation status. |
+| `ListSchemaOperations` | unary | Page remediation and migration operations. |
+| `CancelSchemaOperation` | unary | Request cancellation of a remediation or migration operation. |
+| `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes. |
+
+`Remediate`, `MigrateToTargetVersion`, `AdvanceAndMigrate`, and `ScanCompliance` stay on the wire as deprecated blocking RPCs until the next major version. New clients should use the `Start*` RPCs and poll the matching status RPC instead.
 
 ## Quick Start
 

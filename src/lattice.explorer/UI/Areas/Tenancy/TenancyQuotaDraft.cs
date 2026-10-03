@@ -8,7 +8,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// and the burst percent. A blank ceiling means <b>no ceiling</b>; <c>0</c> is a
 /// real ceiling that permits nothing, and the draft never confuses the two in
 /// either direction. Byte ceilings accept a binary unit (<c>KiB</c> to
-/// <c>TiB</c>), and every field ignores thousands separators.
+/// <c>TiB</c>), and every field ignores thousands separators. The four
+/// delegated access caps read the other way round: a blank cap applies the
+/// cluster's default cap, never no cap.
 /// </summary>
 internal sealed class TenancyQuotaDraft
 {
@@ -29,7 +31,12 @@ internal sealed class TenancyQuotaDraft
         ("tib", 1L << 40),
     ];
 
+    /// <summary>The error beside a delegated access cap that is not blank or a whole number of zero or more.</summary>
+    public const string InvalidCapMessage = "Enter a whole number of zero or more, or leave it blank for the default cap.";
+
     private readonly Dictionary<TenancyQuotaDimension, string> _ceilings = [];
+    private readonly Dictionary<TenancyAccessCap, string> _caps = [];
+    private readonly Dictionary<TenancyAccessCap, string> _capErrors = [];
 
     /// <summary>The text of <paramref name="dimension"/>'s ceiling field.</summary>
     /// <param name="dimension">The dimension.</param>
@@ -38,6 +45,17 @@ internal sealed class TenancyQuotaDraft
         get => _ceilings.TryGetValue(dimension, out var text) ? text : string.Empty;
         set => _ceilings[dimension] = value ?? string.Empty;
     }
+
+    /// <summary>The text of <paramref name="cap"/>'s field; blank applies the default cap.</summary>
+    /// <param name="cap">The delegated access cap.</param>
+    public string this[TenancyAccessCap cap]
+    {
+        get => _caps.TryGetValue(cap, out var text) ? text : string.Empty;
+        set => _caps[cap] = value ?? string.Empty;
+    }
+
+    /// <summary>The error of each delegated access cap field from the last <see cref="TryBuild"/>.</summary>
+    public IReadOnlyDictionary<TenancyAccessCap, string> CapErrors => _capErrors;
 
     /// <summary>The text of the burst percent field.</summary>
     public string BurstPercent { get; set; } = string.Empty;
@@ -53,6 +71,11 @@ internal sealed class TenancyQuotaDraft
         draft[TenancyQuotaDimension.TreeCount] = Text(quotas.MaxTreeCount);
         draft[TenancyQuotaDimension.OpsPerSecond] = Text(quotas.MaxOpsPerSecond);
         draft.BurstPercent = quotas.BurstPercent == 0 ? string.Empty : quotas.BurstPercent.ToString(CultureInfo.InvariantCulture);
+        foreach (var cap in TenancyAccessCaps.All)
+        {
+            draft[cap] = Text(TenancyAccessCaps.Of(quotas, cap));
+        }
+
         return draft;
     }
 
@@ -83,7 +106,21 @@ internal sealed class TenancyQuotaDraft
         BurstError = TryParseCeiling(BurstPercent, false, out var burst) && (burst ?? 0) <= int.MaxValue ? null : InvalidBurstMessage;
         errors = found;
 
-        if (found.Count > 0 || BurstError is not null)
+        _capErrors.Clear();
+        var caps = new Dictionary<TenancyAccessCap, long?>();
+        foreach (var cap in TenancyAccessCaps.All)
+        {
+            if (TryParseCeiling(this[cap], false, out var value))
+            {
+                caps[cap] = value;
+            }
+            else
+            {
+                _capErrors[cap] = InvalidCapMessage;
+            }
+        }
+
+        if (found.Count > 0 || BurstError is not null || _capErrors.Count > 0)
         {
             quotas = default;
             return false;
@@ -97,6 +134,10 @@ internal sealed class TenancyQuotaDraft
             MaxTreeCount = values[TenancyQuotaDimension.TreeCount],
             MaxOpsPerSecond = values[TenancyQuotaDimension.OpsPerSecond],
             BurstPercent = (int)(burst ?? 0),
+            MaxGroups = caps[TenancyAccessCap.Groups],
+            MaxMembershipEdges = caps[TenancyAccessCap.MembershipEdges],
+            MaxMemberSubjects = caps[TenancyAccessCap.MemberSubjects],
+            MaxTenantRules = caps[TenancyAccessCap.TenantRules],
         };
         return true;
     }

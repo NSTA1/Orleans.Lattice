@@ -110,7 +110,9 @@ internal sealed class TenantObservabilityView(
             return null;
         }
 
-        return _engine.ValidateActiveTenant(subject.SubjectId, asserted).Allowed
+        // Group-aware when delegated tenant access administration is enabled, and
+        // exactly the exact-id admin check when it is not: the gate's rule.
+        return _engine.ValidateActiveTenantAs(subject.SubjectId, subject.GroupIds, asserted).Allowed
             ? asserted
             : null;
     }

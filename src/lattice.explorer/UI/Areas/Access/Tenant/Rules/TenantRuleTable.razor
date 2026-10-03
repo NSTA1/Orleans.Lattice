@@ -1,0 +1,44 @@
+@*
+    A booktabs table of one layer of a tenant's rules. A tenant rule links to
+    its page, where it is edited and deleted; a platform rule is read-only and
+    links nowhere. Below the small breakpoint it is a list of two-line rows
+    opening a detail sheet.
+*@
+<LtTable TItem="TenantRuleView"
+         Items="Rules"
+         Caption="@Caption"
+         CaptionHidden="CaptionHidden"
+         RowKey="RowKey"
+         DetailTitle="@(rule => rule.RuleId)">
+    <ChildContent>
+        <LtColumn TItem="TenantRuleView" Title="Rule" RowHeader="true" Mono="true" SortBy="@(rule => rule.RuleId)">
+            @if (Editable)
+            {
+                <a href="@RuleHref(context)">@context.RuleId</a>
+            }
+            else
+            {
+                <span>@context.RuleId</span>
+            }
+        </LtColumn>
+        <LtColumn TItem="TenantRuleView" Title="Effect" Value="@(rule => AccessRuleFormat.EffectLabel(rule.Effect))" SortBy="@(rule => rule.Effect)" />
+        <LtColumn TItem="TenantRuleView" Title="Subject" Mono="true" Value="@(rule => TenantRuleFormat.SubjectLabel(rule.SubjectKind, rule.SubjectId))" SortBy="@(rule => TenantRuleFormat.SubjectLabel(rule.SubjectKind, rule.SubjectId))" />
+        <LtColumn TItem="TenantRuleView" Title="Scope" Mono="true" Value="@(rule => TenantRuleFormat.ScopeLabel(rule))" SortBy="@(rule => TenantRuleFormat.ScopeLabel(rule))" />
+        <LtColumn TItem="TenantRuleView" Title="Operations" Value="@(rule => AccessRuleFormat.OperationsLabel(rule.Operations))" />
+    </ChildContent>
+    <EmptyContent>
+        <span>@EmptyText</span>
+    </EmptyContent>
+    <CompactRow>
+        <LtCompactRow Mono="true">
+            <Primary>@context.RuleId</Primary>
+            <Secondary>@CompactSummary(context)</Secondary>
+        </LtCompactRow>
+    </CompactRow>
+    <DetailActions>
+        @if (Editable)
+        {
+            <a class="lt-btn" href="@RuleHref(context)">Open rule</a>
+        }
+    </DetailActions>
+</LtTable>

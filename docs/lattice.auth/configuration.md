@@ -32,4 +32,6 @@ Both tier flags (`AllTreesGrantsEnabled` and `AccessAdministrationDelegationEnab
 - **`ILatticeAuthAdmin.EffectivePermissionsAsync`.** The returned `AuthEffectivePermissions` carries the same `Posture`, so a listing that includes an inert `Tree:*` rule also reports that the tier is off.
 - **`ILatticeAuthAdmin.GetAccessModelAsync`.** The returned `AccessModelDescriptor` carries `AllTreesGrantsEnabled` and `AccessAdministrationDelegationEnabled`, which the Explorer's Access area renders as on/off entries in its access-posture banner, beside the authentication mode.
 
+The third opt-in that shapes evaluation, delegated tenant access administration, is a tenancy option (`LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`), not a `LatticeAuthOptions` property. The tenancy package logs it in its own start-up line, `Lattice tenancy posture: DelegatedAccessAdministrationEnabled=...`, and `AccessModelDescriptor.DelegatedTenantAccessAdministrationEnabled` reports it; it reads `false` on a cluster without tenancy. See [The tenant rule layer](tenant-layer.md).
+
 The `AuthPolicyPosture` record reports only the two opt-in tier flags; `DefaultEffect` is surfaced separately on `AuthExplanation`.

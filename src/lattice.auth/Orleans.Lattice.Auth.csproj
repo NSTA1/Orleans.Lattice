@@ -21,6 +21,15 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth.Tests" />
+    <!-- The delegated tenant access administration epic (#4154): the tenancy add-on
+         activates the tenant rule layer and purges a deleted tenant's tenant-tier
+         rules (ITenantPolicyRuleStore), and the tenant admin facade reads the
+         layer-carrying explain trace (PolicyMatch.Layer) and the tenant rule
+         confinement checks. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Tenancy" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth" />
     <!-- The microbench host builds a real PolicyAccessGate (via the internal
          decision engine, snapshot maintainer and decision observer) to measure
          the enforcement cost of the opt-in auth layer with Membership + Auth

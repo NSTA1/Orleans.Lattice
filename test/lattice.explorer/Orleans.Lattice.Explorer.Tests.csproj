@@ -28,6 +28,15 @@
     <Using Include="NUnit.Framework" />
   </ItemGroup>
 
+  <!--
+    The delegated tenant-access contract fakes (epic #4154) live with the contracts'
+    own tests and are compiled in here, so the Explorer's tenant Access pages are
+    tested against the same in-memory semantics the contract tests prove.
+  -->
+  <ItemGroup>
+    <Compile Include="..\lattice.api.abstractions\TenantAdmin\Fakes\*.cs" Link="Shared\TenantAdmin\%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.explorer\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />

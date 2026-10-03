@@ -241,17 +241,13 @@ internal sealed class TreeSnapshotGrain(
         // physical index on both trees - the index-for-index copy and
         // shadow-forward depend on it - and a later split of the destination
         // allocates above every index the copy populated.
-        var entry = new TreeRegistryEntry
-        {
-            MaxLeafKeys = maxLeafKeys,
-            MaxInternalChildren = maxInternalChildren,
-            ShardCount = shardCount,
-            DerivedFrom = releasesShadowForwardOnCompletion ? null : logicalTreeId,
-            ShardMap = sourceMap is null
-                ? null
-                : new ShardMap { Slots = (int[])sourceMap.Slots.Clone(), Version = sourceMap.Version },
-            NextShardIndex = sourceEntry?.NextShardIndex,
-        };
+        var entry = DerivedTreeEntries.ForCopy(
+            sourceMap,
+            sourceEntry?.NextShardIndex,
+            shardCount,
+            maxLeafKeys,
+            maxInternalChildren,
+            derivedFrom: releasesShadowForwardOnCompletion ? null : logicalTreeId);
         await registry.RegisterAsync(destinationTreeId, entry);
 
         // Pin the physical tree the copy reads. A resized tree's logical id

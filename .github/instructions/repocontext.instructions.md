@@ -336,6 +336,15 @@ mid-task.
   last verified current. Do not rely on `list_repos` alone to judge staleness.
   The dependable freshness signals are the per-hit `lastIngested` on `search`
   results and `index_status`'s `updatedAt` (see "Health and degraded mode").
+- **Memory-only indexing mode.** A host with
+  `LATTICE_REPOCONTEXT_SOURCE_INDEXING=off` still registers repositories and
+  embeds agent memory, but it never walks, fetches, reads, indexes, or embeds
+  files or symbols. `add_repo` / an indexing pass stamps the repository marker so
+  `list_repos` can still resolve the repo id, with `fileCount: 0` and a current
+  `lastIngested`; that is a valid memory-only repository, not evidence of an
+  empty tree. The switch stops new source indexing only: source records from an
+  earlier run remain until `reset_index` drops the code index while preserving
+  memory.
 
 ## Retrieval
 
@@ -674,7 +683,8 @@ synonyms (`decision` vs `decisions`):
   large blobs. Memory is not a scratchpad for the current turn. The one exception
   to "transient" is a deliberate **cross-session handoff** (see
   [Coordination](#coordination---memory-as-a-cross-session-bus)), which is
-  transient by design and therefore carries a TTL.
+  transient by design yet carries no TTL: it is retired deliberately with
+  `forget` when its workstream closes.
 - **Capture each finding once.** Prefer one well-formed entry written when you
   actually understand the finding, over a first draft plus a near-duplicate
   "better" version. If you do improve it, revise in place with its `id` (see

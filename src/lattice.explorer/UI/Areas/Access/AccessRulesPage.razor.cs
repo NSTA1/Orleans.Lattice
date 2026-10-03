@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 
@@ -9,7 +10,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// <summary>
 /// The rule list (<c>/access/rules</c>, also the area root): every rule, paged,
 /// with a search, an ownership filter, and a "New rule" editor. Rules link to
-/// their own page, where authored rules are edited and deleted.
+/// their own page, where authored rules are edited and deleted. At a tenant-rooted
+/// address whose access administration is delegated to the caller, the rules
+/// governing that tenant in both layers instead.
 /// </summary>
 public partial class AccessRulesPage
 {
@@ -19,6 +22,7 @@ public partial class AccessRulesPage
     private const string AppFilter = "app";
 
     private List<LatticeAuthorizationRule>? _rules;
+    private Dictionary<LatticeAuthorizationRule, string>? _tenantRules;
     private IReadOnlyList<LatticeAuthorizationRule>? _visible;
     private List<LatticeAuthorizationRule>? _visibleSource;
     private string? _visibleFilter;
@@ -33,9 +37,13 @@ public partial class AccessRulesPage
     private bool _loaded;
     private string? _loadedScope;
     private (int Count, bool More)? _clusterWide;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -137,6 +145,13 @@ public partial class AccessRulesPage
 
         _loaded = true;
         _loadedScope = Scope;
+        if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
+        {
+            // The rules governing the tenant, both layers: its view reads them.
+            _editorOpen = false;
+            return;
+        }
+
         _editorOpen = string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         await LoadFirstPageAsync().ConfigureAwait(true);
@@ -158,6 +173,8 @@ public partial class AccessRulesPage
             }
 
             _rules = [.. page.Entries];
+            _tenantRules = null;
+            RememberTenantRules(page);
             _next = page.NextPageToken;
             if (scope is not null)
             {
@@ -185,6 +202,7 @@ public partial class AccessRulesPage
             if (string.Equals(scope, Scope, StringComparison.Ordinal))
             {
                 _rules = [.. _rules, .. page.Entries];
+                RememberTenantRules(page);
                 _next = page.NextPageToken;
             }
         }
@@ -199,6 +217,23 @@ public partial class AccessRulesPage
     }
 
     private Task ReloadAsync() => LoadFirstPageAsync();
+
+    /// <summary>
+    /// Files the owning tenant of each tenant-tier rule on <paramref name="page"/>,
+    /// which the cluster reports index-aligned with its entries, so the table can
+    /// badge it. A page with no tenant-tier rule reports none.
+    /// </summary>
+    private void RememberTenantRules(AuthRulePage page)
+    {
+        var tenants = page.TenantRuleTenants;
+        for (var i = 0; i < tenants.Count && i < page.Entries.Count; i++)
+        {
+            if (tenants[i] is { } tenant)
+            {
+                (_tenantRules ??= [])[page.Entries[i]] = tenant;
+            }
+        }
+    }
 
     private void OpenEditor() => _editorOpen = true;
 

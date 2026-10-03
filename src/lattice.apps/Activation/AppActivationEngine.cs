@@ -191,7 +191,8 @@ internal sealed class AppActivationEngine
 
     private static IReadOnlyList<AppManifestError> DescribeCompilation(AppRuleCompilation compilation)
     {
-        var errors = new List<AppManifestError>(compilation.Excesses.Count + compilation.UnknownRoleBindings.Count);
+        var errors = new List<AppManifestError>(
+            compilation.Excesses.Count + compilation.UnknownRoleBindings.Count + compilation.TenantMismatchBindings.Count);
         foreach (var excess in compilation.Excesses)
         {
             errors.Add(excess.Kind == AppCeilingExcessKind.Operations
@@ -211,6 +212,15 @@ internal sealed class AppActivationEngine
                 "unknown-role-binding",
                 "$.roles",
                 $"The installed binding of role '{binding.RoleName}' names a role this manifest version does not declare."));
+        }
+
+        foreach (var binding in compilation.TenantMismatchBindings)
+        {
+            errors.Add(new AppManifestError(
+                "role-binding-tenant-mismatch",
+                $"$.roles[{binding.RoleName}]",
+                $"The installed binding of role '{binding.RoleName}' names group '{binding.GroupId}', which is not a group of the "
+                + "installing tenant; a role may be bound only to a cluster group or one of the tenant's own groups."));
         }
 
         return errors;
@@ -523,9 +533,13 @@ internal sealed class AppActivationEngine
             var compilation = AppRoleCompiler.Compile(manifest, tenant, record.RoleBindings, record.Ceiling, owners);
             if (!compilation.Succeeded)
             {
-                var failure = compilation.Excesses.Count > 0
-                    ? AppActivationFailure.CeilingExceeded
-                    : AppActivationFailure.UnknownRoleBinding;
+                // A binding reaching outside the installing tenant is a confinement breach, so it is
+                // the reported failure whatever else is wrong; every problem is still in the diagnostics.
+                var failure = compilation.TenantMismatchBindings.Count > 0
+                    ? AppActivationFailure.AppRoleBindingTenantMismatch
+                    : compilation.Excesses.Count > 0
+                        ? AppActivationFailure.CeilingExceeded
+                        : AppActivationFailure.UnknownRoleBinding;
                 return Step.Fail(record, failure, DescribeCompilation(compilation), applied);
             }
 

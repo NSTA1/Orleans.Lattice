@@ -11,7 +11,8 @@ The package ships two independent, strictly opt-in capabilities:
 
 - **Schema enforcement** (`AddLatticeSchemaEnforcement(...)`) - per-tree,
   server-side validation of writes against a `LatticeSchemaPolicy` (JSON,
-  UTF-8, maximum byte length, regex, or a structured predicate), managed through
+  UTF-8, maximum byte length, regex, or a structured predicate using the
+  `TypeOf`, `Length`, `Every`, and `Self` predicate kinds), managed through
   `ILatticeSchemaAdmin`. A non-compliant local write throws
   `LatticeSchemaViolationException`; under strict ingest a non-compliant
   ingested item that reaches the check (a replicated typed-CRDT entry, or an
@@ -27,7 +28,10 @@ The package ships two independent, strictly opt-in capabilities:
   re-stamping migration.
 
 These in-process admin services perform no authorization of their own; the
-`Orleans.Lattice.Api.Schema` facade authorizes remote callers. See the
+`Orleans.Lattice.Api.Schema` facade authorizes remote callers. The facade also
+exposes accept-then-poll operations for remediation, migration, advance-and-migrate,
+and compliance scans, so long runs return a handle immediately and can be polled or
+cancelled. See the
 [schema documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.schema/README.md).
 
 ## Design

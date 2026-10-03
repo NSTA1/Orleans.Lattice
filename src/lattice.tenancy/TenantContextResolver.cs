@@ -115,7 +115,10 @@ internal sealed class TenantContextResolver(
             return default;
         }
 
-        return _engine.ValidateActiveTenant(subject.SubjectId, asserted).Allowed
+        // Group-aware when delegated tenant access administration is enabled, and
+        // exactly the exact-id admin check when it is not: the same rule the gate
+        // applies, so the two never disagree on who may act as the tenant.
+        return _engine.ValidateActiveTenantAs(subject.SubjectId, subject.GroupIds, asserted).Allowed
             ? asserted
             : default;
     }

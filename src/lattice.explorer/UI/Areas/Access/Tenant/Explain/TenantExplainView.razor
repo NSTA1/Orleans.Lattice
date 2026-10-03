@@ -1,0 +1,92 @@
+@inherits TenantAccessView
+
+@*
+    The layer-aware explanation of a decision on the tenant's own trees
+    (/t/{tenant}/access/explain): whether a subject may perform an operation on
+    one of the tenant's trees, which layer decided, and by which rule. A subject
+    that may not act as the tenant at all is told so first.
+*@
+
+<PageTitle>Explain access in tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Ask why a subject is allowed or denied an operation on one of tenant @Tenant's trees, and which layer decided: platform rules first, then the tenant's own.</p>
+<AccessNav Current="@AccessRoutes.ExplainSegment" Tenant="@Tenant" Delegated="true" />
+
+<form class="lt-access-form" @onsubmit="ExplainAsync" novalidate data-lt-tenant-explain="@Tenant">
+    <AccessSubjectPicker @ref="_subjectPicker"
+                         Label="Subject"
+                         Tenant="@Tenant"
+                         SubjectKind="_subjectKind"
+                         SubjectKindChanged="@(kind => _subjectKind = kind)"
+                         Id="@_subject"
+                         IdChanged="@(value => _subject = value)"
+                         Error="@_subjectError"
+                         DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                         DirectorySearchDenied="_modelDenied"
+                         DirectoryExplanation="@_model?.DirectoryExplanation" />
+    <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="OnTreeChanged" Error="@_treeError" Source="@Trees" Noun="tree"
+                Hint="@($"One of tenant {Tenant}'s own trees.")" />
+    <LtTextInput Label="Key (optional)" Mono="true" Value="@_key" ValueChanged="@(value => _key = value)" Hint="Leave empty to ask about the whole tree." />
+    <LtSelect Label="Operation" Options="OperationOptions" Value="@_operation" ValueChanged="@(value => _operation = value)" />
+    <div class="lt-access-form__actions">
+        <LtButton Type="LtButtonType.Submit" Disabled="_running">Explain</LtButton>
+    </div>
+</form>
+
+<section class="lt-access-tenant" data-lt-tenant-view="explain" aria-label="Explain access in tenant @Tenant">
+    @if (_running)
+    {
+        <LtSkeleton Lines="4" Label="Asking the cluster" />
+    }
+    else if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The cluster could not answer")" HeadingLevel="2">
+            @failure.Message
+        </LtEmptyState>
+    }
+    else if (_explanation is { } explanation)
+    {
+        <div class="lt-access-section" aria-live="polite" data-lt-explanation="@(explanation.Allowed ? "allowed" : "denied")">
+            @if (_resolution is { IsMember: false } outsider)
+            {
+                <div class="lt-access-verdict" data-lt-cannot-act="true">
+                    <h2 class="lt-access-verdict__title">Cannot act as tenant @Tenant</h2>
+                    <LtStatusPill State="LtStateRole.Failed" Text="Not a member" />
+                </div>
+                <p class="lt-access-notice">
+                    <span class="lt-access-mono">@TenantRuleFormat.SubjectLabel(outsider.SubjectKind, outsider.SubjectId)</span>
+                    is neither an administrator nor a member of tenant @Tenant, so the tenant refuses its every request before any rule is read.
+                    <a href="@Href(AccessRoutes.TenantMembers(Tenant))">Add it on the Members page</a>.
+                </p>
+                <p class="lt-access-caveat">Below is what the rules would decide if it were a member.</p>
+            }
+            <div class="lt-access-verdict">
+                <h2 class="lt-access-verdict__title">@(explanation.Allowed ? "Allowed" : "Denied")</h2>
+                <LtStatusPill State="@(explanation.Allowed ? LtStateRole.Enabled : LtStateRole.Failed)" Text="@(explanation.Allowed ? "Allowed" : "Denied")" />
+            </div>
+            <LtDefinitionList>
+                <LtDefinition Term="Subject" Mono="true">@TenantRuleFormat.SubjectLabel(explanation.SubjectKind, explanation.SubjectId)</LtDefinition>
+                <LtDefinition Term="Operation">@AccessRuleFormat.OperationsLabel(explanation.Operation)</LtDefinition>
+                <LtDefinition Term="Tree" Mono="true">@explanation.TreeName</LtDefinition>
+                <LtDefinition Term="Key" Mono="true">@(explanation.Key ?? "the whole tree")</LtDefinition>
+                @if (!string.IsNullOrEmpty(explanation.Reason))
+                {
+                    <LtDefinition Term="Reason">@explanation.Reason</LtDefinition>
+                }
+                <LtDefinition Term="With no matching rule">@AccessRuleFormat.EffectLabel(explanation.DefaultEffect)</LtDefinition>
+                @if (explanation.Filtered)
+                {
+                    <LtDefinition Term="Filtered">A range read would be narrowed to the keys the subject may see.</LtDefinition>
+                }
+            </LtDefinitionList>
+            <TenantExplainLayers Tenant="@Tenant" Explanation="explanation" />
+        </div>
+    }
+    else
+    {
+        <LtEmptyState Title="Nothing explained yet">
+            <ChildContent>Choose a subject, one of the tenant's trees and an operation to see the decision and the rule behind it.</ChildContent>
+        </LtEmptyState>
+    }
+</section>
