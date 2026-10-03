@@ -175,6 +175,35 @@ internal sealed partial class BPlusLeafGrain
         _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
 
     /// <summary>
+    /// Whether the write being committed is a saga prepare for a transaction
+    /// whose terminal this leaf has already applied, which makes it a
+    /// late-arriving orphan: a source shard's shadow-forward of a prepare, or
+    /// the retroactive pending-tx sweep, that trailed the saga's terminal to
+    /// this leaf.
+    /// <para>
+    /// Such a prepare is refused before its WAL append rather than bucketed.
+    /// The terminal already settled every key it carried here (a commit's
+    /// committed-values backstop wrote the authoritative value, an abort
+    /// needs nothing), and each saga issues exactly one terminal, so nothing
+    /// would ever drain the bucket. Reads hide an orphan only while
+    /// <see cref="IsRecentlyTerminal"/> remembers the transaction, and that
+    /// memory is per-activation: a reactivation that replays the logged
+    /// prepare, or a later split that strands the key outside this leaf's
+    /// span, leaves the orphan surfacing as the committed value - a stale
+    /// round over newer rows, a duplicate key in a count or scan, and reads
+    /// that keep retrying a prepare they cannot settle.
+    /// </para>
+    /// </summary>
+    private bool IsLatePrepareForTerminalTransaction()
+    {
+        if (!LatticePreparedContext.Current)
+            return false;
+
+        var txid = LatticeTransactionContext.Current;
+        return txid != Guid.Empty && IsRecentlyTerminal(txid);
+    }
+
+    /// <summary>
     /// Tracks per-saga which keys have already had the cross-migration
     /// LWW backstop applied. Keyed by transaction id; value is the set
     /// of keys whose backstop write has landed on this leaf.
@@ -1642,6 +1671,25 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal long? MinUnresolvedPrepareOffsetForPartitionForTest(int partition)
         => MinUnresolvedPrepareOffsetForPartition(partition);
+
+    /// <summary>
+    /// Test hook: buckets a prepared write (a tombstone when
+    /// <paramref name="value"/> is <see langword="null"/>) for
+    /// <paramref name="transactionId"/> the way a prepared Set or Delete does,
+    /// but without <see cref="IsLatePrepareForTerminalTransaction"/>, so a test
+    /// can stand up an orphan bucket - a pending bucket for a transaction whose
+    /// terminal this leaf has already applied. A live prepared write can no
+    /// longer produce that state; activation replay still can, and the orphan
+    /// read and discard guards defend it.
+    /// </summary>
+    internal void PlantPreparedMutationForTest(Guid transactionId, string key, byte[]? value)
+    {
+        var stamp = AdvanceClockOrOverride();
+        AddPreparedMutation(
+            transactionId,
+            key,
+            value is null ? LwwValue<byte[]>.Tombstone(stamp) : LwwValue<byte[]>.Create(value, stamp));
+    }
 
     /// <summary>
     /// Returns the minimum WAL offset across every unresolved

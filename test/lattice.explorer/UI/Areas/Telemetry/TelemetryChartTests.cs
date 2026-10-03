@@ -47,6 +47,20 @@ public sealed class TelemetryChartTests : TelemetryTestContext
     }
 
     [Test]
+    public void A_shortened_direct_label_never_ends_in_half_an_emoji()
+    {
+        // A label cut between the two halves of a surrogate pair is drawn as the replacement character.
+        var name = new string('x', TelemetryChartGeometry.MaxLabelLength - 2) + "\U0001F600" + "-tail";
+        Telemetry.Answer(Reads.QueryId, request => TelemetryTestData.Response(request, default,
+            TelemetryTestData.Series(name, TelemetryTestData.Now, 1, 2)));
+
+        var cut = RenderChart();
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-telemetry-svg__label").TextContent,
+            Is.EqualTo(new string('x', TelemetryChartGeometry.MaxLabelLength - 2) + "\u2026")));
+    }
+
+    [Test]
     public void The_legend_links_each_tree_to_the_tree_filter_and_to_Data()
     {
         Telemetry.Answer(Reads.QueryId, request => TelemetryTestData.Response(request, default,

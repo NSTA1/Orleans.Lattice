@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Tag normalisation allocates once.** The tag-index write path normalised each write's tags through a `List` and then copied it out with `ToArray`. It now fills an exactly-sized array in a single pass, removing two allocations and 88 bytes per four-tag write. ([#4386](https://github.com/NSTA1/Orleans.Lattice/pull/4386)) (`Orleans.Lattice`)
+
+- **Performance - Tag row keys build in one pass.** Tag-index row keys and key-major prefixes were assembled with five- and six-operand `string.Concat`, which sizes the result in one pass and copies in another. They now use `string.Create`, cutting row-key construction time by about a third. ([#4386](https://github.com/NSTA1/Orleans.Lattice/pull/4386)) (`Orleans.Lattice`)
+
+- **Performance - Narrow tag sets reconcile without a hash set.** Reconciling a key's tags always built a `HashSet` for the desired side, even for the handful of tags a typical write carries. Narrow sets now deduplicate through a presized list, saving 168 bytes per four-tag write. ([#4386](https://github.com/NSTA1/Orleans.Lattice/pull/4386)) (`Orleans.Lattice`)
+
 - **Performance - GSet decode projection.** The `GSet` decoders built a key list, sorted it, then grew a result list through an iterator. Both project from an exactly-sized sorted array now, as does `GSet.Values`: 10-48% faster decodes, 136 bytes less per call. ([#4377](https://github.com/NSTA1/Orleans.Lattice/pull/4377)) (`Orleans.Lattice`)
 
 - **Performance - CRDT set provenance decode windows.** The `OrSet` and `RwSet` decoders each built an unsized `List<string>` per call purely to sort a key window. All four decode methods rent a right-sized pooled array now: 9-22% less allocated across state and current-value decodes. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
@@ -91,6 +97,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ### Fixed
+
+- **Core - A reshard no longer leaves stale prepared writes behind an atomic batch.** A split forwards each prepared key on its own, so one could reach the new shard after the batch had committed and sit there undrained. Once the shard forgot the commit, it counted that key twice, could serve a stale round, and reads could hang. The late write is now dropped. ([#4385](https://github.com/NSTA1/Orleans.Lattice/issues/4385)) (`Orleans.Lattice`)
 
 - **Schema - Remediation keeps the tree's shard topology and sizing.** A remediation or eager schema-version migration built its copy with library defaults, so a resharded or pinned tree came back at 64 shards with default leaf sizing, WAL partitions and virtual slot count, and without its runtime overrides. The copy now inherits the tree's shard map, split mark, structural pins and overrides, as a resize's does. ([#4379](https://github.com/NSTA1/Orleans.Lattice/issues/4379)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`)
 
@@ -250,6 +258,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - A Data tab refresh no longer reports a failed read over loaded keys.** Switching tree, page size, prefix, tag or scan mode no longer shows a read error when the previous scan's cursor cannot be released; the new page stays in view and the server reaps the old cursor. ([#4371](https://github.com/NSTA1/Orleans.Lattice/issues/4371)) (`Orleans.Lattice.Explorer.Core`)
 
 - **Explorer - Route addresses with escapes that are not UTF-8 are reported, not misread.** `ExplorerRoutePath.Parse` now reports an id, tenant or parameter whose percent-escapes are not valid UTF-8, such as `%FF`, as malformed instead of resolving it to a differently named tree. ([#4373](https://github.com/NSTA1/Orleans.Lattice/issues/4373)) (`Orleans.Lattice.Explorer.Core`)
+
+- **Explorer - A clipped preview never ends in half an emoji.** A key, value, dead letter, schema preview or chart label clipped part-way through a character outside the Basic Multilingual Plane now stops before it, so it no longer shows a replacement character before the `...`. ([#4388](https://github.com/NSTA1/Orleans.Lattice/issues/4388)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A key prefix ending in an emoji lists only its own keys.** A Data or History prefix ending in U+D7FF or a character such as U+1F3FF no longer sends a range bound the wire widens, so keys outside the prefix are no longer listed. ([#4389](https://github.com/NSTA1/Orleans.Lattice/issues/4389)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - The highest schema target version is not advanced to 0.** At target version 4,294,967,295 the Versions tab no longer offers to advance to version 0; Advance is turned off and the tab says no higher version exists. ([#4390](https://github.com/NSTA1/Orleans.Lattice/issues/4390)) (`Orleans.Lattice.Explorer.UI`)
 
 ### Security
 

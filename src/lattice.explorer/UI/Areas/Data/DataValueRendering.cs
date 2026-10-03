@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Orleans.Lattice.Explorer.Core.Data;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -107,7 +108,7 @@ internal static class DataValueRendering
         // never marks the bytes a hex preview leaves out (#4354).
         var continues = truncated || (rendered.Format == ValueFormat.Hex && hexBytes < bytes.Length);
         return text.Length > maximum || continues
-            ? string.Concat(text.AsSpan(0, Math.Min(text.Length, maximum - 3)), "...")
+            ? string.Concat(LtTextCut.Prefix(text, maximum - 3), "...")
             : text;
     }
 

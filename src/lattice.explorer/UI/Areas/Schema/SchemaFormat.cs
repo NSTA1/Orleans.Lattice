@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -136,7 +137,7 @@ internal static class SchemaFormat
             text = Convert.ToHexString(bytes);
         }
 
-        return text.Length > PreviewCharacters ? text[..PreviewCharacters] + "..." : text;
+        return text.Length > PreviewCharacters ? string.Concat(LtTextCut.Prefix(text, PreviewCharacters), "...") : text;
     }
 
     /// <summary>A byte count, such as "1,024 bytes".</summary>

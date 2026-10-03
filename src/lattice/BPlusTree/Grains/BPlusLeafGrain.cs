@@ -1210,6 +1210,8 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks)
     {
+        if (IsLatePrepareForTerminalTransaction()) return null;
+
         using var _commitScope = EnterCommitScope();
         // step 0 (build) - HLC tick (or override), build LwwValue. Version
         // vector is foreground-only; ILeafProjection.Apply does not advance it.
@@ -1656,6 +1658,8 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        if (IsLatePrepareForTerminalTransaction()) return null;
+
         using var _commitScope = EnterCommitScope();
         var count = entries.Count;
         // walEntries is a transient, single-use buffer: built once
@@ -2070,6 +2074,11 @@ internal sealed partial class BPlusLeafGrain(
         // make the absence durable (the caller's pre-saga value is
         // captured separately by the saga coordinator).
         if (!isPrepared && (!Cache.TryGetRow(key, out var existing) || existing.IsTombstone))
+        {
+            return new LeafDeleteResult { Split = recovered };
+        }
+
+        if (IsLatePrepareForTerminalTransaction())
         {
             return new LeafDeleteResult { Split = recovered };
         }

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Orleans.Lattice.Api.Telemetry;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Telemetry;
 
@@ -306,5 +307,5 @@ internal sealed class TelemetryChartGeometry
     }
 
     private static string Shorten(string name) =>
-        name.Length <= MaxLabelLength ? name : string.Concat(name.AsSpan(0, MaxLabelLength - 1), "\u2026");
+        name.Length <= MaxLabelLength ? name : string.Concat(LtTextCut.Prefix(name, MaxLabelLength - 1), "\u2026");
 }

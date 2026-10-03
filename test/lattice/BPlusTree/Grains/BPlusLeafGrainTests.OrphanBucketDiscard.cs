@@ -43,6 +43,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// terminal (bucket pinned); post-fix the count drops to 0
 /// (bucket discarded by <c>ApplyTxAbort</c>).
 /// </para>
+/// <para>
+/// A live prepared write can no longer seed the orphan: a leaf refuses a
+/// prepare for a transaction whose terminal it has already applied
+/// (issue #4385). The bucket is still reachable through activation replay,
+/// so these tests plant it with <c>PlantPreparedMutationForTest</c> to keep
+/// the discard defended.
+/// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
@@ -76,7 +83,7 @@ public partial class BPlusLeafGrainTests
         // prepare snapshot under the same txid - the destination ends
         // up holding an orphan bucket because the sweep is unaware
         // that the terminal has already passed.
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(1),
             "Setup: sweep replay must have seeded a pending bucket.");
 
@@ -119,8 +126,8 @@ public partial class BPlusLeafGrainTests
 
         // Sweep replays a multi-key prepare snapshot under the
         // already-terminalled txid.
-        await PreparedSetAsync(grain, txid, "a", [77]);
-        await PreparedSetAsync(grain, txid, "b", [88]);
+        grain.PlantPreparedMutationForTest(txid, "a", [77]);
+        grain.PlantPreparedMutationForTest(txid, "b", [88]);
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(1),
             "Setup: sweep replay must have seeded one multi-key pending bucket.");
 
@@ -148,7 +155,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
         await grain.SetAsync("k", [99]);
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         // First duplicate terminal: discards bucket.
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
@@ -179,7 +186,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
         await grain.SetAsync("k", [99]);
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         await grain.ApplyTxTerminalAsync(txid, committed: false, committedValues: null);
 

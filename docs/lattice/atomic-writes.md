@@ -548,6 +548,19 @@ pre-tombstone immediate-evict behaviour and reintroduces the orphan
 risk - reserved for unit tests or environments that disable adaptive
 splitting.
 
+A prepared write that reaches a leaf after that leaf has already applied
+the saga's terminal is refused rather than bucketed. A split's hot-path
+shadow-forward sends each prepared key as its own call, so one can trail
+the terminal by milliseconds. The terminal has already settled every key it
+carried to that leaf (a commit's committed-values backstop wrote the value,
+and an abort needs nothing), and a saga issues one terminal, so nothing would
+ever drain the bucket. Left in place, it surfaced once the leaf no longer
+remembered the terminal - after a reactivation, or after a split stranded
+the key outside the leaf's span - as a stale value or as a key counted twice
+by `CountAsync`. The refusal happens before the write-ahead-log append, so
+the orphan cannot reappear on replay. The retention window above still
+covers a leaf whose current activation does not know the terminal.
+
 ### After the retention window: `Indeterminate`, not `InFlight`
 
 Once a tombstone outlives `TxDecisionRetention`, the registry stops

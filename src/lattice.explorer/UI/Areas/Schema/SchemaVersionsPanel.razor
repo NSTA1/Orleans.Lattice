@@ -133,11 +133,15 @@
         @if (Workspace!.Grants.ManageVersion)
         {
             <div class="lt-toolbar lt-schema-actions">
-                <LtButton OnClick="OpenAdvance" Disabled="@Busy">Advance target version...</LtButton>
+                <LtButton OnClick="OpenAdvance" Disabled="@(Busy || !CanAdvance)">Advance target version...</LtButton>
                 <LtButton OnClick="() => _confirm = Confirm.Migrate" Disabled="@Busy">Migrate stored values...</LtButton>
                 <LtButton Variant="LtButtonVariant.Quiet" OnClick="OpenConfigure" Disabled="@Busy">Change config</LtButton>
                 <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = Confirm.Clear" Disabled="@Busy">Turn off versioning</LtButton>
             </div>
+            @if (!CanAdvance)
+            {
+                <p class="lt-schema-note">The target is the highest version there is, so it cannot be advanced.</p>
+            }
         }
     };
 

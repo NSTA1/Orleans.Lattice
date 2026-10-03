@@ -29,6 +29,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>GetManyAsync</c>) exercises the same guard in a separate
 /// branch, so each gets its own focused test below.
 /// </para>
+/// <para>
+/// A live prepared write can no longer seed the orphan: a leaf refuses a
+/// prepare for a transaction whose terminal it has already applied
+/// (issue #4385). The bucket is still reachable through activation replay,
+/// so these tests plant it with <c>PlantPreparedMutationForTest</c> to keep
+/// the read guard defended.
+/// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
@@ -66,7 +73,7 @@ public partial class BPlusLeafGrainTests
         // Late-arriving shadow-forwarded prepare under the same
         // already-terminalised txid lands in the pending bucket - this
         // is the orphan condition.
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -89,7 +96,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
 
         await MarkRecentlyTerminalAsync(grain, txid);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -111,7 +118,7 @@ public partial class BPlusLeafGrainTests
         var entriesTimestamp = grain.EntriesForTest["k"].Timestamp;
 
         await MarkRecentlyTerminalAsync(grain, txid);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -131,7 +138,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
 
         await MarkRecentlyTerminalAsync(grain, txid);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -151,7 +158,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
         await grain.SetAsync("k", [99]);
         await MarkRecentlyTerminalAsync(grain, txid);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -169,7 +176,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain();
         var txid = Guid.NewGuid();
         await MarkRecentlyTerminalAsync(grain, txid);
-        await PreparedSetAsync(grain, txid, "k", [11]);
+        grain.PlantPreparedMutationForTest(txid, "k", [11]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -194,7 +201,7 @@ public partial class BPlusLeafGrainTests
 
         await MarkRecentlyTerminalAsync(grain, txid);
         // Plant an orphan bucket for "a" only - "b" has no pending.
-        await PreparedSetAsync(grain, txid, "a", [99]);
+        grain.PlantPreparedMutationForTest(txid, "a", [99]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
@@ -214,7 +221,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
         await grain.SetAsync("b", [2]);
         await MarkRecentlyTerminalAsync(grain, txid);
-        await PreparedSetAsync(grain, txid, "a", [99]);
+        grain.PlantPreparedMutationForTest(txid, "a", [99]);
 
         var snapshot = new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Committed };
         using (LatticeRegistrySnapshotContext.BeginScope(snapshot))

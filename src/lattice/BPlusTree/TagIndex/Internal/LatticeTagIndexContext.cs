@@ -228,8 +228,27 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
     // ── Membership row helpers ───────────────────────────────────────
 
+    // Written in a single pass into the exact final length rather than through
+    // string.Concat. Past four operands Concat has no dedicated overload, so it
+    // sums the segment lengths in one pass and copies them in another; handing
+    // string.Create the length up front collapses that to one pass. The state
+    // is a ValueTuple and the callback is static, so neither boxes nor closes
+    // over anything.
     private static string RowKey(string tag, string treeId, string key) =>
-        string.Concat(tag, SepStr, treeId, SepStr, key);
+        string.Create(
+            tag.Length + 1 + treeId.Length + 1 + key.Length,
+            (tag, treeId, key),
+            static (span, state) =>
+            {
+                var (tagPart, treeIdPart, keyPart) = state;
+                tagPart.CopyTo(span);
+                var at = tagPart.Length;
+                span[at++] = Sep;
+                treeIdPart.CopyTo(span[at..]);
+                at += treeIdPart.Length;
+                span[at++] = Sep;
+                keyPart.CopyTo(span[at..]);
+            });
 
     private static string PostingPrefix(string tag, string treeId) =>
         string.Concat(tag, SepStr, treeId, SepStr);
@@ -240,10 +259,39 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     // `\0` prefix keeps mirrors out of the membership namespace, so every
     // `rowKey[0] == Sep` guard and every tag/posting/marker prefix skips them.
     private static string KeyRowKey(string treeId, string key, string tag) =>
-        string.Concat(KeyMajorPrefix, treeId, SepStr, key, SepStr, tag);
+        string.Create(
+            KeyMajorPrefix.Length + treeId.Length + 1 + key.Length + 1 + tag.Length,
+            (treeId, key, tag),
+            static (span, state) =>
+            {
+                var (treeIdPart, keyPart, tagPart) = state;
+                KeyMajorPrefix.CopyTo(span);
+                var at = KeyMajorPrefix.Length;
+                treeIdPart.CopyTo(span[at..]);
+                at += treeIdPart.Length;
+                span[at++] = Sep;
+                keyPart.CopyTo(span[at..]);
+                at += keyPart.Length;
+                span[at++] = Sep;
+                tagPart.CopyTo(span[at..]);
+            });
 
     private static string KeyMajorPrefixFor(string treeId, string key) =>
-        string.Concat(KeyMajorPrefix, treeId, SepStr, key, SepStr);
+        string.Create(
+            KeyMajorPrefix.Length + treeId.Length + 1 + key.Length + 1,
+            (treeId, key),
+            static (span, state) =>
+            {
+                var (treeIdPart, keyPart) = state;
+                KeyMajorPrefix.CopyTo(span);
+                var at = KeyMajorPrefix.Length;
+                treeIdPart.CopyTo(span[at..]);
+                at += treeIdPart.Length;
+                span[at++] = Sep;
+                keyPart.CopyTo(span[at..]);
+                at += keyPart.Length;
+                span[at] = Sep;
+            });
 
     /// <summary>
     /// The segment boundaries of a parsed membership row key
@@ -782,17 +830,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
     internal async Task SetTagsForKeyAsync(string treeId, string key, IReadOnlyList<string> tags, CancellationToken cancellationToken)
     {
-        // Presized from the tag list: the loop adds at most one entry per tag,
-        // so tags.Count is an exact upper bound on the final population.
-        var desired = new HashSet<string>(tags.Count, StringComparer.Ordinal);
-        foreach (var tag in tags)
-        {
-            ValidateTag(tag);
-            desired.Add(tag);
-        }
         var current = await GetTagsForKeyAsync(treeId, key, cancellationToken).ConfigureAwait(false);
 
-        ReconcileTagSet(desired, current, out var toAdd, out var toRemove);
+        ReconcileTagSet(tags, current, out var toAdd, out var toRemove);
 
         if (toAdd is not null)
         {
@@ -838,15 +878,66 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     /// <see cref="IReadOnlyList{T}"/> and publishes no ordering contract, so a
     /// binary search here would fail silently the day that changes.
     /// </para>
+    /// <para>
+    /// Third, <paramref name="tags"/> is deduplicated under the same rule
+    /// rather than unconditionally. The desired side previously built a
+    /// <see cref="HashSet{T}"/> at every width, which is the cost the paragraph
+    /// above declines to pay for <paramref name="current"/> - at the widths a
+    /// tag set actually reaches, the set's bucket and entry arrays exist only
+    /// to answer a handful of ordinal comparisons. Below the threshold the
+    /// desired side is deduped into a presized <see cref="List{T}"/> and probed
+    /// linearly; at and above it the original hashing body runs unchanged, so
+    /// the wide case cannot regress. First-seen order is preserved either way,
+    /// so both partitions keep the order the hashing path produced.
+    /// </para>
+    /// <para>
+    /// The two strategies are separate methods rather than two arms of one
+    /// body, and that is a measured decision rather than a stylistic one.
+    /// Fusing them into a single method left the hashing arm textually
+    /// identical and still measurably slower, because the arm the JIT compiles
+    /// is the whole method: one body carrying both strategies has roughly twice
+    /// the live range, spills where the original kept values in registers, and
+    /// stops inlining the probe helper. Keeping the hashing arm in a method of
+    /// its own makes "the wide case cannot regress" a property of the compiled
+    /// code rather than of the source text.
+    /// </para>
     /// </remarks>
     internal static void ReconcileTagSet(
-        HashSet<string> desired,
+        IReadOnlyList<string> tags,
+        IReadOnlyList<string> current,
+        out List<string>? toAdd,
+        out List<string>? toRemove)
+    {
+        if (tags.Count > LinearTagScanThreshold)
+        {
+            ReconcileHashedDesired(tags, current, out toAdd, out toRemove);
+            return;
+        }
+
+        ReconcileLinearDesired(tags, current, out toAdd, out toRemove);
+    }
+
+    /// <summary>
+    /// Wide-tag-set strategy: deduplicate the desired tags through a presized
+    /// <see cref="HashSet{T}"/>, bounding the quadratic term.
+    /// </summary>
+    private static void ReconcileHashedDesired(
+        IReadOnlyList<string> tags,
         IReadOnlyList<string> current,
         out List<string>? toAdd,
         out List<string>? toRemove)
     {
         toAdd = null;
         toRemove = null;
+
+        // Presized from the tag list: the loop adds at most one entry per
+        // tag, so tags.Count is an exact upper bound on the population.
+        var desired = new HashSet<string>(tags.Count, StringComparer.Ordinal);
+        foreach (var candidate in tags)
+        {
+            ValidateTag(candidate);
+            desired.Add(candidate);
+        }
 
         HashSet<string>? currentSet = null;
         if (current.Count > LinearTagScanThreshold)
@@ -865,10 +956,6 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             }
         }
 
-        // Iterating the row list directly rather than a deduplicated copy is
-        // safe: the key-major mirror stores one row per (treeId, key, tag), so
-        // `current` carries no duplicates to collapse. RemoveRowAsync is
-        // idempotent in any case.
         for (var i = 0; i < current.Count; i++)
         {
             var tag = current[i];
@@ -877,6 +964,84 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 (toRemove ??= []).Add(tag);
             }
         }
+    }
+
+    /// <summary>
+    /// Narrow-tag-set strategy: deduplicate the desired tags into a presized
+    /// <see cref="List{T}"/> probed linearly, which is the common case.
+    /// </summary>
+    private static void ReconcileLinearDesired(
+        IReadOnlyList<string> tags,
+        IReadOnlyList<string> current,
+        out List<string>? toAdd,
+        out List<string>? toRemove)
+    {
+        toAdd = null;
+        toRemove = null;
+
+        var desired = new List<string>(tags.Count);
+        foreach (var candidate in tags)
+        {
+            ValidateTag(candidate);
+            if (!ContainsOrdinalConcrete(desired, candidate))
+            {
+                desired.Add(candidate);
+            }
+        }
+
+        HashSet<string>? currentSet = null;
+        if (current.Count > LinearTagScanThreshold)
+        {
+            currentSet = new HashSet<string>(current, StringComparer.Ordinal);
+        }
+
+        for (var i = 0; i < desired.Count; i++)
+        {
+            var tag = desired[i];
+            var present = currentSet is not null
+                ? currentSet.Contains(tag)
+                : ContainsOrdinal(current, tag);
+            if (!present)
+            {
+                (toAdd ??= []).Add(tag);
+            }
+        }
+
+        // Iterating the row list directly rather than a deduplicated copy is
+        // safe: the key-major mirror stores one row per (treeId, key, tag), so
+        // `current` carries no duplicates to collapse. RemoveRowAsync is
+        // idempotent in any case.
+        for (var i = 0; i < current.Count; i++)
+        {
+            var tag = current[i];
+            if (!ContainsOrdinalConcrete(desired, tag))
+            {
+                (toRemove ??= []).Add(tag);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ordinal linear membership test over the deduplicated desired list.
+    /// </summary>
+    /// <remarks>
+    /// Typed to the concrete <see cref="List{T}"/> rather than
+    /// <see cref="IReadOnlyList{T}"/> deliberately: the interface-typed overload
+    /// below pays an interface dispatch on every <c>Count</c> read and every
+    /// indexer access, which at the narrow widths this arm exists to serve costs
+    /// more than the allocation it saves. Measured, not stylistic.
+    /// </remarks>
+    private static bool ContainsOrdinalConcrete(List<string> values, string value)
+    {
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (string.Equals(values[i], value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Ordinal linear membership test over a small tag list.</summary>
@@ -1297,7 +1462,17 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             return Array.Empty<string>();
         }
-        var list = new List<string>(tags.Length);
+
+        // Filled in place at the exactly-known upper bound rather than built in
+        // a List and copied out. The loop admits at most one entry per element,
+        // so tags.Length sizes the result exactly; the List shape materialised
+        // the same payload twice - once into the list's own backing array and
+        // again into the array ToArray returns - plus the list header. Writing
+        // straight into the result leaves a single allocation on the common
+        // duplicate-free path, and a second one only when a duplicate forces
+        // the trim below.
+        var result = new string[tags.Length];
+        var count = 0;
         if (tags.Length <= TagLinearDedupThreshold)
         {
             // Small tag sets (the overwhelming common case) dedup against the
@@ -1308,9 +1483,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             foreach (var tag in tags)
             {
                 ValidateTag(tag);
-                if (!ContainsOrdinal(list, tag))
+                if (!ContainsOrdinal(result, count, tag))
                 {
-                    list.Add(tag);
+                    result[count++] = tag;
                 }
             }
         }
@@ -1322,18 +1497,21 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 ValidateTag(tag);
                 if (seen.Add(tag))
                 {
-                    list.Add(tag);
+                    result[count++] = tag;
                 }
             }
         }
-        return list.ToArray();
+        return count == result.Length ? result : result[..count];
     }
 
-    private static bool ContainsOrdinal(List<string> list, string value)
+    /// <summary>
+    /// Ordinal linear membership test over the filled prefix of a tag buffer.
+    /// </summary>
+    private static bool ContainsOrdinal(string[] values, int count, string value)
     {
-        for (var i = 0; i < list.Count; i++)
+        for (var i = 0; i < count; i++)
         {
-            if (string.Equals(list[i], value, StringComparison.Ordinal))
+            if (string.Equals(values[i], value, StringComparison.Ordinal))
             {
                 return true;
             }

@@ -144,6 +144,14 @@ public sealed class SchemaDeadLettersPanelTests : SchemaTestContext
     }
 
     [Test]
+    public void A_clipped_key_never_ends_in_half_an_emoji()
+    {
+        var key = new string('k', SchemaDeadLettersPanel.KeyCharacters - 1) + "\U0001F600" + "tail";
+
+        Assert.That(SchemaDeadLettersPanel.Clip(key), Is.EqualTo(new string('k', SchemaDeadLettersPanel.KeyCharacters - 1) + "..."));
+    }
+
+    [Test]
     public void Below_the_small_breakpoint_each_dead_letter_is_a_two_line_row_whose_sheet_shows_the_value_as_text()
     {
         UseEstate();
