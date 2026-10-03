@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - OrMap answers liveness without counting.** `IsEmpty`, `Count`, `ContainsKey` and `Keys` all consumed `LiveEntryCount` only as `> 0`. A new any-query exits on the first live entry and probes before indexing: 96-98% faster, and 2104 bytes removed per wide-tombstone read. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
+
+- **Performance - OrMap dedup gating reads the incoming side only.** Both merge folds gated on the combined count, so a churned key built a hash index over its whole accumulated history to absorb a two-dot delta. Gating on the incoming side alone: 82% faster, 2104 fewer bytes. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
+
+- **Performance - GSet copies preserve their source comparer.** `Merge` and `Clone` copied through a reference-distinct comparer, defeating `HashSet`'s bulk-copy path and rehashing every element; `Merge` also rehashed its left operand outright. Both 69-73% faster. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
+
 - **Performance - OrMap dot scans read each candidate once.** `OrMap`'s linear dot scan indexed the same list element twice per candidate and reloaded `Count` on every iteration. It now walks a span with a single `ref readonly` read per element: 35% faster on a full miss. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
 
 - **Performance - Liveness scans resolve their cover span once.** `OrSetDotCompaction.CountLive` and `AnyLive` re-resolved the cover list to a span for every dot they tested. Both walks hoist it now: 5-15% faster, with the isolating lane attributing 37% of the per-dot cost. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
