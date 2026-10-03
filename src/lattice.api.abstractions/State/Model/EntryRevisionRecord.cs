@@ -127,8 +127,8 @@ public sealed record EntryRevisionRecord
         && Mode == other.Mode
         && Retention.Equals(other.Retention)
         && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
-        && BytesEqual(ValuePreview, other.ValuePreview)
-        && BytesEqual(Delta, other.Delta)
+        && ByteArrayEquality.ContentEquals(ValuePreview, other.ValuePreview)
+        && ByteArrayEquality.ContentEquals(Delta, other.Delta)
         && MemberChangesEqual(MemberChanges, other.MemberChanges);
 
     /// <inheritdoc />
@@ -167,10 +167,6 @@ public sealed record EntryRevisionRecord
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 
     private static bool MemberChangesEqual(
         IReadOnlyList<CrdtMemberChange>? left,

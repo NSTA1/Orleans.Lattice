@@ -279,22 +279,13 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         var frozen = state.State.WaitSet;
         foreach (var tree in frozen)
         {
-            if (!Contains(incoming, tree)) return false;
+            if (!OrdinalStrings.Contains(incoming, tree)) return false;
         }
         foreach (var tree in incoming)
         {
             if (!frozen.Contains(tree)) return false;
         }
         return true;
-    }
-
-    private static bool Contains(IReadOnlyList<string> list, string value)
-    {
-        for (var i = 0; i < list.Count; i++)
-        {
-            if (string.Equals(list[i], value, StringComparison.Ordinal)) return true;
-        }
-        return false;
     }
 
     /// <summary>

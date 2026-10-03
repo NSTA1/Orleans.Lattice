@@ -49,9 +49,14 @@ public sealed class TenantPolicyEngineSubjectExtensionsTests
     [Test]
     public async Task TenantContextResolver_admits_a_member_through_a_group()
     {
-        var engine = await EngineAsync(enabled: true);
+        var (engine, maintainer, registry) = await EngineAsync(enabled: true);
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(engine, Membership(new LatticeSubject("carol", [ClusterGroup])));
+        var resolver = new TenantContextResolver(
+            engine,
+            Membership(new LatticeSubject("carol", [ClusterGroup])),
+            maintainer,
+            registry,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance);
 
         Assert.That(resolver.TryResolveCurrent(out var tenant), Is.True);
         Assert.That(tenant, Is.EqualTo(Acme));
@@ -60,9 +65,14 @@ public sealed class TenantPolicyEngineSubjectExtensionsTests
     [Test]
     public async Task TenantContextResolver_refuses_a_group_member_with_the_flag_off()
     {
-        var engine = await EngineAsync(enabled: false);
+        var (engine, maintainer, registry) = await EngineAsync(enabled: false);
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(engine, Membership(new LatticeSubject("carol", [ClusterGroup])));
+        var resolver = new TenantContextResolver(
+            engine,
+            Membership(new LatticeSubject("carol", [ClusterGroup])),
+            maintainer,
+            registry,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance);
 
         Assert.That(resolver.TryResolveCurrent(out var tenant), Is.True);
         Assert.That(tenant.Value, Is.Null, "the flag-off rule is the exact-id admin check");
@@ -71,7 +81,7 @@ public sealed class TenantPolicyEngineSubjectExtensionsTests
     [Test]
     public async Task TenantObservabilityView_admits_a_member_through_a_group_to_its_own_tenant()
     {
-        var engine = await EngineAsync(enabled: true);
+        var (engine, maintainer, registry) = await EngineAsync(enabled: true);
         LatticeActiveTenantContext.Current = Acme;
         var view = new TenantObservabilityView(
             new TenantObservabilitySource(
@@ -81,19 +91,22 @@ public sealed class TenantPolicyEngineSubjectExtensionsTests
                 new ObservabilityTestData.FakeTenantOverageBilling()),
             ObservabilityTestData.AllowingGate(),
             engine,
-            Membership(new LatticeSubject("carol", [ClusterGroup])));
+            Membership(new LatticeSubject("carol", [ClusterGroup])),
+            maintainer,
+            registry,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantObservabilityView>.Instance);
 
         var snapshot = await view.GetActiveTenantAsync();
 
         Assert.That(snapshot?.Tenant, Is.EqualTo(Acme), "a group member reads its own tenant's series");
     }
 
-    private static async Task<ITenantPolicyEngine> EngineAsync(bool enabled)
+    private static async Task<(ITenantPolicyEngine Engine, CompiledTenantPolicySnapshotMaintainer Maintainer, ITenantRegistry Registry)> EngineAsync(bool enabled)
     {
         var registry = new FakeTenantRegistry();
         registry.Records.Add(Record("acme", admins: ["alice"], members: [ClusterGroup]));
         var maintainer = await TenantPolicyEpochTestCluster.LeasedAsync(registry, new DelegatedTenantAccessFlag(enabled));
-        return new LatticeTenantPolicyEngine(maintainer);
+        return (new LatticeTenantPolicyEngine(maintainer), maintainer, registry);
     }
 
     private static ILatticeMembershipContext Membership(LatticeSubject subject)

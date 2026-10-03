@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.Linq.Expressions;
 
 namespace Orleans.Lattice.GrainIndex.Query;
@@ -100,7 +99,7 @@ internal static class GrainIndexQueryPlanner
     /// </summary>
     private static bool TryCollectConjunction(Expression expression, bool negated, List<QueryAtom> atoms)
     {
-        expression = Unwrap(expression);
+        expression = ExpressionTreeShapes.StripConversions(expression);
 
         switch (expression)
         {
@@ -127,7 +126,7 @@ internal static class GrainIndexQueryPlanner
 
     private static List<List<QueryAtom>> ToDisjunctiveNormalFormCore(Expression expression, bool negated)
     {
-        expression = Unwrap(expression);
+        expression = ExpressionTreeShapes.StripConversions(expression);
 
         switch (expression)
         {
@@ -370,12 +369,12 @@ internal static class GrainIndexQueryPlanner
         ParameterExpression parameter,
         GrainIndexQueryProperty property)
     {
-        switch (Unwrap(expression))
+        switch (ExpressionTreeShapes.StripConversions(expression))
         {
             case BinaryExpression binary when TryMapComparison(binary.NodeType, out var op):
             {
-                bool leftReferences = ReferencesParameter(binary.Left, parameter);
-                bool rightReferences = ReferencesParameter(binary.Right, parameter);
+                bool leftReferences = ExpressionTreeShapes.ReferencesParameter(binary.Left, parameter);
+                bool rightReferences = ExpressionTreeShapes.ReferencesParameter(binary.Right, parameter);
                 if (leftReferences && rightReferences)
                 {
                     throw Unsupported(
@@ -401,8 +400,8 @@ internal static class GrainIndexQueryPlanner
                 when call.Method.DeclaringType == typeof(string)
                     && call.Object is not null
                     && call.Arguments.Count >= 1
-                    && ReferencesParameter(call.Object, parameter)
-                    && !ReferencesParameter(call.Arguments[0], parameter):
+                    && ExpressionTreeShapes.ReferencesParameter(call.Object, parameter)
+                    && !ExpressionTreeShapes.ReferencesParameter(call.Arguments[0], parameter):
             {
                 object? argument = EvaluateConstant(call.Arguments[0]);
 
@@ -630,7 +629,7 @@ internal static class GrainIndexQueryPlanner
     /// serves.
     /// </summary>
     private static object? EvaluateConstant(Expression expression) =>
-        ExpressionConstantReader.Read(Unwrap(expression));
+        ExpressionConstantReader.Read(ExpressionTreeShapes.StripConversions(expression));
     private static bool TryMapComparison(ExpressionType nodeType, out LatticeComparisonOperator op)
     {
         switch (nodeType)
@@ -654,92 +653,6 @@ internal static class GrainIndexQueryPlanner
         _ => op,
     };
 
-    private static Expression Unwrap(Expression expression)
-    {
-        while (expression is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary)
-        {
-            expression = unary.Operand;
-        }
-
-        return expression;
-    }
-
-    private static bool ReferencesParameter(Expression expression, ParameterExpression parameter) =>
-        ContainsParameter(expression, parameter);
-
-    /// <summary>
-    /// Allocation-free, early-exit answer to "does this sub-expression mention
-    /// the lambda parameter?". The planner asks this up to twice per binary
-    /// atom while routing a predicate, and the <see cref="ExpressionVisitor"/>
-    /// it used to delegate to allocates a fresh visitor per call and always
-    /// walks the whole sub-tree, even once the answer is known.
-    /// <para>
-    /// The switch enumerates the node shapes a routable predicate is built
-    /// from. Anything else - a member/list initialiser, a block, a switch -
-    /// falls back to <see cref="ParameterFinder"/>, so an unrecognised node
-    /// kind degrades to the previous behaviour rather than silently answering
-    /// <c>false</c> and mis-routing the query.
-    /// </para>
-    /// </summary>
-    private static bool ContainsParameter(Expression? expression, ParameterExpression target)
-    {
-        switch (expression)
-        {
-            case null:
-                return false;
-            case ParameterExpression parameterExpression:
-                return ReferenceEquals(parameterExpression, target);
-            case ConstantExpression:
-                return false;
-            case UnaryExpression unary:
-                return ContainsParameter(unary.Operand, target);
-            case MemberExpression member:
-                return ContainsParameter(member.Expression, target);
-            case TypeBinaryExpression typeBinary:
-                return ContainsParameter(typeBinary.Expression, target);
-            case BinaryExpression binary:
-                return ContainsParameter(binary.Left, target)
-                    || ContainsParameter(binary.Right, target)
-                    || ContainsParameter(binary.Conversion, target);
-            case ConditionalExpression conditional:
-                return ContainsParameter(conditional.Test, target)
-                    || ContainsParameter(conditional.IfTrue, target)
-                    || ContainsParameter(conditional.IfFalse, target);
-            case MethodCallExpression call:
-                return ContainsParameter(call.Object, target)
-                    || ContainsAnyParameter(call.Arguments, target);
-            case InvocationExpression invocation:
-                return ContainsParameter(invocation.Expression, target)
-                    || ContainsAnyParameter(invocation.Arguments, target);
-            case NewExpression construction:
-                return ContainsAnyParameter(construction.Arguments, target);
-            case NewArrayExpression newArray:
-                return ContainsAnyParameter(newArray.Expressions, target);
-            case IndexExpression index:
-                return ContainsParameter(index.Object, target)
-                    || ContainsAnyParameter(index.Arguments, target);
-            case LambdaExpression lambda:
-                return ContainsAnyParameter(lambda.Parameters, target)
-                    || ContainsParameter(lambda.Body, target);
-            default:
-                return ParameterFinder.Contains(expression, target);
-        }
-    }
-
-    private static bool ContainsAnyParameter<TExpression>(
-        ReadOnlyCollection<TExpression> expressions,
-        ParameterExpression target)
-        where TExpression : Expression
-    {
-        for (var i = 0; i < expressions.Count; i++)
-        {
-            if (ContainsParameter(expressions[i], target))
-                return true;
-        }
-
-        return false;
-    }
-
     private static NotSupportedException Unsupported(string what) =>
         new($"Unsupported grain-index query construct: {what}");
 
@@ -760,30 +673,5 @@ internal static class GrainIndexQueryPlanner
 
         internal static QueryAtomPlan Constant(bool value) =>
             new(null, GrainIndexRangeSet.Empty, null, false) { ConstantValue = value };
-    }
-
-    private sealed class ParameterFinder : ExpressionVisitor
-    {
-        private readonly ParameterExpression _target;
-        private bool _found;
-
-        private ParameterFinder(ParameterExpression target) => _target = target;
-
-        internal static bool Contains(Expression expression, ParameterExpression target)
-        {
-            var finder = new ParameterFinder(target);
-            finder.Visit(expression);
-            return finder._found;
-        }
-
-        protected override Expression VisitParameter(ParameterExpression node)
-        {
-            if (node == _target)
-            {
-                _found = true;
-            }
-
-            return base.VisitParameter(node);
-        }
     }
 }

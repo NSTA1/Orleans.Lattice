@@ -54,8 +54,8 @@ public sealed class Rga : ICrdt<Rga>
     // filling a full dot->node index over every local node. Steady-state
     // replication delivers one or two operations per merge, so the linear
     // path is the common case; the index is built only for a large
-    // catch-up merge. Mirrors the DotLinearScanThreshold fast path the
-    // sibling OrSet / OrMap / OrFlag primitives already use.
+    // catch-up merge. Mirrors the OrSetDotUnion.LinearScanThreshold fast path
+    // the sibling observed-remove primitives already use.
     private const int MergeLinearScanThreshold = 4;
 
     /// <summary>

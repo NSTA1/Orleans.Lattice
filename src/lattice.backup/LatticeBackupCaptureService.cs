@@ -215,7 +215,7 @@ internal sealed class LatticeBackupCaptureService(
                     .ConfigureAwait(false);
             }
 
-            (startInclusive, endExclusive) = ResolveRange(scope);
+            (startInclusive, endExclusive) = BackupScopeRange.Resolve(scope);
             createdAtUtc = DateTimeOffset.UtcNow;
             artifactId = BuildArtifactId(scope, createdAtUtc);
 
@@ -646,7 +646,7 @@ internal sealed class LatticeBackupCaptureService(
             // Then, and only then, charge the capture against the tenant's budget.
             ThrowIfCaptureNotAdmitted(treeId);
 
-            var (startInclusive, endExclusive) = ResolveRange(scope);
+            var (startInclusive, endExclusive) = BackupScopeRange.Resolve(scope);
             var lattice = grainFactory.GetGrain<ILattice>(treeId);
             var options = optionsMonitor.Get(treeId);
 
@@ -857,20 +857,6 @@ internal sealed class LatticeBackupCaptureService(
 
         return members;
     }
-
-    /// <summary>
-    /// Maps a scope to the half-open snapshot range bounds: whole-tree is
-    /// unbounded; a prefix is [prefix, prefixUpperBound); a single key is
-    /// [key, key + separator).
-    /// </summary>
-    private static (string? startInclusive, string? endExclusive) ResolveRange(BackupScopeSelector scope) =>
-        scope.Kind switch
-        {
-            BackupScopeKind.WholeTree => (null, null),
-            BackupScopeKind.Prefix => (scope.KeyOrPrefix, BackupConstants.PrefixUpperBound(scope.KeyOrPrefix!)),
-            BackupScopeKind.Key => (scope.KeyOrPrefix, scope.KeyOrPrefix + "\0"),
-            _ => throw new ArgumentOutOfRangeException(nameof(scope), scope.Kind, "Unknown backup scope kind."),
-        };
 
     /// <summary>
     /// Builds a per-capture, ASCII, separator-free artifact id. The manifest id

@@ -82,7 +82,7 @@ public readonly record struct LatticeSchemaRemediationOutcome
         && ScannedCount == other.ScannedCount
         && string.Equals(OffendingKey, other.OffendingKey, StringComparison.Ordinal)
         && string.Equals(Reason, other.Reason, StringComparison.Ordinal)
-        && BytesEqual(OffendingValuePreview, other.OffendingValuePreview);
+        && ByteArrayEquality.ContentEquals(OffendingValuePreview, other.OffendingValuePreview);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -99,8 +99,4 @@ public readonly record struct LatticeSchemaRemediationOutcome
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

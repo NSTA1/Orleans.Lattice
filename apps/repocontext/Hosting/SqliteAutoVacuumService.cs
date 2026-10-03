@@ -29,7 +29,8 @@ public sealed class SqliteAutoVacuumService(
     RepoContextHostConfiguration config,
     SqliteAutoVacuumOutcome outcome,
     ILogger<SqliteAutoVacuumService> logger,
-    TimeProvider? timeProvider = null) : BackgroundService
+    TimeProvider? timeProvider = null,
+    SqliteSnapshotSweepOutcome? snapshotSweep = null) : BackgroundService
 {
     /// <summary>The spacing between reclaim steps.</summary>
     public static readonly TimeSpan StepInterval = TimeSpan.FromMinutes(1);
@@ -144,6 +145,27 @@ public sealed class SqliteAutoVacuumService(
                 outcome.Requested,
                 RepoContextHostConfiguration.SqliteAutoVacuumKey,
                 outcome.BytesAfter);
+        }
+
+        if (snapshotSweep is { Mode: not SqliteSnapshotSweepMode.Off } sweep)
+        {
+            logger.LogInformation(
+                "SQLite snapshot sweep ({Key}={Mode}) in {Elapsed} ms: {Stranded} of {Scanned} leaf identities are "
+                + "reached by no live row, holding {LeafRows} leaf row(s), {ManifestRows} snapshot manifest(s) and "
+                + "{SegmentRows} snapshot segment(s), {PayloadBytes} payload bytes; {Deleted} row(s) deleted; "
+                + "database file {Before} -> {After} bytes.",
+                RepoContextHostConfiguration.SqliteSnapshotSweepKey,
+                sweep.Mode,
+                (long)sweep.Elapsed.TotalMilliseconds,
+                sweep.StrandedLeaves,
+                sweep.LeavesScanned,
+                sweep.LeafRows,
+                sweep.ManifestRows,
+                sweep.SegmentRows,
+                sweep.PayloadBytes,
+                sweep.RowsDeleted,
+                sweep.BytesBefore,
+                sweep.BytesAfter);
         }
     }
 

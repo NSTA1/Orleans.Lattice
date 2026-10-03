@@ -472,4 +472,44 @@ public sealed partial class InstrumentPrimingEnrolmentTests
             + "so regeneration can never correct them. Add the prefix to GeneratedReasonPrefixes:"
             + $"{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", frozen)}");
     }
+
+    [Test]
+    public void Every_generator_owned_row_matches_what_the_generator_would_write_now()
+    {
+        var byKey = Corpus.Value.Declarations.ToDictionary(d => d.Key, StringComparer.Ordinal);
+        var compared = 0;
+        var mismatches = new List<string>();
+
+        foreach (var row in ReadEnrolmentFile(out _))
+        {
+            if (!byKey.TryGetValue(row.Key, out var declaration)
+                || RegeneratedRow(declaration, row) is not { } expected)
+            {
+                continue;
+            }
+
+            compared++;
+            if (expected.Enrolment != row.Enrolment
+                || !string.Equals(expected.Detail, row.Detail, StringComparison.Ordinal))
+            {
+                mismatches.Add(
+                    $"{row.Key}{Environment.NewLine}"
+                    + $"    expected: {FormatRow(row.Key, expected.Enrolment, expected.Detail)}{Environment.NewLine}"
+                    + $"    actual:   {FormatRow(row.Key, row.Enrolment, row.Detail)}");
+            }
+        }
+
+        Assert.That(
+            compared,
+            Is.GreaterThan(0),
+            "the whole-row comparison matched no generator-owned row; the scan is broken, not clean");
+        Assert.That(
+            mismatches,
+            Is.Empty,
+            $"{mismatches.Count} generator-owned row(s) in InstrumentPrimingEnrolment.tsv are stale: the "
+            + "generator would now write a different enrolment or detail for the named instrument. "
+            + "Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1 running this fixture, or replace each "
+            + "row with its expected line:"
+            + $"{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", mismatches)}");
+    }
 }

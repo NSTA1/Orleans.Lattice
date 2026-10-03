@@ -180,7 +180,7 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
                 stallDelayMs = 0;
                 if (delayMs > 0)
                 {
@@ -329,7 +329,7 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
                 stallDelayMs = 0;
                 if (delayMs > 0)
                 {
@@ -351,12 +351,4 @@ public static class LatticeViewExtensions
         lastKey is null
             ? (originalStart, originalEnd)
             : (lastKey + "\u0000", originalEnd);
-
-    /// <summary>
-    /// Computes the inter-reconnect backoff for a resilient view scan, matching
-    /// <see cref="ILattice"/>'s wrappers: the first reconnect is immediate and
-    /// subsequent attempts apply a small linear ramp capped at 100&#160;ms.
-    /// </summary>
-    private static int ComputeReconnectDelayMs(int attempt) =>
-        attempt <= 1 ? 0 : Math.Min(100, 10 * attempt);
 }

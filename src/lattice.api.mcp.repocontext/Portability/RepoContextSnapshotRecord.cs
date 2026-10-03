@@ -89,8 +89,8 @@ internal sealed record RepoContextSnapshotRecord
         && string.Equals(Key, other.Key, StringComparison.Ordinal)
         && string.Equals(EmbeddingSpace, other.EmbeddingSpace, StringComparison.Ordinal)
         && ExpiresAtTicks == other.ExpiresAtTicks
-        && BytesEqual(Value, other.Value)
-        && BytesEqual(Vector, other.Vector);
+        && ByteArrayEquality.ContentEquals(Value, other.Value)
+        && ByteArrayEquality.ContentEquals(Vector, other.Vector);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -111,8 +111,4 @@ internal sealed record RepoContextSnapshotRecord
         hash.Add(ExpiresAtTicks);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

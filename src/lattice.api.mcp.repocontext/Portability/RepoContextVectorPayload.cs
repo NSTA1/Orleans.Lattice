@@ -41,7 +41,7 @@ internal readonly record struct RepoContextVectorPayload
     /// <param name="other">The payload to compare against.</param>
     public bool Equals(RepoContextVectorPayload other) =>
         string.Equals(EmbeddingSpace, other.EmbeddingSpace, StringComparison.Ordinal)
-        && BytesEqual(Vector, other.Vector);
+        && ByteArrayEquality.ContentEquals(Vector, other.Vector);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -55,8 +55,4 @@ internal readonly record struct RepoContextVectorPayload
         hash.Add(EmbeddingSpace, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

@@ -41,7 +41,7 @@ internal readonly record struct WalShardShippingEntry
     /// <param name="other">The entry to compare against.</param>
     public bool Equals(WalShardShippingEntry other) =>
         Sequence == other.Sequence
-        && BytesEqual(EncodedPayload, other.EncodedPayload);
+        && ByteArrayEquality.ContentEquals(EncodedPayload, other.EncodedPayload);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -55,8 +55,4 @@ internal readonly record struct WalShardShippingEntry
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

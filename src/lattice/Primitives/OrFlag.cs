@@ -1,7 +1,5 @@
 namespace Orleans.Lattice;
 
-using System.Runtime.InteropServices;
-
 /// <summary>
 /// An observed-remove (enable-wins) flag CRDT. Each call to
 /// <see cref="Enable(string, long)"/> tags the flag with a unique
@@ -25,14 +23,6 @@ using System.Runtime.InteropServices;
 [Alias(TypeAliases.OrFlag)]
 public sealed class OrFlag : ICrdt<OrFlag>
 {
-    // Below this many tombstone dots a linear scan beats allocating and
-    // populating a HashSet for the membership checks. A flag carries one
-    // dot per concurrent enable/disable, overwhelmingly 1-2 in practice,
-    // so the linear path is the common case; the set is only built once a
-    // flag genuinely accumulates many concurrent dots. Mirrors
-    // OrSet.DotLinearScanThreshold.
-    private const int DotLinearScanThreshold = 4;
-
     /// <summary>
     /// Live enable dots. The flag is enabled if and only if at least one
     /// of these dots is not covered by <see cref="Tombstones"/> - that is, no
@@ -186,8 +176,8 @@ public sealed class OrFlag : ICrdt<OrFlag>
     public void MergeFrom(OrFlag other)
     {
         ArgumentNullException.ThrowIfNull(other);
-        UnionInto(Enables, other.Enables);
-        UnionInto(Tombstones, other.Tombstones);
+        OrSetDotUnion.UnionInto(Enables, other.Enables);
+        OrSetDotUnion.UnionInto(Tombstones, other.Tombstones);
         Compact();
     }
 
@@ -209,152 +199,8 @@ public sealed class OrFlag : ICrdt<OrFlag>
     /// </param>
     public void MergeDelta(OrFlagDelta delta)
     {
-        UnionDots(Enables, delta.Enables);
-        UnionDots(Tombstones, delta.Disables);
+        OrSetDotUnion.UnionDeltaDots(Enables, delta.Enables);
+        OrSetDotUnion.UnionDeltaDots(Tombstones, delta.Disables);
         Compact();
-    }
-
-    private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
-    {
-        if (source.Count == 0) return;
-
-        // A union with itself is the identity, and short-circuiting it is load
-        // bearing rather than merely thrifty: the walks below resolve source's
-        // backing span once and then append to target, so aliasing the two
-        // lists would let an append resize the array out from under a live
-        // span. The list enumerator this replaced raised on the same aliasing
-        // through its version check, so the guard preserves that safety while
-        // turning a throw into the correct answer.
-        if (ReferenceEquals(target, source)) return;
-
-        // Walk the resolved span with ref readonly rather than the list's
-        // struct enumerator: OrSetDot is a multi-field struct, so the
-        // enumerator's Current copies it once before the Contains/Add call
-        // copies it again, and the enumerator re-checks the list version on
-        // every MoveNext. Flag merges drive this two (OrFlag) or three
-        // (RwFlag) times apiece on the replication apply path.
-        var span = CollectionsMarshal.AsSpan(source);
-        if (source.Count <= DotLinearScanThreshold)
-        {
-            // Small incoming dot list (the common 1-2-concurrent-dot and
-            // steady-state delta-fold case): at most DotLinearScanThreshold
-            // appends, so the linear Contains stays O(target) and never grows
-            // quadratic. Only the incoming side must be small - the previous
-            // guard also required the target to be small, allocating a HashSet
-            // over a long-lived flag's accumulated list on every small merge.
-            for (var i = 0; i < span.Length; i++)
-            {
-                ref readonly var dot = ref span[i];
-                if (!target.Contains(dot)) target.Add(dot);
-            }
-            return;
-        }
-        var seen = OrSetDotSet.Build(target, source.Count);
-        for (var i = 0; i < span.Length; i++)
-        {
-            ref readonly var dot = ref span[i];
-            if (seen.Add(dot)) target.Add(dot);
-        }
-    }
-
-    /// <summary>
-    /// Folds a delta-side dot list into <paramref name="target"/>. This is the
-    /// delta twin of <see cref="UnionInto"/> and carries the same two trims:
-    /// the source is walked through its backing span where its runtime shape
-    /// allows it, and each width strategy lives in its own sibling method
-    /// rather than in a shared body.
-    /// <para>
-    /// The span matters more here than on the state path. A delta's collection
-    /// is declared <see cref="IReadOnlyList{T}"/> because it is serialised
-    /// public surface, so the loop that shipped before paid an interface call
-    /// for the indexer <b>and</b> another for the re-read of <c>Count</c> in
-    /// the loop condition, on every dot, and <see cref="OrSetDot"/> is returned
-    /// whole by value from both. Flag merges drive this twice per applied
-    /// delta on the replication apply path.
-    /// </para>
-    /// <para>
-    /// The split is the second trim and is not cosmetic: fusing a second
-    /// strategy into one body makes the JIT compile both, which lengthens the
-    /// live ranges the narrow arm - the steady-state arm - is compiled under.
-    /// </para>
-    /// </summary>
-    private static void UnionDots(List<OrSetDot> target, IReadOnlyList<OrSetDot>? source)
-    {
-        if (source is not { Count: > 0 }) return;
-
-        // Aliasing a flag's own dot list into its delta is constructible
-        // because Enables and Tombstones are settable, and the span walks below
-        // would let an append resize the array out from under a live span. The
-        // union of a list with itself is the identity, so returning is both
-        // safe and correct.
-        if (ReferenceEquals(target, source)) return;
-
-        if (!CrdtDeltaListSpan.TryGetSpan(source, out var span))
-        {
-            UnionDotsByIndex(target, source);
-            return;
-        }
-
-        if (span.Length <= DotLinearScanThreshold)
-        {
-            UnionDotsNarrow(target, span);
-            return;
-        }
-
-        UnionDotsWide(target, span);
-    }
-
-    /// <summary>
-    /// Small incoming dot list - the steady-state delta-fold case. At most
-    /// <c>DotLinearScanThreshold</c> appends, so the linear probe stays
-    /// O(target) and never grows quadratic.
-    /// </summary>
-    private static void UnionDotsNarrow(List<OrSetDot> target, ReadOnlySpan<OrSetDot> source)
-    {
-        for (var i = 0; i < source.Length; i++)
-        {
-            ref readonly var dot = ref source[i];
-            if (!target.Contains(dot)) target.Add(dot);
-        }
-    }
-
-    /// <summary>
-    /// Wide incoming dot list: index the accumulated side once so the probe is
-    /// O(1) per dot rather than O(target).
-    /// </summary>
-    private static void UnionDotsWide(List<OrSetDot> target, ReadOnlySpan<OrSetDot> source)
-    {
-        var seen = OrSetDotSet.Build(target, source.Length);
-        for (var i = 0; i < source.Length; i++)
-        {
-            ref readonly var dot = ref source[i];
-            if (seen.Add(dot)) target.Add(dot);
-        }
-    }
-
-    /// <summary>
-    /// Fallback for a delta whose collection is neither an array nor a
-    /// <see cref="List{T}"/> - a caller-supplied container, or a deserialiser
-    /// that chose another shape. This is the walk that shipped before, kept
-    /// verbatim so an unspannable delta is no slower than it used to be.
-    /// </summary>
-    private static void UnionDotsByIndex(List<OrSetDot> target, IReadOnlyList<OrSetDot> source)
-    {
-        var count = source.Count;
-        if (count <= DotLinearScanThreshold)
-        {
-            for (var i = 0; i < count; i++)
-            {
-                var dot = source[i];
-                if (!target.Contains(dot)) target.Add(dot);
-            }
-            return;
-        }
-        var seen = OrSetDotSet.Build(target, count);
-        for (var i = 0; i < count; i++)
-        {
-            var dot = source[i];
-            if (seen.Add(dot)) target.Add(dot);
-        }
     }
 }

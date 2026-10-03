@@ -76,7 +76,7 @@ public readonly record struct LwwRegisterDelta
     /// </summary>
     /// <param name="other">The delta to compare against.</param>
     public bool Equals(LwwRegisterDelta other) =>
-        BytesEqual(Value, other.Value)
+        ByteArrayEquality.ContentEquals(Value, other.Value)
         && Timestamp.Equals(other.Timestamp)
         && IsTombstone == other.IsTombstone
         && ExpiresAtTicks == other.ExpiresAtTicks
@@ -97,8 +97,4 @@ public readonly record struct LwwRegisterDelta
         hash.Add(OriginClusterId, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

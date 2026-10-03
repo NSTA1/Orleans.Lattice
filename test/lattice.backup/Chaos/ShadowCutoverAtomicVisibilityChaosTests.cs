@@ -24,6 +24,15 @@ namespace Orleans.Lattice.Backup.Tests.Chaos;
 /// mix of rounds, and never a key missing. Once it settles, every later round must
 /// stick, and the tree must count and scan exactly the universe.
 /// </para>
+/// <para>
+/// Liveness is asserted apart from atomicity (#4407). A read that times out observed
+/// nothing, so the probe records it as a liveness fault rather than an atomic
+/// visibility violation: on a starved CI host a handful of reads can time out while
+/// every phase still completes and every read that does return is whole. A sustained
+/// stall still fails the test, because a phase that cannot finish within its budget
+/// fails the liveness assertion and the quiesced read-back after each phase
+/// classifies nothing.
+/// </para>
 /// </summary>
 [TestFixture]
 [NonParallelizable]
@@ -60,50 +69,64 @@ public sealed class ShadowCutoverAtomicVisibilityChaosTests
     {
         var treeId = $"cutover-atomic-{Guid.NewGuid():N}";
         var tree = await CreateTreeAsync(treeId);
-        var probe = new AtomicRoundProbe(tree, "cut-tx", isToleratedWriteFault: IsRolledBackSaga);
+        var probe = new AtomicRoundProbe(
+            tree, "cut-tx", isToleratedWriteFault: IsRolledBackSaga, classifyTimeoutsAsLiveness: true);
         await probe.SeedAsync();
         probe.StartReaders();
 
-        var log = new List<string>();
+        var phases = new List<AtomicRoundProbe.PhaseReport>();
         var problems = new List<string>();
 
         await tree.ReshardAsync(8);
-        log.Add((await probe.RunPhaseAsync("grow 4->8", TopologyDrivers.ReshardStep(GrainFactory, treeId), PhaseBudget,
-            isToleratedStepFault: TopologyDrivers.IsRetryableStepFault)).ToString());
+        phases.Add(await probe.RunPhaseAsync("grow 4->8", TopologyDrivers.ReshardStep(GrainFactory, treeId), PhaseBudget,
+            isToleratedStepFault: TopologyDrivers.IsRetryableStepFault));
         await tree.ReshardAsync(5);
-        log.Add((await probe.RunPhaseAsync("shrink 8->5", TopologyDrivers.ReshardStep(GrainFactory, treeId), PhaseBudget,
-            isToleratedStepFault: TopologyDrivers.IsRetryableStepFault)).ToString());
+        phases.Add(await probe.RunPhaseAsync("shrink 8->5", TopologyDrivers.ReshardStep(GrainFactory, treeId), PhaseBudget,
+            isToleratedStepFault: TopologyDrivers.IsRetryableStepFault));
         problems.AddRange(await probe.VerifyQuiescedAsync("after reshards"));
 
         var backupId = await CaptureAsync(treeId);
-        await probe.RunPhaseAsync("diverge from the backup", _ => Task.FromResult(true), PhaseBudget, tailRounds: 5);
+        phases.Add(await probe.RunPhaseAsync("diverge from the backup", _ => Task.FromResult(true), PhaseBudget, tailRounds: 5));
 
         var original = await Registry.ResolveAsync(treeId);
-        var first = await CutoverUnderLoadAsync(probe, treeId, backupId, "first cutover", log, problems);
+        var first = await CutoverUnderLoadAsync(probe, treeId, backupId, "first cutover", phases, problems);
         var afterFirst = await Registry.ResolveAsync(treeId);
 
-        await RunUnderRollbackAsync(probe, "revert", () => _fixture.Restore.RevertRestoreAsync(first), log, problems);
+        await RunUnderRollbackAsync(probe, "revert", () => _fixture.Restore.RevertRestoreAsync(first), phases, problems);
         var afterRevert = await Registry.ResolveAsync(treeId);
 
         // Reshard the reverted tree, then cut it over again: the carried-back map must
         // still describe the copy the alias points at.
         await tree.ReshardAsync(7);
-        log.Add((await probe.RunPhaseAsync("grow 5->7 after revert", TopologyDrivers.ReshardStep(GrainFactory, treeId), PhaseBudget,
-            isToleratedStepFault: TopologyDrivers.IsRetryableStepFault)).ToString());
+        phases.Add(await probe.RunPhaseAsync("grow 5->7 after revert", TopologyDrivers.ReshardStep(GrainFactory, treeId), PhaseBudget,
+            isToleratedStepFault: TopologyDrivers.IsRetryableStepFault));
         problems.AddRange(await probe.VerifyQuiescedAsync("after regrow"));
         var secondBackup = await CaptureAsync(treeId);
-        await probe.RunPhaseAsync("diverge again", _ => Task.FromResult(true), PhaseBudget, tailRounds: 5);
-        await CutoverUnderLoadAsync(probe, treeId, secondBackup, "second cutover", log, problems);
+        phases.Add(await probe.RunPhaseAsync("diverge again", _ => Task.FromResult(true), PhaseBudget, tailRounds: 5));
+        await CutoverUnderLoadAsync(probe, treeId, secondBackup, "second cutover", phases, problems);
 
         await probe.StopReadersAsync();
-        TestContext.Out.WriteLine(string.Join(Environment.NewLine, log));
+        TestContext.Out.WriteLine(string.Join(Environment.NewLine, phases));
         TestContext.Out.WriteLine(probe.Summary());
+        if (probe.LivenessFaults.Count > 0)
+        {
+            TestContext.Out.WriteLine("Liveness faults (reads that observed nothing; not an atomicity verdict):"
+                + Environment.NewLine + string.Join(Environment.NewLine, probe.LivenessFaults));
+        }
+
+        var incomplete = phases.Where(p => !p.Completed).ToList();
 
         Assert.Multiple(() =>
         {
             Assert.That(probe.Failures, Is.Empty,
                 "Atomic visibility violation across a shadow cutover or revert:" + Environment.NewLine
                 + string.Join(Environment.NewLine, probe.Failures.Take(30)));
+            Assert.That(incomplete, Is.Empty,
+                "Liveness: a phase did not complete within its budget:" + Environment.NewLine
+                + string.Join(Environment.NewLine, incomplete) + Environment.NewLine
+                + "Read timeouts observed:" + Environment.NewLine
+                + string.Join(Environment.NewLine, probe.LivenessFaults.Take(30)));
+            Assert.That(probe.RoundsCommitted, Is.GreaterThan(0), "liveness: no atomic round committed");
             Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
             Assert.That(afterFirst, Is.Not.EqualTo(original), "precondition: the first cutover swapped the alias");
             Assert.That(afterRevert, Is.EqualTo(original), "the revert must return the alias to the replaced copy");
@@ -120,7 +143,7 @@ public sealed class ShadowCutoverAtomicVisibilityChaosTests
     {
         var treeId = $"cutover-mid-reshard-{Guid.NewGuid():N}";
         var tree = await CreateTreeAsync(treeId, ShadowShards);
-        var probe = new AtomicRoundProbe(tree, "mid-tx", isToleratedWriteFault: IsRolledBackSaga);
+        var probe = new AtomicRoundProbe(tree, "mid-tx", isToleratedWriteFault: IsRolledBackSaga, classifyTimeoutsAsLiveness: true);
         await probe.SeedAsync();
         var backupId = await CaptureAsync(treeId);
         probe.StartReaders();
@@ -167,6 +190,11 @@ public sealed class ShadowCutoverAtomicVisibilityChaosTests
         var physical = await Registry.ResolveAsync(treeId);
         TestContext.Out.WriteLine($"{phase}{Environment.NewLine}{settle}{Environment.NewLine}migrationsInFlightAtCutover={migrationsInFlightAtCutover} live=[{string.Join(",", live)}]");
         TestContext.Out.WriteLine(probe.Summary());
+        if (probe.LivenessFaults.Count > 0)
+        {
+            TestContext.Out.WriteLine("Read timeouts (liveness, not atomicity):" + Environment.NewLine
+                + string.Join(Environment.NewLine, probe.LivenessFaults.Take(30)));
+        }
 
         Assert.Multiple(() =>
         {
@@ -198,31 +226,33 @@ public sealed class ShadowCutoverAtomicVisibilityChaosTests
     }
 
     private async Task<LatticeRestoreResult> CutoverUnderLoadAsync(
-        AtomicRoundProbe probe, string treeId, string backupId, string phase, List<string> log, List<string> problems)
+        AtomicRoundProbe probe, string treeId, string backupId, string phase,
+        List<AtomicRoundProbe.PhaseReport> phases, List<string> problems)
     {
         LatticeRestoreResult? result = null;
         await RunUnderRollbackAsync(probe, phase, async () =>
         {
             result = await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(
                 backupId, treeId, scope: null, mode: LatticeRestoreMode.ShadowCutover));
-        }, log, problems);
+        }, phases, problems);
         return result!;
     }
 
     private static async Task RunUnderRollbackAsync(
-        AtomicRoundProbe probe, string phase, Func<Task> action, List<string> log, List<string> problems)
+        AtomicRoundProbe probe, string phase, Func<Task> action,
+        List<AtomicRoundProbe.PhaseReport> phases, List<string> problems)
     {
         using (probe.OpenRollbackWindow())
         {
             var ran = 0;
-            log.Add((await probe.RunPhaseAsync(phase, async _ =>
+            phases.Add(await probe.RunPhaseAsync(phase, async _ =>
             {
                 if (Interlocked.Exchange(ref ran, 1) == 0) await action();
                 return true;
-            }, PhaseBudget)).ToString());
+            }, PhaseBudget));
         }
 
-        log.Add((await probe.RunPhaseAsync($"settle after {phase}", _ => Task.FromResult(true), PhaseBudget, tailRounds: 5)).ToString());
+        phases.Add(await probe.RunPhaseAsync($"settle after {phase}", _ => Task.FromResult(true), PhaseBudget, tailRounds: 5));
         problems.AddRange(await probe.VerifyQuiescedAsync($"after {phase}"));
     }
 

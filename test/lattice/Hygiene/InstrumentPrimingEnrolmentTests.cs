@@ -141,6 +141,12 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// later parser improvement show up as a visible contradiction rather than as a silent
 /// change of scope.
 /// </para>
+/// <para>
+/// Generator-owned rows (<c>open</c>, and <c>unresolved</c> rows carrying a generated reason)
+/// are compared whole - enrolment and detail - against what the generator would write now,
+/// so a row whose detail has gone stale fails the gate rather than passing on its key and
+/// category alone. Curated rows keep their hand-written detail and are not part of that comparison.
+/// </para>
 /// </remarks>
 [TestFixture]
 [Category("Hygiene")]
@@ -311,19 +317,31 @@ public sealed partial class InstrumentPrimingEnrolmentTests
         var sourceKeys = declarations.Select(d => d.Key).ToHashSet(StringComparer.Ordinal);
         var fileKeys = declaredKeys.ToHashSet(StringComparer.Ordinal);
 
-        var unaccounted = sourceKeys.Except(fileKeys).OrderBy(k => k, StringComparer.Ordinal).ToList();
+        var unaccounted = declarations
+            .Where(d => !fileKeys.Contains(d.Key))
+            .OrderBy(d => d.Key, StringComparer.Ordinal)
+            .ToList();
         var stale = fileKeys.Except(sourceKeys).OrderBy(k => k, StringComparer.Ordinal).ToList();
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                unaccounted,
+                unaccounted.Select(d => d.Key),
                 Is.Empty,
                 $"{unaccounted.Count} instrument declaration(s) exist in source with no enrolment. "
                 + "An instrument that is in neither category is invisible to this gate, which is "
-                + "the condition the gate exists to prevent. Add a row to "
-                + $"{EnrolmentFileName} choosing primed, anchored, unresolved or none:"
-                + $"{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", unaccounted.Take(40))}");
+                + "the condition the gate exists to prevent. Add each row below to "
+                + $"{EnrolmentFileName} (the generator's seed; promote it to primed, anchored or "
+                + "none when that is the decision), or regenerate with "
+                + "LATTICE_REWRITE_PRIMING_ENROLMENT=1 running this fixture:"
+                + $"{Environment.NewLine}  "
+                + string.Join(
+                    $"{Environment.NewLine}  ",
+                    unaccounted.Take(40).Select(d =>
+                    {
+                        var (enrolment, detail) = RegeneratedRow(d, existing: null)!.Value;
+                        return FormatRow(d.Key, enrolment, detail);
+                    })));
 
             Assert.That(
                 stale,
@@ -1277,27 +1295,53 @@ public sealed partial class InstrumentPrimingEnrolmentTests
 
         foreach (var declaration in declarations.OrderBy(d => d.Key, StringComparer.Ordinal))
         {
-            // Preserve a curated row, EXCEPT a None row the parser now contradicts, or a row the
-            // generator itself wrote. None is a claim that the instrument carries no tag
-            // dimension; once a dimension is visible the row is a stale negative claim, and
-            // preserving it would let the regeneration path quietly re-assert something the gate
-            // already knows to be false. A generated row is re-seeded so an improvement in the
-            // analyser's reach reaches the file instead of freezing its first answer forever.
-            var hasDimension = declaration.Dimensions.Count > 0;
-            if (existing.TryGetValue(declaration.Key, out var row)
-                && !(row.Enrolment == Enrolment.None && hasDimension)
-                && !IsGeneratedRow(row))
+            existing.TryGetValue(declaration.Key, out var row);
+            if (RegeneratedRow(declaration, row) is { } seeded)
             {
-                builder.AppendLine($"{row.Key}\t{Render(row.Enrolment)}\t{row.Detail}");
-                continue;
+                builder.AppendLine(FormatRow(declaration.Key, seeded.Enrolment, seeded.Detail));
             }
-
-            var (enrolment, detail) = Seed(declaration);
-            builder.AppendLine($"{declaration.Key}\t{Render(enrolment)}\t{detail}");
+            else
+            {
+                builder.AppendLine(FormatRow(row!.Key, row.Enrolment, row.Detail));
+            }
         }
 
         File.WriteAllText(path, builder.ToString());
     }
+
+    /// <summary>
+    /// The row regeneration writes for <paramref name="declaration"/>, or <see langword="null"/>
+    /// when <paramref name="existing"/> is curated and is kept verbatim. This is the single
+    /// decision both the rewriter and the whole-row gate use, so the gate can never demand a row
+    /// regeneration would not produce.
+    /// </summary>
+    /// <remarks>
+    /// A curated row is preserved, EXCEPT a None row the parser now contradicts, or a row the
+    /// generator itself wrote. None is a claim that the instrument carries no tag dimension; once
+    /// a dimension is visible the row is a stale negative claim, and preserving it would let the
+    /// regeneration path quietly re-assert something the gate already knows to be false. A
+    /// generated row is re-seeded so an improvement in the analyser's reach reaches the file
+    /// instead of freezing its first answer forever.
+    /// </remarks>
+    private static (Enrolment Enrolment, string Detail)? RegeneratedRow(Declaration declaration, EnrolmentRow? existing)
+    {
+        if (existing is not null
+            && !(existing.Enrolment == Enrolment.None && declaration.Dimensions.Count > 0)
+            && !IsGeneratedRow(existing))
+        {
+            return null;
+        }
+
+        var (enrolment, detail) = Seed(declaration);
+
+        // The reader trims every line, so a trailing blank in the last column never survives a
+        // round trip; compare and write the form the file actually holds.
+        return (enrolment, detail.TrimEnd());
+    }
+
+    /// <summary>The exact enrolment-file line for one row.</summary>
+    private static string FormatRow(string key, Enrolment enrolment, string detail) =>
+        $"{key}\t{Render(enrolment)}\t{detail}";
 
     /// <summary>
     /// Detail prefixes only the generator writes. A row carrying one was never curated. The bare

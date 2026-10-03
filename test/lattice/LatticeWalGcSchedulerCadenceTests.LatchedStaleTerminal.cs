@@ -50,12 +50,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             VirtualTimeProvider time,
             ILeafCursorReporter? cursorReporter = null,
             Func<Exception>? fault = null,
-            Func<bool>? blocked = null)
+            Func<bool>? blocked = null,
+            string? consumerId = null)
     {
+        var blockingConsumerId = consumerId ?? BlockedConsumerId(treeId);
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(blocked is null || blocked()
-                ? BlockedReportNaming(BlockedConsumerId(treeId))
+                ? BlockedReportNaming(blockingConsumerId)
                 : Report(entriesTrimmed: 12)));
 
         var (factory, leaf) = FactoryWithBlockedLeaf(treeId);
@@ -203,15 +205,32 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         const string TreeId = "latched-stale-pin";
         var reporter = Substitute.For<ILeafCursorReporter>();
         var time = new VirtualTimeProvider();
-        var (scheduler, _, _, drives) = LatchedStaleTree(TreeId, time, cursorReporter: reporter);
 
+        // Suffixed as a leaf of the default (partitioned) tree publishes it.
+        // Issue #4258: with the unsuffixed id the #4238 retirement gate refuses
+        // the id outright, so the absence of a removal below held whatever the
+        // latched arm did, and this test could not go red.
+        var consumerId = BlockedConsumerId(TreeId) + "_0";
+        var (scheduler, _, _, drives) = LatchedStaleTree(
+            TreeId, time, cursorReporter: reporter, consumerId: consumerId);
+
+        using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, LatchedStaleObservationWindow, maxPasses: 5000);
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.That(drives(), Is.EqualTo(1), "anti-vacuity: the latched drive must have happened.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(drives(), Is.EqualTo(1), "anti-vacuity: the latched drive must have happened.");
+            Assert.That(DriveDecisions(decisions, "refused_malformed_id"), Is.Zero,
+                "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
+            Assert.That(DriveDecisions(decisions, "refused_ambiguous_partition"), Is.Zero,
+                "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
+            Assert.That(DriveDecisions(decisions, "retired"), Is.Zero,
+                "a latched leaf's pin must not be retired.");
+        });
         await reporter.DidNotReceive().UnregisterAsync(
-            TreeId, BlockedConsumerId(TreeId), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

@@ -267,7 +267,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         var frozen = state.State.WaitSet;
         foreach (var view in frozen)
         {
-            if (!Contains(incoming, view))
+            if (!OrdinalStrings.Contains(incoming, view))
             {
                 return false;
             }
@@ -282,18 +282,5 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         }
 
         return true;
-    }
-
-    private static bool Contains(IReadOnlyList<string> list, string value)
-    {
-        for (var i = 0; i < list.Count; i++)
-        {
-            if (string.Equals(list[i], value, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 }

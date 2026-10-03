@@ -33,7 +33,7 @@ public static class LatticePredicateTranslator
 
     private static LatticePredicateNode TranslateBoolean(Expression expression, ParameterExpression parameter)
     {
-        expression = Unwrap(expression);
+        expression = ExpressionTreeShapes.StripConversions(expression);
 
         switch (expression)
         {
@@ -72,7 +72,7 @@ public static class LatticePredicateTranslator
             // A bare boolean member or constant used directly as the predicate
             // body (e.g. u => u.IsActive). The evaluator resolves a Member /
             // Constant node to its truthiness in boolean position.
-            case MemberExpression member when member.Type == typeof(bool) && ReferencesParameter(member, parameter):
+            case MemberExpression member when member.Type == typeof(bool) && ExpressionTreeShapes.ReferencesParameter(member, parameter):
                 return TranslateMemberAccess(member, parameter);
 
             case ConstantExpression { Value: bool } constant:
@@ -152,9 +152,9 @@ public static class LatticePredicateTranslator
 
     private static LatticePredicateNode TranslateOperand(Expression expression, ParameterExpression parameter)
     {
-        expression = Unwrap(expression);
+        expression = ExpressionTreeShapes.StripConversions(expression);
 
-        if (ReferencesParameter(expression, parameter))
+        if (ExpressionTreeShapes.ReferencesParameter(expression, parameter))
         {
             if (expression is MemberExpression member)
                 return TranslateMemberAccess(member, parameter);
@@ -220,38 +220,6 @@ public static class LatticePredicateTranslator
         return LatticeConstant.Integer(Convert.ToInt64(value));
     }
 
-    private static Expression Unwrap(Expression expression)
-    {
-        while (expression is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary)
-            expression = unary.Operand;
-        return expression;
-    }
-
-    private static bool ReferencesParameter(Expression expression, ParameterExpression parameter) =>
-        ParameterFinder.Contains(expression, parameter);
-
     private static NotSupportedException Unsupported(string what) =>
         new($"Unsupported predicate construct: {what}. Server-side predicate push-down supports parameter member access, constants, the comparison operators == != < <= > >=, the boolean operators && || !, and the string methods StartsWith/EndsWith/Contains/Equals.");
-
-    private sealed class ParameterFinder : ExpressionVisitor
-    {
-        private readonly ParameterExpression _target;
-        private bool _found;
-
-        private ParameterFinder(ParameterExpression target) => _target = target;
-
-        public static bool Contains(Expression expression, ParameterExpression target)
-        {
-            var finder = new ParameterFinder(target);
-            finder.Visit(expression);
-            return finder._found;
-        }
-
-        protected override Expression VisitParameter(ParameterExpression node)
-        {
-            if (node == _target)
-                _found = true;
-            return base.VisitParameter(node);
-        }
-    }
 }
