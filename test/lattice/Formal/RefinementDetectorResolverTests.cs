@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
 /// Tests for <see cref="RefinementDetectorResolver"/>, the resolver that keeps
-/// the Detector column of <c>spec/Refinement.md</c> honest.
+/// the Detector column of <c>spec/atomic-commit/Refinement.md</c> honest.
 /// <para>
 /// SELF-REFERENCE IS DELIBERATE. Several of these assert against this fixture's
 /// own tests. That is the one anchor in the repository that cannot rot without

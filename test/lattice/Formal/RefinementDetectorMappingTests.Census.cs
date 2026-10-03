@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
 /// Keeps a hand-maintained census count out of the prose of
-/// <c>spec/Refinement.md</c> (issue #2560).
+/// every module's refinement note (issue #2560).
 /// <para>
 /// The sibling gates in this fixture check the note's structure. This one
 /// checks the note's summary *of* that structure, which is where #2560 lived:
@@ -25,14 +25,16 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </summary>
 internal sealed partial class RefinementDetectorMappingTests
 {
-    [Test]
-    public void The_note_records_no_hand_maintained_census_count()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_note_records_no_hand_maintained_census_count(SpecModule module)
     {
-        var claims = RefinementCensusProse.FindCountClaims(RefinementNote.ReadText());
+        ArgumentNullException.ThrowIfNull(module);
+
+        var claims = RefinementCensusProse.FindCountClaims(module.ReadRefinementNote());
 
         var offenders = claims
             .Select(c =>
-                $"spec/Refinement.md line {c.LineNumber} states a hand-maintained census count "
+                $"{module.Describe(module.RefinementNotePath)} line {c.LineNumber} states a hand-maintained census count "
                 + $"('{c.Text}'): {c.Line}")
             .ToList();
 

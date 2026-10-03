@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// against synthetic source trees rather than against <c>src/</c>.
 /// <para>
 /// WHY THESE EXIST SEPARATELY FROM THE GATE. Every symbol in
-/// <c>spec/Refinement.md</c> resolves today, so the gate over the real tree is
+/// <c>spec/atomic-commit/Refinement.md</c> resolves today, so the gate over the real tree is
 /// green and will stay green until somebody renames something. A green run of a
 /// checker that has never been shown to discriminate is worth nothing, and a
 /// staleness gate is worth LESS than nothing if it cries wolf, because it will

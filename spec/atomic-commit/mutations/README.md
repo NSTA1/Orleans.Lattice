@@ -126,7 +126,7 @@ check off. A mutant can be left with no enabled action, and TLC then reports
 after the state search completes), so the run would be about the deadlock rather
 than the property; with the check off TLC treats the stuck state as stuttering
 forever, which is what the property then has to reject. It is a claim too: the harness runs a declaring mutant a
-third time with the check left on and requires a deadlock, so the switch cannot
+third time with the check left on - and with liveness checking deferred to the end of the search (`-lncheck final`), so a periodic mid-search liveness check on a slow machine cannot report the target first - and requires a deadlock, so the switch cannot
 sit on a mutation that does not need it. Two do. `TerminationCompletionOverAllKeys`'s
 defect IS the stuck state. `MonotonicVisibilityOrphanLosesTerminal`'s mutant has
 always deadlocked, but while `MonotonicVisibility` was a single-step property
@@ -168,7 +168,7 @@ asserting the violation *count* is one.
 
 ## Inventory
 
-All thirteen properties are paired, and every protocol action is perturbed.
+Every property is paired, and every protocol action is perturbed (the module's [counts table](../README.md#counts) states how many of each there are).
 `Every_property_the_base_model_checks_has_a_mutation` reads the base cfg and
 fails if a property is added without a mutation, and
 `Every_protocol_action_is_perturbed_by_a_mutation` reads the specification's
@@ -331,5 +331,5 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj \
 ```
 
 It needs a JVM and `tla2tools.jar`; see
-[how the fixture finds them](../README.md#how-the-nunit-fixture-finds-the-toolchain),
+[how the fixture finds them](../../README.md#how-the-nunit-fixture-finds-the-toolchain),
 and note that it fails rather than skips under `GITHUB_ACTIONS`.

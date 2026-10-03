@@ -901,7 +901,7 @@ of the atomic-commit protocol is enumerated below, and every property is encoded
 as a Coyote assertion (or a bounded-progress liveness check) against a
 production core, with a companion non-vacuous guard test (break the invariant ->
 Coyote finds it). The catalogue is kept aligned name-for-name with the abstract
-invariants of the Phase 7 TLA+ spec (`spec/AtomicCommit.tla`); the mapping column
+invariants of the Phase 7 TLA+ spec (`spec/atomic-commit/AtomicCommit.tla`); the mapping column
 is the cross-lever alignment contract.
 
 The net-new home for this phase is `AtomicCommitInvariantModel` /
@@ -1025,17 +1025,28 @@ Browser tests are slow and are the easiest place in this repo to introduce flake
 ## TLA+ specification
 
 The atomic-commit protocol also has a design-level TLA+ specification under the
-top-level [`spec/`](../../spec/) directory (`AtomicCommit.tla` + `.cfg`, checked
-by TLC), complementary to the Coyote tier: the Coyote models verify the
-*implementation* of an extracted core under systematic schedule exploration,
-while the TLA+ spec checks the protocol *design* exhaustively over small bounded
-instances. See `spec/README.md` for how to run it and `spec/Refinement.md` for
-the mapping from spec actions to the code cores.
+top-level [`spec/`](../../spec/README.md) directory, in the `spec/atomic-commit/`
+module (`AtomicCommit.tla` + `.cfg`, checked by TLC), complementary to the Coyote
+tier: the Coyote models verify the *implementation* of an extracted core under
+systematic schedule exploration, while the TLA+ spec checks the protocol
+*design* exhaustively over small bounded instances. See `spec/README.md` for how
+to run it and the module layout, and `spec/atomic-commit/Refinement.md` for the
+mapping from spec actions to the code cores.
+
+Every directory under `spec/` is a module, and the Formal gates discover the
+modules from disk rather than naming them: each gate takes a `SpecModule` and
+runs once per module, with the module in the test-case name, and a malformed
+module directory fails discovery instead of being skipped. A new specification
+therefore follows the layout in `spec/README.md` (a `.tla`, `.cfg`,
+`<Module>.manifest.json` of counts, mutations, refinement note and a README
+counts table) and is gated the moment it exists. `SpecModuleDiscoveryControlTests`
+proves that over a synthetic module built in a temp directory.
 
 TLC **is** run per PR, through an ordinary NUnit fixture rather than a workflow
 step of its own: `test/lattice/Formal/TlcModelCheckTests.cs` (`[Category("Tlc")]`)
-checks the specification and a mutant generated from each definition in
-`spec/mutations/`, so every property has to demonstrate that it can go red. It
+checks every module's specification and a mutant generated from each definition
+in its mutation directory (`spec/<area>/mutations/`), so every property has to
+demonstrate that it can go red. It
 rides the test fan-out in the `deterministic` tier; every CI test leg provisions a
 Temurin 17 runtime and a digest-pinned `tla2tools.jar` first, and
 `CiTlaToolchainProvisioningTests` requires every workflow that runs .NET tests to
