@@ -57,6 +57,27 @@ public sealed class ExplorerExtensionPointAbsenceTests
     }
 
     [Test]
+    public void The_sweep_reaches_the_public_types_the_absence_gates_police()
+    {
+        // Battery test: every gate in this fixture is an absence assertion over
+        // PublicTypes(), and an empty population satisfies all of them. The
+        // assembly battery above guards the assembly set but not the exported
+        // types, so a sweep that loaded the right assemblies and saw no type in
+        // them would still report a clean bill of health.
+        var publicTypes = PublicTypes().ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(publicTypes, Is.Not.Empty);
+            Assert.That(
+                publicTypes,
+                Does.Contain(typeof(Orleans.Lattice.Explorer.Web.LatticeExplorerWebOptions)),
+                "the sweep must reach the web head's own public surface, which is where an area "
+                + "registration API would most plausibly reappear.");
+        });
+    }
+
+    [Test]
     public void No_public_explorer_type_or_member_is_named_as_a_plugin_or_area_registration()
     {
         var offenders = new List<string>();
@@ -133,8 +154,24 @@ public sealed class ExplorerExtensionPointAbsenceTests
 
     [Test]
     public void Every_public_service_collection_extension_is_an_allowed_non_extension_registration()
+        => Assert.That(PublicServiceCollectionExtensions(), Is.SubsetOf(AllowedServiceCollectionExtensions));
+
+    [Test]
+    public void The_service_collection_extension_sweep_reaches_the_web_head_entry_point()
     {
-        var registrations = PublicTypes()
+        // Battery test: Is.SubsetOf is satisfied by an empty set, and the filter
+        // chain above is long - static class, extension attribute, first parameter
+        // IServiceCollection. A drift in any link empties the population and the
+        // allow-list gate passes while policing nothing.
+        Assert.That(
+            PublicServiceCollectionExtensions(),
+            Does.Contain("AddLatticeExplorerWeb"),
+            "the web head's registration is the one public service-collection extension the "
+            + "Explorer is known to ship, so the sweep must find it.");
+    }
+
+    private static string[] PublicServiceCollectionExtensions() =>
+        [.. PublicTypes()
             .Where(type => type is { IsAbstract: true, IsSealed: true })
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
             .Where(method => method.IsDefined(typeof(System.Runtime.CompilerServices.ExtensionAttribute), inherit: false)
@@ -142,11 +179,7 @@ public sealed class ExplorerExtensionPointAbsenceTests
                 && target == typeof(IServiceCollection))
             .Select(method => method.Name)
             .Distinct()
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-
-        Assert.That(registrations, Is.SubsetOf(AllowedServiceCollectionExtensions));
-    }
+            .Order(StringComparer.Ordinal)];
 
     private static bool Mentions(Type candidate, Type contract)
     {

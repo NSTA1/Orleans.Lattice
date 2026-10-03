@@ -105,6 +105,22 @@ public sealed class AuthSchemeAdvertisementSerializationTests
             .Select(f => (string)f.GetRawConstantValue()!)
             .ToArray();
 
-        Assert.That(values, Is.Unique);
+        // Is.Unique is satisfied by an empty set, so the sweep has to be shown to
+        // reach the alias table before its verdict means anything. A BindingFlags
+        // drift, or the constants moving onto a base or partial type, would empty
+        // this population and the uniqueness gate would pass policing nothing.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                values,
+                Is.SupersetOf(new[]
+                {
+                    GrpcStateTypeAliases.AuthSchemeAdvertisementRequest,
+                    GrpcStateTypeAliases.AuthSchemeDescriptor,
+                    GrpcStateTypeAliases.AuthSchemeAdvertisement,
+                }),
+                "the sweep must see the alias constants it is asserting are distinct.");
+            Assert.That(values, Is.Unique);
+        });
     }
 }

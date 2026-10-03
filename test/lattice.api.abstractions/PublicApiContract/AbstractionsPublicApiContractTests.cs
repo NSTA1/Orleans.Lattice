@@ -76,6 +76,26 @@ public class AbstractionsPublicApiContractTests
     }
 
     [Test]
+    public void The_exported_type_sweep_reaches_the_contracted_surface()
+    {
+        // Battery test: the namespace gate below is an absence assertion over the
+        // exported-type set, so an empty sweep passes it. Nothing else in this
+        // fixture guards that population - the service-interface cases above are
+        // driven from a hand-written array, not from reflection over the assembly.
+        var exported = AbstractionsAssembly.GetExportedTypes();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exported, Is.Not.Empty);
+            Assert.That(
+                exported,
+                Is.SupersetOf(ServiceInterfaces),
+                "every contracted service interface must be visible to the sweep that polices "
+                + "which namespaces public types may live in.");
+        });
+    }
+
+    [Test]
     public void Every_public_type_lives_in_a_contracted_api_namespace()
     {
         var strays = AbstractionsAssembly.GetExportedTypes()

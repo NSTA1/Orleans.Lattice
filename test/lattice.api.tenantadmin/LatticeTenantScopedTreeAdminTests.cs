@@ -259,6 +259,12 @@ public sealed class LatticeTenantScopedTreeAdminTests
         // unused.
         Assert.That(
             typeof(LatticeTenantScopedTreeAdmin)
+                .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public),
+            Is.Not.Empty,
+            "the field sweep must see the facade's own fields; an empty lookup would satisfy the "
+            + "dead-config assertion below while proving nothing.");
+        Assert.That(
+            typeof(LatticeTenantScopedTreeAdmin)
                 .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
                 .Select(f => f.FieldType),
             Has.None.EqualTo(typeof(ITenantAdmissionController)),
