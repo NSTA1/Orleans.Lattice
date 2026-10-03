@@ -64,6 +64,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - GSet decode projection.** The `GSet` decoders built a key list, sorted it, then grew a result list through an iterator. Both project from an exactly-sized sorted array now, as does `GSet.Values`: 10-48% faster decodes, 136 bytes less per call. ([#4377](https://github.com/NSTA1/Orleans.Lattice/pull/4377)) (`Orleans.Lattice`)
+
 - **Performance - CRDT set provenance decode windows.** The `OrSet` and `RwSet` decoders each built an unsized `List<string>` per call purely to sort a key window. All four decode methods rent a right-sized pooled array now: 9-22% less allocated across state and current-value decodes. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
 
 - **Performance - Atomic and cross-tree fingerprint windows.** Both fingerprint paths allocated a scratch key array per call, the cross-tree one once per participant. They share a single pooled rental now: 192 bytes whatever the width, down from 4.3 KB and 16.3 KB at 512 keys. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)

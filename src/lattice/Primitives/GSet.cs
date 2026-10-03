@@ -121,13 +121,19 @@ public sealed class GSet : ICrdt<GSet>
     /// </summary>
     public IEnumerable<byte[]> Values()
     {
-        if (Elements.Count == 0) yield break;
+        var count = Elements.Count;
+        if (count == 0) yield break;
 
-        var keys = new List<string>(Elements);
-        keys.Sort(OrdinalStringOrder.Comparison);
-        foreach (var key in keys)
+        // An exactly-sized array rather than a List: HashSet.CopyTo fills it
+        // in one pass with no List wrapper object, and indexing it drops the
+        // per-element version check a List enumerator pays on every MoveNext.
+        // Order is unchanged - the same ordinal sort of the same base64 keys.
+        var keys = new string[count];
+        Elements.CopyTo(keys);
+        Array.Sort(keys, OrdinalStringOrder.Comparison);
+        for (var i = 0; i < count; i++)
         {
-            yield return Convert.FromBase64String(key);
+            yield return Convert.FromBase64String(keys[i]);
         }
     }
 
