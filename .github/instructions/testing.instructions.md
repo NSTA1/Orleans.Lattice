@@ -781,6 +781,22 @@ and [`docs/lattice/verified-atomic-commit.md`](../../docs/lattice/verified-atomi
    iteration, so every schedule gets the full fault allowance (see the mutable-state
    rule above and issue #1664). See `AtomicCommitLivenessModel` for the reference
    pattern.
+5. **Audit every call site's inputs for their contractual meaning, not just
+   their local truth.** Model-checking a pure core establishes a property *of
+   the function*. Citing it for a *system* invariant also needs every caller to
+   supply inputs that mean what the core's contract says they mean, and that
+   obligation is discharged nowhere the model can see - it moves to the call
+   sites when the rule is extracted, and grows with each new caller. The
+   instance that names the rule (issue #2331): `TxRegistryGrain` computed
+   `TerminalDecisionGuard.Classify`'s `hasExisting` as "the decision map holds a
+   row right now", which is false-but-locally-true once a row is retired, so
+   "never both commit and abort" holds only within the retention window while
+   a comment called it "one model-checked rule". So, for a core whose inputs
+   its caller computes from mutable state: state at each call site the scope
+   it actually enforces, never cite "model-checked" for an unscoped invariant,
+   and pin the composition with a test at the grain rather than the core - no
+   test of the core in isolation can fail on this. `TxRegistryGrainTests`'
+   `WriteOnceScope` partial is the worked example.
 
 ### Verified-core coverage (level-C Phase 5, issue #1594)
 

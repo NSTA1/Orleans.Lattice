@@ -112,8 +112,16 @@ internal sealed partial class TxRegistryGrain(
     public async Task MarkCommittedAsync(Guid txid)
     {
         // Write-once terminal guard through the shared, dependency-free
-        // TerminalDecisionGuard so the "never both commit and abort" invariant is
-        // one model-checked rule rather than a hand-copied inline branch.
+        // TerminalDecisionGuard, so the rule is one model-checked function rather
+        // than a hand-copied inline branch. What that buys is scoped, and the
+        // scope is stated here because "model-checked" is the phrase that stops a
+        // reviewer looking further (issue #2331): this method enforces "never
+        // both commit and abort" only while the decision is LIVE. The
+        // `Conflict when !tombstoned` arm below deliberately lets an
+        // opposite-outcome mark through once the saga's cleanup has tombstoned
+        // the row, and once a tombstone is purged there is no row for Classify to
+        // see at all. Classify is correct over its inputs; the invariant across a
+        // forget is not claimed.
         //
         // Evaluated against the maps as they stand, BEFORE the tombstone-clearing
         // prologue below. Clearing first hides the existing row from Classify, so
@@ -197,8 +205,10 @@ internal sealed partial class TxRegistryGrain(
     public async Task MarkAbortedAsync(Guid txid)
     {
         // Guard first, clear second - see MarkCommittedAsync for why the
-        // ordering is load-bearing. The defect is a pair, and a remedy applied
-        // only to the committed path leaves the abort path defective.
+        // ordering is load-bearing, and for the scope of the write-once claim:
+        // live decisions only, not across a forget. The defect is a pair, and a
+        // remedy applied only to the committed path leaves the abort path
+        // defective.
         var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
         var tombstoned = state.State.ForgottenAt.ContainsKey(txid);
         switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: false))
@@ -1435,14 +1445,17 @@ internal sealed partial class TxRegistryGrain(
         // protocol violation (the saga coordinator never broadcasts a
         // mixed terminal set); throwing here lets a malformed inbound
         // stream surface as a hard error rather than silently
-        // corrupting the gate.
-        // Mixed-outcome guard: every per-source-shard terminal of a
-        // saga must agree on commit/abort. A mixed sequence is a
-        // protocol violation (the saga coordinator never broadcasts a
-        // mixed terminal set); throwing here lets a malformed inbound
-        // stream surface as a hard error rather than silently
         // corrupting the gate. Routed through the shared write-once
         // TerminalDecisionGuard so it is the same rule the Mark* paths use.
+        //
+        // The same rule, over a different scope (issue #2331 asked for this
+        // call site to be audited): hasExisting is "a row is stored", so a
+        // conflict is rejected against any row still held - tombstoned or
+        // not, unlike the Mark* paths, which re-record over a tombstone - and
+        // a row that has been purged classifies as Record. Rejecting is the
+        // conservative choice on a receiver, which has no business replacing
+        // an outcome it was told; the purge case is the retention window
+        // TerminalDecisionGuard documents, not a gap special to this path.
         var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
         if (TerminalDecisionGuard.Classify(hasExisting, existing, committed) == TerminalRecordAction.Conflict)
         {
