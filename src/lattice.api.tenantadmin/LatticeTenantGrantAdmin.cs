@@ -104,7 +104,7 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
     public async Task<TenantGrantReport> ListGrantsAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId, nameof(tenantId));
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId, nameof(tenantId));
 
         // The authorizer returns the record, so the read that proved authority is
         // the same read the issued projection is built from - no second hit.
@@ -146,8 +146,8 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
             .AuthorizeTenantAdminAsync(granter, GrantsAction, cancellationToken)
             .ConfigureAwait(false);
 
-        ThrowIfReservedTenant(granter, "offer-cross-tenant-grant");
-        ThrowIfReservedTenant(grantee, "offer-cross-tenant-grant");
+        TenantAdminArguments.ThrowIfReservedTenant(granter, "offer-cross-tenant-grant");
+        TenantAdminArguments.ThrowIfReservedTenant(grantee, "offer-cross-tenant-grant");
 
         var offered = CrossTenantGrant.Create(
             grantee.Value, TenantGranteeKind.Tenant, scope, engineOperations, TenantGrantState.Pending);
@@ -444,21 +444,6 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         CrossTenantGrant.Create(
             grantee.Value, TenantGranteeKind.Tenant, scope, TenantGrantOperations.None).GrantId;
 
-    /// <summary>
-    /// Rejects a grant operation naming the reserved default tenant on either
-    /// side. It names the cluster's own legacy state, so a cross-tenant grant
-    /// to or from it would expose the whole legacy keyspace across a tenant
-    /// boundary. The reserved id is a constant, so the refusal leaks nothing about
-    /// registry contents.
-    /// </summary>
-    private static void ThrowIfReservedTenant(TenantId tenant, string operation)
-    {
-        if (tenant.IsDefault)
-        {
-            throw new ReservedTenantOperationException(tenant.Value, operation);
-        }
-    }
-
     private static void ValidateScope(string scope)
     {
         if (string.IsNullOrWhiteSpace(scope))
@@ -476,8 +461,8 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
     private static (TenantId Granter, TenantId Grantee) ParsePair(
         string granterTenantId, string granteeTenantId)
     {
-        var granter = ParseTenant(granterTenantId, nameof(granterTenantId));
-        var grantee = ParseTenant(granteeTenantId, nameof(granteeTenantId));
+        var granter = TenantAdminArguments.ParseTenantId(granterTenantId, nameof(granterTenantId));
+        var grantee = TenantAdminArguments.ParseTenantId(granteeTenantId, nameof(granteeTenantId));
 
         if (granter.Equals(grantee))
         {
@@ -486,16 +471,5 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         }
 
         return (granter, grantee);
-    }
-
-    private static TenantId ParseTenant(string tenantId, string parameterName)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId, parameterName);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException($"'{tenantId}' is not a valid tenant id.", parameterName);
-        }
-
-        return tenant;
     }
 }

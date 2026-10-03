@@ -138,7 +138,7 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
     public async Task<TenantStatusReport> GetTenantAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
 
         if (!await IsAccessibleAsync(tenant, cancellationToken).ConfigureAwait(false))
         {
@@ -154,9 +154,9 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
         return new TenantStatusReport
         {
             TenantId = tenant.Value,
-            Status = Map(record.Status),
+            Status = TenantLifecycleMapping.ToLifecycleStatus(record.Status),
             IsDefault = tenant.IsDefault,
-            Regions = BuildDescriptors(record),
+            Regions = TenantLifecycleMapping.DescribeRegions(record),
             Quotas = TenantQuotasMapping.ToDescriptor(record.Quotas),
         };
     }
@@ -200,7 +200,7 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
         }
 
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
-        return record is null ? TenantLifecycleStatus.Active : Map(record.Status);
+        return record is null ? TenantLifecycleStatus.Active : TenantLifecycleMapping.ToLifecycleStatus(record.Status);
     }
 
     /// <summary>
@@ -248,61 +248,4 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
             return await _membership!.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
         }
     }
-
-    private static IReadOnlyList<TenantRegionStatusDescriptor> BuildDescriptors(TenantRecord record)
-    {
-        var regionIds = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var regionId in record.AllowedRegionIds)
-        {
-            regionIds.Add(regionId);
-        }
-
-        foreach (var entry in record.RegionStatusEntries)
-        {
-            regionIds.Add(entry.Key);
-        }
-
-        var descriptors = new List<TenantRegionStatusDescriptor>(regionIds.Count);
-        foreach (var regionId in regionIds)
-        {
-            descriptors.Add(new TenantRegionStatusDescriptor
-            {
-                RegionId = regionId,
-                Status = Map(record.GetRegionStatus(regionId)),
-                IsAllowed = record.IsRegionAllowed(regionId),
-            });
-        }
-
-        return descriptors;
-    }
-
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException(
-                $"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
-    }
-
-    private static TenantLifecycleStatus Map(TenantStatus status) => status switch
-    {
-        TenantStatus.Active => TenantLifecycleStatus.Active,
-        TenantStatus.Suspended => TenantLifecycleStatus.Suspended,
-        _ => TenantLifecycleStatus.Active,
-    };
-
-    private static TenantRegionLifecycleStatus Map(TenantRegionStatus status) => status switch
-    {
-        TenantRegionStatus.Provisioning => TenantRegionLifecycleStatus.Provisioning,
-        TenantRegionStatus.Backfilling => TenantRegionLifecycleStatus.Backfilling,
-        TenantRegionStatus.Online => TenantRegionLifecycleStatus.Online,
-        TenantRegionStatus.Draining => TenantRegionLifecycleStatus.Draining,
-        TenantRegionStatus.Offline => TenantRegionLifecycleStatus.Offline,
-        TenantRegionStatus.Removed => TenantRegionLifecycleStatus.Removed,
-        _ => TenantRegionLifecycleStatus.None,
-    };
 }

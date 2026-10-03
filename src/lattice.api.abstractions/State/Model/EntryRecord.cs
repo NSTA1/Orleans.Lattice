@@ -100,7 +100,7 @@ public sealed record EntryRecord
         && string.Equals(CrdtShape, other.CrdtShape, StringComparison.Ordinal)
         && MergeMode == other.MergeMode
         && Raw == other.Raw
-        && BytesEqual(ValuePreview, other.ValuePreview)
+        && ByteArrayEquality.ContentEquals(ValuePreview, other.ValuePreview)
         && MembersEqual(CurrentMembers, other.CurrentMembers);
 
     /// <inheritdoc />
@@ -156,8 +156,4 @@ public sealed record EntryRecord
 
         return true;
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

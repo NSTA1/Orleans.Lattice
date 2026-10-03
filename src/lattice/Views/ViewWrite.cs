@@ -79,7 +79,7 @@ public readonly record struct ViewWrite
         && Timestamp.Equals(other.Timestamp)
         && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
         && string.Equals(SourceKey, other.SourceKey, StringComparison.Ordinal)
-        && BytesEqual(Value, other.Value);
+        && ByteArrayEquality.ContentEquals(Value, other.Value);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -98,10 +98,6 @@ public readonly record struct ViewWrite
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 
     /// <summary>
     /// Creates an <see cref="ViewWriteKind.Upsert"/> write.

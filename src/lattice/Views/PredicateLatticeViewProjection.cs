@@ -1,4 +1,3 @@
-using System.IO.Hashing;
 using System.Text;
 
 namespace Orleans.Lattice;
@@ -274,57 +273,11 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
     {
         var builder = new StringBuilder();
         builder.Append("v1|filter=");
-        if (filter is { } node)
-        {
-            AppendNode(builder, node);
-        }
-        else
-        {
-            builder.Append("none");
-        }
+        ProjectionVersionFingerprint.AppendFilter(builder, filter);
 
         builder.Append("|value=").Append(valueSelectorVersion ?? "identity");
         builder.Append("|key=").Append(keySelectorVersion ?? "identity");
 
-        var hash = XxHash128.Hash(Encoding.UTF8.GetBytes(builder.ToString()));
-        return Convert.ToHexString(hash);
-    }
-
-    private static void AppendNode(StringBuilder builder, in LatticePredicateNode node)
-    {
-        // Length-prefix the two variable-length, caller-controlled string fields
-        // (member path and constant) so a value containing the ':' field delimiter
-        // cannot shift a field boundary and make a structurally different node
-        // serialize identically - which would let a redefined view reuse a stale
-        // ProjectionVersion and skip the rebuild the change requires.
-        var memberPath = node.MemberPath ?? string.Empty;
-        var constant = node.Constant.ToString() ?? string.Empty;
-        builder.Append('(')
-            .Append((int)node.Kind).Append(':')
-            .Append(memberPath.Length).Append(':').Append(memberPath).Append(':')
-            .Append((int)node.ComparisonOperator).Append(':')
-            .Append((int)node.BooleanOperator).Append(':')
-            .Append((int)node.StringMethod).Append(':')
-            .Append(constant.Length).Append(':').Append(constant);
-
-        // Only a type test reads ValueKind, so only it contributes one: every tree
-        // built before TypeOf existed keeps the version it always had.
-        if (node.Kind == LatticePredicateNodeKind.TypeOf)
-        {
-            builder.Append(':').Append((int)node.ValueKind);
-        }
-
-        if (node.Children is { } children)
-        {
-            builder.Append(":[");
-            foreach (var child in children)
-            {
-                AppendNode(builder, child);
-            }
-
-            builder.Append(']');
-        }
-
-        builder.Append(')');
+        return ProjectionVersionFingerprint.Hash(builder);
     }
 }

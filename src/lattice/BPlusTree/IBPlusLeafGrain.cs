@@ -1033,6 +1033,11 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// calling it again on a leaf whose own row is already gone finishes the
     /// snapshot clear (issue #4383).
     /// </para>
+    /// <para>
+    /// Once the leaf's row is deleted, the activation never writes it back: a
+    /// checkpoint advance still pending is discarded rather than flushed on
+    /// deactivation, and any later write on that activation fails (issue #4419).
+    /// </para>
     /// </summary>
     Task ClearGrainStateAsync();
 

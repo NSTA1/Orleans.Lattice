@@ -949,7 +949,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             var present = currentSet is not null
                 ? currentSet.Contains(tag)
-                : ContainsOrdinal(current, tag);
+                : OrdinalStrings.Contains(current, tag);
             if (!present)
             {
                 (toAdd ??= []).Add(tag);
@@ -1000,7 +1000,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             var tag = desired[i];
             var present = currentSet is not null
                 ? currentSet.Contains(tag)
-                : ContainsOrdinal(current, tag);
+                : OrdinalStrings.Contains(current, tag);
             if (!present)
             {
                 (toAdd ??= []).Add(tag);
@@ -1032,20 +1032,6 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     /// more than the allocation it saves. Measured, not stylistic.
     /// </remarks>
     private static bool ContainsOrdinalConcrete(List<string> values, string value)
-    {
-        for (var i = 0; i < values.Count; i++)
-        {
-            if (string.Equals(values[i], value, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>Ordinal linear membership test over a small tag list.</summary>
-    private static bool ContainsOrdinal(IReadOnlyList<string> values, string value)
     {
         for (var i = 0; i < values.Count; i++)
         {
@@ -1139,7 +1125,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             case LatticeMergeMode.OrFlag:
             {
                 var flag = bytes is null ? new OrFlag() : JsonLatticeSerializer<OrFlag>.Default.Deserialize(bytes);
-                var counter = NextOrFlagCounter(flag, replicaId);
+                var counter = ObservedRemoveDots.NextCounter(flag, replicaId);
                 var delta = new OrFlagDelta
                 {
                     Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
@@ -1153,12 +1139,12 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             case LatticeMergeMode.RwFlag:
             {
                 var flag = bytes is null ? new RwFlag() : JsonLatticeSerializer<RwFlag>.Default.Deserialize(bytes);
-                var counter = NextRwFlagCounter(flag, replicaId);
+                var counter = ObservedRemoveDots.NextCounter(flag, replicaId);
                 var delta = new RwFlagDelta
                 {
                     Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
                     Disables = Array.Empty<OrSetDot>(),
-                    Tombstones = ObservedRwDisables(flag),
+                    Tombstones = ObservedRemoveDots.ObservedDisables(flag),
                 };
                 flag.MergeDelta(delta);
                 return (
@@ -1169,56 +1155,6 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 throw new InvalidOperationException(
                     $"MintFlagEnableRowAsync is only valid under a flag membership mode, not '{_membershipMode}'.");
         }
-    }
-
-    // Highest counter observed for replicaId across an OrFlag's enable and
-    // tombstone dots, plus one. Mirrors OrFlagAccessor.NextCounter so an atomic
-    // enable mints the same monotonic dot the eventual path would.
-    private static long NextOrFlagCounter(OrFlag flag, string replicaId)
-    {
-        long max = 0;
-        foreach (var d in flag.Enables)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        foreach (var d in flag.Tombstones)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        return max + 1;
-    }
-
-    // Highest counter observed for replicaId across an RwFlag's enable, disable,
-    // and tombstone dots, plus one. Mirrors RwFlagAccessor.NextCounter.
-    private static long NextRwFlagCounter(RwFlag flag, string replicaId)
-    {
-        long max = 0;
-        foreach (var d in flag.Enables)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        foreach (var d in flag.Disables)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        foreach (var d in flag.Tombstones)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        return max + 1;
-    }
-
-    // The currently observed disable dots an RwFlag enable cancels (remove-wins
-    // bookkeeping). Mirrors RwFlagAccessor.ObservedDisables.
-    private static OrSetDot[] ObservedRwDisables(RwFlag flag)
-    {
-        if (flag.Disables.Count == 0) return Array.Empty<OrSetDot>();
-        var observed = new OrSetDot[flag.Disables.Count];
-        for (var i = 0; i < flag.Disables.Count; i++)
-        {
-            observed[i] = flag.Disables[i];
-        }
-        return observed;
     }
 
     // A membership row identified as an orphan candidate by the read-only scan

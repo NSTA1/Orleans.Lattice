@@ -195,7 +195,7 @@ public readonly record struct SnapshotEntry
     /// <param name="other">The entry to compare against.</param>
     public bool Equals(SnapshotEntry other) =>
         string.Equals(Key, other.Key, StringComparison.Ordinal)
-        && BytesEqual(Value, other.Value)
+        && ByteArrayEquality.ContentEquals(Value, other.Value)
         && Timestamp.Equals(other.Timestamp)
         && IsPrepared == other.IsPrepared
         && IsTombstone == other.IsTombstone
@@ -204,7 +204,7 @@ public readonly record struct SnapshotEntry
         && AtomicBatchSize == other.AtomicBatchSize
         && AtomicBatchIndex == other.AtomicBatchIndex
         && ExpiresAtTicks == other.ExpiresAtTicks
-        && BytesEqual(Delta, other.Delta)
+        && ByteArrayEquality.ContentEquals(Delta, other.Delta)
         && Mode == other.Mode;
 
     /// <inheritdoc />
@@ -233,8 +233,4 @@ public readonly record struct SnapshotEntry
         hash.Add(Mode);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

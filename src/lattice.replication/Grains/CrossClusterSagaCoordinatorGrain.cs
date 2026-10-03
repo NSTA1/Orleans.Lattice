@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -420,41 +419,20 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> lenPrefix = stackalloc byte[4];
-        AppendLengthPrefixed(hash, targetTree, lenPrefix);
-        AppendLengthPrefixed(hash, manifestId, lenPrefix);
+        IncrementalHashFraming.AppendLengthPrefixed(hash, targetTree, lenPrefix);
+        IncrementalHashFraming.AppendLengthPrefixed(hash, manifestId, lenPrefix);
         // Fold the set id into the fingerprint so a set restore and an otherwise
         // identical single-tree restore never collide on a reused saga id. A null
         // (single-tree) set id contributes the empty string, so an existing
         // single-tree caller's fingerprint is unchanged.
-        AppendLengthPrefixed(hash, setId ?? string.Empty, lenPrefix);
+        IncrementalHashFraming.AppendLengthPrefixed(hash, setId ?? string.Empty, lenPrefix);
         BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, participants.Count);
         hash.AppendData(lenPrefix);
         foreach (var p in participants)
         {
-            AppendLengthPrefixed(hash, p.ClusterId, lenPrefix);
+            IncrementalHashFraming.AppendLengthPrefixed(hash, p.ClusterId, lenPrefix);
         }
         return hash.GetHashAndReset();
-    }
-
-    /// <summary>
-    /// Appends a 4-byte little-endian length prefix followed by the UTF-8 bytes
-    /// of <paramref name="value"/> to <paramref name="hash"/>, encoding through a
-    /// stack buffer for short strings and renting from the array pool only for
-    /// the rare long value.
-    /// </summary>
-    private static void AppendLengthPrefixed(IncrementalHash hash, string value, Span<byte> lenPrefix)
-    {
-        var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
-        byte[]? rented = maxBytes > 512 ? System.Buffers.ArrayPool<byte>.Shared.Rent(maxBytes) : null;
-        Span<byte> buffer = rented ?? stackalloc byte[512];
-        var written = Encoding.UTF8.GetBytes(value, buffer);
-        BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, written);
-        hash.AppendData(lenPrefix);
-        hash.AppendData(buffer[..written]);
-        if (rented is not null)
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
-        }
     }
 
     private async Task RegisterKeepaliveAsync()

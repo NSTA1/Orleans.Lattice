@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -1118,7 +1117,7 @@ internal sealed class LatticeCrossTreeTxGrain(
         {
             foreach (var p in participants)
             {
-                AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
+                IncrementalHashFraming.AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
                 var count = p.Entries.Count;
                 for (var i = 0; i < count; i++) rented[i] = p.Entries[i].Key;
                 var keys = rented.AsSpan(0, count);
@@ -1127,7 +1126,7 @@ internal sealed class LatticeCrossTreeTxGrain(
                 hash.AppendData(lenPrefix);
                 foreach (var key in keys)
                 {
-                    AppendLengthPrefixed(hash, key, lenPrefix);
+                    IncrementalHashFraming.AppendLengthPrefixed(hash, key, lenPrefix);
                 }
             }
             return hash.GetHashAndReset();
@@ -1139,31 +1138,6 @@ internal sealed class LatticeCrossTreeTxGrain(
             // participant's key count.
             Array.Clear(rented, 0, widest);
             System.Buffers.ArrayPool<string>.Shared.Return(rented);
-        }
-    }
-
-    /// <summary>
-    /// Appends a 4-byte little-endian length prefix followed by the UTF-8 bytes
-    /// of <paramref name="value"/> to <paramref name="hash"/>, encoding through a
-    /// stack buffer for short strings and renting from the array pool only for
-    /// the rare long key.
-    /// <para>
-    /// Internal rather than private so the microbenchmark host's verbatim
-    /// fingerprint baseline appends through the same untouched helper.
-    /// </para>
-    /// </summary>
-    internal static void AppendLengthPrefixed(IncrementalHash hash, string value, Span<byte> lenPrefix)
-    {
-        var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
-        byte[]? rented = maxBytes > 512 ? System.Buffers.ArrayPool<byte>.Shared.Rent(maxBytes) : null;
-        Span<byte> buffer = rented ?? stackalloc byte[512];
-        var written = Encoding.UTF8.GetBytes(value, buffer);
-        BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, written);
-        hash.AppendData(lenPrefix);
-        hash.AppendData(buffer[..written]);
-        if (rented is not null)
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
         }
     }
 

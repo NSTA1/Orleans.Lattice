@@ -313,7 +313,7 @@ internal sealed partial class TxRegistryGrain
             return already;
         }
 
-        var conflict = ownWrite && IsWriteConflict(failure);
+        var conflict = ownWrite && GrainStateWriteFaults.IsConflict(failure);
         if (conflict)
         {
             logger.LogWarning(
@@ -331,23 +331,6 @@ internal sealed partial class TxRegistryGrain
         }
 
         return new TxRegistryWriteFailedException(GrainKey, failure, conflict);
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="failure"/> (or an
-    /// exception it wraps) is an <see cref="InconsistentStateException"/>.
-    /// </summary>
-    internal static bool IsWriteConflict(Exception failure)
-    {
-        for (var e = failure; e is not null; e = e.InnerException)
-        {
-            if (e is InconsistentStateException)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /// <summary>

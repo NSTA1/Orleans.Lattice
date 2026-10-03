@@ -88,6 +88,23 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private const int MaxEmptyOpenDeferrals = 3;
 
     /// <summary>
+    /// How many consecutive load attempts have been deferred because a record the
+    /// committed state names could not be read consistently (issue #4092). Reset on
+    /// every completed open and whenever the bound below faults the load.
+    /// </summary>
+    private int _recordUnavailableDeferrals;
+
+    /// <summary>
+    /// How many consecutive record-unavailable deferrals are tolerated before the
+    /// load is faulted with reason <c>unloadable_record</c> (issue #4092). A storm
+    /// clears within a handful of retries; a record that stays inconsistent on every
+    /// read does not, and deferring it for ever leaves the approximate index closed
+    /// with only a rising Deferred counter to show for it. The durable index is kept
+    /// either way.
+    /// </summary>
+    internal const int MaxRecordUnavailableDeferrals = 8;
+
+    /// <summary>
     /// Bounds an unbroken run of admission refusals so the open has a state a reader
     /// can act on, rather than only a counter that rises. See
     /// <see cref="RepoContextAnnOpenSaturationLatch"/> for why a rising refusal count
@@ -929,6 +946,37 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // the next tick re-reads only the restore. Counting it as a discard is
             // what destroyed a converged index; counting it as a fault would page
             // for back-pressure.
+            //
+            // Bounded (issue #4092): a record that stays inconsistent on EVERY
+            // read is not back-pressure, and deferring it for ever leaves the
+            // index closed behind a counter that only rises. Past the bound the
+            // load faults with unloadable_record so the condition is visible and
+            // terminal for this attempt - but the durable index is still kept,
+            // never discarded, because a transient storm that outlasted the bound
+            // must not cost the converged index either.
+            if (++_recordUnavailableDeferrals >= MaxRecordUnavailableDeferrals)
+            {
+                _recordUnavailableDeferrals = 0;
+                _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted, "unloadable_record");
+                _logger.LogError(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not be "
+                    + "read consistently from its store on {Attempts} consecutive attempts: a record its committed "
+                    + "state names was missing from one read and present in another every time. The load is faulted "
+                    + "with reason {Reason}. The durable index was kept, not discarded.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    MaxRecordUnavailableDeferrals,
+                    "unloadable_record");
+
+                throw new InvalidOperationException(
+                    $"Repository-context approximate index for '{_repoId}' could not be read consistently on "
+                    + $"{MaxRecordUnavailableDeferrals} consecutive attempts (unloadable_record). The durable index "
+                    + "was kept, not discarded.",
+                    ex);
+            }
+
             _load?.Record(RepoContextAnnIndexLoadOutcome.Deferred);
             _logger.LogWarning(
                 ex,
@@ -997,6 +1045,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // one: that walk banks its remaining mappings and completes in a single
         // attempt, so the progress path above is never reached for it.
         ClearOpenSaturation();
+        _recordUnavailableDeferrals = 0;
 
         _index = _loading;
         _loading = null;

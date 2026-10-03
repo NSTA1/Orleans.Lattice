@@ -20,8 +20,8 @@ internal static class LatticeOperationKey
     /// <summary>The longest operation id accepted.</summary>
     internal const int MaxOperationIdLength = 128;
 
-    private const char FieldSeparator = '|';
-    private const char EscapeChar = '%';
+    private const char FieldSeparator = StorageSafeKeyEncoding.FieldSeparator;
+    private const char EscapeChar = StorageSafeKeyEncoding.EscapeChar;
     private const string IndexPrefix = "idx";
 
     /// <summary>
@@ -74,7 +74,7 @@ internal static class LatticeOperationKey
     internal static string For(string tenantId, string operationId)
     {
         var builder = new StringBuilder(tenantId.Length + operationId.Length + 1);
-        AppendEncoded(builder, tenantId);
+        StorageSafeKeyEncoding.AppendEncoded(builder, tenantId);
         builder.Append(FieldSeparator);
         builder.Append(operationId);
         return builder.ToString();
@@ -89,7 +89,7 @@ internal static class LatticeOperationKey
         var builder = new StringBuilder(tenantId.Length + IndexPrefix.Length + 1);
         builder.Append(IndexPrefix);
         builder.Append(FieldSeparator);
-        AppendEncoded(builder, tenantId);
+        StorageSafeKeyEncoding.AppendEncoded(builder, tenantId);
         return builder.ToString();
     }
 
@@ -125,22 +125,6 @@ internal static class LatticeOperationKey
         return Decode(key.AsSpan(prefixLength));
     }
 
-    private static void AppendEncoded(StringBuilder builder, string value)
-    {
-        foreach (var ch in value)
-        {
-            if (IsSafe(ch))
-            {
-                builder.Append(ch);
-            }
-            else
-            {
-                builder.Append(EscapeChar);
-                builder.Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
-            }
-        }
-    }
-
     private static string Decode(ReadOnlySpan<char> value)
     {
         var builder = new StringBuilder(value.Length);
@@ -159,11 +143,4 @@ internal static class LatticeOperationKey
 
         return builder.ToString();
     }
-
-    private static bool IsSafe(char ch) =>
-        ch != FieldSeparator
-        && ch != EscapeChar
-        && ch is not ('/' or '\\' or '#' or '?')
-        && ch is not (>= '\u0000' and <= '\u001f')
-        && ch is not (>= '\u007f' and <= '\u009f');
 }

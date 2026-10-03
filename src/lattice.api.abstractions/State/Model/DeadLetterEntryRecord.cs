@@ -65,7 +65,7 @@ public sealed record DeadLetterEntryRecord
         && Source == other.Source
         && TimestampUtc == other.TimestampUtc
         && PreviewTruncated == other.PreviewTruncated
-        && BytesEqual(ValuePreview, other.ValuePreview);
+        && ByteArrayEquality.ContentEquals(ValuePreview, other.ValuePreview);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -84,8 +84,4 @@ public sealed record DeadLetterEntryRecord
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

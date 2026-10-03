@@ -127,8 +127,8 @@ public readonly record struct EntryRevision
         && Mode == other.Mode
         && RetentionShape == other.RetentionShape
         && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
-        && BytesEqual(ValuePreview, other.ValuePreview)
-        && BytesEqual(Delta, other.Delta)
+        && ByteArrayEquality.ContentEquals(ValuePreview, other.ValuePreview)
+        && ByteArrayEquality.ContentEquals(Delta, other.Delta)
         && Equals(VectorClock, other.VectorClock);
 
     /// <inheritdoc />
@@ -158,8 +158,4 @@ public readonly record struct EntryRevision
         hash.Add(VectorClock);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

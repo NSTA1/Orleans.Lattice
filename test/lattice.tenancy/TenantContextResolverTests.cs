@@ -57,13 +57,38 @@ public sealed class TenantContextResolverTests
         return engine;
     }
 
+    /// <summary>
+    /// Builds a resolver with an authoritative compiled-policy snapshot (no
+    /// rebuild outstanding), so every test below decides from the substituted
+    /// engine exactly as it did before issue #4065 - the registry-confirmation
+    /// path during a non-authoritative snapshot is covered separately by
+    /// <see cref="TenantContextResolverRegistryLagTests"/>.
+    /// </summary>
+    private static TenantContextResolver CreateResolver(
+        ITenantPolicyEngine engine,
+        ILatticeMembershipContext membership,
+        CompiledTenantPolicySnapshotMaintainer? policy = null,
+        ITenantRegistry? registry = null) =>
+        new(
+            engine,
+            membership,
+            policy ?? AuthoritativePolicy(),
+            registry ?? Substitute.For<ITenantRegistry>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance);
+
+    private static CompiledTenantPolicySnapshotMaintainer AuthoritativePolicy() =>
+        TenantPolicyEpochTestCluster
+            .LeasedAsync(new TenantPolicyTestData.FakeTenantRegistry())
+            .GetAwaiter()
+            .GetResult();
+
     // ---- No assertion: default-tenant adoption --------------------------
 
     [Test]
     public void TryResolveCurrent_with_no_active_tenant_resolves_the_default_tenant()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
-        var resolver = new TenantContextResolver(engine, Membership("alice"));
+        var resolver = CreateResolver(engine, Membership("alice"));
 
         var resolved = resolver.TryResolveCurrent(out var tenant);
 
@@ -79,7 +104,7 @@ public sealed class TenantContextResolverTests
     [Test]
     public void ComposeEffectiveTreeId_under_the_default_tenant_returns_the_bare_name()
     {
-        var resolver = new TenantContextResolver(
+        var resolver = CreateResolver(
             Substitute.For<ITenantPolicyEngine>(), Membership("alice"));
         resolver.TryResolveCurrent(out var tenant);
 
@@ -92,7 +117,7 @@ public sealed class TenantContextResolverTests
     public void TryResolveCurrent_with_a_validated_assertion_resolves_that_tenant()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
 
         var resolved = resolver.TryResolveCurrent(out var tenant);
 
@@ -107,7 +132,7 @@ public sealed class TenantContextResolverTests
     public void A_validated_assertion_scopes_an_unqualified_name_into_the_tenant_namespace()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
         resolver.TryResolveCurrent(out var tenant);
 
         // The whole point of the seam: two tenants asking for "orders" must not be
@@ -120,8 +145,8 @@ public sealed class TenantContextResolverTests
     [Test]
     public void Two_tenants_asking_for_the_same_name_get_different_trees()
     {
-        var acmeResolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
-        var betaResolver = new TenantContextResolver(Engine("bob", Beta), Membership("bob"));
+        var acmeResolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
+        var betaResolver = CreateResolver(Engine("bob", Beta), Membership("bob"));
 
         LatticeActiveTenantContext.Current = Acme;
         acmeResolver.TryResolveCurrent(out var acme);
@@ -143,7 +168,7 @@ public sealed class TenantContextResolverTests
         // default tenant - which is Unbounded - so an authored quota could never
         // bind however small it was set.
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
         resolver.TryResolveCurrent(out var tenant);
 
         var effective = LatticeTenantResolution.ComposeEffectiveTreeId(tenant, "orders");
@@ -166,7 +191,7 @@ public sealed class TenantContextResolverTests
     {
         // 'mallory' asserts acme but the engine admits only 'alice'.
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("mallory"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("mallory"));
 
         resolver.TryResolveCurrent(out var tenant);
 
@@ -187,7 +212,7 @@ public sealed class TenantContextResolverTests
         var engine = Substitute.For<ITenantPolicyEngine>();
         engine.ValidateActiveTenant(Arg.Any<string>(), Arg.Any<TenantId>())
             .Returns(TenantAccessDecision.Allow());
-        var resolver = new TenantContextResolver(engine, Membership(string.Empty));
+        var resolver = CreateResolver(engine, Membership(string.Empty));
 
         resolver.TryResolveCurrent(out var tenant);
 
@@ -205,7 +230,7 @@ public sealed class TenantContextResolverTests
     public void TryResolveCurrent_falls_back_to_the_async_path_when_membership_is_cold()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(
+        var resolver = CreateResolver(
             Engine("alice", Acme), Membership("alice", warm: false));
 
         var resolved = resolver.TryResolveCurrent(out _);
@@ -217,7 +242,7 @@ public sealed class TenantContextResolverTests
     public async Task ResolveCurrentAsync_validates_through_the_cold_membership_path()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(
+        var resolver = CreateResolver(
             Engine("alice", Acme), Membership("alice", warm: false));
 
         var tenant = await resolver.ResolveCurrentAsync();
@@ -229,7 +254,7 @@ public sealed class TenantContextResolverTests
     public async Task ResolveCurrentAsync_denies_an_unauthorized_assertion_on_the_cold_path()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(
+        var resolver = CreateResolver(
             Engine("alice", Acme), Membership("mallory", warm: false));
 
         var tenant = await resolver.ResolveCurrentAsync();
@@ -240,7 +265,7 @@ public sealed class TenantContextResolverTests
     [Test]
     public async Task ResolveCurrentAsync_with_no_assertion_is_the_default_tenant()
     {
-        var resolver = new TenantContextResolver(
+        var resolver = CreateResolver(
             Substitute.For<ITenantPolicyEngine>(), Membership("alice", warm: false));
 
         Assert.That(await resolver.ResolveCurrentAsync(), Is.EqualTo(TenantId.Default));
@@ -253,7 +278,7 @@ public sealed class TenantContextResolverTests
         // TryResolveCurrent returns true and the result is validated synchronously,
         // returning as a ValueTask without ever reaching the slow async path.
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice", warm: true));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice", warm: true));
 
         var tenant = await resolver.ResolveCurrentAsync();
 
@@ -267,9 +292,33 @@ public sealed class TenantContextResolverTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(() => new TenantContextResolver(null!, Membership("alice")),
+            Assert.That(() => CreateResolver(null!, Membership("alice")),
                 Throws.ArgumentNullException);
-            Assert.That(() => new TenantContextResolver(Substitute.For<ITenantPolicyEngine>(), null!),
+            Assert.That(() => CreateResolver(Substitute.For<ITenantPolicyEngine>(), null!),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new TenantContextResolver(
+                    Substitute.For<ITenantPolicyEngine>(),
+                    Membership("alice"),
+                    null!,
+                    Substitute.For<ITenantRegistry>(),
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new TenantContextResolver(
+                    Substitute.For<ITenantPolicyEngine>(),
+                    Membership("alice"),
+                    AuthoritativePolicy(),
+                    null!,
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new TenantContextResolver(
+                    Substitute.For<ITenantPolicyEngine>(),
+                    Membership("alice"),
+                    AuthoritativePolicy(),
+                    Substitute.For<ITenantRegistry>(),
+                    null!),
                 Throws.ArgumentNullException);
         });
     }

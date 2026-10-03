@@ -64,10 +64,19 @@ public sealed class DelegatedAccessStaleSnapshotTests
     {
         await using var world = await World.FlippedOffWithRebuildHeldAsync();
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(world.Engine, Membership(new LatticeSubject("carol", [ClusterGroup])));
+        var resolver = new TenantContextResolver(
+            world.Engine,
+            Membership(new LatticeSubject("carol", [ClusterGroup])),
+            world.Maintainer,
+            world.Registry,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance);
 
-        Assert.That(resolver.TryResolveCurrent(out var tenant), Is.True);
-        Assert.That(tenant.Value, Is.Null, "the stale snapshot never selects the tenant's namespace");
+        // The non-authoritative snapshot (the rebuild's registry scan is held) is
+        // never trusted either way: the synchronous path defers rather than
+        // answering from stale state (issue #4065), and the async path then
+        // confirms the deny against the registry of record with the live flag.
+        Assert.That(resolver.TryResolveCurrent(out _), Is.False, "defers: the snapshot cannot be trusted while non-authoritative");
+        Assert.That((await resolver.ResolveCurrentAsync()).Value, Is.Null, "the registry confirms a group member is refused with the flag off");
     }
 
     [Test]
@@ -83,9 +92,14 @@ public sealed class DelegatedAccessStaleSnapshotTests
                 new ObservabilityTestData.FakeTenantOverageBilling()),
             ObservabilityTestData.AllowingGate(),
             world.Engine,
-            Membership(new LatticeSubject("carol", [ClusterGroup])));
+            Membership(new LatticeSubject("carol", [ClusterGroup])),
+            world.Maintainer,
+            world.Registry,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantObservabilityView>.Instance);
 
-        Assert.That(await view.GetActiveTenantAsync(), Is.Null, "the stale snapshot never exposes the tenant's series");
+        // The registry-confirmation path (issue #4065) reaches the same deny as
+        // before, now via the registry of record rather than a stale snapshot.
+        Assert.That(await view.GetActiveTenantAsync(), Is.Null, "the registry confirms a group member is refused with the flag off");
     }
 
     [Test]
