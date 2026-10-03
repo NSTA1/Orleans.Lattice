@@ -55,11 +55,25 @@ public sealed class AuthToolHandlersReadTests
         var expected = new AuthGroupPage { Entries = [new AuthGroup { GroupId = "ops" }], NextPageToken = "next" };
         admin.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>()).Returns(expected);
 
-        var result = await AuthToolHandlers.ListGroupsAsync(admin, 25, "cursor", CancellationToken.None);
+        var result = await AuthToolHandlers.ListGroupsAsync(admin, 25, "cursor", cancellationToken: CancellationToken.None);
 
         Assert.That(result, Is.SameAs(expected));
         await admin.Received(1).ListGroupsAsync(
-            Arg.Is<AuthPageRequest>(r => r.PageSize == 25 && r.PageToken == "cursor"),
+            Arg.Is<AuthPageRequest>(r => r.PageSize == 25 && r.PageToken == "cursor" && !r.IncludeTenantGroups),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ListGroupsAsync_forwards_the_tenant_groups_opt_in()
+    {
+        var admin = Admin();
+        admin.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new AuthGroupPage());
+
+        await AuthToolHandlers.ListGroupsAsync(admin, includeTenantGroups: true);
+
+        await admin.Received(1).ListGroupsAsync(
+            Arg.Is<AuthPageRequest>(r => r.IncludeTenantGroups),
             Arg.Any<CancellationToken>());
     }
 
@@ -73,7 +87,7 @@ public sealed class AuthToolHandlersReadTests
         await AuthToolHandlers.ListGroupsAsync(admin);
 
         await admin.Received(1).ListGroupsAsync(
-            Arg.Is<AuthPageRequest>(r => r.PageSize == 0 && r.PageToken == null),
+            Arg.Is<AuthPageRequest>(r => r.PageSize == 0 && r.PageToken == null && !r.IncludeTenantGroups),
             Arg.Any<CancellationToken>());
     }
 

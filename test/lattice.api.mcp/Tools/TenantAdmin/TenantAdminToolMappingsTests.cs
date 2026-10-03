@@ -117,6 +117,34 @@ public sealed class TenantAdminToolMappingsTests
             Assert.That(result.MaxMemoryBytes, Is.Null);
             Assert.That(result.MaxTreeCount, Is.Null);
             Assert.That(result.MaxOpsPerSecond, Is.Null);
+            Assert.That(result.MaxGroups, Is.Null, "A null delegated-access cap means the default cap.");
+            Assert.That(result.MaxTenantRules, Is.Null);
+        });
+    }
+
+    [Test]
+    public void ToMcp_quotas_update_result_copies_the_delegated_access_caps_without_affecting_unbounded()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantQuotasUpdateResult
+        {
+            TenantId = "acme",
+            Quotas = new TenantQuotasDescriptor
+            {
+                MaxGroups = 10,
+                MaxMembershipEdges = 20,
+                MaxMemberSubjects = 30,
+                MaxTenantRules = 40,
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.MaxGroups, Is.EqualTo(10));
+            Assert.That(result.MaxMembershipEdges, Is.EqualTo(20));
+            Assert.That(result.MaxMemberSubjects, Is.EqualTo(30));
+            Assert.That(result.MaxTenantRules, Is.EqualTo(40));
+            Assert.That(result.IsUnbounded, Is.True,
+                "The delegated-access caps are not data-plane dimensions and never decide IsUnbounded.");
         });
     }
 

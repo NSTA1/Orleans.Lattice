@@ -1,0 +1,42 @@
+@inherits TenantAccessView
+@using Orleans.Lattice.Explorer.Core.History
+
+@*
+    A tenant group's history (D19): the revisions of its record in the cluster's
+    membership store, read through the Explorer's existing history reader, newest
+    first. A caller who may not read that history is told so; nothing is guessed.
+*@
+
+<section class="lt-access-section" aria-labelledby="lt-access-group-history" data-lt-group-history="@HistoryState">
+    <h2 id="lt-access-group-history" class="lt-access-section__title">History</h2>
+    @if (_unavailable is { } reason)
+    {
+        <p class="lt-access-fieldset__hint">@reason</p>
+    }
+    else if (_rows is null)
+    {
+        <LtSkeleton Lines="3" Label="Loading the group's history" />
+    }
+    else
+    {
+        <LtTable TItem="HistoryRevisionRow" Items="_rows" Caption="History of this group" CaptionHidden="true" RowKey="@(row => row.Hlc)" DetailTitle="@(row => When(row))">
+            <ChildContent>
+                <LtColumn TItem="HistoryRevisionRow" Title="When" RowHeader="true" Mono="true" Value="@(row => When(row))" />
+                <LtColumn TItem="HistoryRevisionRow" Title="Change" Value="@(row => ChangeText(row))" />
+            </ChildContent>
+            <EmptyContent><span>No revision of this group is retained.</span></EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@When(context)</Primary>
+                    <Secondary>@ChangeText(context)</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+        </LtTable>
+        @if (_continuation is not null)
+        {
+            <div class="lt-access-actions">
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="LoadMoreAsync" Disabled="_loading">Load more history</LtButton>
+            </div>
+        }
+    }
+</section>

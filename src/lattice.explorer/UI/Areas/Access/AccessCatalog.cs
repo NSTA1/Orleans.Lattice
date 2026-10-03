@@ -47,12 +47,22 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// read; an unread model is unknown, never "not enforced".
     /// </summary>
     /// <param name="cancellationToken">Cancels the read.</param>
-    public async Task<AccessModelDescriptor?> GetAccessModelAsync(CancellationToken cancellationToken)
+    public async Task<AccessModelDescriptor?> GetAccessModelAsync(CancellationToken cancellationToken) =>
+        (await ReadAccessModelAsync(cancellationToken).ConfigureAwait(true)).Model;
+
+    /// <summary>
+    /// The cluster's access model, as <see cref="GetAccessModelAsync"/> reads it,
+    /// and whether the cluster refused the caller it. The same single call is
+    /// made; a refusal is not remembered, so it is asked again next time, as an
+    /// unread model always is.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public async ValueTask<AccessModelRead> ReadAccessModelAsync(CancellationToken cancellationToken)
     {
         var key = ForgetIfTheCallerChanged();
         if (_model is not null)
         {
-            return _model;
+            return new AccessModelRead(_model, Denied: false);
         }
 
         AccessModelDescriptor? model;
@@ -60,9 +70,13 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
         {
             model = await Admin.GetAccessModelAsync(cancellationToken).ConfigureAwait(true);
         }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return new AccessModelRead(null, Denied: true);
+        }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return null;
+            return default;
         }
 
         if (ForgetIfTheCallerChanged() == key)
@@ -70,7 +84,7 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
             _model = model;
         }
 
-        return model;
+        return new AccessModelRead(model, Denied: false);
     }
 
     /// <summary>The first page of groups, for completion.</summary>
@@ -136,7 +150,9 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
     /// only the rules governing that tenant's own trees: the cluster narrows it
     /// (<see cref="AuthPageRequest.ActiveTenantOnly"/>), and every rule is checked
     /// again here, so a cluster that predates the narrowing still shows nothing of
-    /// another tenant's - its pages are then read on until this one is full.
+    /// another tenant's - its pages are then read on until this one is full. Each
+    /// tenant-tier rule kept carries its owning tenant in
+    /// <see cref="AuthRulePage.TenantRuleTenants"/>, index-aligned with the entries.
     /// </summary>
     /// <param name="scope">The tenant a tenant-rooted address names, or <see langword="null"/> for the cluster-wide listing.</param>
     /// <param name="request">The page asked for.</param>
@@ -159,20 +175,36 @@ internal sealed class AccessCatalog(ILatticeAuthAdmin admin, ShellAssertedTenant
         var size = request.EffectivePageSize;
         var next = request with { ActiveTenantOnly = true };
         var entries = new List<LatticeAuthorizationRule>();
+
+        // The owning tenant of each kept tenant-tier rule, kept index-aligned with
+        // the entries; reported only when one of them is tenant-tier, as the cluster does.
+        var tenants = new List<string?>();
+        var anyTenantTier = false;
         for (var reads = 0; ; reads++)
         {
             var page = await Admin.ListRulesAsync(next, cancellationToken).ConfigureAwait(true);
-            foreach (var rule in page.Entries)
+            var pageTenants = page.TenantRuleTenants;
+            for (var i = 0; i < page.Entries.Count; i++)
             {
+                var rule = page.Entries[i];
                 if (IsOwnedBy(rule, owner))
                 {
                     entries.Add(rule);
+                    var tenant = i < pageTenants.Count ? pageTenants[i] : null;
+                    tenants.Add(tenant);
+                    anyTenantTier |= tenant is not null;
                 }
             }
 
             if (page.NextPageToken is null || entries.Count >= size || reads >= MaximumFillReads)
             {
-                return new AuthRulePage { Entries = entries, NextPageToken = page.NextPageToken, Tenant = scope };
+                return new AuthRulePage
+                {
+                    Entries = entries,
+                    NextPageToken = page.NextPageToken,
+                    Tenant = scope,
+                    TenantRuleTenants = anyTenantTier ? tenants : [],
+                };
             }
 
             next = next with { PageToken = page.NextPageToken };

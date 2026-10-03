@@ -29,7 +29,8 @@ namespace Orleans.Lattice.Apps;
 /// <para>
 /// <b>Fail closed.</b> A missing projection, source or gate, an install whose manifest does not resolve to exactly
 /// the installed slug and version, or a source fault, evaluates to no install at all. A caller with no resolved
-/// identity or group closure holds no role.
+/// identity or group closure holds no role. A binding naming a group outside the install's tenant (see
+/// <see cref="AppRoleCompiler"/>, tenant confinement) binds nothing, so it never confers a role.
 /// </para>
 /// <para>
 /// <b>Cost.</b> Each install's roles, with their bound groups, are compiled once per registry record revision and
@@ -229,6 +230,7 @@ internal sealed class AppRoleGrantEvaluator
             if (binding is null
                 || string.IsNullOrEmpty(binding.GroupId)
                 || !string.Equals(binding.RoleName, roleName, StringComparison.Ordinal)
+                || !AppRoleCompiler.IsBindableGroup(record.Tenant, binding.GroupId)
                 || (groups is not null && groups.Contains(binding.GroupId, StringComparer.Ordinal)))
             {
                 continue;

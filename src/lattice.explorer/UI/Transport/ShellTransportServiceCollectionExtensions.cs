@@ -58,6 +58,8 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeTenantRegionAdmin),
         typeof(ILatticeTenantSelfService),
         typeof(ILatticeTenantQuotaUsage),
+        typeof(ILatticeTenantDirectoryAdmin),
+        typeof(ILatticeTenantPolicyAdmin),
         typeof(ILatticeTelemetry),
         typeof(ILatticeTreeAdmin),
         typeof(ILatticeStorageUsageOperations),
@@ -100,6 +102,8 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddKeyedScoped<ILatticeTenantRegionAdmin, ShellTenantRegionAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantSelfService, ShellTenantSelfServiceTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTenantQuotaUsage, ShellTenantQuotaUsageTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantDirectoryAdmin, ShellTenantDirectoryAdminTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeTenantPolicyAdmin, ShellTenantPolicyAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTelemetry, ShellTelemetryTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeTreeAdmin, ShellTreeAdminTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeStorageUsageOperations, ShellStorageUsageOperationsTransport>(ShellFacades.Key);

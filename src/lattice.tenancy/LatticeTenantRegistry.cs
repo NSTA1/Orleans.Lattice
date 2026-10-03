@@ -16,7 +16,8 @@ namespace Orleans.Lattice.Tenancy;
 internal sealed class LatticeTenantRegistry(
     IGrainFactory grainFactory,
     TenantRegistryInitializer initializer,
-    OrleansLatticeSerializer<TenantRecord> serializer) : ITenantRegistry
+    OrleansLatticeSerializer<TenantRecord> serializer,
+    ITenantAccessDataPurge accessDataPurge) : ITenantRegistry, IGuardedTenantRegistry
 {
     /// <summary>
     /// The bounded optimistic-concurrency retry budget for a single
@@ -83,6 +84,21 @@ internal sealed class LatticeTenantRegistry(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<TenantRecord> PutGuardedAsync(
+        TenantRecord record, Action<TenantRecord> validateMerged, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(validateMerged);
+        var key = RequireTenantKey(record.Id);
+        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            return await PutMergeAsync(Registry, key, record, cancellationToken, validateMerged).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// The optimistic-concurrency read-merge-write against a supplied
     /// <paramref name="registry"/> tree. Capture the stored record's version,
@@ -94,12 +110,16 @@ internal sealed class LatticeTenantRegistry(
     /// <see cref="PutAsync"/> converge rather than last-writer-wins overwrite.
     /// Factored out of <see cref="PutAsync"/> so the retry loop can be driven
     /// deterministically in a unit test against a substituted <see cref="ILattice"/>.
+    /// When <paramref name="validateMerged"/> is supplied it runs on each attempt's
+    /// merged record before the conditional write; a throw aborts with nothing
+    /// written (see <see cref="IGuardedTenantRegistry"/>).
     /// </summary>
     internal async Task<TenantRecord> PutMergeAsync(
         ILattice registry,
         string key,
         TenantRecord record,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<TenantRecord>? validateMerged = null)
     {
         for (var attempt = 1; ; attempt++)
         {
@@ -110,6 +130,7 @@ internal sealed class LatticeTenantRegistry(
             // On a miss the version is HybridLogicalClock.Zero, which
             // SetIfVersionAsync treats as "create only if still absent".
             var merged = current.Value is null ? record : current.Value.MergeFrom(record);
+            validateMerged?.Invoke(merged);
 
             var applied = await registry
                 .SetIfVersionAsync(key, merged, current.Version, _serializer, cancellationToken)
@@ -131,6 +152,7 @@ internal sealed class LatticeTenantRegistry(
     {
         var key = RequireTenantKey(tenant);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        await accessDataPurge.PurgeAsync(tenant, cancellationToken).ConfigureAwait(false);
         using (LatticeSystemOrigin.Enter())
         {
             return await Registry.DeleteAsync(key, cancellationToken).ConfigureAwait(false);

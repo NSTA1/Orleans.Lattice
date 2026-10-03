@@ -45,12 +45,17 @@ The facades exposed are:
 - **`ILatticeTenantQuotaUsage`** - the read-only usage-against-quota report: per
   dimension, a tenant's consumption next to its steady-state and burst-adjusted
   ceilings.
+- **`ILatticeTenantDirectoryAdmin`** and **`ILatticeTenantPolicyAdmin`** - delegated
+  tenant access administration: a tenant's own groups and member set, and the
+  tenant-tier rules on its own trees. Opt-in; see
+  [Delegated tenant access administration](#delegated-tenant-access-administration).
 
 The [gRPC binding](../lattice.api.tenantadmin.grpc/README.md) serves every facade
 above except `ILatticeTenantScopedTreeAdmin`, which no transport binding exposes. The
-MCP binding exposes the self-service reads and, behind its control opt-in, only the
-lifecycle, quota, and region-residency verbs (see the
-[tenancy guide](../lattice.tenancy/README.md#tenant-aware-surfaces)).
+MCP binding exposes the self-service reads and, behind its control opt-in, the
+lifecycle, quota, and region-residency verbs and the
+[delegated tenant access tools](../lattice.api.mcp/tools.md#delegated-tenant-access-tools)
+(see the [tenancy guide](../lattice.tenancy/README.md#tenant-aware-surfaces)).
 
 ## Core properties
 
@@ -88,7 +93,9 @@ lifecycle, quota, and region-residency verbs (see the
   definition.
 - **Create seeds admin subjects.** Tenant *visibility* on the read-only
   `ILatticeTenantSelfService` surface resolves from the tenant
-  record's admin-subject set, so a tenant created with none is mutable but
+  record's admin-subject set (and, with
+  [delegated tenant access administration](#delegated-tenant-access-administration)
+  on, its member set and group entries too), so a tenant created with none is mutable but
   invisible - even to the operator who just created it. `CreateTenantAsync`
   therefore takes an optional `adminSubjects` set and seeds it onto the new
   record. Omit it (or pass an empty set) and the **calling subject** is seeded, so the
@@ -124,14 +131,20 @@ lifecycle, quota, and region-residency verbs (see the
   the gate and cannot be used as an oracle.
 - **Cascading delete.** Deleting a tenant first suspends it, so no new
   tenant-scoped admission can race the delete, then cascades the delete to every tree
-  the tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry
-  record is removed. An interrupted delete therefore leaves a suspended, retriable
-  record rather than orphaned trees.
+  the tenant owns (each `t/{tenantId}/*` tree is soft-deleted), then purges the
+  tenant's access data - its tenant-tier rules, its tenant groups and their
+  membership edges in both directions - before the registry record, and the member
+  set with it, is removed. The purge runs whether or not delegated tenant access
+  administration is enabled. An interrupted delete therefore leaves a suspended,
+  retriable record rather than orphaned trees or access data.
 - **Quota authoring.** `SetTenantQuotasAsync` replaces a tenant's resource quotas and
   burst allowance in one platform-operator action. Each ceiling (`MaxBytes`,
   `MaxKeys`, `MaxMemoryBytes`, `MaxTreeCount`, `MaxOpsPerSecond`) is `null` for
   unbounded on that dimension; passing `TenantQuotasDescriptor.Unbounded` lifts every
-  cap again. A bounded ceiling must be non-negative, and so must `BurstPercent`, the
+  resource cap again. The four delegated access caps (`MaxGroups`,
+  `MaxMembershipEdges`, `MaxMemberSubjects`, `MaxTenantRules`) are different: `null`
+  means their defaults (500, 10000, 5000 and 1000), never unbounded, and
+  `Unbounded` does not lift them. A bounded ceiling must be non-negative, and so must `BurstPercent`, the
   transient headroom above the bounded ceilings: a negative value on any of them fails
   closed with an `ArgumentException` and writes nothing. The
   reserved `default` tenant can never be given quotas. The quotas now in effect come
@@ -151,8 +164,10 @@ Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` packa
 
 - `AddLatticeTenantAdminApi(this ISiloBuilder builder, Action<LatticeApiTenantAdminOptions>? configure = null)` -
   registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`,
-  `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, and the read-only
-  `ILatticeTenantSelfService` and `ILatticeTenantQuotaUsage`, together with the
+  `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, the read-only
+  `ILatticeTenantSelfService` and `ILatticeTenantQuotaUsage`, and the delegated
+  tenant access facades `ILatticeTenantDirectoryAdmin` and
+  `ILatticeTenantPolicyAdmin`, together with the
   fail-closed authorizers they consult, and a residency listener that completes the
   drain of the silo's own region: a region dropped by `SetResidencyAsync` moves
   `Draining` -> `Offline` -> `Removed` on its own. A region it adds stays at
@@ -283,7 +298,14 @@ instead of a report for a tenant it does not hold.
 `ListAccessibleTenantsAsync` returns, in ascending ordinal tenant-id order, the
 tenants the caller is a registered administrator of plus its own current tenant when
 that is non-default, so an anonymous or non-privileged caller under the default tenant
-gets an empty list. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
+gets an empty list. It asks the tenant policy engine with the caller's resolved
+groups, and so does the accessibility check in `GetTenantAsync`: while delegated
+tenant access administration is on, a tenant the caller may act as through a member
+entry or a group entry - for example a member only through one of the tenant's
+groups - is listed and readable; while it is off, only the exact-id admin set counts.
+A group never admits to a tenant that is not group-aware: the reserved `default`
+tenant, or a tenant compiled while the feature was off, is reached only through an
+exact-id admin entry, even when one of the caller's group ids is in its admin set. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
 not see this tenant" into a single `TenantNotFoundException`, so no caller can probe
 for the existence of a tenant outside its authority.
 
@@ -344,13 +366,27 @@ resolves to nothing is refused with a `LatticeDirectoryValidationException` (an
 `ArgumentException`) before the write. Resolution is the only directory check. Unlike
 the `UpsertGroupAsync` and `AddMemberAsync` paths of the
 [authorization-admin facade](../lattice.api.auth/README.md), the principal's kind is
-not checked, so an id that resolves to a group is accepted. Admin-subject membership
-is matched against the caller's own subject id with no group expansion, so such an
-entry never authorizes the group's members. Removing a tenant's last admin subject is refused with
-`TenantLastAdminSubjectException` - including when two concurrent removals of
-different subjects would together empty the set, which is detected on the merged
-record and repaired before the refusal - and the reserved `default` tenant's
-membership can never be changed.
+not checked, so an id that resolves to a group is accepted. While delegated tenant
+access administration is off, admin-subject membership is matched against the
+caller's own subject id with no group expansion, so such an entry never authorizes
+the group's members; while it is on, a group entry admits the group's members (see
+[Group-aware tenant-admin check](#group-aware-tenant-admin-check)). Whatever the flag,
+an id in the reserved `t/` namespace is admitted only when it is one of the tenant's
+own groups and that group exists: another tenant's group, or a malformed `t/` id, is
+refused with `TenantAccessConfinementException` (`ForeignTenantGroup`), and an
+own-tenant group that does not exist with an `ArgumentException`. Such an entry is
+checked in the membership directory instead of the identity directory. A group entry
+counts as one entry. Removing a tenant's last admin subject is refused with
+`TenantLastAdminSubjectException`, including when two concurrent removals of
+different subjects would together empty the set: the guard is re-applied to the
+merged record inside the registry's compare-and-set loop, before the write, so the
+second racer to commit re-reads the first's removal and is refused with nothing
+written. (A host that replaced the built-in tenant registry gets a best-effort
+fallback: the guard is checked against a fresh read, and a call that still finds the
+set empty after its write re-grants its own entry and is refused.) A removal is
+stamped later than the entry it removes as well as the local clock, so it takes
+effect even when another silo with a clock running ahead wrote the entry. The
+reserved `default` tenant's membership can never be changed.
 
 ### `ILatticeTenantGrantAdmin`
 
@@ -407,6 +443,209 @@ tenant and a live tenant admin only its own; an unauthorized tenant and an absen
 are unified into a single `TenantNotFoundException`, so the call cannot probe for
 tenant existence. Authoring quotas remains the operator-only `SetTenantQuotasAsync`.
 
+## Delegated tenant access administration
+
+Two further facades, published in `Orleans.Lattice.Api.Abstractions` (namespace
+`Orleans.Lattice.Api.TenantAdmin`) and implemented here, let a tenant's own
+administrators decide who belongs to the tenant, which groups exist inside it, and
+who may do what on its trees, without a platform operator in the loop:
+
+- **`ILatticeTenantDirectoryAdmin`** - the tenant's groups, their direct members, and
+  the tenant member set.
+- **`ILatticeTenantPolicyAdmin`** - tenant-tier rules on the tenant's own trees, a
+  layer-aware explanation and effective-permissions view, and the tenant's access
+  posture.
+
+What tenant groups, members and tenant-tier rules are, and how the feature is
+switched on, is described under
+[Delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration)
+in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules is in
+[The tenant rule layer](../lattice.auth/tenant-layer.md).
+
+### Rules both facades share
+
+- **Order of checks.** Every operation checks its arguments' syntax, then authorizes
+  the caller (a platform operator, or an admin of the named tenant directly or through
+  a group), then refuses with `TenantAccessAdministrationDisabledException` while
+  `LatticeTenancyOptions.DelegatedAccessAdministrationEnabled` is off, then refuses the
+  reserved `default` tenant with `ReservedTenantOperationException`. A caller that is
+  not authorized is denied whether or not the tenant exists, and learns nothing about
+  the cluster's posture. `ILatticeTenantPolicyAdmin.GetPostureAsync` is the one
+  operation that skips the feature check, so it answers while the feature is off.
+- **One enforcement point.** Once authorized, each facade runs its membership,
+  registry and policy-store work under system origin, so its own authorization is the
+  single check. The policy store and the membership directory still apply their own
+  confinement guards to that work.
+- **Tenant-local names.** Groups, trees and rule ids are named tenant-locally. The
+  facades compose `t/{tenant}/{name}` for a group, `t/{tenant}/{tree}` for a tree and
+  `tenant:{tenant}:{id}` for a rule from the tenant the call names, so a caller can
+  never name another tenant's group, tree or rule: it reads as not found.
+  `TenantSubjectKind` (`User`, `TenantGroup`, `ClusterGroup`) says how to read a
+  subject id. A `ClusterGroup` id that starts with `t/` is refused with
+  `TenantAccessConfinementException` (`ForeignTenantGroup`), and so is a `User` id
+  that starts with `t/` when it names a group member or a member-set entry. A `User`
+  rule subject is taken as given.
+- **Caps: verify and compensate.** A new group, a membership edge, a member-set entry
+  and a new tenant-tier rule are each checked against the tenant's cap
+  (`MaxGroups`, `MaxMembershipEdges`, `MaxMemberSubjects`, `MaxTenantRules` on
+  `TenantQuotasDescriptor`) before the write, and counted again after it. A call that
+  finds the tenant over its cap withdraws exactly what it added and is refused with
+  `LatticeQuotaExceededException`. Concurrent callers may all be refused, which is the
+  fail-closed direction; between a write and its withdrawal a reader can briefly see
+  the tenant over its cap. The withdrawal is idempotent and is tried up to four times,
+  uncancellably. If every attempt fails, the addition stays and the call is still
+  refused with `LatticeQuotaExceededException`, whose message says the cap may stay
+  exceeded until the addition is removed and whose `Current` is the over-cap count; a
+  warning naming only the tenant and dimension is logged.
+- **Removals win the merge.** A removal from the member set or the admin set is
+  stamped later than the entry it removes as well as the local clock, so `Changed`
+  `true` means the entry is gone even when another silo with a clock running ahead
+  wrote it.
+- **One id namespace.** Admin-set and member-set entries are plain ids, and user ids
+  and cluster group ids share one namespace there, as they do in the membership
+  directory: an entry matches a subject whose own id, or any of whose groups, equals
+  it. Keeping user and group ids distinct is the identity provider's and the
+  directory's job. Tenant groups cannot collide, because the facades never store a
+  user or cluster group entry that starts with `t/`.
+- **Idempotent mutations, ordinal listings.** Repeating an add or remove reports
+  `Changed` (or `Removed`) `false`. Paged listings take a `TenantAccessPageRequest`
+  (`PageSize` defaults to 100 and is clamped to 1000) and return `NextPageToken`.
+
+| Failure | Raised when |
+|---|---|
+| `LatticeAuthorizationDeniedException` | The caller is neither a platform operator nor an admin of the tenant. |
+| `TenantAccessAdministrationDisabledException` | The feature is off (every operation except `GetPostureAsync`). Derives from `Exception`; carries `TenantId`. |
+| `ReservedTenantOperationException` | The tenant is the reserved `default` tenant, which has no tenant groups, members or tenant-tier rules. |
+| `TenantAccessConfinementException` | The request breaks a confinement rule. An `ArgumentException` carrying `TenantId` and `Rule`: `GroupNesting`, `ForeignTenantGroup`, `RuleTree`, `RuleOperations` or `ReservedRuleId`. |
+| `TenantLastAdminSubjectException` | Removing a group would remove the tenant's last admin-set entry. |
+| `LatticeQuotaExceededException` | An addition would exceed one of the four access caps. Its `Dimension` is `tenant-groups`, `tenant-membership-edges`, `tenant-member-subjects` or `tenant-rules`. |
+| `ArgumentException` | A malformed tenant id, local name or rule, or a named tenant group that does not exist. |
+
+### `ILatticeTenantDirectoryAdmin`
+
+| Method | Signature |
+|---|---|
+| `ListGroupsAsync` | `Task<TenantGroupPage> ListGroupsAsync(string tenantId, TenantAccessPageRequest page, CancellationToken cancellationToken = default)` |
+| `GetGroupAsync` | `Task<TenantGroupDescriptor?> GetGroupAsync(string tenantId, string groupName, CancellationToken cancellationToken = default)` |
+| `UpsertGroupAsync` | `Task<TenantGroupDescriptor> UpsertGroupAsync(string tenantId, TenantGroupDescriptor group, CancellationToken cancellationToken = default)` |
+| `RemoveGroupAsync` | `Task<TenantGroupRemovalResult> RemoveGroupAsync(string tenantId, string groupName, CancellationToken cancellationToken = default)` |
+| `ListGroupMembersAsync` | `Task<IReadOnlyList<TenantGroupMember>> ListGroupMembersAsync(string tenantId, string groupName, CancellationToken cancellationToken = default)` |
+| `AddGroupMemberAsync` | `Task<TenantMembershipChangeResult> AddGroupMemberAsync(string tenantId, string groupName, string memberId, TenantSubjectKind memberKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+| `RemoveGroupMemberAsync` | `Task<TenantMembershipChangeResult> RemoveGroupMemberAsync(string tenantId, string groupName, string memberId, TenantSubjectKind memberKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+| `ListMembersAsync` | `Task<TenantMemberPage> ListMembersAsync(string tenantId, TenantAccessPageRequest page, CancellationToken cancellationToken = default)` |
+| `AddMemberAsync` | `Task<TenantMembershipChangeResult> AddMemberAsync(string tenantId, string subjectId, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+| `RemoveMemberAsync` | `Task<TenantMembershipChangeResult> RemoveMemberAsync(string tenantId, string subjectId, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+| `ResolveSubjectAsync` | `Task<TenantSubjectResolution> ResolveSubjectAsync(string tenantId, string subjectId, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+
+- **Groups.** A group name is 1 to 63 characters of lower-case ASCII letters, digits,
+  `-`, `_` and `.`. Only creating a group counts against `MaxGroups`; an upsert of an
+  existing group changes its display name. Listings are in ascending local-name
+  order.
+- **Members of a group.** A group may contain users, cluster groups and the tenant's
+  own groups. A tenant group named as a member must exist. An edge that would nest a
+  tenant group in a cluster group or in another tenant's group is refused for every
+  caller (`GroupNesting`); see the
+  [nesting invariant](../lattice.membership/README.md#tenant-groups). When an identity
+  directory is registered and `LatticeIdentityDirectoryOptions.ValidationRequired` is
+  set, a user or cluster group id must resolve to that kind, as on the cluster
+  facade.
+- **The member set.** Its entries are users, cluster groups and the tenant's own
+  groups. Admins are implicitly members and are not repeated in the listing.
+  Membership only lets a subject act as the tenant; what it may then do is decided by
+  rules, default-deny.
+- **Entry kinds on a listing.** The stored entries are plain ids, so a listing
+  recovers each kind: a `t/` id is a tenant group (reported by its local name), an id
+  with a group record in the membership directory, or that the identity directory
+  resolves as a group, is a cluster group, and anything else is a user.
+- **Removing a group** cascades, in this order: a guard that refuses with
+  `TenantLastAdminSubjectException` when the group is the tenant's last admin-set
+  entry, before anything is written; the group's member-set and admin-set entries,
+  committed with the last-admin guard re-applied to the merged record, so a racing
+  admin removal is refused with nothing written;
+  the tenant-tier rules whose subject is the group; and finally its membership edges
+  in both directions and its record. A removal interrupted part-way can be repeated.
+  `TenantGroupRemovalResult` reports `Removed`, `EdgesRemoved`,
+  `RemovedFromMemberSet`, `RemovedFromAdminSet` and the local `RemovedRuleIds`; a
+  group that does not exist reports `Removed` `false` and cascades nothing.
+- **`ResolveSubjectAsync`** expands the subject's transitive groups from the
+  membership directory and reports `IsAdmin`, `IsMember` and the matching
+  `AdminEntries` and `MemberEntries`. The subject may be any principal, so a tenant
+  admin who added a cluster group to the tenant's member or admin set can learn
+  whether a given user is a transitive member of that cluster group. That is by
+  design: admitting the group lets its members act as the tenant, so who they are is
+  the tenant admin's to know. Nothing is reported about a cluster group the tenant has
+  not admitted, because only entries of the tenant's own sets are matched.
+
+### `ILatticeTenantPolicyAdmin`
+
+| Method | Signature |
+|---|---|
+| `PutRuleAsync` | `Task<TenantRuleView> PutRuleAsync(string tenantId, TenantRuleDraft rule, CancellationToken cancellationToken = default)` |
+| `GetRuleAsync` | `Task<TenantRuleView?> GetRuleAsync(string tenantId, string ruleId, CancellationToken cancellationToken = default)` |
+| `RemoveRuleAsync` | `Task<bool> RemoveRuleAsync(string tenantId, string ruleId, CancellationToken cancellationToken = default)` |
+| `ListRulesAsync` | `Task<TenantRulePage> ListRulesAsync(string tenantId, TenantAccessPageRequest page, CancellationToken cancellationToken = default)` |
+| `ExplainAsync` | `Task<TenantExplanation> ExplainAsync(string tenantId, string subjectId, string treeName, string? key, LatticeOperation operation, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+| `EffectivePermissionsAsync` | `Task<TenantEffectivePermissions> EffectivePermissionsAsync(string tenantId, string subjectId, string? treeName = null, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)` |
+| `GetPostureAsync` | `Task<TenantAccessPosture> GetPostureAsync(string tenantId, CancellationToken cancellationToken = default)` |
+
+- **Writing a rule.** A `TenantRuleDraft` carries a tenant-local `RuleId`, a subject
+  (`SubjectId` and `SubjectKind`), a `ScopeKind` (`Tree`, `Prefix`, `Key` or
+  `TenantWide`), a `TreeName` (omitted for `TenantWide`), a `KeyOrPrefix`,
+  `Operations` and `Effect`. The facade refuses, with
+  `TenantAccessConfinementException`: a rule id that already carries the reserved
+  `tenant:` or `app:` prefix (`ReservedRuleId`); operations that are empty or outside
+  `LatticeAuthOperations.All`, so never `Telemetry`, `Replication`, `TreeLifecycle`
+  or `AppInstall` (`RuleOperations`); and a tree name that is one of the tenant's
+  app-owned trees (`a/...`), a reserved or system tree, or the tenant-wide sentinel
+  (`RuleTree`). A rule's subject may be a user, a cluster group or one of the tenant's
+  own groups.
+- **One copy per local id.** The policy store keys a rule by tree and id, so the
+  facade keeps a local id unique across the tenant's trees: a put that moves a rule to
+  another tree removes the copy it replaced. Only a put of a new local id counts
+  against `MaxTenantRules`. The returned `TenantRuleView` is in the `Tenant` layer and
+  editable. `RemoveRuleAsync` never removes an operator rule.
+- **What a tenant administrator sees.** `ListRulesAsync` lists the tenant's
+  tenant-tier rules (`Layer` `Tenant`, `Origin` `Tenant`, `Editable`) and the
+  operator rules scoped to the tenant's own trees (`Layer` `Platform`, `Origin`
+  `PlatformTree`, read-only). Cluster-wide `Tree:*` rules (`PlatformWide`) and app
+  role rules (`AppRole`) are never listed; when one decides an explanation or applies
+  to a subject, it is reported by `RuleId`, `Origin` and `Effect` only, and
+  `SubjectWithheld` reads `true`.
+- **Explain and effective permissions.** `ExplainAsync` evaluates the request with the
+  subject's groups resolved from the membership directory (a group subject is
+  evaluated as a member of that group) and reports `Allowed`, `Filtered`, `Reason`,
+  the `DecidingLayer` and `DecidingRule` (both `null` when the default effect
+  decided), `DefaultEffect`, and the `MatchedRules` the tenant may see in full,
+  platform layer first. `EffectivePermissionsAsync` lists the rules of both layers
+  that name the subject directly or through one of its groups, optionally on one
+  tree. Both accept one of the tenant's app-owned trees as the tree, read-only.
+- **Posture.** `TenantAccessPosture` reports `Enabled` (the cluster flag),
+  `CallerIsTenantAdmin`, `CallerIsPlatformOperator`, and `Groups`,
+  `MembershipEdges`, `MemberSubjects` and `TenantRules`, each a
+  `TenantQuotaDimensionUsage` whose `Usage` is the tenant's count and whose `Limit` is
+  the cap in force. It still refuses the `default` tenant and an unauthorized caller.
+
+### Group-aware tenant-admin check
+
+`AddLatticeTenantAdminApi` registers both facades, and replaces its own built-in
+`TenantRegionResidencyAuthorizer` registration with one that reads the delegated-access
+flag live on every check. While the flag is on, a caller is a tenant admin when its
+subject id **or any of its resolved transitive groups** is a live admin-set entry;
+while it is off, only its exact subject id counts, as before. Because every
+tenant-tier verb authorizes through that authorizer, the group-aware rule applies to
+residency, admin-subject, cross-tenant grant and quota-usage calls as well as to the
+two new facades. An admin-set entry naming another tenant's group never counts. A
+`TenantRegionResidencyAuthorizer` a host registers itself, and one built through its
+public constructor, keeps the exact-id check.
+
+### Transport bindings
+
+The [gRPC binding](../lattice.api.tenantadmin.grpc/README.md#delegated-tenant-access-rpcs)
+serves both facades as eighteen RPCs, and `LatticeTenantAdminApiGrpcClient` implements
+both interfaces directly. The MCP server exposes them as the
+[delegated tenant access tools](../lattice.api.mcp/tools.md#delegated-tenant-access-tools),
+behind `EnableTenantAdminControlTools`.
+
 ## Authorization seams
 
 The two fail-closed authorizers the facades consult are public types of this package
@@ -421,7 +660,10 @@ trusted co-hosted infrastructure and are independent of the data-plane
   `IsTenantAdminAuthorizedAsync` is its non-throwing probe.
 - `TenantRegionResidencyAuthorizer` - the two-tier gate for the tenant-tier verbs.
   `AuthorizeOperatorAsync` is the operator tier. `AuthorizeTenantAdminAsync` admits the
-  platform operator or a live admin subject on the tenant record and returns that
+  platform operator or a live admin subject on the tenant record (through one of the
+  caller's groups too, in the instance `AddLatticeTenantAdminApi` registers, while
+  delegated tenant access administration is on - see
+  [Group-aware tenant-admin check](#group-aware-tenant-admin-check)) and returns that
   record, reporting an unknown tenant as `TenantNotFoundException` to the operator and
   as a denial to anyone else. `TryAuthorizeTenantAdminAsync` returns `null` instead of
   throwing - for a missing tenant as well as a denial - so a verb either of two
@@ -439,7 +681,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantStatusReport` | result | One tenant's read-only lifecycle status, authored `Quotas`, and per-region residency rows. |
 | `TenantStatusChangeResult` | result | Suspend/resume outcome; `Changed` reports whether state moved. |
 | `TenantDeletionResult` | result | Deletion outcome, including the count of trees cascaded. |
-| `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate. |
+| `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate; and the four delegated access caps (`null` = the default, never unbounded). |
 | `TenantQuotasUpdateResult` | result | The tenant id and the quotas now in effect after authoring. |
 | `TenantLifecycleStatus` | enum | `Active` / `Suspended`. |
 | `TenantRegionAuthorizationResult` | result | The resulting allowed region set. |
@@ -449,12 +691,12 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantRegionLifecycleStatus` | enum | `None` / `Provisioning` / `Backfilling` / `Online` / `Draining` / `Offline` / `Removed`. |
 | `TenantNotFoundException` | exception | No tenant with that id is registered. |
 | `TenantAlreadyExistsException` | exception | A tenant with the same id is already registered. |
-| `ReservedTenantOperationException` | exception | Attempted suspend, delete, set-quotas, an admin-subject add / remove, or a cross-tenant grant offer on the reserved `default` tenant. |
+| `ReservedTenantOperationException` | exception | Attempted suspend, delete, set-quotas, an admin-subject add / remove, a cross-tenant grant offer, or any delegated tenant access operation on the reserved `default` tenant. |
 | `TenantRegionNotAllowedException` | exception | A residency region is not in the allowed set (or a revoked region is still resident). |
 | `TenantLastRegionException` | exception | The change would remove the last resident region, as submitted or once merged with a concurrent removal. |
 | `TenantAdminSubjectReport` | result | A tenant's live admin-subject set, in ordinal order. |
 | `TenantAdminSubjectChangeResult` | result | An add / remove outcome: the subject, `Changed`, and the resulting admin-subject set. |
-| `TenantLastAdminSubjectException` | exception | The removal would leave the tenant with no admin subjects. |
+| `TenantLastAdminSubjectException` | exception | The removal would leave the tenant with no admin subjects, including removing a tenant group that is the last admin-set entry. |
 | `TenantGrantDescriptor` | model | One cross-tenant grant: granting and grantee tenant, `Scope`, `Operations`, lifecycle `State`, and `GrantId`. |
 | `TenantGrantReport` | result | A tenant's `Issued` and `Received` grants, in every lifecycle state. |
 | `TenantGrantChangeResult` | result | A grant step's outcome: the `Grant` as committed and `Changed`. |
@@ -465,6 +707,28 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantQuotaUsageReport` | result | A tenant's usage against its quotas: one `TenantQuotaDimensionUsage` per dimension, `BurstPercent`, the authored `Quotas`, `HasUsage`, and the `EnforcementScope`. |
 | `TenantQuotaDimensionUsage` | model | One dimension's `Usage` (`null` = not measured), `Limit` (`null` = unbounded), `BurstLimit`, live `Overage`, and accrued `MeteredOverage`. |
 | `TenantQuotaEnforcementScope` | enum | `GlobalConverged` (the converged cross-cluster total) / `PerCluster` (this cluster's local share only). |
+| `TenantAccessPageRequest` | model | A delegated tenant access page request: `PageSize` (default 100, clamped to 1000) and `PageToken`. |
+| `TenantGroupDescriptor` | model | A tenant group: its tenant-local `Name` and optional `DisplayName`. |
+| `TenantGroupPage` | result | One page of a tenant's groups and the `NextPageToken`. |
+| `TenantGroupMember` | model | One direct member of a tenant group: `MemberId` and `Kind`. |
+| `TenantGroupRemovalResult` | result | What removing a tenant group cascaded to. |
+| `TenantMemberEntry` | model | One member-set or admin-set entry: `SubjectId` and `Kind`. |
+| `TenantMemberPage` | result | One page of a tenant's member set and the `NextPageToken`. |
+| `TenantMembershipChangeResult` | result | A group-member or member-set add / remove outcome; `Changed` reports whether anything moved. |
+| `TenantSubjectResolution` | result | Whether a subject is an admin or a member of a tenant, and through which entries. |
+| `TenantSubjectKind` | enum | `User` / `TenantGroup` / `ClusterGroup` - how to read a subject id. |
+| `TenantRuleDraft` | model | A tenant-tier rule to write, with a tenant-local id. |
+| `TenantRuleView` | model | A rule as a tenant administrator sees it, with its `Layer`, `Origin` and `Editable`; `SubjectWithheld` for a platform-wide or app role rule. |
+| `TenantRulePage` | result | One page of the rules governing a tenant and the `NextPageToken`. |
+| `TenantRuleLayer` | enum | `Platform` / `Tenant`. |
+| `TenantRuleOrigin` | enum | `PlatformTree` / `PlatformWide` / `AppRole` / `Tenant`. |
+| `TenantRuleScopeKind` | enum | `Tree` / `Key` / `Prefix` / `TenantWide`. |
+| `TenantExplanation` | result | A layer-aware explanation of one decision on a tenant's tree. |
+| `TenantEffectivePermissions` | result | The rules of both layers that apply to a subject on a tenant's trees. |
+| `TenantAccessPosture` | result | Whether the feature is enabled, the caller's standing, and the four access caps with usage. |
+| `TenantAccessAdministrationDisabledException` | exception | Delegated tenant access administration is off. |
+| `TenantAccessConfinementException` | exception | A delegated tenant access request broke a confinement rule; an `ArgumentException` carrying `Rule`. |
+| `TenantAccessConfinementRule` | enum | `GroupNesting` / `ForeignTenantGroup` / `RuleTree` / `RuleOperations` / `ReservedRuleId`. |
 | `ApiTenantAdminTypeAliases` | static class | The stable `oitn.`-prefixed Orleans serialization aliases of the tenant-admin contract types. |
 
 ## See also

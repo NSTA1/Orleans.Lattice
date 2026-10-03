@@ -5,6 +5,8 @@ using NSubstitute;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Tests.UI.Areas.Access.Tenant;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -53,9 +55,16 @@ public abstract class TenancyTestContext : ShellChromeTestContext
         Services.AddKeyedSingleton<Orleans.Lattice.Api.Auth.ILatticeAuthAdmin>(ShellFacades.Key, Directory);
         Services.AddKeyedSingleton<Orleans.Lattice.Api.Replication.ILatticeReplicationStatus>(ShellFacades.Key, Regions);
 
+        // Delegated tenant access administration is off until a test opens it.
+        TenantFacades = new FakeTenantAccessFacades();
+        Services.AddSingleton<ITenantAccessFacades>(TenantFacades);
+
         // The chrome context keeps only its own probe areas; the area under test is put back.
         Services.AddExplorerArea<TenancyArea>();
     }
+
+    /// <summary>The delegated tenant access facades, whose posture probe opens group admin subjects; off by default.</summary>
+    internal FakeTenantAccessFacades TenantFacades { get; }
 
     /// <summary>The cluster behind every tenant facade.</summary>
     internal FakeTenancyCluster Cluster { get; }

@@ -1,0 +1,29 @@
+@attribute [Route(AccessRoutes.TenantMembersRoute)]
+@inherits ExplorerPage
+
+@*
+    A tenant's member set. The address exists only tenant-rooted: when the
+    posture probe reports the tenant's access administration delegated to the
+    caller it shows the tenant Members view, and otherwise says why there is
+    nothing to administer here.
+*@
+
+@if (Delegated is { } tenant)
+{
+    <TenantMembersView Tenant="@tenant" />
+}
+else if (State is null)
+{
+    <PageTitle>Access - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">Access</h1>
+    <LtSkeleton Lines="6" Label="Loading access" />
+}
+else
+{
+    <PageTitle>Access - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">Access</h1>
+    <AccessNav Tenant="@Scope" />
+    <LtEmptyState Title="Members are not administered here">
+        <ChildContent><span data-lt-tenant-access="@AccessTenantGate.StandingAttribute(State.Standing)">@AccessTenantGate.Unavailable(State, "member set")</span></ChildContent>
+    </LtEmptyState>
+}

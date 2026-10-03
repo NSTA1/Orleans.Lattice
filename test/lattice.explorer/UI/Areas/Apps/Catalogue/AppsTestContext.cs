@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Explorer.Tests.UI.Areas.Access.Tenant;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -35,6 +37,10 @@ public abstract class AppsTestContext : ShellChromeTestContext
         Services.AddKeyedSingleton<ILatticeAppWorkspace>(ShellFacades.Key, Workspace);
         Services.AddKeyedSingleton(ShellFacades.Key, Auth);
 
+        // Delegated tenant access administration is off until a test opens it.
+        TenantFacades = new FakeTenantAccessFacades();
+        Services.AddSingleton<ITenantAccessFacades>(TenantFacades);
+
         // The chrome context may clear the real areas so fake areas cannot collide
         // on a key; these tests are about the real Apps area, so it is registered
         // again (idempotent when it is still there).
@@ -52,6 +58,9 @@ public abstract class AppsTestContext : ShellChromeTestContext
 
     /// <summary>The auth facade whose group search binds roles.</summary>
     internal ILatticeAuthAdmin Auth { get; }
+
+    /// <summary>The delegated tenant access facades, which list a tenant's own groups; off by default.</summary>
+    internal FakeTenantAccessFacades TenantFacades { get; }
 
     /// <summary>
     /// Makes the caller a restricted identity: no <c>AppInstall</c>, so the

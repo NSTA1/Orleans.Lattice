@@ -25,7 +25,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <para>
 /// <b>Tenant-admin tier</b> (set residency within allowed, read status). Granted
 /// when the caller is that platform operator <b>or</b> a live admin subject on the
-/// tenant record (<see cref="TenantRecord.HasAdminSubject"/>). Admin-subject
+/// tenant record (<see cref="TenantRecord.HasAdminSubject"/>). While delegated
+/// tenant access administration is enabled the check is group-aware: an admin-set
+/// entry naming one of the caller's resolved groups also counts
+/// (<see cref="TenantRecord.IsAdmin"/>). Admin-subject
 /// membership is a CRDT set on the record, evaluated directly, so it too is
 /// inherently independent of the data-plane default effect. This deliberately does
 /// <b>not</b> reuse the cluster-wide <c>"*"</c> Admin authorizer, which can
@@ -43,6 +46,7 @@ public sealed class TenantRegionResidencyAuthorizer
     private readonly ILatticeAccessGate _gate;
     private readonly ITenantRegistry _registry;
     private readonly ILatticeMembershipContext? _membership;
+    private readonly Func<bool>? _delegatedAccessEnabled;
 
     /// <summary>
     /// Initializes a new <see cref="TenantRegionResidencyAuthorizer"/>.
@@ -53,13 +57,47 @@ public sealed class TenantRegionResidencyAuthorizer
     /// <exception cref="ArgumentNullException"><paramref name="gate"/> or <paramref name="registry"/> is <c>null</c>.</exception>
     public TenantRegionResidencyAuthorizer(
         ILatticeAccessGate gate, ITenantRegistry registry, ILatticeMembershipContext? membership = null)
+        : this(gate, registry, membership, delegatedAccessEnabled: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new <see cref="TenantRegionResidencyAuthorizer"/> whose
+    /// tenant-admin check is group-aware while delegated tenant access
+    /// administration is enabled.
+    /// </summary>
+    /// <param name="gate">The registered core access gate used for the operator-tier check. Must not be <c>null</c>.</param>
+    /// <param name="registry">The tenancy registry read to resolve the tenant record. Must not be <c>null</c>.</param>
+    /// <param name="membership">The membership context used to resolve the caller subject, or <c>null</c>.</param>
+    /// <param name="delegatedAccessEnabled">
+    /// The live read of the delegated-access flag, consulted on every check (never
+    /// snapshotted), or <c>null</c> for the exact-id admin check only. While it
+    /// reads <see langword="true"/> a caller is a tenant admin when its id or any
+    /// of its resolved groups is a live admin-set entry
+    /// (<see cref="TenantRecord.IsAdmin"/>); otherwise only its exact id counts.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="gate"/> or <paramref name="registry"/> is <c>null</c>.</exception>
+    internal TenantRegionResidencyAuthorizer(
+        ILatticeAccessGate gate,
+        ITenantRegistry registry,
+        ILatticeMembershipContext? membership,
+        Func<bool>? delegatedAccessEnabled)
     {
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(registry);
         _gate = gate;
         _registry = registry;
         _membership = membership;
+        _delegatedAccessEnabled = delegatedAccessEnabled;
     }
+
+    /// <summary>
+    /// <see langword="true"/> when this authorizer was built with a live
+    /// delegated-access flag, so its tenant-admin check can become group-aware.
+    /// The registration uses it to tell a flag-aware instance from one a host
+    /// built through the public constructor.
+    /// </summary>
+    internal bool IsDelegatedAccessAware => _delegatedAccessEnabled is not null;
 
     /// <summary>
     /// Authorizes an <b>operator-tier</b> action (authorizing a tenant's allowed
@@ -157,7 +195,7 @@ public sealed class TenantRegionResidencyAuthorizer
         // A non-operator is authorized only as a live admin subject on an existing
         // record. A missing record is reported as a denial (never a not-found), so
         // a non-admin caller cannot probe tenant existence.
-        if (record is not null && !subject.IsAnonymous && record.HasAdminSubject(subject.SubjectId))
+        if (record is not null && !subject.IsAnonymous && IsTenantAdmin(record, subject))
         {
             return record;
         }
@@ -213,7 +251,25 @@ public sealed class TenantRegionResidencyAuthorizer
             return record;
         }
 
-        return !subject.IsAnonymous && record.HasAdminSubject(subject.SubjectId) ? record : null;
+        return !subject.IsAnonymous && IsTenantAdmin(record, subject) ? record : null;
+    }
+
+    /// <summary>
+    /// The tenant-admin membership test. While delegated tenant access
+    /// administration is enabled (read live, never snapshotted) it is group-aware:
+    /// the subject's id or any of its resolved transitive groups must be a live
+    /// admin-set entry, and only admissible entries count (another tenant's group
+    /// never does). Otherwise it is the exact-id check this authorizer has always
+    /// applied. Allocation-free on both paths.
+    /// </summary>
+    private bool IsTenantAdmin(TenantRecord record, in LatticeSubject subject)
+    {
+        if (_delegatedAccessEnabled is { } enabled && enabled())
+        {
+            return record.IsAdmin(subject.SubjectId, subject.GroupIds ?? Array.Empty<string>());
+        }
+
+        return record.HasAdminSubject(subject.SubjectId);
     }
 
     private async ValueTask<bool> IsPlatformOperatorAsync(LatticeSubject subject, CancellationToken cancellationToken)

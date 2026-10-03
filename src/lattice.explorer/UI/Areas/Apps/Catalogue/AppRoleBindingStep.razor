@@ -1,5 +1,5 @@
 @using Orleans.Lattice.Explorer.UI.Suggestions
-@using Orleans.Lattice.Explorer.UI.Areas.Access
+@using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant
 @using Orleans.Lattice.Explorer.UI.Design.Components
 @implements IDisposable
 
@@ -7,8 +7,11 @@
     Bind roles: each role the app declares is bound to one membership group - never
     to a user. The same step changes the installed version's bindings, where a role
     may also be left unbound. The group is typed into a type-ahead picker that
-    suggests the directory's groups (or, without a directory, the auth store's
-    groups); it is read-only here: nothing is created or changed in the directory.
+    suggests the cluster's groups (from the directory or, without one, the auth
+    store) and, when the installing tenant's delegated access administration is open
+    to the caller, the tenant's own groups, labelled Tenant. Another tenant's group is
+    never offered, and one typed in is refused before anything is sent. It is
+    read-only here: nothing is created or changed in the directory.
 *@
 @if (Flow?.Descriptor is { } app)
 {
@@ -24,12 +27,13 @@
                 <LtComboBox Label="@($"Group for {name}")"
                             Value="@Flow.Bindings.GetValueOrDefault(name)"
                             ValueChanged="value => Flow.Bind(name, value)"
-                            Source="@Suggestions.GroupsOrStoredGroups"
+                            Source="@GroupSource"
                             Mode="LtComboBoxMode.Suggest"
                             Noun="group"
                             ExistingMessage="A group the cluster knows."
-                            Hint="A membership group id. Type part of a name or id to find one." />
-                @if (Flow.Bindings.GetValueOrDefault(name) is { } group)
+                            Error="@ErrorFor(Flow.Bindings.GetValueOrDefault(name))"
+                            Hint="@GroupHint" />
+                @if (Flow.Bindings.GetValueOrDefault(name) is { } group && IsBindable(group))
                 {
                     @switch (_caller.Of(group))
                     {
@@ -39,7 +43,7 @@
                         case AppGroupMembership.NotMember:
                             <p class="lt-apps-hint" data-lt-holding="not-member">
                                 You are not in @group, so you will not hold the @name role.
-                                <a class="lt-apps-link" href="@Navigator.Canonicalize(AccessRoutes.Group(group)).ToHref()" data-lt-join="@group">Add me to @group</a>,
+                                <a class="lt-apps-link" href="@Navigator.Canonicalize(AppBindingGroups.JoinAddress(group)).ToHref()" data-lt-join="@group">Add me to @group</a>,
                                 or bind it to a group you are in.
                             </p>
                             break;
@@ -60,7 +64,7 @@
         }
         <div class="lt-apps-actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="Flow.Back">Back</LtButton>
-            <LtButton OnClick="Flow.ConfirmBindings" Disabled="@(!Flow.IsRebinding && Flow.UnboundRoles.Count > 0)">Continue</LtButton>
+            <LtButton OnClick="Flow.ConfirmBindings" Disabled="@((!Flow.IsRebinding && Flow.UnboundRoles.Count > 0) || HasForeignBinding)">Continue</LtButton>
         </div>
         @if (Flow.UnboundRoles.Count > 0)
         {
@@ -72,6 +76,8 @@
 @code {
     private readonly ComponentLifetime _lifetime = new();
     private AppsCallerGroups _caller = AppsCallerGroups.Unknown;
+    private AppGroupSuggestionSource? _groups;
+    private string? _ownGroupsTenant;
 
     [CascadingParameter]
     internal AppInstallFlow? Flow { get; set; }
@@ -85,7 +91,53 @@
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
 
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
+
     private AppRoleHoldingAssessment? Holding => Flow is { } flow ? AppRoleHoldingAssessment.Assess(flow.DraftedRoleGroups, _caller) : null;
+
+    // The installing tenant's own groups are offered only once its delegated access administration is open to the caller.
+    private ILtSuggestionSource GroupSource
+    {
+        get
+        {
+            if (_groups is null || !string.Equals(_groups.Tenant, _ownGroupsTenant, StringComparison.Ordinal))
+            {
+                _groups = new AppGroupSuggestionSource(Suggestions.GroupsOrStoredGroups, TenantAccess, _ownGroupsTenant);
+            }
+
+            return _groups;
+        }
+    }
+
+    private string GroupHint => _ownGroupsTenant is { } tenant
+        ? $"A cluster group, or one of tenant {tenant}'s own groups. Type part of a name or id to find one."
+        : "A membership group id. Type part of a name or id to find one.";
+
+    private bool HasForeignBinding
+    {
+        get
+        {
+            if (Flow is null)
+            {
+                return false;
+            }
+
+            foreach (var group in Flow.Bindings.Values)
+            {
+                if (!IsBindable(group))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    private bool IsBindable(string group) => AppBindingGroups.IsBindable(Flow?.Key.Tenant, group);
+
+    private string? ErrorFor(string? group) => group is not null && !IsBindable(group) ? AppBindingGroups.MismatchMessage : null;
 
     /// <summary>Stops reading the caller's groups.</summary>
     public void Dispose() => _lifetime.Leave();
@@ -97,6 +149,21 @@
         try
         {
             _caller = await Membership.ReadAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        try
+        {
+            if (Flow?.Key.Tenant is { } tenant && TenantAccessCatalog.Administers(tenant))
+            {
+                var state = await TenantAccess.GetStateAsync(tenant, _lifetime.Token);
+                if (!_lifetime.IsLeft && state.IsDelegated)
+                {
+                    _ownGroupsTenant = tenant;
+                }
+            }
         }
         catch (OperationCanceledException)
         {

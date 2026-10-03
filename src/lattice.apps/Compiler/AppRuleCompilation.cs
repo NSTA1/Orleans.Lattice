@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Apps;
 /// <summary>
 /// The outcome of compiling a manifest's roles into authorization rules. Either the complete
 /// owned rule set (<see cref="Succeeded"/>) or an activation failure that lists every ceiling
-/// excess and unknown-role binding; a failure never carries a partially granted rule set.
+/// excess, unknown-role binding and tenant-mismatched binding; a failure never carries a partially
+/// granted rule set.
 /// </summary>
 public sealed class AppRuleCompilation
 {
@@ -13,16 +14,21 @@ public sealed class AppRuleCompilation
         IReadOnlyList<LatticeAuthorizationRule> rules,
         IReadOnlyList<AppCeilingExcess> excesses,
         IReadOnlyList<AppRoleBinding> unknownRoleBindings,
-        IReadOnlyList<string> unboundRoles)
+        IReadOnlyList<string> unboundRoles,
+        IReadOnlyList<AppRoleBinding> tenantMismatchBindings)
     {
         Rules = rules;
         Excesses = excesses;
         UnknownRoleBindings = unknownRoleBindings;
         UnboundRoles = unboundRoles;
+        TenantMismatchBindings = tenantMismatchBindings;
     }
 
-    /// <summary><c>true</c> when there are no ceiling excesses and no unknown-role bindings.</summary>
-    public bool Succeeded => Excesses.Count == 0 && UnknownRoleBindings.Count == 0;
+    /// <summary>
+    /// <c>true</c> when there are no ceiling excesses, no unknown-role bindings and no
+    /// tenant-mismatched bindings.
+    /// </summary>
+    public bool Succeeded => Excesses.Count == 0 && UnknownRoleBindings.Count == 0 && TenantMismatchBindings.Count == 0;
 
     /// <summary>
     /// On success, the whole owned rule set ordered by ordinal rule id, each an unconditional
@@ -35,6 +41,14 @@ public sealed class AppRuleCompilation
 
     /// <summary>Bindings naming a role the manifest does not declare, in binding order. Any entry fails compilation.</summary>
     public IReadOnlyList<AppRoleBinding> UnknownRoleBindings { get; }
+
+    /// <summary>
+    /// Bindings naming a group in the reserved tenant-group namespace (<c>t/...</c>) that is not a
+    /// group of the installing tenant, in binding order: another tenant's group, or an id in that
+    /// namespace that is not a well-formed tenant group id. Any entry fails compilation, so a binding
+    /// can never confer an app role on another tenant's members.
+    /// </summary>
+    public IReadOnlyList<AppRoleBinding> TenantMismatchBindings { get; }
 
     /// <summary>
     /// Diagnostic only: declared roles with no binding, in manifest order. They emit no rules and do

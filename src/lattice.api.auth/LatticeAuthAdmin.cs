@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 
@@ -33,6 +34,15 @@ namespace Orleans.Lattice.Api.Auth;
 /// the policy store already runs its own tree operations system-origin while
 /// delegating "who may edit policy" to a higher layer - here, this facade.
 /// </para>
+/// <para>
+/// <b>Tenant tier.</b> Tenant groups (<c>t/{tenant}/{name}</c>) and tenant-tier
+/// rules (<c>tenant:{tenant}:...</c>) belong to a tenant's own administrators and are
+/// authored through the tenant administration surfaces. This facade refuses to
+/// create a group in the reserved <c>t/</c> namespace or to author a tenant-tier rule
+/// or tenant-wide scope, lists both (tenant groups on request), lets an operator
+/// remove a tenant-tier rule as a break-glass action, and reports the deciding
+/// policy layer from the decision engine's trace.
+/// </para>
 /// </remarks>
 internal sealed class LatticeAuthAdmin(
     ILatticeAuthorizationPolicyStore store,
@@ -45,7 +55,9 @@ internal sealed class LatticeAuthAdmin(
     IOptionsMonitor<LatticeAuthOptions> authOptions,
     IOptionsMonitor<LatticeMembershipOptions> membershipOptions,
     IOptionsMonitor<LatticeIdentityDirectoryOptions> identityDirectoryOptions,
-    ITenantContextResolver? tenants = null) : ILatticeAuthAdmin
+    ITenantContextResolver? tenants = null,
+    ITenantRuleLayer? tenantRuleLayer = null,
+    ILatticeDecisionEngine? decisionEngine = null) : ILatticeAuthAdmin
 {
     private const string RuleKeySeparator = "\u001f";
 
@@ -61,6 +73,12 @@ internal sealed class LatticeAuthAdmin(
     /// intended, so a delegated admin passes this same authorization check.
     /// </summary>
     private static readonly string AdminScopeTreeId = LatticeAuthReservedTrees.PolicyTreeId;
+
+    /// <summary>
+    /// The default group-listing filter: cluster groups only, every tenant group
+    /// (<c>t/...</c>) excluded. Cached so a listing allocates no delegate.
+    /// </summary>
+    private static readonly Func<MembershipGroup, bool> IsClusterGroup = static g => !IsTenantTierGroupId(g.GroupId);
 
     private readonly ILatticeAuthorizationPolicyStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly ILatticeMembershipDirectory _directory = directory ?? throw new ArgumentNullException(nameof(directory));
@@ -81,6 +99,13 @@ internal sealed class LatticeAuthAdmin(
         ArgumentNullException.ThrowIfNull(group);
         ArgumentException.ThrowIfNullOrEmpty(group.GroupId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        // D2: the whole t/ namespace is reserved to the tenant tier, malformed ids
+        // included, so the test is the prefix rather than the exact tenant-group shape.
+        if (IsTenantTierGroupId(group.GroupId))
+        {
+            throw LatticeTenantOwnedGroupException.Rejected(group.GroupId, nameof(group));
+        }
 
         await ValidateDirectoryPrincipalAsync(
             group.GroupId, DirectoryPrincipalKind.Group, nameof(group), cancellationToken).ConfigureAwait(false);
@@ -131,7 +156,8 @@ internal sealed class LatticeAuthAdmin(
                 request.PageToken,
                 request.EffectivePageSize,
                 static g => g.GroupId,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                request.IncludeTenantGroups ? null : IsClusterGroup).ConfigureAwait(false);
 
             var entries = new List<AuthGroup>(page.Count);
             foreach (var group in page)
@@ -154,11 +180,23 @@ internal sealed class LatticeAuthAdmin(
         ArgumentException.ThrowIfNullOrEmpty(memberId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
-        await ValidateDirectoryPrincipalAsync(
-            memberId, ToDirectoryPrincipalKind(memberKind), nameof(memberId), cancellationToken).ConfigureAwait(false);
-        await ValidateDirectoryPrincipalAsync(
-            groupId, DirectoryPrincipalKind.Group, nameof(groupId), cancellationToken).ConfigureAwait(false);
+        // A t/ id is a local tenant-tier group that no upstream identity directory
+        // knows, so it is not validated there: the directory's tenant group nesting
+        // invariant (D3) decides it, and its typed refusal surfaces unchanged.
+        if (!IsTenantTierGroupId(memberId))
+        {
+            await ValidateDirectoryPrincipalAsync(
+                memberId, ToDirectoryPrincipalKind(memberKind), nameof(memberId), cancellationToken).ConfigureAwait(false);
+        }
 
+        if (!IsTenantTierGroupId(groupId))
+        {
+            await ValidateDirectoryPrincipalAsync(
+                groupId, DirectoryPrincipalKind.Group, nameof(groupId), cancellationToken).ConfigureAwait(false);
+        }
+
+        // The directory enforces the tenant group nesting invariant for every caller
+        // and throws LatticeTenantGroupNestingException before any write.
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await _directory.AddMemberAsync(groupId, memberId, memberKind, cancellationToken).ConfigureAwait(false);
@@ -216,6 +254,26 @@ internal sealed class LatticeAuthAdmin(
         ArgumentNullException.ThrowIfNull(rule);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
+        // D7: operators list and remove tenant-tier rules but never author them. The
+        // store refuses both of these off system origin too; refusing here, before the
+        // store is reached, gives the operator an error that names the right surface.
+        if (LatticeTenantRuleIds.IsTenantOwned(rule.RuleId))
+        {
+            throw LatticeTenantOwnedRuleException.Rejected(rule.RuleId, nameof(rule));
+        }
+
+        if (TenantRuleConfinement.IsTenantWideSentinelShape(rule.Scope.TreeId))
+        {
+            throw new ArgumentException(
+                $"The rule '{rule.RuleId}' targets '{rule.Scope.TreeId}', a tenant-wide scope "
+                + $"('{LatticeTenantTrees.SegmentPrefix}{{tenant}}/*'). Tenant-wide rules belong to the tenant tier: they are "
+                + "authored by the tenant's own administrators through the tenant policy administration surface "
+                + "(ILatticeTenantPolicyAdmin) and are evaluated only where no operator rule matches. To govern a "
+                + "tenant's trees from the platform, author an operator rule on each tree, or a cluster-wide "
+                + $"'{LatticeScope.ClusterWideTreeId}' rule; operator rules are evaluated first and their verdict is final.",
+                nameof(rule));
+        }
+
         // The store runs its own write system-origin (it edits the reserved policy
         // tree that feeds the gate); the administrator check above is the caller
         // authorization the store deliberately delegates upward.
@@ -238,6 +296,18 @@ internal sealed class LatticeAuthAdmin(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        if (LatticeTenantRuleIds.IsTenantOwned(ruleId))
+        {
+            // Break-glass: an operator may remove a tenant-tier rule it cannot author.
+            // The store refuses a tenant-tier delete off system origin, so the removal
+            // runs under system origin now that the administrator check has passed;
+            // the policy tree's per-key history records it like any other delete.
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                return await _store.RemoveRuleAsync(treeId, ruleId, cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         return await _store.RemoveRuleAsync(treeId, ruleId, cancellationToken).ConfigureAwait(false);
     }
@@ -268,7 +338,13 @@ internal sealed class LatticeAuthAdmin(
             RuleCatalogKey,
             cancellationToken).ConfigureAwait(false);
 
-        return new AuthRulePage { Entries = page, NextPageToken = next, Tenant = tenant?.Value };
+        return new AuthRulePage
+        {
+            Entries = page,
+            NextPageToken = next,
+            Tenant = tenant?.Value,
+            TenantRuleTenants = TenantRuleTenantsOf(page),
+        };
     }
 
     /// <summary>
@@ -336,18 +412,32 @@ internal sealed class LatticeAuthAdmin(
 
         // Fold the cluster-wide "*" wildcard bucket into the per-tree listing so a
         // Tree:* rule that effectively governs this tree is surfaced rather than
-        // silently omitted (issue #1339). The reserved "*" tree lists only its own
-        // bucket. Paging is by (tree id, rule id) - the same catalog key
-        // ListRulesAsync uses - so the merged, wildcard-inclusive stream advances
-        // monotonically. Each store bucket is ascending by rule id (hence by
-        // catalog key within its fixed tree-id prefix), so a two-way merge yields a
-        // globally catalog-key-ordered stream.
-        var source = string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal)
-            ? _store.ListRulesForTreeAsync(treeId, cancellationToken)
-            : MergeByCatalogKeyAsync(
+        // silently omitted (issue #1339), and likewise the owning tenant's
+        // tenant-wide "t/{tenant}/*" bucket for a tree the tenant layer governs. The
+        // reserved "*" tree lists only its own bucket. Paging is by (tree id, rule
+        // id) - the same catalog key ListRulesAsync uses - so the merged,
+        // wildcard-inclusive stream advances monotonically. Each store bucket is
+        // ascending by rule id (hence by catalog key within its fixed tree-id
+        // prefix), so a merge yields a globally catalog-key-ordered stream.
+        IAsyncEnumerable<LatticeAuthorizationRule> source;
+        if (string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+        {
+            source = _store.ListRulesForTreeAsync(treeId, cancellationToken);
+        }
+        else
+        {
+            source = MergeByCatalogKeyAsync(
                 _store.ListRulesForTreeAsync(LatticeScope.ClusterWideTreeId, cancellationToken),
                 _store.ListRulesForTreeAsync(treeId, cancellationToken),
                 cancellationToken);
+            if (TryGetTenantWideTreeId(treeId, out var tenantWideTreeId))
+            {
+                source = MergeByCatalogKeyAsync(
+                    source,
+                    _store.ListRulesForTreeAsync(tenantWideTreeId, cancellationToken),
+                    cancellationToken);
+            }
+        }
 
         var (page, next) = await PageAsync(
             source,
@@ -356,7 +446,73 @@ internal sealed class LatticeAuthAdmin(
             RuleCatalogKey,
             cancellationToken).ConfigureAwait(false);
 
-        return new AuthRulePage { Entries = page, NextPageToken = next };
+        return new AuthRulePage { Entries = page, NextPageToken = next, TenantRuleTenants = TenantRuleTenantsOf(page) };
+    }
+
+    /// <summary>
+    /// Resolves the tenant-wide sentinel tree id (<c>t/{tenant}/*</c>) whose rules
+    /// govern <paramref name="treeId"/> through the tenant layer: present only for a
+    /// tree the tenant layer may govern (a tenant's own non-app, non-system tree of a
+    /// tenant other than <c>default</c>).
+    /// </summary>
+    /// <param name="treeId">The governed tree id.</param>
+    /// <param name="tenantWideTreeId">The owning tenant's tenant-wide tree id, when this returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when the tenant layer governs <paramref name="treeId"/>.</returns>
+    internal static bool TryGetTenantWideTreeId(string treeId, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? tenantWideTreeId)
+    {
+        if (TenantRuleConfinement.TryGetTenantLayerTree(treeId, out var tenant)
+            && TenantId.TryParse(tenant.ToString(), out var tenantId))
+        {
+            tenantWideTreeId = LatticeScope.TenantWide(tenantId).TreeId;
+            return true;
+        }
+
+        tenantWideTreeId = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Builds <see cref="AuthRulePage.TenantRuleTenants"/> for a page: empty when no
+    /// rule on it is tenant-tier (no allocation), otherwise index-aligned with
+    /// <paramref name="rules"/>, carrying each tenant-tier rule's owning tenant.
+    /// </summary>
+    /// <param name="rules">The rules on the page.</param>
+    /// <returns>The per-entry tenant marks.</returns>
+    internal static IReadOnlyList<string?> TenantRuleTenantsOf(IReadOnlyList<LatticeAuthorizationRule> rules)
+    {
+        string?[]? tenants = null;
+        for (var i = 0; i < rules.Count; i++)
+        {
+            if (LatticeTenantRuleIds.TryGetTenant(rules[i].RuleId, out var tenant))
+            {
+                tenants ??= new string?[rules.Count];
+                tenants[i] = tenant.Value;
+            }
+        }
+
+        return tenants ?? Array.Empty<string?>();
+    }
+
+    /// <summary>
+    /// Builds <see cref="AuthEffectivePermissions.RuleLayers"/>: empty when every
+    /// rule is an operator rule (no allocation), otherwise index-aligned with
+    /// <paramref name="rules"/>.
+    /// </summary>
+    /// <param name="rules">The listed rules.</param>
+    /// <returns>The per-rule layers.</returns>
+    internal static IReadOnlyList<TenantRuleLayer> RuleLayersOf(IReadOnlyList<LatticeAuthorizationRule> rules)
+    {
+        TenantRuleLayer[]? layers = null;
+        for (var i = 0; i < rules.Count; i++)
+        {
+            if (TenantRuleConfinement.LayerOf(rules[i].RuleId) == PolicyDecisionLayer.Tenant)
+            {
+                layers ??= new TenantRuleLayer[rules.Count];
+                layers[i] = TenantRuleLayer.Tenant;
+            }
+        }
+
+        return layers ?? Array.Empty<TenantRuleLayer>();
     }
 
     /// <summary>
@@ -424,6 +580,7 @@ internal sealed class LatticeAuthAdmin(
         var (key, rangeStart, rangeEnd) = TranslateScope(scope);
         var request = new LatticeAccessRequest(scope.TreeId, operation, subject, key, rangeStart, rangeEnd);
         var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+        var (decidingLayer, decidingRuleId) = TraceDecidingRule(subject, request);
 
         var matched = await CollectMatchedRulesAsync(subject, operation, scope, cancellationToken).ConfigureAwait(false);
 
@@ -439,6 +596,43 @@ internal sealed class LatticeAuthAdmin(
             DefaultEffect = _authOptions.CurrentValue.DefaultEffect,
             MatchedRules = matched,
             Posture = CurrentPosture(),
+            DecidingLayer = decidingLayer,
+            DecidingRuleId = decidingRuleId,
+        };
+    }
+
+    /// <summary>
+    /// Reports which policy layer, and which rule, decided <paramref name="request"/>,
+    /// from the decision engine's explain trace. The verdict itself stays the gate's;
+    /// this only labels it. Returns no layer when no engine trace is available (no
+    /// policy engine registered, or a host-replaced engine), when no rule matched
+    /// (the default effect decided), and for a collection request the engine
+    /// resolves key by key rather than by one uniformly-deciding rule.
+    /// </summary>
+    /// <param name="subject">The resolved subject.</param>
+    /// <param name="request">The explained request.</param>
+    /// <returns>The deciding layer and rule id, or two <see langword="null"/>s.</returns>
+    private (TenantRuleLayer? Layer, string? RuleId) TraceDecidingRule(LatticeSubject subject, in LatticeAccessRequest request)
+    {
+        if (decisionEngine is not LatticeDecisionEngine engine)
+        {
+            return (null, null);
+        }
+
+        engine.Evaluate(
+            subject,
+            request.TreeId,
+            request.Operation,
+            request.Key,
+            request.RangeStart,
+            request.RangeEnd,
+            out var match);
+
+        return match.Layer switch
+        {
+            PolicyDecisionLayer.Operator when match.Matched => (TenantRuleLayer.Platform, match.RuleId),
+            PolicyDecisionLayer.Tenant when match.Matched => (TenantRuleLayer.Tenant, match.RuleId),
+            _ => (null, null),
         };
     }
 
@@ -479,6 +673,7 @@ internal sealed class LatticeAuthAdmin(
             GroupIds = Sorted(subject.GroupIds),
             Rules = rules,
             Posture = CurrentPosture(),
+            RuleLayers = RuleLayersOf(rules),
         };
     }
 
@@ -562,6 +757,11 @@ internal sealed class LatticeAuthAdmin(
             AllTreesGrantsEnabled = _authOptions.CurrentValue.AllTreesGrantsEnabled,
             AccessAdministrationDelegationEnabled =
                 _authOptions.CurrentValue.AccessAdministrationDelegationEnabled,
+            // Read from the tenant rule layer seam the tenancy add-on activates when
+            // its delegated access administration flag is on; the null default (no
+            // tenancy, or the flag off) reads false. This package never references
+            // tenancy.
+            DelegatedTenantAccessAdministrationEnabled = tenantRuleLayer?.IsActive ?? false,
         };
     }
 
@@ -645,6 +845,16 @@ internal sealed class LatticeAuthAdmin(
         {
             await CollectFromTreeAsync(
                 LatticeScope.ClusterWideTreeId, subject, operation, scope, groupSet, matched, seen, cap, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // A tenant-wide rule of the tree's owning tenant governs it through the tenant
+        // layer, so it is cited too. Its scope is the tenant-wide sentinel tree, which
+        // overlaps every key of the explained tree, so it is matched as a tree rule.
+        if (TryGetTenantWideTreeId(scope.TreeId, out var tenantWideTreeId))
+        {
+            await CollectFromTreeAsync(
+                tenantWideTreeId, subject, operation, scope, groupSet, matched, seen, cap, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -769,7 +979,8 @@ internal sealed class LatticeAuthAdmin(
         string? token,
         int size,
         Func<T, string> keyOf,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<T, bool>? include = null)
     {
         var page = new List<T>(Math.Min(size, 32));
         string? next = null;
@@ -777,6 +988,11 @@ internal sealed class LatticeAuthAdmin(
         await foreach (var item in source.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             if (token is not null && string.CompareOrdinal(keyOf(item), token) <= 0)
+            {
+                continue;
+            }
+
+            if (include is not null && !include(item))
             {
                 continue;
             }
@@ -824,6 +1040,17 @@ internal sealed class LatticeAuthAdmin(
 
     private static AuthGroup ToAuthGroup(MembershipGroup group) =>
         new() { GroupId = group.GroupId, DisplayName = group.DisplayName };
+
+    /// <summary>
+    /// <see langword="true"/> when <paramref name="id"/> is in the namespace reserved
+    /// to the tenant tier (it starts with <see cref="LatticeTenantTrees.SegmentPrefix"/>),
+    /// whether or not it is a well-formed <see cref="LatticeTenantGroupId"/>.
+    /// Allocation-free.
+    /// </summary>
+    /// <param name="id">The group or member id.</param>
+    /// <returns><see langword="true"/> for a tenant-tier id.</returns>
+    internal static bool IsTenantTierGroupId(string id) =>
+        id.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal);
 
     private static DirectoryPrincipalDescriptor ToDescriptor(DirectoryPrincipal principal) =>
         new()

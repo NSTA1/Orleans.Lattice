@@ -39,16 +39,18 @@ internal sealed class TenantPolicyEpochTestCluster
     public int Advances { get; private set; }
 
     /// <summary>Creates a silo over <paramref name="registry"/> that is not yet leased.</summary>
-    public CompiledTenantPolicySnapshotMaintainer AddSilo(ITenantRegistry registry) =>
-        new(registry, new Publisher(this), Time, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+    public CompiledTenantPolicySnapshotMaintainer AddSilo(ITenantRegistry registry, DelegatedTenantAccessFlag? delegatedAccess = null) =>
+        new(registry, new Publisher(this), Time, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance, delegatedAccess);
 
     /// <summary>
     /// Creates a silo, leases it, and waits for the snapshot build the lease
     /// schedules, so the silo is authoritative on return.
     /// </summary>
-    public async Task<CompiledTenantPolicySnapshotMaintainer> AddLeasedSiloAsync(ITenantRegistry registry)
+    public async Task<CompiledTenantPolicySnapshotMaintainer> AddLeasedSiloAsync(
+        ITenantRegistry registry,
+        DelegatedTenantAccessFlag? delegatedAccess = null)
     {
-        var silo = AddSilo(registry);
+        var silo = AddSilo(registry, delegatedAccess);
         Renew(silo);
         await silo.BackgroundRebuild;
         Assert.That(silo.IsSnapshotAuthoritative, Is.True, "precondition: a leased, built silo is authoritative");
@@ -110,12 +112,16 @@ internal sealed class TenantPolicyEpochTestCluster
     /// A maintainer that is never leased, so it is never authoritative. For tests
     /// that exercise only the snapshot's content or the non-authoritative path.
     /// </summary>
-    public static CompiledTenantPolicySnapshotMaintainer Unleased(ITenantRegistry registry) =>
-        new TenantPolicyEpochTestCluster().AddSilo(registry);
+    public static CompiledTenantPolicySnapshotMaintainer Unleased(
+        ITenantRegistry registry,
+        DelegatedTenantAccessFlag? delegatedAccess = null) =>
+        new TenantPolicyEpochTestCluster().AddSilo(registry, delegatedAccess);
 
     /// <summary>A single leased, built (and so authoritative) maintainer.</summary>
-    public static Task<CompiledTenantPolicySnapshotMaintainer> LeasedAsync(ITenantRegistry registry) =>
-        new TenantPolicyEpochTestCluster().AddLeasedSiloAsync(registry);
+    public static Task<CompiledTenantPolicySnapshotMaintainer> LeasedAsync(
+        ITenantRegistry registry,
+        DelegatedTenantAccessFlag? delegatedAccess = null) =>
+        new TenantPolicyEpochTestCluster().AddLeasedSiloAsync(registry, delegatedAccess);
 
     /// <summary>A residency snapshot that is never leased, so it is never authoritative.</summary>
     public static TenantResidencySnapshotMaintainer UnleasedResidency(ITenantRegistry registry, string regionId = "eu") =>

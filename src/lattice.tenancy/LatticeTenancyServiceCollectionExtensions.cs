@@ -115,7 +115,47 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton(typeof(OrleansLatticeSerializer<>));
 
         builder.Services.TryAddSingleton<TenantRegistryInitializer>();
+        builder.Services.TryAddSingleton<ITenantAccessDataPurge>(TenantAccessDataPurge.FromServices);
         builder.Services.TryAddSingleton<ITenantRegistry, LatticeTenantRegistry>();
+
+        // Delegated tenant access administration (epic #4154). One per-silo live
+        // view of the opt-in flag, read by the compiled snapshot maintainer below
+        // (which rebuilds when it flips), by the tenant rule layer that Replaces
+        // auth's null default (IsActive = the flag, so with it off the
+        // authorization engine never enters the tenant rule layer), and by the
+        // facades.
+        //
+        // Membership's tenant group claim filter, which strips claim-asserted t/
+        // group ids, is NOT flag-gated: once tenancy is registered the whole t/
+        // namespace is reserved to the tenant tier whatever the flag says. Operator
+        // rules and app role bindings may name t/{T}/x and are honoured whatever
+        // the flag, so a filter that followed the flag would let a token asserting
+        // t/{T}/x match them after the flag is turned off (a rollback, or one silo
+        // ahead of another). The cost is one ordinal prefix test per claim-derived
+        // group on the cold (cache-miss) resolution path only; the warm path never
+        // reaches the filter. Replace (not TryAdd) deterministically supersedes the
+        // null seams regardless of order. Hosts without tenancy keep membership's
+        // inactive null filter, unchanged.
+        //
+        // A flag change still flushes membership's resolution cache in both
+        // directions: it is cheap, and it guarantees no subject resolved before the
+        // flip outlives a change in what the flag governs.
+        builder.Services.TryAddSingleton(sp =>
+        {
+            var flag = new DelegatedTenantAccessFlag(sp.GetRequiredService<IOptionsMonitor<LatticeTenancyOptions>>());
+            if (sp.GetService<MembershipResolutionCache>() is { } membershipCache)
+            {
+                flag.Changed += membershipCache.Clear;
+            }
+
+            return flag;
+        });
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantRuleLayer, TenancyTenantRuleLayer>());
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantGroupClaimFilter>(new TenantGroupClaimFilter(static () => true)));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenancyPostureLogger>());
 
         // The compiled tenant-policy snapshot maintainer: a per-silo singleton
         // registered twice at the same instance - once as the concrete singleton

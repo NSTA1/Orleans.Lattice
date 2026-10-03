@@ -8,6 +8,12 @@
     auth facade; an id the identity directory refuses is shown beside the field.
 *@
 
+@if (_gate.DelegatedTenant is { } delegatedTenant && GroupId is { } delegatedName)
+{
+    <TenantGroupDetailView Tenant="@delegatedTenant" Name="@delegatedName" />
+}
+else
+{
 <PageTitle>@(GroupId ?? "Group") - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title lt-shell-mono">@GroupId</h1>
@@ -148,4 +154,5 @@ else
                           OnConfirm="RemoveMemberAsync">
         @_removing stops being a direct member of @_group.GroupId, and loses whatever this group grants it.
     </LtConfirmDestructive>
+}
 }

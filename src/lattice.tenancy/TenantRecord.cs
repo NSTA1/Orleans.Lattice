@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Tenancy;
 /// <summary>
 /// The durable, conflict-free-mergeable definition of a single tenant: its
 /// immutable <see cref="Id"/> plus last-writer-wins registers for status,
-/// quotas, and placement, an LWW-element-set of tenant-admin subjects, and an
+/// quotas, and placement, LWW-element-sets of tenant-admin and tenant member
+/// subjects, and an
 /// LWW-element-map of cross-tenant grants. Every mutating operation stamps its
 /// change with a <see cref="HybridLogicalClock"/> and a writer id, and
 /// <see cref="MergeFrom"/> / <see cref="Merge"/> join two records field by field
@@ -13,6 +14,16 @@ namespace Orleans.Lattice.Tenancy;
 /// from any number of cluster replicas converge to the same record independent
 /// of the order they are applied.
 /// </summary>
+/// <remarks>
+/// The admin set and the member set store plain ids, and user ids and group ids
+/// share one namespace there: an entry matches a subject whose own id, or any of
+/// whose resolved group ids, equals it. That is deliberate and consistent with the
+/// membership directory's id-only model, which also keys users and groups in one
+/// id space; keeping user and group ids distinct is the identity provider's and
+/// the directory's responsibility. Tenant groups are the exception that cannot
+/// collide: they live in the reserved <c>t/</c> namespace, which a user id or a
+/// cluster group id may never use.
+/// </remarks>
 [GenerateSerializer]
 [Alias(TenantTypeAliases.TenantRecord)]
 public sealed class TenantRecord
@@ -58,6 +69,16 @@ public sealed class TenantRecord
     /// </summary>
     [Id(7)]
     internal Dictionary<string, TenantRegionStatusSlot> RegionStatuses { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The LWW-element-set of tenant member subjects, keyed by subject id (a user
+    /// id, one of the tenant's own groups, or a cluster group). Stamped
+    /// independently of the admin set <see cref="Subjects"/>, so a subject's member
+    /// and admin entries converge without clobbering each other. Empty on a record
+    /// written before member sets existed.
+    /// </summary>
+    [Id(8)]
+    internal Dictionary<string, TenantSubjectSlot> MemberSlots { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>Parameterless constructor for the Orleans serializer.</summary>
     public TenantRecord()
@@ -180,6 +201,116 @@ public sealed class TenantRecord
     {
         ArgumentNullException.ThrowIfNull(subjectId);
         ApplySubject(subjectId, present: false, clock, writerId);
+    }
+
+    /// <summary>
+    /// Adds a tenant member subject (add-wins by stamp): a user id, one of the
+    /// tenant's own groups, or a cluster group. A member may act as the tenant
+    /// while delegated tenant access administration is enabled; what it may then do
+    /// is decided by authorization rules. Membership is validated on write by the
+    /// administration facades, not here.
+    /// </summary>
+    /// <param name="subjectId">The subject id to add. Must not be <c>null</c>.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> is <c>null</c>.</exception>
+    /// <exception cref="InvalidOperationException">This record defines the reserved <see cref="TenantId.Default"/> tenant, which never accepts member entries.</exception>
+    public void AddMemberSubject(string subjectId, HybridLogicalClock clock, string? writerId)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        if (Id.Equals(TenantId.Default))
+        {
+            throw new InvalidOperationException(
+                $"The reserved '{TenantId.Default}' tenant does not accept member entries; its access is operator-administered.");
+        }
+
+        ApplyMember(subjectId, present: true, clock, writerId);
+    }
+
+    /// <summary>Removes a tenant member subject (remove is a tombstone by stamp).</summary>
+    /// <param name="subjectId">The subject id to remove. Must not be <c>null</c>.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> is <c>null</c>.</exception>
+    public void RemoveMemberSubject(string subjectId, HybridLogicalClock clock, string? writerId)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        ApplyMember(subjectId, present: false, clock, writerId);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="subjectId"/> is a live entry of the
+    /// tenant's member set. An exact-id, zero-allocation membership check that does
+    /// not consider the admin set or groups; see <see cref="IsMember"/> for the
+    /// group-aware rule.
+    /// </summary>
+    /// <param name="subjectId">The subject id to test. Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> when the subject's winning member slot is present.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> is <c>null</c>.</exception>
+    public bool HasMemberSubject(string subjectId)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        return MemberSlots.TryGetValue(subjectId, out var slot) && slot.Present;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when the subject administers the tenant: its id, or any of
+    /// its resolved transitive groups, is a live entry of the admin set. A
+    /// zero-allocation check for the group shapes a resolved subject carries.
+    /// </summary>
+    /// <remarks>
+    /// This is the group-aware rule the delegated access-administration facades
+    /// apply while the feature is enabled; it does not read the feature flag. The
+    /// reserved <see cref="TenantId.Default"/> tenant stays operator-administered, so
+    /// for it only the exact subject id counts.
+    /// </remarks>
+    /// <param name="subjectId">The subject id to test. Must not be <c>null</c>.</param>
+    /// <param name="groupIds">The subject's resolved transitive group ids (<see cref="LatticeSubject.GroupIds"/>). Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> when the subject, or one of its groups, is an admin entry.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> or <paramref name="groupIds"/> is <c>null</c>.</exception>
+    public bool IsAdmin(string subjectId, IReadOnlyCollection<string> groupIds)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        ArgumentNullException.ThrowIfNull(groupIds);
+
+        if (Subjects.TryGetValue(subjectId, out var slot) && slot.Present)
+        {
+            return true;
+        }
+
+        return !Id.Equals(TenantId.Default) && AnyGroupPresent(Subjects, groupIds, Id);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when the subject may act as the tenant: it administers
+    /// the tenant (<see cref="IsAdmin"/> - admins are implicitly members), or its id
+    /// or any of its resolved transitive groups is a live entry of the member set. A
+    /// zero-allocation check for the group shapes a resolved subject carries.
+    /// </summary>
+    /// <remarks>
+    /// This is the group-aware rule the delegated access-administration facades
+    /// apply while the feature is enabled; it does not read the feature flag. The
+    /// reserved <see cref="TenantId.Default"/> tenant never accepts member entries,
+    /// so for it this is the exact-id admin check.
+    /// </remarks>
+    /// <param name="subjectId">The subject id to test. Must not be <c>null</c>.</param>
+    /// <param name="groupIds">The subject's resolved transitive group ids (<see cref="LatticeSubject.GroupIds"/>). Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> when the subject, or one of its groups, is an admin or member entry.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="subjectId"/> or <paramref name="groupIds"/> is <c>null</c>.</exception>
+    public bool IsMember(string subjectId, IReadOnlyCollection<string> groupIds)
+    {
+        if (IsAdmin(subjectId, groupIds))
+        {
+            return true;
+        }
+
+        if (Id.Equals(TenantId.Default))
+        {
+            return false;
+        }
+
+        return (MemberSlots.TryGetValue(subjectId, out var slot) && slot.Present)
+            || AnyGroupPresent(MemberSlots, groupIds, Id);
     }
 
     /// <summary>Issues or updates a cross-tenant grant (keyed by <see cref="CrossTenantGrant.GrantId"/>).</summary>
@@ -392,6 +523,53 @@ public sealed class TenantRecord
         {
             var count = 0;
             foreach (var slot in Subjects.Values)
+            {
+                if (slot.Present)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// The live tenant member subject ids, in ordinal order. Materialised on each
+    /// access; prefer <see cref="HasMemberSubject"/> for a single membership test.
+    /// Empty by default, and always empty for the reserved
+    /// <see cref="TenantId.Default"/> tenant.
+    /// </summary>
+    public IReadOnlyList<string> MemberSubjects
+    {
+        get
+        {
+            var result = new List<string>(MemberSlots.Count);
+            foreach (var (subjectId, slot) in MemberSlots)
+            {
+                if (slot.Present)
+                {
+                    result.Add(subjectId);
+                }
+            }
+
+            result.Sort(OrdinalStringOrder.Comparison);
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// The number of live tenant member subjects. Counted in place without
+    /// materialising the id list - the zero-allocation counterpart of
+    /// <see cref="MemberSubjects"/>, and the usage read the member-set cap
+    /// (<see cref="TenantQuotas.EffectiveMaxMemberSubjects"/>) is enforced against.
+    /// </summary>
+    public int MemberSubjectCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var slot in MemberSlots.Values)
             {
                 if (slot.Present)
                 {
@@ -713,6 +891,7 @@ public sealed class TenantRecord
             GrantSlots = new Dictionary<string, TenantGrantSlot>(GrantSlots, StringComparer.Ordinal),
             AllowedRegions = new Dictionary<string, TenantRegionAllowSlot>(AllowedRegions, StringComparer.Ordinal),
             RegionStatuses = new Dictionary<string, TenantRegionStatusSlot>(RegionStatuses, StringComparer.Ordinal),
+            MemberSlots = new Dictionary<string, TenantSubjectSlot>(MemberSlots, StringComparer.Ordinal),
         };
 
     /// <summary>
@@ -766,6 +945,12 @@ public sealed class TenantRecord
             mine = existed ? TenantRegionStatusSlot.Merge(mine, slot) : slot;
         }
 
+        foreach (var (subjectId, slot) in other.MemberSlots)
+        {
+            ref var mine = ref CollectionsMarshal.GetValueRefOrAddDefault(MemberSlots, subjectId, out var existed);
+            mine = existed ? TenantSubjectSlot.Merge(mine, slot) : slot;
+        }
+
         return this;
     }
 
@@ -802,6 +987,10 @@ public sealed class TenantRecord
         ValidateCeiling(quotas.MaxMemoryBytes, nameof(TenantQuotas.MaxMemoryBytes), paramName);
         ValidateCeiling(quotas.MaxTreeCount, nameof(TenantQuotas.MaxTreeCount), paramName);
         ValidateCeiling(quotas.MaxOpsPerSecond, nameof(TenantQuotas.MaxOpsPerSecond), paramName);
+        ValidateAccessCap(quotas.MaxGroups, nameof(TenantQuotas.MaxGroups), paramName);
+        ValidateAccessCap(quotas.MaxMembershipEdges, nameof(TenantQuotas.MaxMembershipEdges), paramName);
+        ValidateAccessCap(quotas.MaxMemberSubjects, nameof(TenantQuotas.MaxMemberSubjects), paramName);
+        ValidateAccessCap(quotas.MaxTenantRules, nameof(TenantQuotas.MaxTenantRules), paramName);
     }
 
     private static void ValidateCeiling(long? ceiling, string dimension, string paramName)
@@ -814,6 +1003,16 @@ public sealed class TenantRecord
         }
     }
 
+    private static void ValidateAccessCap(long? cap, string dimension, string paramName)
+    {
+        if (cap is < 0)
+        {
+            throw new ArgumentException(
+                $"TenantQuotas.{dimension} must be null (the default cap) or non-negative, but was {cap}.",
+                paramName);
+        }
+    }
+
     private void ApplySubject(string subjectId, bool present, HybridLogicalClock clock, string? writerId)
     {
         var slot = new TenantSubjectSlot { Present = present, Clock = clock, WriterId = writerId };
@@ -821,6 +1020,71 @@ public sealed class TenantRecord
             ? TenantSubjectSlot.Merge(existing, slot)
             : slot;
     }
+
+    private void ApplyMember(string subjectId, bool present, HybridLogicalClock clock, string? writerId)
+    {
+        var slot = new TenantSubjectSlot { Present = present, Clock = clock, WriterId = writerId };
+        MemberSlots[subjectId] = MemberSlots.TryGetValue(subjectId, out var existing)
+            ? TenantSubjectSlot.Merge(existing, slot)
+            : slot;
+    }
+
+    /// <summary>
+    /// <c>true</c> when any id in <paramref name="groupIds"/> is a live entry of
+    /// <paramref name="slots"/> that may count for <paramref name="tenant"/>
+    /// (<see cref="TenantAccessEntries.IsAdmissible"/>: another tenant's group, or a
+    /// malformed <c>t/</c> entry that arrived by replication or restore, never
+    /// counts). Allocation-free for the shapes a resolved subject carries (a
+    /// <see cref="HashSet{T}"/>, an array or a list); any other collection is
+    /// enumerated through its interface.
+    /// </summary>
+    private static bool AnyGroupPresent(Dictionary<string, TenantSubjectSlot> slots, IReadOnlyCollection<string> groupIds, TenantId tenant)
+    {
+        if (slots.Count == 0 || groupIds.Count == 0)
+        {
+            return false;
+        }
+
+        switch (groupIds)
+        {
+            case HashSet<string> set:
+                foreach (var group in set)
+                {
+                    if (IsLiveAdmissible(slots, group, tenant))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case IReadOnlyList<string> list:
+                for (var i = 0; i < list.Count; i++)
+                {
+                    if (IsLiveAdmissible(slots, list[i], tenant))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                foreach (var group in groupIds)
+                {
+                    if (IsLiveAdmissible(slots, group, tenant))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+        }
+    }
+
+    private static bool IsLiveAdmissible(Dictionary<string, TenantSubjectSlot> slots, string? group, TenantId tenant) =>
+        group is not null
+        && slots.TryGetValue(group, out var slot)
+        && slot.Present
+        && TenantAccessEntries.IsAdmissible(group, tenant);
 
     private void ApplyGrant(
         string grantId,

@@ -21,6 +21,12 @@ internal static class AccessRoutes
     /// <summary>The explain segment.</summary>
     public const string ExplainSegment = "explain";
 
+    /// <summary>The members segment: a tenant's member set, at a tenant-rooted address only.</summary>
+    public const string MembersSegment = "members";
+
+    /// <summary>The route template of a tenant's member set, the one Access route with no cluster-wide form.</summary>
+    public const string TenantMembersRoute = "/t/{tenant}/access/members";
+
     /// <summary>The query key naming the governed tree of a rule, which disambiguates a rule id reused across trees.</summary>
     public const string TreeQuery = "tree";
 
@@ -78,5 +84,72 @@ internal static class AccessRoutes
     {
         ArgumentException.ThrowIfNullOrEmpty(slug);
         return ExplorerAddress.ForArea("apps", slug, "roles");
+    }
+
+    // ----- Delegated tenant access administration (epic #4154) -----
+    //
+    // The tenant-rooted forms of the area, served by the tenant pages when the
+    // posture probe reports the feature enabled for a caller who administers the
+    // tenant (or is a platform operator); otherwise the same addresses keep their
+    // cluster-wide pages. Groups and rules are named by their tenant-local name
+    // and id: the facade composes t/{tenant}/{name} and tenant:{tenant}:{id}.
+
+    /// <summary>A tenant's Access root (<c>/t/{tenant}/access</c>).</summary>
+    /// <param name="tenant">The tenant.</param>
+    public static ExplorerAddress TenantRoot(string tenant) => Root.WithTenant(RequireTenant(tenant));
+
+    /// <summary>A tenant's own groups (<c>/t/{tenant}/access/groups</c>).</summary>
+    /// <param name="tenant">The tenant.</param>
+    public static ExplorerAddress TenantGroups(string tenant) => Groups.WithTenant(RequireTenant(tenant));
+
+    /// <summary>One of a tenant's own groups (<c>/t/{tenant}/access/groups/{name}</c>), by tenant-local name.</summary>
+    /// <param name="tenant">The tenant.</param>
+    /// <param name="name">The group's tenant-local name.</param>
+    public static ExplorerAddress TenantGroup(string tenant, string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return ExplorerAddress.ForArea(AreaKey, GroupsSegment, name).WithTenant(RequireTenant(tenant));
+    }
+
+    /// <summary>A tenant's member set (<c>/t/{tenant}/access/members</c>).</summary>
+    /// <param name="tenant">The tenant.</param>
+    public static ExplorerAddress TenantMembers(string tenant) =>
+        ExplorerAddress.ForArea(AreaKey, MembersSegment).WithTenant(RequireTenant(tenant));
+
+    /// <summary>The rules governing a tenant (<c>/t/{tenant}/access/rules</c>).</summary>
+    /// <param name="tenant">The tenant.</param>
+    public static ExplorerAddress TenantRules(string tenant) => Rules.WithTenant(RequireTenant(tenant));
+
+    /// <summary>One of a tenant's tenant-tier rules (<c>/t/{tenant}/access/rules/{localId}</c>), by local id.</summary>
+    /// <param name="tenant">The tenant.</param>
+    /// <param name="localId">The rule's tenant-local id.</param>
+    public static ExplorerAddress TenantRule(string tenant, string localId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(localId);
+        return ExplorerAddress.ForArea(AreaKey, RulesSegment, localId).WithTenant(RequireTenant(tenant));
+    }
+
+    /// <summary>The layer-aware explain page of a tenant (<c>/t/{tenant}/access/explain</c>).</summary>
+    /// <param name="tenant">The tenant.</param>
+    public static ExplorerAddress TenantExplain(string tenant) => Explain.WithTenant(RequireTenant(tenant));
+
+    /// <summary>
+    /// The sections of a tenant's delegated Access pages, in navigation order:
+    /// Groups, Members, Rules and Explain.
+    /// </summary>
+    /// <param name="tenant">The tenant.</param>
+    /// <returns>Each section's segment, label and address.</returns>
+    public static IReadOnlyList<(string Segment, string Label, ExplorerAddress Address)> TenantSections(string tenant) =>
+    [
+        (GroupsSegment, "Groups", TenantGroups(tenant)),
+        (MembersSegment, "Members", TenantMembers(tenant)),
+        (RulesSegment, "Rules", TenantRules(tenant)),
+        (ExplainSegment, "Explain", TenantExplain(tenant)),
+    ];
+
+    private static string RequireTenant(string tenant)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenant);
+        return tenant;
     }
 }

@@ -84,4 +84,17 @@ public sealed record AccessModelDescriptor
     /// <c>LatticeAuthOptions.AccessAdministrationDelegationEnabled</c>.
     /// </summary>
     [Id(7)] public bool AccessAdministrationDelegationEnabled { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when delegated tenant access administration is
+    /// enabled, so a tenant's own administrators may manage its tenant groups, its
+    /// member set, and the tenant-tier rules on its own trees through
+    /// <c>ILatticeTenantDirectoryAdmin</c> and <c>ILatticeTenantPolicyAdmin</c>;
+    /// <see langword="false"/> (the default) when that surface refuses every call
+    /// and any stored tenant groups, members, and tenant rules are inert. Maps to
+    /// <c>LatticeTenancyOptions.DelegatedAccessAdministrationEnabled</c>, and reads
+    /// <see langword="false"/> on a cluster without the tenancy add-on and from a
+    /// server that predates the flag.
+    /// </summary>
+    [Id(8)] public bool DelegatedTenantAccessAdministrationEnabled { get; init; }
 }

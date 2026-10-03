@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Membership;
@@ -11,7 +12,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// One group (<c>/access/groups/{id}</c>): rename it, add and remove direct
 /// members (users or nested groups), see the groups it belongs to and the rules
 /// that apply to it, and delete it. Member changes are refused while the cluster
-/// resolves membership from tokens alone.
+/// resolves membership from tokens alone. At a tenant-rooted address whose access
+/// administration is delegated to the caller, one of the tenant's own groups,
+/// by tenant-local name; any other tenant-rooted address names no group.
 /// </summary>
 public partial class AccessGroupPage
 {
@@ -31,9 +34,13 @@ public partial class AccessGroupPage
     private string? _removing;
     private bool _deleteOpen;
     private bool _busy;
+    private readonly AccessTenantGate _gate = new();
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal TenantAccessCatalog TenantAccess { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -59,6 +66,12 @@ public partial class AccessGroupPage
         }
 
         _loaded = Address;
+        if (await _gate.ResolveAsync(TenantAccess, Address.Tenant).ConfigureAwait(true))
+        {
+            // One of the tenant's own groups: its view reads it.
+            return;
+        }
+
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
         await LoadAsync().ConfigureAwait(true);
     }

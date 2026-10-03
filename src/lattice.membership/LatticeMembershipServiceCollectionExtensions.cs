@@ -96,6 +96,12 @@ public static class LatticeMembershipServiceCollectionExtensions
         builder.Services.TryAddSingleton(TimeProvider.System);
         builder.Services.TryAddSingleton<MembershipResolutionCache>();
 
+        // Tenant group claim filter seam (epic #4154). Claim resolution reads the
+        // ITenantGroupClaimFilter null seam before expanding asserted groups. The
+        // inactive default leaves resolution exactly as before; the tenancy
+        // add-on Replaces it to strip asserted t/{tenant}/{name} group ids.
+        builder.Services.TryAddSingleton<ITenantGroupClaimFilter, NullTenantGroupClaimFilter>();
+
         // Route the core mutation-observer seam at the same cache singleton so a
         // sys-membership-* write flushes the exact cache the context reads.
         builder.Services.AddSingleton<IMutationObserver>(sp => sp.GetRequiredService<MembershipResolutionCache>());

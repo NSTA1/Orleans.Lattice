@@ -12,7 +12,10 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// discovery RPC - plus the three <see cref="ILatticeTenantRegionAdmin"/>
 /// region-residency operations (authorize allowed regions, set residency, read
 /// per-region status) and the three <see cref="ILatticeTenantAccessAdmin"/>
-/// admin-subject operations (list, add, remove). A management surface (dashboard,
+/// admin-subject operations (list, add, remove). It also implements the delegated
+/// tenant access contracts <see cref="ILatticeTenantDirectoryAdmin"/> and
+/// <see cref="ILatticeTenantPolicyAdmin"/> directly, so a remote management surface
+/// binds to those interfaces with no adapter. A management surface (dashboard,
 /// CLI) consumes the API through this client rather than hand-rolling channel
 /// calls.
 /// </summary>
@@ -26,7 +29,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// <see cref="CallInvoker"/> seam, so the client can adopt region-aware call
 /// routing without restructuring.
 /// </remarks>
-public sealed class LatticeTenantAdminApiGrpcClient
+public sealed partial class LatticeTenantAdminApiGrpcClient
 {
     private readonly CallInvoker _invoker;
     private readonly LatticeTenantAdminGrpcMethods _methods;

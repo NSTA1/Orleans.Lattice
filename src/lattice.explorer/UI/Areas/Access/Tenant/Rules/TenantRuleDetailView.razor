@@ -1,0 +1,78 @@
+@inherits TenantAccessView
+
+@*
+    One of the tenant's tenant-tier rules (/t/{tenant}/access/rules/{localId}),
+    named by its local id: what it grants or denies, to whom and where, with
+    Edit, Delete, an Explain for its subject and its history. A local id the
+    tenant has no rule of is not found.
+*@
+
+<PageTitle>@RuleId - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@RuleId</h1>
+<AccessNav Current="@AccessRoutes.RulesSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="rule" aria-label="Rule @RuleId of tenant @Tenant">
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The rule could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_rule is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading the rule" />
+    }
+    else
+    {
+        var rule = _rule;
+        <p class="lt-shell-page-lede" data-lt-rule-layer="@(rule.Editable ? "tenant" : "platform")">@LayerText</p>
+        <LtDefinitionList>
+            <LtDefinition Term="Effect">@AccessRuleFormat.EffectLabel(rule.Effect)</LtDefinition>
+            <LtDefinition Term="Subject" Mono="true">
+                @if (rule.SubjectKind == TenantSubjectKind.TenantGroup && rule.SubjectId is { } group)
+                {
+                    <a href="@Href(AccessRoutes.TenantGroup(Tenant, group))">@TenantRuleFormat.SubjectLabel(rule.SubjectKind, rule.SubjectId)</a>
+                }
+                else
+                {
+                    @TenantRuleFormat.SubjectLabel(rule.SubjectKind, rule.SubjectId)
+                }
+            </LtDefinition>
+            <LtDefinition Term="Scope" Mono="true">@TenantRuleFormat.ScopeLabel(rule)</LtDefinition>
+            <LtDefinition Term="Operations">@AccessRuleFormat.OperationsLabel(rule.Operations)</LtDefinition>
+            <LtDefinition Term="Layer">@TenantRuleFormat.LayerLabel(rule.Layer)</LtDefinition>
+        </LtDefinitionList>
+        <div class="lt-access-actions">
+            @if (rule.Editable)
+            {
+                <LtButton OnClick="@(() => _editorOpen = true)">Edit rule</LtButton>
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="@(() => _confirmOpen = true)">Delete rule</LtButton>
+            }
+            @if (ExplainHref(rule) is { } explain)
+            {
+                <a class="lt-btn lt-btn--quiet" href="@explain">Explain for this subject</a>
+            }
+        </div>
+        @if (rule.Editable)
+        {
+            <TenantRuleHistory Tenant="@Tenant" Rule="rule" />
+            <LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="Edit rule" Placement="DialogPlacement">
+                @if (_editorOpen)
+                {
+                    <TenantRuleEditor Tenant="@Tenant" Rule="rule" Rules="_rules" DirectoryAvailable="@(_model?.DirectoryAvailable == true)" DirectorySearchDenied="_modelDenied" DirectoryExplanation="@_model?.DirectoryExplanation" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
+                }
+            </LtDialog>
+            <LtConfirmDestructive Open="_confirmOpen"
+                                  OpenChanged="@(open => _confirmOpen = open)"
+                                  Title="Delete this rule"
+                                  ObjectKind="rule"
+                                  ObjectName="@rule.RuleId"
+                                  ConfirmText="Delete rule"
+                                  OnConfirm="DeleteAsync">
+                @AccessRuleFormat.EffectLabel(rule.Effect) for @TenantRuleFormat.SubjectLabel(rule.SubjectKind, rule.SubjectId) on @TenantRuleFormat.ScopeLabel(rule) stops applying at once. This cannot be undone.
+            </LtConfirmDestructive>
+        }
+    }
+</section>

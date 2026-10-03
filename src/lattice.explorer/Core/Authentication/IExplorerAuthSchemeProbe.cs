@@ -14,7 +14,9 @@ public interface IExplorerAuthSchemeProbe
     /// <see cref="ExplorerAuthSchemeAdvertisement.Empty"/> when the endpoint does
     /// not advertise (an older server) or the probe cannot reach it, so the
     /// sign-in falls back to the Basic (username and password) flow rather than
-    /// failing.
+    /// failing. A probe cancelled through <paramref name="cancellationToken"/>
+    /// throws <see cref="OperationCanceledException"/> instead, so a caller that
+    /// gave up is never told the endpoint advertises nothing.
     /// </summary>
     /// <param name="address">The state-API endpoint address.</param>
     /// <param name="allowUnencryptedHttp2">Whether to permit an <c>http://</c> (h2c) endpoint.</param>

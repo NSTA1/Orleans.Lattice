@@ -1,0 +1,169 @@
+@inherits TenantAccessView
+
+@*
+    The tenant's member set (/t/{tenant}/access/members): the users, the tenant's
+    own groups and the cluster groups whose subjects may act as the tenant, added
+    through the tenant-aware subject picker and removed with a confirmation. The
+    tenant's administrators are members already: they are listed read-only, with
+    the place they are changed.
+*@
+
+<PageTitle>Members of tenant @Tenant - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Tenant @Tenant's members may act as the tenant; what each may then do is decided by rules. Its administrators are members already and are not repeated here.</p>
+<AccessNav Current="@AccessRoutes.MembersSegment" Tenant="@Tenant" Delegated="true" />
+
+<section class="lt-access-tenant" data-lt-tenant-view="members" aria-label="Members of tenant @Tenant">
+    <p class="lt-access-caveat" data-lt-default-deny="true">A member may act as tenant @Tenant, and rules decide what it can do: a member no rule allows can do nothing (default-deny).</p>
+    <div class="lt-toolbar">
+        @if (_page is not null && _failure is null)
+        {
+            <span class="lt-access-count" role="status">@CountText</span>
+        }
+        @if (CapText is { } cap)
+        {
+            <span class="lt-access-count" data-lt-cap="member-subjects" data-lt-at-cap="@(AtCap ? "true" : "false")">@cap</span>
+        }
+    </div>
+
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Members could not be read")">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_page is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading members" />
+    }
+    else
+    {
+        @if (_members.Count == 0)
+        {
+            <LtEmptyState Title="No members yet">
+                <ChildContent>Tenant @Tenant has no members besides its administrators yet.</ChildContent>
+            </LtEmptyState>
+        }
+        else
+        {
+            <LtTable TItem="TenantMemberEntry" Items="_members" Caption="@($"Members of tenant {Tenant}")" CaptionHidden="true" RowKey="@(entry => EntryKey(entry))" DetailTitle="@(entry => entry.SubjectId)">
+                <ChildContent>
+                    <LtColumn TItem="TenantMemberEntry" Title="Member" RowHeader="true" Mono="true" SortBy="@(entry => entry.SubjectId)">
+                        @if (context.Kind == TenantSubjectKind.TenantGroup)
+                        {
+                            <a href="@GroupHref(context.SubjectId)">@context.SubjectId</a>
+                        }
+                        else
+                        {
+                            @context.SubjectId
+                        }
+                    </LtColumn>
+                    <LtColumn TItem="TenantMemberEntry" Title="Kind" SortBy="@(entry => (int)entry.Kind)">
+                        <span data-lt-kind="@TenantGroupFormat.KindValue(context.Kind)">@TenantGroupFormat.KindLabel(context.Kind)</span>
+                    </LtColumn>
+                    <LtColumn TItem="TenantMemberEntry" Title="Actions" Align="LtColumnAlign.End">
+                        <LtButton Variant="LtButtonVariant.Quiet" Disabled="_busy" OnClick="@(() => _removing = context)" aria-label="@($"Remove {context.SubjectId}")">Remove</LtButton>
+                    </LtColumn>
+                </ChildContent>
+                <EmptyContent><span>No member matches.</span></EmptyContent>
+                <CompactRow>
+                    <LtCompactRow Mono="true">
+                        <Primary>@context.SubjectId</Primary>
+                        <Secondary>@TenantGroupFormat.KindLabel(context.Kind)</Secondary>
+                    </LtCompactRow>
+                </CompactRow>
+                <Detail>
+                    <LtDefinitionList>
+                        <LtDefinition Term="Member" Mono="true">@context.SubjectId</LtDefinition>
+                        <LtDefinition Term="Kind">@TenantGroupFormat.KindLabel(context.Kind)</LtDefinition>
+                    </LtDefinitionList>
+                </Detail>
+                <DetailActions>
+                    @if (context.Kind == TenantSubjectKind.TenantGroup)
+                    {
+                        <a class="lt-btn" href="@GroupHref(context.SubjectId)">Open group</a>
+                    }
+                    <LtButton Variant="LtButtonVariant.Destructive" Disabled="_busy" OnClick="@(() => _removing = context)">Remove member</LtButton>
+                </DetailActions>
+            </LtTable>
+            @if (_page.NextPageToken is not null)
+            {
+                <div class="lt-access-actions">
+                    <LtButton OnClick="LoadMoreAsync" Disabled="_loadingMore">Load more members</LtButton>
+                </div>
+            }
+        }
+
+        @if (AtCap)
+        {
+            <p class="lt-access-notice" role="note" data-lt-cap-reason="member-subjects">@TenantGroupFormat.CapReason(_posture!.MemberSubjects, "members", Tenant)</p>
+        }
+        <form class="lt-access-form" @onsubmit="AddAsync" novalidate>
+            <AccessSubjectPicker @ref="_picker"
+                                 Label="Member"
+                                 Tenant="@Tenant"
+                                 SubjectKind="_kind"
+                                 SubjectKindChanged="@(kind => _kind = kind)"
+                                 Id="@_subjectId"
+                                 IdChanged="@(value => _subjectId = value)"
+                                 Error="@_addError"
+                                 DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                                 DirectorySearchDenied="_modelDenied"
+                                 DirectoryExplanation="@_model?.DirectoryExplanation"
+                                 Disabled="AtCap" />
+            <div class="lt-access-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="@(_busy || AtCap)">Add member</LtButton>
+            </div>
+        </form>
+    }
+
+    <section class="lt-access-section" aria-labelledby="lt-access-tenant-admins" data-lt-implicit-members="@AdminsState">
+        <h2 id="lt-access-tenant-admins" class="lt-access-section__title">Administrators</h2>
+        <p class="lt-access-caveat">Tenant @Tenant's administrators are members too. They are changed in <a href="@AdminsHref">Tenancy, Admins</a>.</p>
+        @if (_admins is { } admins)
+        {
+            @if (admins.Count == 0)
+            {
+                <p class="lt-access-fieldset__hint">No administrator entries are listed.</p>
+            }
+            else
+            {
+                <ul class="lt-access-links">
+                    @foreach (var admin in admins)
+                    {
+                        <li @key="admin" class="lt-access-mono" data-lt-admin="@admin">
+                            @if (OwnGroupName(admin) is { } groupName)
+                            {
+                                <a href="@GroupHref(groupName)">@admin</a>
+                            }
+                            else
+                            {
+                                @admin
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+        else if (_adminsRead)
+        {
+            <p class="lt-access-fieldset__hint">The administrators could not be listed here.</p>
+        }
+        else
+        {
+            <LtSkeleton Lines="2" Label="Loading administrators" />
+        }
+    </section>
+</section>
+
+<LtConfirmDestructive Open="@(_removing is not null)"
+                      OpenChanged="@(open => { if (!open) { _removing = null; } })"
+                      Title="Remove this member"
+                      ObjectKind="member"
+                      ObjectName="@(_removing?.SubjectId ?? string.Empty)"
+                      ConfirmText="Remove member"
+                      OnConfirm="RemoveAsync">
+    @_removing?.SubjectId stops being a member of tenant @Tenant, unless an administrator entry or another member entry still includes it.
+</LtConfirmDestructive>

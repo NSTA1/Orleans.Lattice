@@ -38,7 +38,11 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <para>
 /// <b>Invariants.</b> The reserved default tenant's membership can never be
 /// mutated, and the last admin subject can never be removed. Both are enforced
-/// here, fail-closed.
+/// here, fail-closed; the last-subject guard is re-applied to the merged record
+/// inside the registry's compare-and-set loop (<see cref="TenantAdminSetCommit"/>),
+/// so a racing removal is refused before it commits. A removal is stamped later
+/// than the slot it removes (<see cref="TenantRemovalStamp"/>), so it wins the merge
+/// even against a slot written by a silo whose clock runs ahead.
 /// </para>
 /// </remarks>
 internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
@@ -54,6 +58,7 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     private readonly ITenantAdminClock _clock;
     private readonly ILatticeIdentityDirectory? _identityDirectory;
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
+    private readonly ITenantDirectoryStore? _tenantGroups;
     private readonly string? _writerId;
 
     /// <summary>
@@ -73,14 +78,20 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     /// The identity-directory options deciding whether validation is required, or
     /// <c>null</c> when none is registered.
     /// </param>
-    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="identityDirectory"/> or <paramref name="identityDirectoryOptions"/> is <c>null</c>.</exception>
+    /// <param name="tenantGroups">
+    /// The membership underlay used to verify that a tenant group named as an admin
+    /// entry exists, or <c>null</c> when none is supplied (a tenant-group admin entry
+    /// is then refused, fail-closed, because it cannot be verified).
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="identityDirectory"/>, <paramref name="identityDirectoryOptions"/> or <paramref name="tenantGroups"/> is <c>null</c>.</exception>
     public LatticeTenantAccessAdmin(
         ITenantRegistry registry,
         TenantRegionResidencyAuthorizer authorizer,
         ITenantAdminClock clock,
         IOptions<ClusterOptions> clusterOptions,
         ILatticeIdentityDirectory? identityDirectory = null,
-        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null)
+        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null,
+        ITenantDirectoryStore? tenantGroups = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -92,8 +103,15 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         _clock = clock;
         _identityDirectory = identityDirectory;
         _identityDirectoryOptions = identityDirectoryOptions;
+        _tenantGroups = tenantGroups;
         _writerId = clusterOptions.Value.ClusterId;
     }
+
+    /// <summary>
+    /// <see langword="true"/> when this instance can verify tenant-group admin
+    /// entries; the registration uses it to tell an upgraded instance apart.
+    /// </summary>
+    internal bool VerifiesTenantGroups => _tenantGroups is not null;
 
     /// <inheritdoc />
     public async Task<TenantAdminSubjectReport> ListAdminSubjectsAsync(
@@ -127,6 +145,12 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
 
         ThrowIfReservedTenant(tenant, "add-admin-subject");
 
+        // D4: an admin-set entry names a user, a cluster group, or one of this
+        // tenant's own groups. The reserved t/ namespace belongs to tenant groups, so
+        // another tenant's group (or a malformed t/ id) is refused for every caller,
+        // operators included, before anything is read or written.
+        var isOwnTenantGroup = EnsureAdmissibleAdminEntry(tenant, subjectId);
+
         // Idempotent no-op: the subject already holds tenant-admin authority, so no
         // new membership reference is created and none needs validating.
         if (record.HasAdminSubject(subjectId))
@@ -140,8 +164,19 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // typo'd, retired, or not-yet-provisioned id must never be recorded as a
         // live grant that whoever later registers it would inherit. The registered
         // tenant-create path applies the same directory validation to explicitly
-        // seeded admin subjects before it writes the tenant.
-        await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
+        // seeded admin subjects before it writes the tenant. A tenant group lives in
+        // the membership directory, not the identity directory, so it is checked
+        // there instead: it must exist, or a typo'd group would count as an admin
+        // entry that resolves to nobody (and that a later group of that name would
+        // silently inherit).
+        if (isOwnTenantGroup)
+        {
+            await RequireTenantGroupAsync(tenant, subjectId, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
+        }
 
         record.AddAdminSubject(subjectId, _clock.Next(), _writerId);
 
@@ -190,30 +225,23 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
             throw new TenantLastAdminSubjectException(tenant.Value, subjectId);
         }
 
-        record.RemoveAdminSubject(subjectId, _clock.Next(), _writerId);
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        // Stamped later than the slot it removes as well as the local clock, so the
+        // removal wins the merge even when another silo's clock wrote the slot ahead
+        // of this one, and Changed=true means the subject really lost its authority.
+        record.RemoveAdminSubject(subjectId, TenantRemovalStamp.ForAdminEntry(_clock, record, subjectId), _writerId);
 
         // The guard above is a read-check-write over a CRDT store, so it alone is
         // not sufficient: two concurrent removals of *different* subjects can each
         // observe two live subjects, each pass the check, and land tombstones on
         // disjoint keys that both survive the per-subject merge - emptying the set
-        // and orphaning the tenant. The registry's returned join is the first point
-        // at which that is observable, so re-check it and self-heal: re-grant this
-        // call's own subject at a strictly later stamp (which supersedes the
-        // tombstone this call just wrote, and only that one) and refuse the removal.
-        // The registry commits with an optimistic compare-and-set, so the first
-        // racing caller to commit sees a join that still holds the other's subject
-        // and succeeds; only the caller whose merged result is empty re-grants its own
-        // subject and is refused, and the tenant is left with at least one admin
-        // subject rather than none - the fail-closed direction. A retry of the
-        // refused call now sees a single live subject and is refused by the guard
-        // above before it writes, so this terminates.
-        if (merged.AdminSubjectCount == 0)
-        {
-            merged.AddAdminSubject(subjectId, _clock.Next(), _writerId);
-            await _registry.PutAsync(merged, cancellationToken).ConfigureAwait(false);
-            throw new TenantLastAdminSubjectException(tenant.Value, subjectId);
-        }
+        // and orphaning the tenant. The guard is therefore re-applied to the merged
+        // record inside the registry's optimistic compare-and-set loop, before the
+        // conditional write: the first racer to commit succeeds, and the second
+        // re-reads that commit, re-merges, and is refused with nothing written. No
+        // remove-then-re-grant, so no second write can fail and strand the tenant.
+        var merged = await TenantAdminSetCommit
+            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken)
+            .ConfigureAwait(false);
 
         return new TenantAdminSubjectChangeResult
         {
@@ -261,6 +289,60 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
             throw LatticeDirectoryValidationException.Unresolved(
                 subjectId, DirectoryPrincipalKind.User, "subjectId");
         }
+    }
+
+    /// <summary>
+    /// Requires the tenant group named by an admin entry to exist in the membership
+    /// directory. Fails closed when no membership underlay was supplied, because the
+    /// entry could then never be verified.
+    /// </summary>
+    /// <exception cref="ArgumentException">The group does not exist, or cannot be verified.</exception>
+    private async Task RequireTenantGroupAsync(TenantId tenant, string groupId, CancellationToken cancellationToken)
+    {
+        if (_tenantGroups is null)
+        {
+            throw new ArgumentException(
+                $"Tenant group '{groupId}' cannot be verified on this silo, so it cannot be added to tenant "
+                    + $"'{tenant}''s admin set.",
+                "subjectId");
+        }
+
+        if (await _tenantGroups.GetGroupAsync(groupId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            throw new ArgumentException(
+                $"Tenant '{tenant}' has no group '{groupId}'. Create the group before adding it to the admin set.",
+                "subjectId");
+        }
+    }
+
+    /// <summary>
+    /// Applies the D4 admin-set confinement: an entry outside the reserved
+    /// <see cref="LatticeTenantTrees.SegmentPrefix"/> namespace (a user or a cluster
+    /// group) is admissible, and so is a well-formed group of
+    /// <paramref name="tenant"/> itself; another tenant's group and every malformed
+    /// <c>t/</c> id are refused. Allocation-free on the accepted paths.
+    /// </summary>
+    /// <returns><see langword="true"/> when the entry names one of the tenant's own groups.</returns>
+    /// <exception cref="TenantAccessConfinementException">The entry is in the reserved namespace but is not one of the tenant's own groups.</exception>
+    internal static bool EnsureAdmissibleAdminEntry(TenantId tenant, string subjectId)
+    {
+        if (!subjectId.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (TenantAccessEntries.IsAdmissible(subjectId, tenant))
+        {
+            return true;
+        }
+
+        throw new TenantAccessConfinementException(
+            tenant.Value,
+            TenantAccessConfinementRule.ForeignTenantGroup,
+            $"'{subjectId}' is in the reserved '{LatticeTenantTrees.SegmentPrefix}' tenant group namespace but is not "
+                + $"a group of tenant '{tenant}'. A tenant's admin set may name users, cluster groups, and the "
+                + "tenant's own groups only.",
+            nameof(subjectId));
     }
 
     /// <summary>

@@ -39,7 +39,12 @@ public sealed class TenancyQuotaTests : TenancyTestContext
             }));
             Assert.That(cut.FindAll(".lt-tenancy-meter").Select(meter => meter.ClassList.Contains("lt-tenancy-meter--over")), Is.EqualTo(new[] { true, true }));
             Assert.That(cut.FindAll(".lt-tenancy-meter__fill").Select(fill => fill.GetAttribute("style")), Is.EqualTo(new[] { "inline-size: 100%", "inline-size: 100%" }));
-            Assert.That(cut.FindAll(".lt-dl__row dd").Select(value => value.TextContent.Trim()), Is.EqualTo(new[] { "Across every region (converged)", "10% above each ceiling" }));
+            Assert.That(cut.FindAll(".lt-dl__row dd").Select(value => value.TextContent.Trim()), Is.EqualTo(new[]
+            {
+                "Across every region (converged)",
+                "10% above each ceiling",
+                "Tenant groups 500 (default), Group membership edges 10,000 (default), Tenant members 5,000 (default), Tenant access rules 1,000 (default)",
+            }));
         });
     }
 
@@ -187,6 +192,77 @@ public sealed class TenancyQuotaTests : TenancyTestContext
 
         TenancyForms.Button(cut, "Edit quotas").Click();
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end")));
+    }
+
+    [Test]
+    public void The_delegated_access_caps_read_as_their_defaults_when_unset_never_as_unbounded()
+    {
+        Cluster.Tenants["acme"].Quotas = new TenantQuotasDescriptor { MaxGroups = 20, MaxTenantRules = 0 };
+
+        var cut = RenderQuota();
+
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll(".lt-dl__row dd")[2].TextContent.Trim(),
+            Is.EqualTo("Tenant groups 20, Group membership edges 10,000 (default), Tenant members 5,000 (default), Tenant access rules 0")));
+        Assert.That(cut.Markup, Does.Not.Contain("Unbounded groups"));
+    }
+
+    [Test]
+    public void The_editor_sets_and_clears_the_delegated_access_caps_with_a_blank_meaning_the_default()
+    {
+        Cluster.Tenants["acme"].Quotas = new TenantQuotasDescriptor { MaxKeys = 100, MaxMemberSubjects = 40 };
+        var cut = OpenEditor();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyForms.Field(cut, "Tenant members").GetAttribute("value"), Is.EqualTo("40"));
+            Assert.That(TenancyForms.Field(cut, "Tenant groups").GetAttribute("value"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-field__hint").Select(hint => hint.TextContent.Trim()), Has.Some.EqualTo("Blank applies the default cap of 500. It is never unbounded."));
+        });
+
+        TenancyForms.Type(cut, "Tenant groups", "50");
+        TenancyForms.Type(cut, "Group membership edges", "2,000");
+        TenancyForms.Type(cut, "Tenant members", "");
+        cut.Find("form.lt-tenancy-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(
+            Cluster.Tenants["acme"].Quotas,
+            Is.EqualTo(new TenantQuotasDescriptor { MaxKeys = 100, MaxGroups = 50, MaxMembershipEdges = 2000 })));
+    }
+
+    [Test]
+    public void An_invalid_delegated_access_cap_is_marked_and_nothing_is_sent()
+    {
+        var cut = OpenEditor();
+
+        TenancyForms.Type(cut, "Tenant access rules", "lots");
+        cut.Find("form.lt-tenancy-form").Submit();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyForms.ErrorOf(cut, "Tenant access rules"), Is.EqualTo(TenancyQuotaDraft.InvalidCapMessage));
+            Assert.That(TenancyForms.ErrorOf(cut, "Tenant groups"), Is.Null);
+            Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.SetTenantQuotasAsync)));
+        });
+    }
+
+    [Test]
+    public void The_draft_round_trips_every_delegated_access_cap()
+    {
+        var quotas = new TenantQuotasDescriptor { MaxGroups = 1, MaxMembershipEdges = 2, MaxMemberSubjects = 3, MaxTenantRules = 4 };
+
+        var draft = TenancyQuotaDraft.From(quotas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyAccessCaps.All.Select(cap => draft[cap]), Is.EqualTo(new[] { "1", "2", "3", "4" }));
+            Assert.That(draft.TryBuild(out var built, out _), Is.True);
+            Assert.That(built, Is.EqualTo(quotas));
+            Assert.That(draft.CapErrors, Is.Empty);
+            Assert.That(TenancyQuotaDraft.From(default).TryBuild(out var unset, out _), Is.True);
+            Assert.That(TenancyAccessCaps.All.Select(cap => TenancyAccessCaps.Of(unset, cap)), Is.All.Null, "a blank cap is sent as unset, so the default applies");
+            Assert.That(TenancyAccessCaps.All.Select(TenancyAccessCaps.Default), Is.EqualTo(new long[] { 500, 10_000, 5_000, 1_000 }));
+        });
     }
 
     private IRenderedComponent<TenancyQuota> RenderQuota(bool canEdit = true, LtBreakpoint? band = null) =>

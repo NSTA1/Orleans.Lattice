@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Auth;
@@ -46,4 +47,14 @@ public sealed record AuthEffectivePermissions
     /// the rule list does not mislead by omission. Defaults to both-off.
     /// </summary>
     [Id(3)] public AuthPolicyPosture Posture { get; init; } = new();
+
+    /// <summary>
+    /// The policy layer of each rule in <see cref="Rules"/>. Empty when every rule
+    /// is an operator (<see cref="TenantRuleLayer.Platform"/>) rule, and from a
+    /// server that predates this member; otherwise index-aligned with
+    /// <see cref="Rules"/>. Operator rules decide first and their verdict is final;
+    /// a <see cref="TenantRuleLayer.Tenant"/> rule decides only where no operator
+    /// rule matches.
+    /// </summary>
+    [Id(4)] public IReadOnlyList<TenantRuleLayer> RuleLayers { get; init; } = Array.Empty<TenantRuleLayer>();
 }

@@ -1,0 +1,96 @@
+schema: lattice.agents/procedure/v1
+id: tenant-access
+name: "Delegate access administration to a tenant"
+surfaces:
+  in_process:
+    api: "ILatticeTenantDirectoryAdmin and ILatticeTenantPolicyAdmin"
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin"
+  grpc:
+    api: "/orleans.lattice.api.tenantadmin/UpsertTenantGroup and the other tenant access RPCs"
+    source: "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs#UpsertTenantGroupMethodName"
+  mcp_tool:
+    api: "lattice_tenant_group_upsert and the other delegated tenant access tools"
+    source: "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs"
+preconditions:
+  - id: feature-enabled
+    check: "LatticeTenancyOptions.DelegatedAccessAdministrationEnabled is true; GetPostureAsync reports Enabled."
+    source: "src/lattice.tenancy/LatticeTenancyOptions.cs#LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"
+  - id: caller-tenant-admin
+    check: "The caller is a platform operator or an admin of the tenant, directly or through a group."
+    source: "docs/lattice.api.tenantadmin/README.md"
+  - id: not-default-tenant
+    check: "The tenant is not the reserved default tenant."
+    source: "docs/lattice.tenancy/README.md"
+steps:
+  - n: 1
+    action: "Read the tenant access posture."
+    api: "ILatticeTenantPolicyAdmin.GetPostureAsync / GetTenantAccessPosture / lattice_tenant_access_posture"
+    expects: "Enabled is true, the caller's standing, and the four caps with usage."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#GetPostureAsync"
+  - n: 2
+    action: "Create a tenant group by tenant-local name."
+    api: "ILatticeTenantDirectoryAdmin.UpsertGroupAsync / UpsertTenantGroup / lattice_tenant_group_upsert"
+    expects: "The group t/{tenant}/{name} exists; creating counts against MaxGroups."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#UpsertGroupAsync"
+  - n: 3
+    action: "Add users, cluster groups or the tenant's own groups to the group."
+    api: "ILatticeTenantDirectoryAdmin.AddGroupMemberAsync / AddTenantGroupMember / lattice_tenant_group_member_add"
+    expects: "Changed reports whether the edge was added; each edge counts against MaxMembershipEdges."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#AddGroupMemberAsync"
+  - n: 4
+    action: "Add the group to the tenant member set so its members may act as the tenant."
+    api: "ILatticeTenantDirectoryAdmin.AddMemberAsync / AddTenantMember / lattice_tenant_member_add"
+    expects: "The entry counts against MaxMemberSubjects; members can do nothing until a rule allows it."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#AddMemberAsync"
+  - n: 5
+    action: "Grant the group access with a tenant-tier rule on a tenant tree or the tenant-wide scope."
+    api: "ILatticeTenantPolicyAdmin.PutRuleAsync / PutTenantRule / lattice_tenant_rule_put"
+    expects: "The rule is stored as tenant:{tenant}:{id} in the Tenant layer; it counts against MaxTenantRules."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#PutRuleAsync"
+  - n: 6
+    action: "Confirm the decision a member receives."
+    api: "ILatticeTenantPolicyAdmin.ExplainAsync / ExplainTenantAccess / lattice_tenant_explain"
+    expects: "DecidingLayer is Tenant with the new rule, or Platform when an operator rule decides first."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#ExplainAsync"
+postconditions:
+  - check: "Members of the group may act as the tenant and are allowed what the rule grants, unless an operator rule decides otherwise."
+    source: "docs/lattice.auth/tenant-layer.md"
+  - check: "No change reaches another tenant's trees, app-owned trees or system trees."
+    source: "docs/lattice.auth/tenant-layer.md"
+failure_modes:
+  - id: feature-disabled
+    signal: "TenantAccessAdministrationDisabledException (gRPC FailedPrecondition)."
+    effect: "Nothing is read or written."
+    response: "Ask a platform operator to enable DelegatedAccessAdministrationEnabled."
+  - id: confinement
+    signal: "TenantAccessConfinementException naming GroupNesting, ForeignTenantGroup, RuleTree, RuleOperations or ReservedRuleId (gRPC InvalidArgument)."
+    effect: "Nothing is written."
+    response: "Name only the tenant's own trees and groups, cluster groups and users, and data-plane operations."
+  - id: cap-reached
+    signal: "LatticeQuotaExceededException with a tenant-groups, tenant-membership-edges, tenant-member-subjects or tenant-rules dimension (gRPC ResourceExhausted)."
+    effect: "The addition is refused or withdrawn; if the withdrawal failed every attempt the message says the cap may stay exceeded until the addition is removed."
+    response: "Remove entries, or ask a platform operator to raise the cap with SetTenantQuotasAsync."
+  - id: platform-rule-decides
+    signal: "ExplainAsync reports DecidingLayer Platform."
+    effect: "The tenant rule has no effect on that request."
+    response: "Ask a platform operator to change the operator rule; a tenant rule cannot override it."
+rollback:
+  supported: true
+  mechanism: "Remove the rule, the member-set entry and the group; removing the group cascades its edges, entries and tenant rules."
+  steps:
+    - "ILatticeTenantPolicyAdmin.RemoveRuleAsync"
+    - "ILatticeTenantDirectoryAdmin.RemoveMemberAsync"
+    - "ILatticeTenantDirectoryAdmin.RemoveGroupAsync"
+  source: "docs/lattice.api.tenantadmin/README.md"
+concurrency:
+  - rule: "Cap-governed additions are verified after the write and withdrawn when over the cap; concurrent racers may all be refused."
+    source: "docs/lattice.api.tenantadmin/README.md"
+  - rule: "Removing the tenant's last admin entry, including a group, is refused with TenantLastAdminSubjectException; the guard runs inside the registry compare-and-set loop, so concurrent removals cannot empty the set."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
+sources:
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+  - "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs"
+  - "docs/lattice.tenancy/README.md"
+  - "docs/lattice.api.tenantadmin/README.md"

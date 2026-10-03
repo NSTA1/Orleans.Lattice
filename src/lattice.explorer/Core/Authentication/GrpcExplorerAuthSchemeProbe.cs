@@ -13,7 +13,9 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// <see cref="ExplorerAuthSchemeAdvertisement"/>. An endpoint that does not
 /// implement the RPC (an older server) or is unreachable yields
 /// <see cref="ExplorerAuthSchemeAdvertisement.Empty"/> so the sign-in falls back to
-/// the Basic (username and password) flow instead of failing.
+/// the Basic (username and password) flow instead of failing. A probe the caller
+/// cancels throws <see cref="OperationCanceledException"/> rather than reporting
+/// an empty advertisement.
 /// </summary>
 public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDisposable
 {
@@ -73,14 +75,31 @@ public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDis
         {
             throw;
         }
+        catch (RpcException ex) when (IsCallerCancellation(ex, cancellationToken))
+        {
+            // The transport surfaces a cancelled call as RpcException(Cancelled),
+            // never as OperationCanceledException, so the arm above cannot see it.
+            // A caller who gave up must not be told the endpoint advertises nothing.
+            throw new OperationCanceledException("The auth-scheme probe was cancelled.", ex, cancellationToken);
+        }
         catch (RpcException)
         {
             // Endpoint does not advertise (Unimplemented), is unreachable, or
-            // rejected the probe: an empty advertisement, so the sign-in falls
-            // back to Basic (there is no manual scheme picker).
+            // rejected the probe - or the call was cancelled by something other
+            // than the caller (the channel torn down under it): an empty
+            // advertisement, so the sign-in falls back to Basic (there is no
+            // manual scheme picker).
             return ExplorerAuthSchemeAdvertisement.Empty;
         }
     }
+
+    /// <summary>
+    /// Whether a failed probe call is the caller's own cancellation: the
+    /// transport reported <see cref="StatusCode.Cancelled"/> and the caller's
+    /// token is cancelled. A cancellation the caller did not request is not one.
+    /// </summary>
+    internal static bool IsCallerCancellation(RpcException ex, CancellationToken cancellationToken)
+        => ex.StatusCode == StatusCode.Cancelled && cancellationToken.IsCancellationRequested;
 
     private static ExplorerAuthSchemeAdvertisement Map(AuthSchemeAdvertisement advertisement)
     {

@@ -1,7 +1,8 @@
 @*
     A booktabs table of authorization rules. Each rule links to its page; an
     app-owned rule names its owning app and links to that app's roles, where it
-    is actually changed. Below the small breakpoint it is a list of two-line rows
+    is actually changed, and a tenant-tier rule names its owning tenant and links
+    to that tenant's rules. On an explanation, the deciding rule is marked. Below the small breakpoint it is a list of two-line rows
     opening a detail sheet.
 *@
 <LtTable TItem="LatticeAuthorizationRule"
@@ -9,6 +10,7 @@
          Caption="@Caption"
          CaptionHidden="CaptionHidden"
          RowKey="RowKey"
+         IsCurrent="@(DecidingRuleId is null ? null : IsDeciding)"
          DetailTitle="@(rule => rule.RuleId)">
     <ChildContent>
         <LtColumn TItem="LatticeAuthorizationRule" Title="Rule" RowHeader="true" Mono="true" SortBy="@(rule => rule.RuleId)">
@@ -28,6 +30,17 @@
                 else
                 {
                     <span>an app</span>
+                }
+            }
+            else if (TenantOf(context) is { } tenant)
+            {
+                @if (TenantRulesHref(tenant) is { } tenantRules)
+                {
+                    <a href="@tenantRules" data-lt-tenant-rule="@tenant">tenant @tenant</a>
+                }
+                else
+                {
+                    <span data-lt-tenant-rule="@tenant">tenant @tenant</span>
                 }
             }
             else

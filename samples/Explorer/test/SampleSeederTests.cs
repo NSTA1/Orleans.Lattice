@@ -16,6 +16,7 @@ public sealed class SampleSeederTests
         Assert.That(SampleSeeder.OrdersTree(SampleIdentities.AcmeTenant), Is.EqualTo("t/acme/orders"));
         Assert.That(SampleSeeder.TaskBoardTree(SampleIdentities.GlobexTenant), Is.EqualTo($"t/globex/a/{TaskBoardApp.Slug}/tasks"));
         Assert.That(SampleSeeder.TaskKey("t-001"), Is.EqualTo("tasks/t-001"));
+        Assert.That(SampleSeeder.InvoicesTree, Is.EqualTo("t/globex/invoices"));
     }
 
     [Test]

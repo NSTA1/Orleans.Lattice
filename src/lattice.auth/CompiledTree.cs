@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Auth;
 /// deterministic, allocation-light point resolution. Rules are split into three
 /// scope tiers: an exact-key map (most specific), a prefix index kept as a
 /// sorted array for longest-prefix lookup, and a tree-wide list (least specific).
-/// Built once by <see cref="CompiledPolicy.Compile"/> and thereafter immutable.
+/// Built once by <see cref="CompiledPolicy.Compile(IEnumerable{LatticeAuthorizationRule}, bool)"/> and thereafter immutable.
 /// </summary>
 /// <remarks>
 /// In-process snapshot state: never serialized, never crosses a grain boundary.
@@ -56,6 +56,18 @@ internal sealed class CompiledTree
     public bool HasPerKeyRules => _exact.Count > 0 || _prefixes.Length > 0;
 
     /// <summary>
+    /// The exact keys that carry at least one rule. Used off the hot path by the
+    /// layered existence probe to enumerate the positions a decision can change at.
+    /// </summary>
+    internal IReadOnlyList<string> ExactKeys => _exact.Keys;
+
+    /// <summary>
+    /// The prefixes that carry at least one rule, in ascending ordinal order. Used off
+    /// the hot path by the layered existence probe.
+    /// </summary>
+    internal IReadOnlyList<string> Prefixes => _prefixes;
+
+    /// <summary>
     /// Resolves the winning rule for a point request, or a non-matched result
     /// when no rule applies.
     /// </summary>
@@ -95,7 +107,7 @@ internal sealed class CompiledTree
     /// exact-key tier. For a stored prefix this is the decision every key that
     /// extends the prefix and names no more specific rule resolves to.
     /// </summary>
-    private PolicyMatch ResolveBelowExactTier(
+    internal PolicyMatch ResolveBelowExactTier(
         in LatticeSubject subject,
         LatticeOperation operation,
         string? key,

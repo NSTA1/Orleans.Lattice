@@ -38,6 +38,12 @@ internal sealed class MembershipResolutionCache(
 
     private readonly ConcurrentDictionary<MembershipCacheKey, Entry> _entries = new();
 
+    // Bumped by every flush. A resolution captures it before resolving and stores
+    // its result only if no flush happened meanwhile, so a subject resolved under
+    // the pre-flush rules is never cached after the flush that was meant to
+    // evict it.
+    private long _generation;
+
     /// <summary>The number of live cache entries. Exposed for tests.</summary>
     internal int Count => _entries.Count;
 
@@ -93,6 +99,7 @@ internal sealed class MembershipResolutionCache(
         // about to run - so it is counted here rather than in TryGetCached.
         LatticeMembershipMetrics.RecordResolutionCacheMiss();
 
+        var generation = Interlocked.Read(ref _generation);
         var resolved = await resolver(cancellationToken).ConfigureAwait(false);
 
         // Only a resolved identity is cached. An unrecognised, invalid, or
@@ -110,7 +117,7 @@ internal sealed class MembershipResolutionCache(
                 expiresAt = tokenExpiry;
             }
 
-            if (expiresAt > now)
+            if (expiresAt > now && Interlocked.Read(ref _generation) == generation)
             {
                 StoreBounded(cacheKey, new Entry(resolved.Subject, expiresAt), now);
             }
@@ -154,8 +161,17 @@ internal sealed class MembershipResolutionCache(
         _entries[cacheKey] = entry;
     }
 
-    /// <summary>Drops every cached entry. Exposed for tests.</summary>
-    internal void Clear() => _entries.Clear();
+    /// <summary>
+    /// Drops every cached entry, and stops any resolution already in flight from
+    /// caching its result. Used by tests, by membership mutations, and by the
+    /// tenancy add-on when its delegated tenant access administration flag
+    /// changes, so no subject resolved before the flip outlives it.
+    /// </summary>
+    internal void Clear()
+    {
+        Interlocked.Increment(ref _generation);
+        _entries.Clear();
+    }
 
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
@@ -163,7 +179,7 @@ internal sealed class MembershipResolutionCache(
         if (mutation.TreeId is { } treeId
             && treeId.StartsWith(MembershipConstants.TreePrefix, StringComparison.Ordinal))
         {
-            _entries.Clear();
+            Clear();
         }
 
         return Task.CompletedTask;

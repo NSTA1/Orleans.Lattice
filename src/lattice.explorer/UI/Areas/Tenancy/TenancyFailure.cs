@@ -32,6 +32,14 @@ internal sealed record TenancyFailure(TenancyFailureKind Kind, string Message)
     /// <summary>The sentence shown when the Explorer has no endpoint.</summary>
     public const string NotConnectedMessage = "The Explorer is not connected to a cluster.";
 
+    /// <summary>The sentence shown when the cluster refuses an admin subject naming another tenant's group.</summary>
+    public const string ForeignTenantGroupMessage =
+        "Another tenant's group can never administer this tenant. Choose a user, a cluster group or one of this tenant's own groups.";
+
+    /// <summary>The sentence shown when delegated tenant access administration is off.</summary>
+    public const string DelegatedAccessOffMessage =
+        "Delegated tenant access administration is off, so groups cannot be used here. Ask a platform operator.";
+
     /// <summary>The sentence shown when the cluster did not answer.</summary>
     public const string NoAnswerMessage = "The cluster did not answer. Try again.";
 
@@ -58,6 +66,8 @@ internal sealed record TenancyFailure(TenancyFailureKind Kind, string Message)
             TenantLastAdminSubjectException => new(TenancyFailureKind.Refused,
                 "A tenant keeps at least one admin subject. Add the replacement before removing the last one."),
             TenantLastRegionException => new(TenancyFailureKind.Refused, "A tenant stays resident in at least one region."),
+            TenantAccessConfinementException { Rule: TenantAccessConfinementRule.ForeignTenantGroup } => new(TenancyFailureKind.Refused, ForeignTenantGroupMessage),
+            TenantAccessAdministrationDisabledException => new(TenancyFailureKind.Refused, DelegatedAccessOffMessage),
             TenantRegionNotAllowedException region => new(TenancyFailureKind.Refused,
                 $"Region {region.RegionId} is not allowed for this tenant, or the tenant is still resident there."),
             TenantGrantTransitionException transition => new(TenancyFailureKind.Refused,

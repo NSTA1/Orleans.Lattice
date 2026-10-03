@@ -741,6 +741,45 @@ invariants:
       - "docs/crdt/readme.md"
       - "docs/lattice/state-primitives.md"
       - "docs/lattice.replication/deltas.md"
+  - id: delegated-tenant-access-off-is-inert
+    name: "Delegated tenant access administration off is inert"
+    description: "With LatticeTenancyOptions.DelegatedAccessAdministrationEnabled false (the default), member entries, group admin entries and tenant-tier rules have no effect, active-tenant validation is the exact-id admin check, the delegated facades refuse with TenantAccessAdministrationDisabledException except posture, and turning the flag off deletes nothing. Tenant group records are kept and still satisfy an operator rule or app role binding that names them through their directory-recorded members, while identity-provider-asserted t/ group claims stay stripped whenever tenancy is registered."
+    scope:
+      packages:
+        - "Orleans.Lattice.Tenancy"
+        - "Orleans.Lattice.Auth"
+        - "Orleans.Lattice.Membership"
+        - "Orleans.Lattice.Api.TenantAdmin"
+      components:
+        - "DelegatedTenantAccessFlag"
+        - "TenancyTenantRuleLayer"
+        - "LatticeTenantPolicyEngine"
+        - "TenantAccessAdministrationDisabledException"
+    violation_modes:
+      - "A member or group entry admits a subject while the flag is off."
+      - "Turning the flag off also stops stripping asserted t/ group claims (the claim filter must stay active)."
+      - "The evaluator consults a tenant-tier rule while the flag is off."
+      - "Turning the flag off deletes tenant groups, members or rules."
+      - "A snapshot compiled with the flag on keeps honouring member entries after the flag is turned off."
+    detection_signals:
+      - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
+        name: "DelegatedAccessStaleSnapshotTests"
+        source: "test/lattice.tenancy/DelegatedAccessStaleSnapshotTests.cs"
+      - type: test
+        name: "LatticeTenantDirectoryAdminFeatureOffIntegrationTests"
+        source: "test/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdminFeatureOffIntegrationTests.cs"
+      - type: test
+        name: "TenantLayerAllocationTests"
+        source: "test/lattice.auth/TenantLayerAllocationTests.cs"
+    remediation:
+      - step: "Read TenantAccessPosture.Enabled or AccessModelDescriptor.DelegatedTenantAccessAdministrationEnabled before relying on tenant groups or rules."
+        source: "docs/lattice.tenancy/README.md"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - "src/lattice.tenancy/LatticeTenancyOptions.cs"
   - id: distributed-lock-fencing
     name: "Distributed lock fencing"
     description: "Every lock grant has a durable, strictly increasing fencing token and stale holders cannot renew, release, or write through lower tokens."
@@ -1518,6 +1557,106 @@ invariants:
         source: ".github/instructions/security.instructions.md"
     sources:
       - ".github/instructions/security.instructions.md"
+  - id: tenant-access-no-isolation-bypass
+    name: "Tenant access never bypasses tenant isolation"
+    description: "Tenant membership, group-aware admin checks and tenant-tier rules never bypass the tenant gate or the cross-tenant grant protocol; reaching another tenant's trees still needs an active grant, admin-set, member-set and app-binding entries never count when they name another tenant's group, and the reserved default tenant has no tenant groups, members or tenant rules."
+    scope:
+      packages:
+        - "Orleans.Lattice.Tenancy"
+        - "Orleans.Lattice.Api.TenantAdmin"
+        - "Orleans.Lattice.Apps"
+      components:
+        - "TenantGateEnforcer"
+        - "TenantAccessEntries"
+        - "LatticeTenantDirectoryAdmin"
+        - "LatticeTenantPolicyAdmin"
+    violation_modes:
+      - "A tenant member reaches another tenant's tree without an active cross-tenant grant."
+      - "An admin-set entry naming another tenant's group admits that group's members."
+      - "A delegated access facade accepts the reserved default tenant."
+      - "Two concurrent admin-set removals both commit and leave the tenant with no admin entry, or a removal is repaired by a second write that can fail."
+      - "A removal stamped behind the slot it supersedes loses the merge while the facade reports the entry removed."
+    detection_signals:
+      - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
+        name: "TenantAccessEntriesTests"
+        source: "test/lattice.tenancy/TenantAccessEntriesTests.cs"
+      - type: test
+        name: "LatticeTenantAccessAdminAdminSetConfinementTests"
+        source: "test/lattice.api.tenantadmin/Directory/LatticeTenantAccessAdminAdminSetConfinementTests.cs"
+      - type: test
+        name: "AppRoleGrantEvaluatorTenantConfinementTests"
+        source: "test/lattice.apps/Registry/AppRoleGrantEvaluatorTenantConfinementTests.cs"
+    remediation:
+      - step: "Use the cross-tenant grant protocol to share data between tenants."
+        source: "docs/lattice.api.tenantadmin/README.md"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - "src/lattice.tenancy/TenantAccessEntries.cs"
+  - id: tenant-group-namespace-reserved
+    name: "The t/ group namespace is reserved to the tenant tier"
+    description: "Only the tenant tier owns group ids starting with t/: the cluster auth facade refuses to create one, and whenever the tenancy add-on is registered, whatever its delegated tenant access administration flag, every identity-provider-asserted t/ group is stripped before group expansion, because operator rules and app role bindings naming a tenant group are honoured whatever the flag."
+    scope:
+      packages:
+        - "Orleans.Lattice.Membership"
+        - "Orleans.Lattice.Api.Auth"
+        - "Orleans.Lattice.Tenancy"
+      components:
+        - "ITenantGroupClaimFilter"
+        - "TenantGroupClaimFilter"
+        - "LatticeAuthAdmin"
+    violation_modes:
+      - "The cluster auth facade creates a group whose id starts with t/."
+      - "A token-asserted, overage or claim-projected t/ group id reaches group expansion on a cluster with tenancy registered, including while the delegated-access flag is off."
+      - "The claim filter is made to follow the delegated-access flag, so a token asserting t/{T}/x matches an operator rule or app role binding after a rollback."
+      - "A check tests only the well-formed LatticeTenantGroupId shape, so t/default/x or a malformed t/ id slips through."
+    detection_signals:
+      - type: test
+        name: "TenantGroupClaimFilterTests"
+        source: "test/lattice.membership/TenantGroupClaimFilterTests.cs"
+      - type: test
+        name: "MembershipContextTenantGroupClaimFilterTests"
+        source: "test/lattice.membership/MembershipContextTenantGroupClaimFilterTests.cs"
+      - type: exception
+        name: "LatticeTenantOwnedGroupException"
+        source: "src/lattice.api.auth/LatticeTenantOwnedGroupException.cs#LatticeTenantOwnedGroupException"
+    remediation:
+      - step: "Manage tenant groups through ILatticeTenantDirectoryAdmin, which composes t/{tenant}/{name} from the tenant the call names."
+        source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin"
+      - step: "Test the whole t/ prefix (LatticeTenantTrees.SegmentPrefix) when reserving the namespace."
+        source: "src/lattice.membership/TenantGroupClaimFilter.cs#TenantGroupClaimFilter"
+    sources:
+      - "docs/lattice.membership/README.md"
+      - "docs/lattice.api.auth/README.md"
+  - id: tenant-group-nesting-confined
+    name: "Tenant groups stay inside their tenant"
+    description: "A tenant group may contain users, groups of the same tenant and cluster groups, but never becomes a member of a cluster group or of another tenant's group; the membership directory refuses such an edge for every caller, system origin included."
+    scope:
+      packages:
+        - "Orleans.Lattice.Membership"
+      components:
+        - "ILatticeMembershipDirectory"
+        - "TenantGroupNesting"
+        - "LatticeTenantGroupNestingException"
+    violation_modes:
+      - "A tenant group is added as a member of a cluster group, extending an operator rule on that group to people a tenant administrator controls."
+      - "A tenant group is added to another tenant's group."
+      - "A system-origin write skips the nesting check."
+    detection_signals:
+      - type: test
+        name: "TenantGroupNestingTests"
+        source: "test/lattice.membership/TenantGroupNestingTests.cs"
+      - type: exception
+        name: "LatticeTenantGroupNestingException"
+        source: "src/lattice.membership/LatticeTenantGroupNestingException.cs#LatticeTenantGroupNestingException"
+    remediation:
+      - step: "Nest the cluster group inside the tenant group instead; that direction is allowed."
+        source: "docs/lattice.membership/README.md"
+    sources:
+      - "docs/lattice.membership/README.md"
+      - "src/lattice.membership/TenantGroupNesting.cs"
   - id: tenant-isolation-namespace
     name: "Tenant namespace isolation"
     description: "Tenant-scoped surfaces compose tree ids under t/{tenant}/ and refuse platform or foreign namespaces unless the access gate authorizes the crossing."
@@ -1557,6 +1696,37 @@ invariants:
     sources:
       - "docs/lattice.tenancy/README.md"
       - ".github/instructions/security.instructions.md"
+  - id: tenant-layer-beneath-operator
+    name: "Operator verdicts are final over tenant-tier rules"
+    description: "A matched operator rule, allow or deny, decides the request; the tenant layer is consulted only when no operator rule matches, only for a tenant-layer tree, and it is the tree owner's layer. Range filters compose the layers per key on operator coverage."
+    scope:
+      packages:
+        - "Orleans.Lattice.Auth"
+      components:
+        - "PolicyEvaluator"
+        - "LatticeDecisionEngine"
+        - "ITenantRuleLayer"
+    violation_modes:
+      - "A tenant key-scoped allow carves a hole in an operator deny."
+      - "A tenant deny revokes an operator allow."
+      - "A range filter admits a key an operator rule denies or drops a key an operator rule allows."
+      - "The tenant layer governs a control-plane, app-owned or default-tenant tree."
+    detection_signals:
+      - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
+        name: "TenantLayerEvaluationTests"
+        source: "test/lattice.auth/TenantLayerEvaluationTests.cs"
+      - type: test
+        name: "TenantLayerRangeFilterPropertyTests"
+        source: "test/lattice.auth/TenantLayerRangeFilterPropertyTests.cs"
+    remediation:
+      - step: "Author an operator rule to change a decision the operator layer makes; a tenant rule cannot."
+        source: "docs/lattice.auth/tenant-layer.md"
+    sources:
+      - "docs/lattice.auth/tenant-layer.md"
+      - "src/lattice.auth/PolicyEvaluator.cs"
   - id: tenant-quota-admission
     name: "Tenant quota admission"
     description: "Tenant writes and charged reads are admitted against the compiled quota policy after authorization and are refused only at the documented admission seams."
@@ -1636,6 +1806,72 @@ invariants:
         source: "docs/lattice.tenancy/README.md"
     sources:
       - "docs/lattice.tenancy/README.md"
+  - id: tenant-rule-confinement
+    name: "Tenant-tier rules and tenant-group subjects are confined to their tenant"
+    description: "The policy store refuses, for every caller, a tenant-tier rule outside its tenant's tenant-layer trees or tenant-wide scope or outside the data-plane operations, and any rule naming a tenant group on a tree outside that group's tenant (app: rules may also use that tenant's app-owned trees); tenant: ids are written only under system origin."
+    scope:
+      packages:
+        - "Orleans.Lattice.Auth"
+        - "Orleans.Lattice.Api.TenantAdmin"
+        - "Orleans.Lattice.Apps"
+      components:
+        - "LatticeAuthorizationPolicyStore"
+        - "TenantRuleConfinement"
+        - "LatticeTenantRuleIds"
+        - "LatticeTenantOwnedRuleException"
+    violation_modes:
+      - "An operator writes or deletes a tenant: rule id off system origin."
+      - "A tenant-tier rule governs another tenant, an app-owned tree, a reserved or sys- tree, or Telemetry, Replication, TreeLifecycle or AppInstall."
+      - "A Tree:* or cross-tenant rule names a tenant group."
+      - "An app role binding names another tenant group."
+    detection_signals:
+      - type: test
+        name: "TenantAccessConformanceTests"
+        source: "test/lattice.api.tenantadmin/Security/TenantAccessConformanceTests.cs"
+      - type: test
+        name: "LatticeAuthorizationPolicyStoreTenantRuleTests"
+        source: "test/lattice.auth/LatticeAuthorizationPolicyStoreTenantRuleTests.cs"
+      - type: test
+        name: "AppRoleCompilerTests.TenantGroups"
+        source: "test/lattice.apps/Compiler/AppRoleCompilerTests.TenantGroups.cs"
+      - type: exception
+        name: "LatticeTenantOwnedRuleException"
+        source: "src/lattice.auth/LatticeTenantOwnedRuleException.cs#LatticeTenantOwnedRuleException"
+    remediation:
+      - step: "Author tenant-tier rules only through ILatticeTenantPolicyAdmin, which composes the tenant: id and tenant-local trees."
+        source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#ILatticeTenantPolicyAdmin"
+    sources:
+      - "docs/lattice.auth/tenant-layer.md"
+      - "src/lattice.auth/TenantRuleConfinement.cs"
+  - id: tenant-wide-scope-tenant-tier-only
+    name: "The tenant-wide scope is tenant-tier only"
+    description: "A rule over a t/{tenant}/* sentinel tree is accepted only when its id is tenant:-prefixed and its scope is exactly LatticeScope.TenantWide of that tenant; it never reaches app-owned, system or other-tenant trees, and the data plane refuses user-origin writes to such a tree id."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Auth"
+        - "Orleans.Lattice.Api.Auth"
+      components:
+        - "LatticeScope"
+        - "LatticeAuthorizationPolicyStore"
+        - "LatticeAuthAdmin"
+    violation_modes:
+      - "An operator or app rule uses a t/{tenant}/* scope."
+      - "A tenant-wide rule grants access to an app-owned or system tree."
+      - "A real tree is created with a /* local name."
+    detection_signals:
+      - type: test
+        name: "LatticeScopeTenantWideTests"
+        source: "test/lattice.auth/LatticeScopeTenantWideTests.cs"
+      - type: test
+        name: "LatticeAuthAdminTenantTierTests.Rules"
+        source: "test/lattice.api.auth/LatticeAuthAdminTenantTierTests.Rules.cs"
+    remediation:
+      - step: "Use LatticeScope.ClusterWide for an operator all-trees rule, and the tenant facade for a tenant-wide rule."
+        source: "docs/lattice.auth/tenant-layer.md"
+    sources:
+      - "docs/lattice.auth/tenant-layer.md"
+      - "src/lattice.auth/LatticeScope.cs"
   - id: tombstone-ttl-retention
     name: "Tombstone and TTL retention"
     description: "Expired live entries and tombstones are hidden from user reads but retained through the grace window for convergence before physical compaction."

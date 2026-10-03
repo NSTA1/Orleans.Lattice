@@ -9,7 +9,7 @@ has live data:
   every control plane the Explorer has an area for (state, auth, schema, apps,
   tenancy, tree administration, backup, and replication control and status) on
   its own h2c gRPC endpoint;
-- tenancy on, with two seeded tenants, `acme` and `globex`;
+- tenancy on, with two seeded tenants, `acme` and `globex`, and delegated tenant access administration on, so `globex` keeps its own groups, members and rules;
 - replication between the regions over loopback gRPC, with a small background
   writer keeping the links busy and a switch that pauses the link;
 - one backup sink both regions share, which is what lets replicated trees be
@@ -82,8 +82,8 @@ so any password signs in.
 |------|------------|
 | `explorer-admin` | Bootstrap administrator and platform operator. The console signs in as it by default. |
 | `acme-admin` | Tenant admin of `acme`. |
-| `globex-admin` | Tenant admin of `globex`. |
-| `alice` | Member of `operators` (may read `factory-floor`) and `task-editors`. |
+| `globex-admin` | Tenant admin of `globex`, and not a platform operator: keeps globex's own groups, members and rules under `/t/globex/access`. |
+| `alice` | Member of `operators` (may read `factory-floor`) and `task-editors`, and of globex's own group `t/globex/operators`. |
 | `bob` | Member of `task-viewers`. |
 | `carol` | Member of `visitors`, bound to no app role. |
 
@@ -150,6 +150,28 @@ exists." The roster group `auditors` is left uncreated, so **New group** with th
 id `auditors` creates it; an id the roster does not list, such as `nobody`, is
 refused when you leave the field.
 
+### Delegated tenant access (globex)
+
+Delegated tenant access administration is on, so a tenant's own administrators
+keep its groups, members and rules, and the platform's rules still decide first.
+globex is seeded with:
+
+- its own group `t/globex/operators` ("Globex operators"), with `alice` in it;
+- a member set holding that group, so `alice` may act as tenant `globex`;
+- globex rules `operators-read-orders` and `operators-read-invoices`, which grant
+  the group `Read` and `RangeRead` on globex's `orders` and `invoices`; and
+- one Platform rule, `platform-deny-alice-globex-invoices`, which denies `alice`
+  globex's `invoices` and so shadows globex's own rule there.
+
+Restart with `--sign-in-as globex-admin`, a tenant admin who is not a platform
+operator. Access is on the spine at `/t/globex/access`, with **Groups**,
+**Members**, **Rules** and **Explain** for globex alone: create a group, add a
+user to it, add the group to **Members**, and grant it a rule on one of globex's
+trees. **Rules** lists the Platform rule read-only, above globex's own. In
+**Explain**, ask about `alice` reading `invoices`: the Platform layer decides
+(denied, by `platform-deny-alice-globex-invoices`) and globex's rule is shown as
+shadowed; ask about `orders` and globex's own rule allows it. Nothing of acme is
+listed or reachable from globex's pages.
 ### Schema
 
 `/t/acme/schema`. Schema enforcement and per-value versioning are on, with one
@@ -191,7 +213,7 @@ tenant admin sees:
   page says a lasting *Draining* means.
 
 For the **tenant-scoped view**, restart with `--sign-in-as acme-admin`. The
-console opens at `/t/acme` with only Data, Apps, Tenancy, Replication and
+console opens at `/t/acme` with only Data, Apps, Access, Tenancy, Replication and
 Backups on the spine (Backups says a backup grant is needed). Tenancy is now
 **My tenant** at `/t/acme/tenancy`: Members, Quota, Regions and Sharing, with no
 other tenant in sight. Restart with `--sign-in-as globex-admin` and approve

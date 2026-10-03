@@ -33,6 +33,8 @@ public sealed class ShellTransportRegistrationTests
         [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantRegionAdmin)] = typeof(ShellTenantRegionAdminTransport),
         [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantSelfService)] = typeof(ShellTenantSelfServiceTransport),
         [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantQuotaUsage)] = typeof(ShellTenantQuotaUsageTransport),
+        [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantDirectoryAdmin)] = typeof(ShellTenantDirectoryAdminTransport),
+        [typeof(Orleans.Lattice.Api.TenantAdmin.ILatticeTenantPolicyAdmin)] = typeof(ShellTenantPolicyAdminTransport),
         [typeof(Orleans.Lattice.Api.Telemetry.ILatticeTelemetry)] = typeof(ShellTelemetryTransport),
         [typeof(Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdmin)] = typeof(ShellTreeAdminTransport),
         [typeof(Orleans.Lattice.Api.TreeAdmin.ILatticeStorageUsageOperations)] = typeof(ShellStorageUsageOperationsTransport),

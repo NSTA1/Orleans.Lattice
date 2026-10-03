@@ -1,0 +1,27 @@
+@inherits TenantAccessView
+
+@*
+    The confirmation a tenant group's deletion goes through: the cascade the tenant
+    directory will apply, previewed before anything is written, then the name typed
+    to confirm. The report of what was actually removed is shown once it is done.
+*@
+
+<LtConfirmDestructive Open="Open"
+                      OpenChanged="OnOpenChangedAsync"
+                      Title="Delete this group"
+                      ObjectKind="group"
+                      ObjectName="@Name"
+                      ConfirmText="Delete group"
+                      OnConfirm="DeleteAsync">
+    <div data-lt-cascade="@(_cascade is null ? "loading" : "ready")">
+        @if (_cascade is { } cascade)
+        {
+            <p data-lt-cascade-text="true">@cascade.Text(Name)</p>
+        }
+        else
+        {
+            <LtSkeleton Lines="1" Label="Reading what the deletion removes" />
+        }
+        <p>A platform rule that names it stops matching anyone through it. This cannot be undone.</p>
+    </div>
+</LtConfirmDestructive>
