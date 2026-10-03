@@ -23,7 +23,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 8 | 4 | 14 | 19 | 25 | 116,530 |
+| `WalDurability` | 8 | 4 | 14 | 20 | 25 | 116,530 |
 | `WalMove` | 5 | 1 | 9 | 9 | 13 | 497 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
