@@ -291,10 +291,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Purging a tree trims its write-ahead log.** An ordinary purge unregistered the tree without trimming its log, and WAL collection only visits registered trees, so the log leaked for good. Purge completion now trims the log first, as a resize discard already did. ([#3936](https://github.com/NSTA1/Orleans.Lattice/issues/3936)) (`Orleans.Lattice`)
 
+- **Leaf - A cleared leaf no longer writes an unreclaimable stub row.** A stray splice, setter or checkpoint flush on a cleared or never-seeded leaf persisted a row with no tree id that nothing reclaims. An empty unbound leaf now skips that write; a split sibling or a leaf holding data still persists. ([#4419](https://github.com/NSTA1/Orleans.Lattice/issues/4419)) (`Orleans.Lattice`)
+
 - **Retrieval - A persistently unavailable ANN record no longer defers the index forever.** The approximate index load retried an unavailable record without limit, so the index never opened. After eight consecutive deferrals it now faults as `unloadable_record` and keeps the durable index. ([#4092](https://github.com/NSTA1/Orleans.Lattice/issues/4092)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Tests - Vacuous and load-dependent fixtures.** WAL GC pin-retirement fixtures now use a partition-suffixed consumer id that reaches the path under test, a cold-start-storm fixture drops a 300ms deadline, and a registry fan-in fixture counts deferred admissions instead of timing them. ([#4258](https://github.com/NSTA1/Orleans.Lattice/issues/4258), [#4133](https://github.com/NSTA1/Orleans.Lattice/issues/4133), [#3939](https://github.com/NSTA1/Orleans.Lattice/issues/3939)) (`Orleans.Lattice`)
 
+- **Tests - A starved test host no longer reads as a torn atomic batch.** The shadow-cutover atomic-visibility fixtures report a read timeout as a separate liveness failure with its timing, so host starvation is not called a tear; a genuinely torn batch still fails the atomicity assertion. ([#4407](https://github.com/NSTA1/Orleans.Lattice/issues/4407)) (`repository-wide`)
 - **Gates - Two gates now see what they claim to.** The instrument priming enrolment gate compares each generator-owned row whole, so a stale row fails it, and the bucket closing-list guard counts soft references such as `Relates to #N` as claims. ([#4257](https://github.com/NSTA1/Orleans.Lattice/issues/4257), [#4121](https://github.com/NSTA1/Orleans.Lattice/issues/4121)) (`repository-wide`)
 
 ### Security
