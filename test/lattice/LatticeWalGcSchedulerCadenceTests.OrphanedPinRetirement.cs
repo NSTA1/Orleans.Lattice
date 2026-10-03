@@ -72,19 +72,38 @@ public partial class LatticeWalGcSchedulerCadenceTests
         var reporter = Substitute.For<ILeafCursorReporter>();
         var time = new VirtualTimeProvider();
 
+        // Suffixed exactly as in the positive test above. Issue #4258: with the
+        // unsuffixed id the #4238 retirement gate refuses the id before any
+        // removal, so this control held even under "retires everything it
+        // touches" - the very defect it exists to rule out.
+        var consumerId = BlockedConsumerId(TreeId) + "_0";
         var (scheduler, recorder) = BlockedTreeProbing(
             time,
             () => Task.FromResult<string?>(TreeId),
+            consumerId: consumerId,
             treeId: TreeId,
             cursorReporter: reporter);
 
+        using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
+        int attempted;
         using (recorder)
         {
             await StartAndRunFirstPassAsync(scheduler, time);
-            await AttemptsBeforeFirstAbandonmentAsync(time, recorder);
+            attempted = await AttemptsBeforeFirstAbandonmentAsync(time, recorder);
             await scheduler.StopAsync(CancellationToken.None);
         }
 
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempted, Is.GreaterThan(0),
+                "anti-vacuity: the leaf must actually have been driven.");
+            Assert.That(DriveDecisions(decisions, "refused_malformed_id"), Is.Zero,
+                "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
+            Assert.That(DriveDecisions(decisions, "refused_ambiguous_partition"), Is.Zero,
+                "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
+            Assert.That(DriveDecisions(decisions, "retired"), Is.Zero,
+                "a leaf that drives normally must keep its pin.");
+        });
         await reporter.DidNotReceive().UnregisterAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }

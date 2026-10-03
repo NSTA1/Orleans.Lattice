@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Orleans.Lattice.Explorer.Core.Session;
@@ -77,6 +78,13 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
             try
             {
                 blob = await _backing.GetAsync(BackingKey, cancellationToken);
+            }
+            catch (CryptographicException)
+            {
+                // The document is permanently unreadable (e.g. protected under a key
+                // ring this host no longer holds). Retrying can never succeed, so
+                // discard it like a corrupt document rather than wedging the session.
+                blob = null;
             }
             catch
             {
