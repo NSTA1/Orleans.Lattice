@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
 /// One hand-maintained census count found in the prose of
-/// <c>spec/Refinement.md</c>.
+/// <c>spec/atomic-commit/Refinement.md</c>.
 /// </summary>
 /// <param name="LineNumber">The 1-based line in the note, for failure messages.</param>
 /// <param name="Line">The whole offending line, so the message quotes context.</param>
@@ -13,7 +13,7 @@ internal sealed record CensusCountClaim(int LineNumber, string Line, string Text
 
 /// <summary>
 /// Detects a hand-maintained census count reappearing in the prose of
-/// <c>spec/Refinement.md</c> - a claim of the shape "ten rows detected", "9
+/// <c>spec/atomic-commit/Refinement.md</c> - a claim of the shape "ten rows detected", "9
 /// detected", or "four gaps".
 /// <para>
 /// WHY THIS EXISTS. #2560 was a false census sentence in the note ("ten rows

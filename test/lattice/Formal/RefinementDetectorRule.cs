@@ -191,14 +191,14 @@ internal static class RefinementDetectorRule
 
     private static string Describe(RefinementRow row, IReadOnlyList<RefinementCodeSymbol> cited) =>
         cited.Count == 0
-            ? $"spec/Refinement.md line {row.LineNumber}: row {row.Label} asserts a production "
+            ? $"refinement note line {row.LineNumber}: row {row.Label} asserts a production "
               + "behaviour but its Detector cell names no test at all. Every behaviour-asserting "
               + "row has to cite a backticked `Fixture.TestMethod` name, whatever verdict it "
               + $"declares. A '{DetectedVerdict}' cell that cites nothing is prose that nothing "
               + "can falsify. A 'Partial' or 'None' cell still has to name the coverage that does "
               + "exist and cite the issue for the part that does not; if there is genuinely no "
               + "test at all, the row is a gap that has not been written down yet."
-            : $"spec/Refinement.md line {row.LineNumber}: row {row.Label} asserts a production "
+            : $"refinement note line {row.LineNumber}: row {row.Label} asserts a production "
               + "behaviour but none of the tests its Detector cell names resolves: "
               + string.Join(", ", cited.Select(c => $"'{c.Text}'"))
               + ". The row was probably left behind by a rename.";

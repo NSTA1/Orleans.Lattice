@@ -11,14 +11,9 @@ design-level specification above the code, checked by TLC, with a refinement
 note ([`Refinement.md`](Refinement.md)) mapping it to the extracted Coyote
 protocol cores.
 
-## Why this lives here (and not in the solution)
-
-The specification is intentionally **outside** the compiled solution
-(`Orleans.Lattice.slnx`). It is not C#; it is checked by TLC, which needs a
-Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
-fixture that shells out to it rather than by building anything here - see the
-"CI decision" section below. This directory contains only `.tla`, `.cfg`,
-`.mutation`, and `.md` files; nothing here is built by `dotnet`.
+It is one of the modules indexed in [`spec/README.md`](../README.md). The layout every
+module follows, how to run TLC, and why TLC runs in CI are described there;
+this README covers only what is particular to the atomic-commit module.
 
 ## Files
 
@@ -28,6 +23,7 @@ fixture that shells out to it rather than by building anything here - see the
 | [`AtomicCommit.cfg`](AtomicCommit.cfg) | The TLC model: the bounded instance and the invariant / property list to check. |
 | [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
+| [`AtomicCommit.manifest.json`](AtomicCommit.manifest.json) | The module manifest: where the mutations and refinement note live, which actions are non-behavioural, and the counts the gates assert (see [Counts](#counts)). |
 | `README.md` | This file. |
 
 ## What is modelled
@@ -128,7 +124,7 @@ at a time. It would strengthen the design rather than mirror the code: the
 implementation takes no per-key admission lock, so two sagas writing one key
 each stage their own per-transaction pending bucket on the leaf, and
 overlapping sagas are resolved pairwise by last-writer-wins ("Ordering across
-distinct sagas" in [atomic writes](../docs/lattice/atomic-writes.md)). As an
+distinct sagas" in [atomic writes](../../docs/lattice/atomic-writes.md)). As an
 invariant alone it is false here for the same reason: `PrepareTx` has no
 cross-saga precondition and both sagas may hold a bucket on `k2`. Making it
 true costs one conjunct on `PrepareTx` requiring no other saga's bucket on any
@@ -153,7 +149,7 @@ domain, which is a larger change than that conjunct.
 To widen the instance, declare the new model values on the `CONSTANTS` line of
 `AtomicCommit.tla`, extend `TxWrites`, `Txns`, and `Keys` there, and add the
 matching model-value assignments to `AtomicCommit.cfg`. The state space stays
-small for the default instance (31,684 distinct states), but no
+small for the default instance (see [Counts](#counts)), but no
 protocol action's guard refers to another saga, so the sagas' reachable states
 combine as a product: every saga added multiplies the count by what one saga
 alone can reach, and larger instances grow quickly.
@@ -178,38 +174,15 @@ meets it. Read it before filing any of these findings as new.
 
 ## How to run TLC
 
-You need a Java runtime (JDK/JRE 11+) and `tla2tools.jar` from the
-[TLA+ tools releases](https://github.com/tlaplus/tlaplus/releases).
+From this directory, with the toolchain described in
+[how to run TLC](../README.md#how-to-run-tlc):
 
 ```bash
-# From this directory, with tla2tools.jar on hand:
 java -cp /path/to/tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
 ```
 
-On Windows PowerShell:
-
-```powershell
-java -cp C:\path\to\tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
-```
-
 A clean run ends with `Model checking completed. No error has been found.`
-and reports zero invariant or temporal-property violations and no deadlock.
-
-TLC keeps its working files in a `states/` directory beside the specification
-by default, and git does not ignore `spec/states/`: delete it after a run, or
-pass `-metadir` with a directory outside the repository. The NUnit fixture
-below avoids it by running every model in a scratch directory.
-
-### How the NUnit fixture finds the toolchain
-
-`TlcModelCheckTests` (see [CI decision](#ci-decision)) locates the same two
-pieces itself. It reads `tla2tools.jar` from the `TLA_TOOLS_JAR` environment
-variable (an absolute path), falling back to `tools/tla2tools.jar` at the
-repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
-falling back to the first `java` on `PATH`. The CI workflows download the pinned
-tla2tools v1.7.4 release to `tools/tla2tools.jar` and verify its SHA-256 digest
-before the tests run.
-
+and reports the distinct-state count in [Counts](#counts).
 ### Confirming the model is non-vacuous
 
 The invariants are load-bearing, not trivially true. To convince yourself,
@@ -290,64 +263,17 @@ invariants and all six temporal properties over 29,929 distinct states at depth 
 invariants and all six action and temporal properties over 31,684 distinct
 states at depth 21 (134,633 generated), clean, with deadlock checking on. The current specification is model-checked in CI by
 `TlcModelCheckTests.The_base_specification_holds`, against the tla2tools v1.7.4
-release the workflows pin (see [CI decision](#ci-decision)).
+release the workflows pin (see [CI decision](../README.md#ci-decision)).
 
-## CI decision
+## Counts
 
-TLC **is** run per PR, as an ordinary NUnit fixture
-(`test/lattice/Formal/TlcModelCheckTests.cs`) tagged `[Category("Tlc")]`. It
-therefore rides the existing test fan-out with no change to the matrix planner:
-the `deterministic` tier is the complement of `Chaos` and `Coyote`, so a new
-category lands in it automatically, and `test/lattice`'s last shard is a
-complement shard, so a new namespace is picked up without editing the shard
-config. The workflow provisions a Temurin 17 JDK and a digest-pinned
-`tla2tools.jar` before the leg runs.
+The module's current totals. `SpecModuleDiscoveryTests` checks this table
+against [`AtomicCommit.manifest.json`](AtomicCommit.manifest.json), and the
+other Formal gates check the manifest against the specification, the cfg, the
+mutation catalogue, the refinement note and TLC's own state count.
+This table is the one place this directory states them; see
+[module layout](../README.md#module-layout).
 
-Every lane that runs .NET tests has to do the same, because the `Tlc` category
-is selected by any ordinary filter rather than opted into by name, and the
-fixture fails closed when the toolchain is missing. That obligation was implicit
-once, and the coverage lane duly ran without the toolchain and failed the whole
-core suite at `OneTimeSetUp`. It is now explicit:
-`CiTlaToolchainProvisioningTests` (in `test/lattice/Hygiene/`) requires each
-workflow that runs tests either to provision the toolchain - pinned to the same
-release and digest as the others, and digest-verified - or to carry a
-`# tla-toolchain: not-required - <reason>` marker saying why it cannot select
-the category.
-
-This reverses an earlier decision recorded here, which is worth stating plainly
-rather than quietly overwriting. That decision rested on two premises: that the
-.NET build image carries no Java runtime, and that the specification tracks the
-protocol *design* rather than any single code change, so gating a PR on it would
-buy little marginal signal. The first premise was simply wrong - the GitHub
-runner image ships several JDKs, and `actions/setup-java` selects one from the
-image cache in a couple of seconds. The second was right about what TLC *was*
-being asked to do, and is the part that changed: the fixture no longer only
-checks that the specification holds. It checks that each paired **mutant** makes
-its property fire - by name for an invariant or action property, and for the
-temporal properties by way of a single-property configuration, because TLC
-does not name the property in a temporal violation. That is a claim about the
-specification's own diagnostic power, and unlike the design it tracks, it
-regresses silently the moment somebody weakens a property - which is exactly
-the failure the atomicity audit (epic #2299) found four times over.
-
-Each of the thirteen properties is paired with at least one mutation, every
-protocol action in `Next` is perturbed by at least one (issue #2322, gated by
-`SpecActionMutationCoverageTests`), and each pairing runs as a two-arm
-experiment: the generated single-property model must be **clean**
-against the unmutated specification and **violated** against the mutant. The
-control arm is what makes a red mutant evidence rather than merely a red run,
-and it is the standing proof that the fixture is not vacuous. See
-[`mutations/README.md`](mutations/README.md).
-
-The local invocation documented above remains supported and is still the fast
-path when iterating on the protocol design.
-
-The dev loop does **not** run this category. The Tier 2 filter in
-[`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md)
-excludes `Tlc` alongside `AzureStorageEmulator`, for the same reason: a
-contributor without the external toolchain should not be blocked. Absence is
-handled asymmetrically and deliberately - the fixture skips locally (a visible
-`Skipped` count, not `Assert.Inconclusive`, which NUnit counts as neither passed
-nor failed nor skipped and which has already produced a false green here) and
-**fails** when `GITHUB_ACTIONS` is `true`, because in CI a missing toolchain is a
-broken pipeline rather than a missing convenience.
+| Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
+|--------|------------|------------|---------|-----------|----------------|-----------------|
+| `AtomicCommit` | 7 | 6 | 8 | 20 | 17 | 31,684 |

@@ -10,8 +10,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Detector for the <b>hot-path</b> half of the TLA+ action
-/// <c>ShadowForwardOrphan(t,k)</c> (<c>spec/AtomicCommit.tla</c>, mapped in
-/// <c>spec/Refinement.md</c>).
+/// <c>ShadowForwardOrphan(t,k)</c> (<c>spec/atomic-commit/AtomicCommit.tla</c>, mapped in
+/// <c>spec/atomic-commit/Refinement.md</c>).
 /// <para>
 /// The row maps that action onto <b>two</b> production paths that both land a
 /// prepared write on a destination leaf which has already applied the saga's

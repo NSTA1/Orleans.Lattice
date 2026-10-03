@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// fixture that exists.
 /// <para>
 /// Three families of gate police TEXT rather than code - the formal refinement
-/// fixtures under <c>test/lattice/Formal/</c> (which read <c>spec/*.md</c>),
+/// fixtures under <c>test/lattice/Formal/</c> (which read <c>spec/**/*.md</c>),
 /// the hygiene fixtures under <c>test/&lt;pkg&gt;/Hygiene/</c> (em-dash,
 /// mojibake, and siblings, which scan every tracked text file), and the
 /// documentation snippet compilations under <c>test/&lt;pkg&gt;/Docs/</c>.

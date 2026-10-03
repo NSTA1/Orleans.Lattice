@@ -1,10 +1,9 @@
 using System.Text.RegularExpressions;
-using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// One data row of a mapping table in <c>spec/Refinement.md</c>.
+/// One data row of a mapping table in a module's refinement note.
 /// </summary>
 /// <param name="Section">The <c>##</c> heading the row sits under.</param>
 /// <param name="LineNumber">The 1-based line in the note, for failure messages.</param>
@@ -20,7 +19,7 @@ internal sealed record RefinementRow(string Section, int LineNumber, IReadOnlyLi
 }
 
 /// <summary>
-/// One markdown table in <c>spec/Refinement.md</c>, with the section heading
+/// One markdown table in a module's refinement note, with the section heading
 /// it appeared under.
 /// </summary>
 /// <param name="Section">The <c>##</c> heading the table sits under.</param>
@@ -32,7 +31,7 @@ internal sealed record RefinementTable(
     IReadOnlyList<RefinementRow> Rows);
 
 /// <summary>
-/// Reads <c>spec/Refinement.md</c> and returns its mapping tables as
+/// Reads a module's refinement note (see <see cref="SpecModule"/>) and returns its mapping tables as
 /// structured rows.
 /// <para>
 /// This is deliberately a shared reader rather than parsing inlined into one
@@ -70,47 +69,61 @@ internal static class RefinementNote
 
     private static readonly Regex AlignmentCell = new(@"^:?-{1,}:?$", RegexOptions.Compiled);
 
-    /// <summary>Absolute path of the refinement note.</summary>
-    public static string NotePath =>
-        Path.Combine(HygieneRepository.FindRepoRoot(), "spec", "Refinement.md");
-
-    /// <summary>Reads the note's raw markdown.</summary>
-    public static string ReadText() => File.ReadAllText(NotePath);
-
     /// <summary>
-    /// Reads every mapping table in the note on disk, keyed by section
-    /// heading. Throws when one of <see cref="MappingSections"/> is missing or
-    /// yields no rows.
+    /// Reads every mapping table in <paramref name="module"/>'s refinement
+    /// note, keyed by section heading. Throws when one of
+    /// <see cref="MappingSections"/> is missing or yields no rows.
     /// </summary>
-    public static IReadOnlyDictionary<string, RefinementTable> ReadTables() =>
-        ParseTables(ReadText());
-
-    /// <summary>The rows of the spec-variable mapping table.</summary>
-    public static IReadOnlyList<RefinementRow> ReadVariableRows() => ReadRows(VariableSection);
-
-    /// <summary>The rows of the spec-action mapping table.</summary>
-    public static IReadOnlyList<RefinementRow> ReadActionRows() => ReadRows(ActionSection);
-
-    /// <summary>The rows of the spec-property mapping table.</summary>
-    public static IReadOnlyList<RefinementRow> ReadPropertyRows() => ReadRows(PropertySection);
-
-    /// <summary>The rows of every mapping table, in document order.</summary>
-    public static IReadOnlyList<RefinementRow> ReadAllRows()
+    public static IReadOnlyDictionary<string, RefinementTable> ReadTables(SpecModule module)
     {
-        var tables = ReadTables();
-        return MappingSections.SelectMany(section => tables[section].Rows).ToArray();
+        ArgumentNullException.ThrowIfNull(module);
+        return module.ReadRefinementTables();
     }
 
-    private static IReadOnlyList<RefinementRow> ReadRows(string section) => ReadTables()[section].Rows;
+    /// <summary>The rows of <paramref name="module"/>'s spec-action mapping table.</summary>
+    public static IReadOnlyList<RefinementRow> ReadActionRows(SpecModule module) =>
+        ReadTables(module)[ActionSection].Rows;
+
+    /// <summary>
+    /// The labels of <paramref name="module"/>'s action rows for the actions
+    /// its manifest declares non-behavioural. Throws unless each declared
+    /// action has exactly one row, so a typo in the manifest cannot quietly
+    /// exempt nothing - or a renamed row quietly stop being exempt.
+    /// </summary>
+    public static IReadOnlyList<string> NonBehaviouralRowLabels(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var rows = ReadActionRows(module);
+        var labels = new List<string>();
+        foreach (var action in module.Manifest.NonBehaviouralActions)
+        {
+            var matches = rows.Where(r => SpecActions.ActionNameOf(r) == action).ToArray();
+            if (matches.Length != 1)
+            {
+                throw new InvalidOperationException(
+                    $"{module.Describe(module.ManifestPath)} declares '{action}' non-behavioural, but "
+                    + $"{module.Describe(module.RefinementNotePath)}'s '{ActionSection}' table has "
+                    + $"{matches.Length} rows for it. Exactly one is required.");
+            }
+
+            labels.Add(matches[0].Label);
+        }
+
+        return labels;
+    }
 
     /// <summary>
     /// Parses mapping tables out of arbitrary markdown. Exposed separately
     /// from <see cref="ReadTables"/> so the parser can be tested against
     /// hand-written input, including the inputs it is supposed to reject.
     /// </summary>
-    public static IReadOnlyDictionary<string, RefinementTable> ParseTables(string markdown)
+    /// <param name="markdown">The note's text.</param>
+    /// <param name="noteLabel">How to name the note in an error, such as its path.</param>
+    public static IReadOnlyDictionary<string, RefinementTable> ParseTables(string markdown, string noteLabel = "the refinement note")
     {
         ArgumentNullException.ThrowIfNull(markdown);
+        ArgumentException.ThrowIfNullOrEmpty(noteLabel);
 
         var lines = markdown.ReplaceLineEndings("\n").Split('\n');
         var tables = new Dictionary<string, RefinementTable>(StringComparer.Ordinal);
@@ -129,7 +142,7 @@ internal static class RefinementNote
             if (tables.ContainsKey(section))
             {
                 throw new InvalidOperationException(
-                    $"spec/Refinement.md section '{section}' contains more than one markdown table. "
+                    $"{noteLabel} section '{section}' contains more than one markdown table. "
                     + "The readers here assume one mapping table per section; either merge them or "
                     + "give the second table its own '##' heading.");
             }
@@ -180,7 +193,7 @@ internal static class RefinementNote
             if (!tables.TryGetValue(expected, out var table))
             {
                 throw new InvalidOperationException(
-                    $"spec/Refinement.md has no markdown table under a '## {expected}' heading. "
+                    $"{noteLabel} has no markdown table under a '## {expected}' heading. "
                     + "Either the heading was renamed or the table was removed; the gates over this "
                     + "note read it structurally and cannot continue. Update RefinementNote's section "
                     + "constants to match the note, or restore the table.");
@@ -189,7 +202,7 @@ internal static class RefinementNote
             if (table.Rows.Count == 0)
             {
                 throw new InvalidOperationException(
-                    $"spec/Refinement.md's '{expected}' table parsed to zero rows. That would make every "
+                    $"{noteLabel}'s '{expected}' table parsed to zero rows. That would make every "
                     + "gate driven by this reader pass while checking nothing, so it is treated as a "
                     + "parser or authoring fault rather than as an empty mapping.");
             }

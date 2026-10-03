@@ -219,8 +219,8 @@ jobs:
           done
 
       # The TLA+ toolchain for the `Tlc` category in test/lattice, which runs
-      # TLC over spec/ and over a mutant generated from each definition in
-      # spec/mutations/. See spec/README.md and issue #2323.
+      # TLC over every module under spec/ and over a mutant generated from each
+      # definition in its mutations/ directory. See spec/README.md and issue #2323.
       #
       # This lane runs every non-chaos suite with the filter
       # `TestCategory!=Chaos&TestCategory!=Coyote`, which does NOT exclude

@@ -1,8 +1,8 @@
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// The staleness gate over <c>spec/Refinement.md</c>: every production C#
-/// symbol the mapping tables name in backticks must still exist in
+/// The staleness gate over every module's refinement note: every production
+/// C# symbol the mapping tables name in backticks must still exist in
 /// <c>src/</c>.
 /// <para>
 /// WHAT THIS GATE CHECKS, AND WHAT IT EMPHATICALLY DOES NOT. It checks
@@ -37,9 +37,11 @@ public sealed class RefinementMappingStalenessTests
 {
     private static readonly RefinementSymbolResolver Resolver = RefinementSymbolResolver.ForRepository();
 
-    private static IReadOnlyList<RefinementCodeSymbol> Symbols() =>
-        RefinementCodeSymbols.Extract(
-            RefinementNote.MappingSections.Select(s => RefinementNote.ReadTables()[s]));
+    private static IReadOnlyList<RefinementCodeSymbol> Symbols(SpecModule module)
+    {
+        var tables = RefinementNote.ReadTables(module);
+        return RefinementCodeSymbols.Extract(RefinementNote.MappingSections.Select(s => tables[s]));
+    }
 
     /// <summary>
     /// The vacuity guard, and it is not optional. Every other test in this
@@ -54,10 +56,13 @@ public sealed class RefinementMappingStalenessTests
     /// regresses.
     /// </para>
     /// </summary>
-    [Test]
-    public void The_refinement_note_yields_rows_and_symbols_to_check()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_refinement_note_yields_rows_and_symbols_to_check(SpecModule module)
     {
-        var tables = RefinementNote.ReadTables();
+        ArgumentNullException.ThrowIfNull(module);
+
+        var tables = RefinementNote.ReadTables(module);
+        var note = module.Describe(module.RefinementNotePath);
 
         Assert.Multiple(() =>
         {
@@ -66,15 +71,15 @@ public sealed class RefinementMappingStalenessTests
                 Assert.That(
                     tables[section].Rows,
                     Is.Not.Empty,
-                    $"spec/Refinement.md's '{section}' table parsed to zero rows, so every gate over it "
+                    $"{note}'s '{section}' table parsed to zero rows, so every gate over it "
                     + "would be vacuous.");
             }
         });
 
         Assert.That(
-            Symbols(),
+            Symbols(module),
             Is.Not.Empty,
-            "extracted no code symbols from spec/Refinement.md's mapping tables, so this gate would "
+            $"extracted no code symbols from {note}'s mapping tables, so this gate would "
             + "pass while checking nothing. Either the note stopped naming code in backticks or "
             + "RefinementCodeSymbols no longer recognises the form it uses.");
     }
@@ -83,10 +88,12 @@ public sealed class RefinementMappingStalenessTests
     /// The gate. Each reference must resolve as a member of the named type, as
     /// a partial-class file <c>Type.Suffix.cs</c>, or as a nested type.
     /// </summary>
-    [Test]
-    public void Every_code_symbol_named_in_the_refinement_mapping_still_exists()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_code_symbol_named_in_the_refinement_mapping_still_exists(SpecModule module)
     {
-        var symbols = Symbols();
+        ArgumentNullException.ThrowIfNull(module);
+
+        var symbols = Symbols(module);
 
         Assert.That(symbols, Is.Not.Empty, "no symbols to check; see the vacuity guard in this fixture.");
 
@@ -99,21 +106,24 @@ public sealed class RefinementMappingStalenessTests
                 Assert.That(
                     RefinementSymbolResolver.IsResolved(resolution),
                     Is.True,
-                    Diagnose(symbol, resolution));
+                    Diagnose(module, symbol, resolution));
             }
         });
     }
 
     /// <summary>
-    /// Keeps the partial-class file branch honest. Several of the note's
-    /// references are file suffixes rather than members, and that branch is the
-    /// one a naive rewrite of this gate would drop - producing confident false
-    /// positives on a note that is entirely correct.
+    /// Keeps the partial-class file branch honest. Several of the atomic-commit
+    /// note's references are file suffixes rather than members, and that branch
+    /// is the one a naive rewrite of this gate would drop - producing confident
+    /// false positives on a note that is entirely correct. Taken across every
+    /// module, since whether a given module's note names one is a fact about
+    /// that module rather than about the resolver.
     /// </summary>
     [Test]
     public void The_partial_class_file_form_is_exercised_by_the_mapping()
     {
-        var partials = Symbols()
+        var partials = SpecModuleCatalogue.Repository()
+            .SelectMany(Symbols)
             .Where(s => Resolver.Resolve(s) == RefinementSymbolResolution.PartialClassFile)
             .Select(s => s.Text)
             .ToArray();
@@ -121,7 +131,7 @@ public sealed class RefinementMappingStalenessTests
         Assert.That(
             partials,
             Is.Not.Empty,
-            "no symbol in spec/Refinement.md resolves as a partial-class file suffix, so that branch of "
+            "no symbol in any module's refinement note resolves as a partial-class file suffix, so that branch of "
             + "the resolver is now unexercised by the real mapping. If the note legitimately stopped "
             + "naming one (ShardRootGrain.TxTerminal, ShardRootGrain.Split and BPlusLeafGrain.PendingTx "
             + "are the ones it names today), delete this test together with the branch rather than "
@@ -139,10 +149,12 @@ public sealed class RefinementMappingStalenessTests
     /// from the type's own files.
     /// </para>
     /// </summary>
-    [Test]
-    public void The_resolver_reports_symbols_that_do_not_exist()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_resolver_reports_symbols_that_do_not_exist(SpecModule module)
     {
-        var realType = Symbols().First().TypeName;
+        ArgumentNullException.ThrowIfNull(module);
+
+        var realType = Symbols(module).First().TypeName;
 
         Assert.Multiple(() =>
         {
@@ -166,7 +178,7 @@ public sealed class RefinementMappingStalenessTests
         });
     }
 
-    private static string Diagnose(RefinementCodeSymbol symbol, RefinementSymbolResolution resolution)
+    private static string Diagnose(SpecModule module, RefinementCodeSymbol symbol, RefinementSymbolResolution resolution)
     {
         var cause = resolution switch
         {
@@ -179,7 +191,7 @@ public sealed class RefinementMappingStalenessTests
             _ => "unresolved.",
         };
 
-        return $"spec/Refinement.md line {symbol.LineNumber} ('{symbol.Section}' table, row "
+        return $"{module.Describe(module.RefinementNotePath)} line {symbol.LineNumber} ('{symbol.Section}' table, row "
             + $"'{symbol.Row}') names '{symbol.Text}', which no longer resolves: {cause}"
             + Environment.NewLine
             + "The mapping is now describing code that does not exist. Update the row to name the "
